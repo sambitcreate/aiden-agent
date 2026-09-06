@@ -296,7 +296,7 @@ export function ShortcutSettings() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div>
+      <div className="settings-page-heading">
         <Text as="h1" variant="heading1">
           Keyboard shortcuts
         </Text>

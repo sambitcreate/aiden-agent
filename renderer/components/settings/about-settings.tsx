@@ -156,7 +156,7 @@ export function AboutSettings() {
 
   return (
     <>
-      <FieldSet title="About">
+      <FieldSet title="Application">
         <div className="settings-about-header flex items-center gap-4 p-4 max-[540px]:items-start">
           <img src={APP_ICON_URL} alt="" className="size-16 shrink-0" />
           <div className="min-w-0 flex-1">

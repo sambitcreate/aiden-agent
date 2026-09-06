@@ -4,6 +4,7 @@ import { SkillRegistry } from "./skill-registry.js";
 
 /** Process-owned registry. Its invocation key is generated once and never leaves main. */
 export const skillRegistry = new SkillRegistry({
+  isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getWorkspace: (id) => configStore.getWorkspace(id),
   listConfigured: () => configStore.listSkills(),
   discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),

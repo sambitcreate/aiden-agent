@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { BotCustomSelection } from "../../renderer/shared/bot-capabilities.js";
-import { bindBotCustomSelection, type BoundBotCustomSelection } from "./bot-capability-bindings.js";
+import {
+  bindBotCustomSelection,
+  withBotCapabilityTombstones,
+  type BoundBotCustomSelection,
+} from "./bot-capability-bindings.js";
 import {
   buildBotCapabilityCatalogSnapshot,
   type BotCapabilityCatalogSnapshot,
@@ -187,14 +191,18 @@ function inventory(suffix = "v1"): BotCapabilityInventory {
 function snapshot(suffix = "v1"): BotCapabilityCatalogSnapshot {
   return buildBotCapabilityCatalogSnapshot({
     inventory: inventory(suffix),
-    notice: {
-      version: "bot-full-access-v1",
-      requiresAcknowledgement: false,
-      acceptedAt: "2026-08-23T00:00:00.000Z",
-      acceptedDecision: "continue_full",
-    },
+    notice: acceptedNotice(),
     mintOpaqueId: mint,
   });
+}
+
+function acceptedNotice() {
+  return {
+    version: "bot-full-access-v1" as const,
+    requiresAcknowledgement: false as const,
+    acceptedAt: "2026-08-23T00:00:00.000Z",
+    acceptedDecision: "continue_full" as const,
+  };
 }
 
 function selection(current: BotCapabilityCatalogSnapshot, input: {
@@ -306,6 +314,7 @@ function fixture(input: {
   chatWorkspaceId?: string;
   omitModelAuthority?: boolean;
   fullWebSearchEnabled?: boolean;
+  skillsEnabled?: boolean;
 } = {}) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
@@ -335,6 +344,17 @@ function fixture(input: {
     },
     binding: modelBinding,
   };
+  if (input.skillsEnabled === false && botBinding) {
+    currentSnapshot = withBotCapabilityTombstones(
+      buildBotCapabilityCatalogSnapshot({
+        inventory: { ...inventory(), skills: [] },
+        notice: acceptedNotice(),
+        mintOpaqueId: mint,
+      }),
+      [botBinding],
+    );
+  }
+  let skillsEnabled = input.skillsEnabled ?? true;
   let currentBot = bot();
   let currentChat = {
     ...chat(),
@@ -425,10 +445,12 @@ function fixture(input: {
       },
     },
     inventoryLeases,
+    skillsEnabled: async () => skillsEnabled,
   };
   return {
     resolver: createBotRuntimeAuthorityResolver(deps),
     setSnapshot(value: BotCapabilityCatalogSnapshot) { currentSnapshot = value; },
+    setSkillsEnabled(value: boolean) { skillsEnabled = value; },
     invalidateLease() { leaseValid = false; },
     archive() { currentBot = bot(true); },
     replaceHome() { revalidateHomeError = new Error("home replaced"); },
@@ -527,6 +549,52 @@ test("a Custom chat reduction intersects the Bot ceiling and retains exact tool 
   assert.deepEqual(authority.connections[0]!.tools.map(({ effect }) => effect), ["read", "mutating"]);
   assert.equal(authority.files.mode, "scoped");
   assert.equal(authority.files.botHome, true);
+});
+
+test("global Skills off suppresses Custom Bot skills without mutating saved grants", async () => {
+  const enabledSnapshot = snapshot();
+  const app = fixture({ customBot: true, currentSnapshot: enabledSnapshot, skillsEnabled: false });
+  const disabledAdmission = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.deepEqual(disabledAdmission.authority.skills, []);
+  await disabledAdmission.revalidateBeforeEffect();
+  disabledAdmission.release();
+
+  app.setSnapshot(enabledSnapshot);
+  app.setSkillsEnabled(true);
+  const enabledAdmission = await app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  });
+  assert.deepEqual(enabledAdmission.authority.skills.map(({ sourceId }) => sourceId), ["skill-a"]);
+  enabledAdmission.release();
+});
+
+test("enabled Skills still fail closed when a saved Custom Bot skill is missing", async () => {
+  const enabledSnapshot = snapshot();
+  const app = fixture({ customBot: true, currentSnapshot: enabledSnapshot });
+  const binding = bindBotCustomSelection({
+    selection: selection(enabledSnapshot, { skill: true }),
+    catalogRevision: enabledSnapshot.catalog.revision,
+    snapshot: enabledSnapshot,
+  });
+  app.setSnapshot(withBotCapabilityTombstones(
+    buildBotCapabilityCatalogSnapshot({
+      inventory: { ...inventory(), skills: [] },
+      notice: acceptedNotice(),
+      mintOpaqueId: mint,
+    }),
+    [binding],
+  ));
+  await expectFailure(app.resolver.admit({
+    audienceId: "device-a",
+    botId: "bot-a",
+    chatId: "chat-a",
+  }), "capability_changed");
 });
 
 test("a Full Bot with a Custom chat reduction keeps Custom access while using Bot model authority", async () => {

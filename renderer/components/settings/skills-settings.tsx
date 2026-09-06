@@ -15,11 +15,18 @@ import {
   Switch,
   Text,
   Textarea,
+  toast,
 } from "../ui";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
-import { skillsApi } from "../../lib/ipc";
-import { queryKeys, useDiscoveredSkills, useSkills, useWorkspaces } from "../../lib/queries";
-import type { Skill } from "../../lib/types";
+import { skillsApi, settingsApi } from "../../lib/ipc";
+import {
+  queryKeys,
+  useDiscoveredSkills,
+  useSkills,
+  useWorkspaces,
+  useSettings,
+} from "../../lib/queries";
+import type { Skill, AppSettings } from "../../lib/types";
 import { resolveSkillCatalogWorkspaceId } from "../../lib/skill-catalog-workspace";
 
 /** Active workspace id from localStorage (settings sits outside WorkspaceProvider). */
@@ -43,6 +50,9 @@ function newSkill(): Skill {
 export function SkillsSettings() {
   const qc = useQueryClient();
   const skills = useSkills();
+  const settings = useSettings();
+  const [globalSaving, setGlobalSaving] = React.useState(false);
+  const globallyEnabled = settings.data?.skillsEnabled !== false;
   const [editing, setEditing] = React.useState<Skill | null>(null);
   const [removing, setRemoving] = React.useState<Skill | null>(null);
 
@@ -55,6 +65,20 @@ export function SkillsSettings() {
       qc.invalidateQueries({ queryKey: ["skillCatalog"] }),
     ]);
 
+  const setGlobalEnabled = async (enabled: boolean) => {
+    if (globalSaving) return;
+    setGlobalSaving(true);
+    try {
+      const saved = await settingsApi.set({ skillsEnabled: enabled });
+      qc.setQueryData<AppSettings>(queryKeys.settings, saved);
+      await invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t update skills settings.");
+    } finally {
+      setGlobalSaving(false);
+    }
+  };
+
   const toggle = async (skill: Skill, enabled: boolean) => {
     await skillsApi.save({ ...skill, enabled });
     await invalidate();
@@ -65,9 +89,11 @@ export function SkillsSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text variant="strong">Skills</Text>
+          <Text as="h1" variant="heading1">
+            Skills
+          </Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
             Reusable instruction sets the assistant can invoke as tools when a task matches.
           </Text>
@@ -83,13 +109,34 @@ export function SkillsSettings() {
         </Button>
       </div>
 
+      <FieldSet>
+        <Field
+          label="Use skills globally"
+          description="Allow configured and discovered skills in chats, Bots, Telegram, and scheduled tasks. Turning this off stops active replies. Saved skills and individual choices are kept."
+          orientation="horizontal"
+        >
+          <Switch
+            aria-label="Use skills globally"
+            checked={globallyEnabled}
+            disabled={globalSaving || !settings.data}
+            onCheckedChange={setGlobalEnabled}
+          />
+        </Field>
+      </FieldSet>
+      {!globallyEnabled ? (
+        <Text variant="small" color="secondary">
+          Skills are off. Aiden won’t discover, attach, or load skills until you turn them on again.
+          Visible chat history stays available. Hidden skill instructions won’t be replayed.
+        </Text>
+      ) : null}
+
       {list.length === 0 ? (
         <Text variant="small" color="tertiary">
           No skills yet. Create one — e.g. “Code Reviewer” with your review checklist as its
           instructions.
         </Text>
       ) : (
-        <div className="rounded-card border border-separator">
+        <div className="settings-card rounded-card border border-separator">
           {list.map((s, i) => (
             <React.Fragment key={s.id}>
               {i > 0 ? <Separator /> : null}
@@ -108,6 +155,7 @@ export function SkillsSettings() {
                 <Switch
                   aria-label={`Enable ${s.name || "skill"}`}
                   checked={s.enabled}
+                  disabled={!globallyEnabled}
                   onCheckedChange={(v) => toggle(s, v)}
                 />
                 <Button
@@ -125,7 +173,7 @@ export function SkillsSettings() {
         </div>
       )}
 
-      {discoveredList.length > 0 ? (
+      {globallyEnabled && discoveredList.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2">
           <div>
             <Text variant="strong">From skill folders</Text>
@@ -135,7 +183,7 @@ export function SkillsSettings() {
               Availability follows the same collision and safety rules as the composer and model.
             </Text>
           </div>
-          <div className="rounded-card border border-separator">
+          <div className="settings-card rounded-card border border-separator">
             {discoveredList.map((s, i) => (
               <React.Fragment key={s.invocationId}>
                 {i > 0 ? <Separator /> : null}

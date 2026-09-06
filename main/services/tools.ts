@@ -179,11 +179,14 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (webSearchTool) tools.push(webSearchTool);
 
   // Every skill consumer uses this exact authoritative snapshot.
+  const skillsEnabled = async () => (await configStore.getSettings()).skillsEnabled !== false;
   const skillSnapshot =
-    ctx.skillSnapshot ??
-    (ctx.workspaceId ? await skillRegistry.snapshot(ctx.workspaceId) : undefined);
+    ctx.includeSkillTools !== false && (await skillsEnabled())
+      ? (ctx.skillSnapshot ??
+        (ctx.workspaceId ? await skillRegistry.snapshot(ctx.workspaceId) : undefined))
+      : undefined;
   if (ctx.includeSkillTools !== false && skillSnapshot) {
-    tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none"));
+    tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none", skillsEnabled));
   }
 
   // MCP server tools.

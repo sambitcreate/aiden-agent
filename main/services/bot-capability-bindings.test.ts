@@ -204,6 +204,33 @@ test("Custom selection binds exact provider, file, shell, MCP tool, skill, and o
   assert.doesNotThrow(() => assertBoundBotCustomSelectionCurrent(bound, current));
 });
 
+test("a closed global Skills gate suppresses only skill drift validation", () => {
+  const current = snapshot();
+  const bound = binding(current);
+  const withoutSkills = inventory();
+  withoutSkills.skills = [];
+  const disabledSnapshot = withBotCapabilityTombstones(
+    buildBotCapabilityCatalogSnapshot({
+      inventory: withoutSkills,
+      notice,
+      mintOpaqueId: createBotCapabilityOpaqueIdMint(key),
+    }),
+    [bound],
+  );
+
+  assert.throws(
+    () => assertBoundBotCustomSelectionCurrent(bound, disabledSnapshot),
+    BotCapabilityBindingDriftError,
+  );
+  assert.doesNotThrow(() =>
+    assertBoundBotCustomSelectionCurrent(bound, disabledSnapshot, { skillsEnabled: false }),
+  );
+  assert.deepEqual(
+    botCustomSelectionDrift(bound, disabledSnapshot, { skillsEnabled: false }),
+    [],
+  );
+});
+
 test("file choices enforce Full Mac exclusivity and approved-location Bot folder pairing", () => {
   const current = snapshot();
   const selection = fullSelection(current);

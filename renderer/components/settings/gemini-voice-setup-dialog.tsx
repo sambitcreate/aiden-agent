@@ -1,4 +1,4 @@
-import { Brain, KeyRound, Mic2, ShieldCheck } from "lucide-react";
+import { AudioLines, KeyRound, Mic2, ShieldCheck } from "lucide-react";
 
 import { Button, Dialog, RadioGroup, RadioGroupItem, Text, type DialogLayer } from "../ui";
 import type { GeminiUsageScope } from "../../lib/types";
@@ -36,7 +36,7 @@ const choices: Array<{
     scope: "models_and_transcription",
     title: "Models + transcription",
     description: "Use Gemini for voice and add Google chat models throughout Aiden.",
-    icon: Brain,
+    icon: AudioLines,
   },
 ];
 

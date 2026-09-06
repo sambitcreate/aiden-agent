@@ -91,6 +91,8 @@ export interface BotCapabilityCatalog {
   shellAvailable: boolean;
   connections: BotCapabilityOption[];
   skills: BotCapabilityOption[];
+  /** Omitted means enabled. False suppresses execution while saved grants remain dormant. */
+  skillsEnabled?: boolean;
   otherCapabilities: BotCapabilityOption[];
   notice: BotNoticeStatus;
 }
@@ -572,7 +574,7 @@ export function intersectBotCustomSelections(
 export function validateSelectionAgainstCatalog(
   selection: BotCustomSelection,
   catalog: BotCapabilityCatalog,
-  options: { requireAvailable?: boolean } = {},
+  options: { requireAvailable?: boolean; retainedSkillIds?: readonly string[] } = {},
 ): void {
   const requireAvailable = options.requireAvailable ?? true;
   const requireOptions = (
@@ -601,7 +603,14 @@ export function validateSelectionAgainstCatalog(
   }
   requireOptions(selection.fileScopeIds, catalog.fileScopes, "file scope");
   requireOptions(selection.connectionIds, catalog.connections, "connection");
-  requireOptions(selection.skillIds, catalog.skills, "skill");
+  const skillsToValidate = catalog.skillsEnabled === false
+    ? selection.skillIds.filter((id) => !options.retainedSkillIds?.includes(id))
+    : selection.skillIds;
+  // Even a malformed disabled catalog cannot authorize a new skill grant.
+  if (catalog.skillsEnabled === false && skillsToValidate.length > 0) {
+    throw new BotCapabilityValidationError("Skills are disabled. Only saved skill grants may be retained.");
+  }
+  requireOptions(skillsToValidate, catalog.skills, "skill");
   requireOptions(selection.otherCapabilityIds, catalog.otherCapabilities, "capability");
 }
 

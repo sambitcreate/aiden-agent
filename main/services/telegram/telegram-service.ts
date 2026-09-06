@@ -27,7 +27,6 @@ import { contextLifecycleService } from "../context-lifecycle-service-main.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
-import { formatSkillInvocation } from "@earendil-works/pi-agent-core";
 import {
   mkdir,
   readFile,
@@ -650,20 +649,14 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
             description: (skill.description || `Run ${skill.name}`)
               .replace(/\s+/gu, " ")
               .slice(0, 256),
-            expand: (argument: string) =>
-              formatSkillInvocation(
-                {
-                  name: skill.name,
-                  description: skill.description,
-                  content: skill.instructions,
-                  filePath: skill.path ?? "/Aiden/Configured Skills/SKILL.md",
-                },
-                argument,
-              ),
+            skillInvocation: { workspaceId, invocationId: skill.invocationId },
           },
         ];
       });
       return [...extensionCommands, ...skillCommands];
+    },
+    validateSkillInvocation: async ({ workspaceId, invocationId }) => {
+      await skillRegistry.resolveFresh(workspaceId, invocationId);
     },
     readOutboundAttachment: readWorkspaceAttachment,
     applyModelSelection: async (choice) => {
@@ -866,6 +859,9 @@ export function createTelegramProfileManager() {
       await telegramBotBindings.assertHealthy();
       const profiles = await refreshProfiles();
       await Promise.all(profiles.map((profile) => serviceFor(profile).start()));
+    },
+    async refreshCommands(): Promise<void> {
+      await Promise.all([...services.values()].map((service) => service.refreshCommands()));
     },
     stop(): void {
       for (const service of services.values()) service.stop();

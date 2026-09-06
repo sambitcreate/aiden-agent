@@ -317,7 +317,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,

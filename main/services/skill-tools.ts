@@ -9,35 +9,43 @@ function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
 }
 
-export function makeSkillTool(skill: RegisteredSkill): AgentTool {
+export function makeSkillTool(
+  skill: RegisteredSkill,
+  isEnabled: () => Promise<boolean> = async () => true,
+): AgentTool {
   const summary = skill.description ? `${skill.name}: ${skill.description}` : skill.name;
-  return declarePiRuntimeReplay({
-    name: skillToolKey(skill),
-    label: skill.name,
-    description: `${summary} — call this to load detailed instructions before performing the task.`,
-    parameters: Type.Object({}),
-    execute: async (): Promise<AgentToolResult<null>> => {
-      if (!skill.path) return textResult(skill.instructions);
-      const base = path.dirname(skill.path);
-      return textResult(
-        [
-          `<skill_content name="${skill.name.replace(/"/g, "&quot;")}">`,
-          skill.instructions,
-          "",
-          `Base directory for this skill: ${base}`,
-          "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-          "</skill_content>",
-        ].join("\n"),
-      );
+  return declarePiRuntimeReplay(
+    {
+      name: skillToolKey(skill),
+      label: skill.name,
+      description: `${summary} — call this to load detailed instructions before performing the task.`,
+      parameters: Type.Object({}),
+      execute: async (): Promise<AgentToolResult<null>> => {
+        if (!(await isEnabled())) throw new Error("Skills are disabled in Settings → Skills.");
+        if (!skill.path) return textResult(skill.instructions);
+        const base = path.dirname(skill.path);
+        return textResult(
+          [
+            `<skill_content name="${skill.name.replace(/"/g, "&quot;")}">`,
+            skill.instructions,
+            "",
+            `Base directory for this skill: ${base}`,
+            "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+            "</skill_content>",
+          ].join("\n"),
+        );
+      },
     },
-  }, "safe");
+    "safe",
+  );
 }
 
 export function buildSkillTools(
   snapshot: SkillRegistrySnapshot,
   allowWorkspaceSkills = true,
+  isEnabled: () => Promise<boolean> = async () => true,
 ): AgentTool[] {
   return snapshot.available
     .filter((skill) => allowWorkspaceSkills || skill.source !== "workspace")
-    .map(makeSkillTool);
+    .map((skill) => makeSkillTool(skill, isEnabled));
 }

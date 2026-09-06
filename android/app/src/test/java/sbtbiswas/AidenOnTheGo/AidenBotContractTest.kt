@@ -1,9 +1,14 @@
 package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarPresentation
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotCustomAccessDraft
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
@@ -211,6 +216,50 @@ class AidenBotContractTest {
                 avatar = AidenBotSemanticAvatar.Recipe(recipe),
                 access = AidenBotAccessUpdate.full("rev_1")
             )
+        }
+    }
+
+    @Test
+    fun testGloballyDisabledSkillsRejectStaleSelectionsAndAllowSkillFreeChoices() {
+        val fixture = loadSharedContractFixture()
+        val catalog = fixture.botCapabilityCatalog.copy(skills = emptyList())
+        val stale = requireNotNull(fixture.botPolicyUpdate.request.custom)
+        assertTrue(stale.skillIds.isNotEmpty())
+        assertFalse(catalog.containsAvailable(stale))
+        assertTrue(catalog.containsAvailable(stale.copy(skillIds = emptyList())))
+    }
+
+    @Test
+    fun testDisabledSkillsPreserveSavedDraftsWithoutGrantingNewChoices() {
+        val fixture = loadSharedContractFixture()
+        val saved = requireNotNull(fixture.botPolicyUpdate.request.custom)
+        val catalog = fixture.botCapabilityCatalog.copy(
+            skillsEnabled = false,
+            skills = fixture.botCapabilityCatalog.skills.map { it.copy(available = false) }
+        )
+        assertTrue(catalog.containsAvailable(saved))
+        val draft = requireNotNull(AidenBotCustomAccessDraft.fromAccess(fixture.botPolicyUpdate.response, catalog))
+        assertEquals(saved.skillIds.toSet(), draft.skillIDs)
+        assertTrue(draft.isSaveable(catalog))
+        assertTrue(requireNotNull(AidenBotCustomAccessDraft.fromCatalog(catalog)).skillIDs.isEmpty())
+        assertFalse(catalog.containsAvailable(saved.copy(skillIds = listOf("skill.unknown"))))
+        assertFalse(catalog.copy(connections = catalog.connections.map { it.copy(available = false) }).containsAvailable(saved))
+        assertFalse(catalog.copy(skillsEnabled = true).containsAvailable(saved))
+        assertTrue(fixture.botCapabilityCatalog.containsAvailable(saved))
+    }
+
+    @Test
+    fun testSkillsGateWireDefaultsAndValidation() {
+        val catalog = loadSharedContractFixture().botCapabilityCatalog
+        val fields = json.parseToJsonElement(json.encodeToString(AidenBotCapabilityCatalog.serializer(), catalog)).jsonObject
+        val legacy = JsonObject(fields - "skillsEnabled")
+        assertTrue(json.decodeFromString<AidenBotCapabilityCatalog>(legacy.toString()).skillsEnabled)
+        val disabled = JsonObject(fields + ("skillsEnabled" to JsonPrimitive(false)))
+        assertFalse(json.decodeFromString<AidenBotCapabilityCatalog>(disabled.toString()).skillsEnabled)
+        for (invalid in listOf(JsonNull, JsonPrimitive("false"), JsonPrimitive(0))) {
+            assertThrows(Exception::class.java) {
+                json.decodeFromString<AidenBotCapabilityCatalog>(JsonObject(fields + ("skillsEnabled" to invalid)).toString())
+            }
         }
     }
 

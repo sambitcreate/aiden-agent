@@ -311,3 +311,46 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+## 2026-09-06 — Model Pad responsive Settings
+
+- A square bounded only by window width still overflows short Settings windows;
+  measure the actual scrollport and the title, toolbar, axes, and legend height.
+  Compensate for scrollTop so browsing supporting panels cannot grow the Pad.
+- Constraining the legend to a small square causes extra wrapping and consumes
+  the saved height. Keep the legend at column width and center the square and
+  axis labels independently. Remove duplicate Pad titles once Settings supplies
+  its shared page heading. The Electron matrix covers minimum window size and
+  native 125% zoom as well as wide/short layouts.
+
+## 2026-09-06 — Global skills gate verification
+
+- Skill availability has two production readers: the workspace registry and Bot
+  capability inventory. Gate both before discovery and check again after an
+  asynchronous scan; otherwise a cached or in-flight snapshot can expose skills
+  after disabling them. Existing skill tools also need an execution-time check.
+- Android verification needs the installed Homebrew JDK 21 path; macOS
+  `java_home` did not discover it. iOS XCTest compiled with Xcode beta but the
+  default physical iPhone was locked, so verification retried the other connected
+  physical iPhone in accordance with the no-simulator project requirement. Both
+  devices were locked, so signed XCTest execution remains pending an unlocked
+  device; the app and test bundle compiled successfully.
+- Disabling discovery alone does not remove skill instructions already expanded
+  into a Pi journal. The disabled execution view must project visible messages
+  and new turn entries for inference, compaction, and recall. Pi v4 stores an
+  explicit retained tail, but compaction still fences against the durable leaf:
+  keep that leaf identity as an inert boundary and prove JSONL reopen parity.
+- Telegram commands previously expanded instructions before queue dispatch and
+  persisted that expansion as user text. Queue opaque skill provenance instead,
+  validate at dispatch and generation, and keep only raw arguments in ChatStore.
+  Refresh command registration after a gate change without blocking Settings;
+  bound that registration request so later updates cannot wait forever.
+
+- 2026-09-06 Settings CI: full Electron coverage exposed duplicate destination/group headings on About (also audited Memory/Remote Access), and a sidebar fixture selector that assumed the old visible path suffix. Give groups distinct labels, assert one exact destination heading across all pages, and select the new path-free workspace accessible label.
+- The hosted Model Pad reachability check failed after a one-time `scrollIntoViewIfNeeded`, while the same matrix passed locally. Retry standard centered scrolling while responsive layout settles, sample the next frame, and assert against the intersection of the actual scrollport and viewport. Include matrix and geometry values in failures. A responsive-layout race is the working explanation; deterministic product overflow was not reproduced.
+
+- 2026-09-06 Global Skills follow-up: gate coverage must include operator compaction and every Bot catalog/edit surface, not only turn admission. Empty paused inventory must never be reconciled as removed resources; doing so churns durable incarnations on re-enable. Keep paused saved skill IDs as unavailable presentation choices with explicit global-state metadata and enforce exact preservation/subsets on the Mac. Kotlin's ordinary Boolean JSON serializer accepted quoted `"false"`; the new gate uses a strict boolean serializer and cross-client malformed-field tests.
+- iOS follow-up acceptance: updated app/test bundle compiles for generic physical hardware. A fresh iPhone13 XCTest attempt reached device preflight but required unlocking; stopped the waiting test runner. Physical execution remains unverified.
+- Local verification sequencing: `npm test` and `npm run build` both build native helpers at startup. Concurrent execution raced `lipo` over `build/native/aiden-worktree-remover`; keep full tests and production builds sequential in one checkout. This was a local build-output race, not a source failure.
+
+- 2026-09-06 Mobile catalog seam: service and model tests passed while the HTTP router rejected Android’s optional Bot query and iOS emitted only generic catalog requests. Add transport-level request tests and forward target identity end to end; per-Bot catalogs must not occupy a generic cache slot. Android has no persistent catalog cache.

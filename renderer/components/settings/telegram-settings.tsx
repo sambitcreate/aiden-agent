@@ -269,7 +269,7 @@ export function TelegramSettings() {
             : "Add a bot token below before enabling the bridge."
         }
       >
-        <Switch checked={enabled} onCheckedChange={toggle} disabled={!hasToken} />
+        <Switch aria-label="Enable Telegram bridge" checked={enabled} onCheckedChange={toggle} disabled={!hasToken} />
       </Field>
 
       <Field
@@ -323,7 +323,7 @@ export function TelegramSettings() {
         </Select>
         {folderWorkspaceCount === 0 && (
           <p className="text-secondary text-regular">
-            Add a folder workspace in Settings → Workspaces to enable project automation.
+            Add a folder using the Workspaces sidebar to enable project automation.
           </p>
         )}
       </Field>
@@ -430,6 +430,7 @@ export function TelegramSettings() {
         description="Stream structurally complete Telegram-native Rich Drafts while Aiden answers; the persisted final reply completes the preview lifecycle."
       >
         <Switch
+          aria-label="Live answer drafts"
           checked={draftPreviews}
           onCheckedChange={(checked) => void saveExperience({ draftPreviews: checked })}
         />
@@ -477,6 +478,7 @@ export function TelegramSettings() {
         description="Create one Telegram topic per configured Aiden workspace and route each topic only to that workspace. Enable Threaded Mode for the bot in @BotFather first."
       >
         <Switch
+          aria-label="Private-chat threads"
           checked={threadedMode}
           onCheckedChange={(checked) => void saveExperience({ threadedMode: checked })}
         />

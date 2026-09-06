@@ -151,7 +151,7 @@ function Disclosure({
   children,
 }: React.PropsWithChildren<{ title: string; summary: string }>) {
   return (
-    <details className="group mb-7 overflow-hidden rounded-card bg-well">
+    <details className="settings-card group mb-7 overflow-hidden rounded-card bg-well">
       <summary className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1">
           <span className="block text-large-strong text-primary">{title}</span>
@@ -462,7 +462,7 @@ export function RemoteAccessSettings() {
 
   if (settingsQuery.isLoading) {
     return (
-      <FieldSet title="Remote Access">
+      <FieldSet title="Connection">
         <Field label="Status" description="Checking Aiden's local remote service.">
           <span className="flex items-center justify-end gap-2 text-small text-secondary">
             <Loader2 className="size-4 animate-spin" /> Checking…
@@ -516,7 +516,7 @@ export function RemoteAccessSettings() {
 
   return (
     <>
-      <FieldSet title="Remote Access">
+      <FieldSet title="Connection">
         <Field
           label={(
             <span className="flex items-center gap-1.5">

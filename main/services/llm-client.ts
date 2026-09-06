@@ -138,6 +138,7 @@ import {
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
+  projectVisibleHistoryWithoutSkills,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
@@ -341,6 +342,8 @@ function piResourcesForSkillSnapshot(
 }
 
 export interface GenerationExecutionOptions {
+  /** Main-owned Telegram queue provenance, resolved freshly at generation. */
+  telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
   /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
   permission?: GenerationPermission;
   /** Scheduled and other background runs can withhold tools that would recurse or mutate. */
@@ -1494,6 +1497,17 @@ export const llmClient = {
           authoritativeMode,
         );
       }
+      if (options.telegramSkillInvocation) {
+        const selection = options.telegramSkillInvocation;
+        const currentUser = [...authoritativeChat.messages].reverse().find((message) => message.role === "user");
+        if (options.interactionSurface !== "telegram" || selection.workspaceId !== authoritativeWorkspaceId || !currentUser) {
+          throw new Error("The queued Telegram skill no longer matches this conversation.");
+        }
+        const skill = await skillRegistry.resolveFresh(selection.workspaceId, selection.invocationId);
+        const prepared = formatPreparedSkillInvocation(skill, currentUser.content, selection.workspaceId, currentUser.id);
+        initialization.skillInvocation = prepared;
+        initialization.skillPrompt = prepared.formattedPrompt;
+      }
       if (workspaceMutationGate.isChanging(authoritativeWorkspaceId)) {
         throw new Error("The workspace is changing. Try again in a moment.");
       }
@@ -2013,7 +2027,7 @@ export const llmClient = {
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
       };
-      const promptJournal = piSession;
+
 
       const currentUser = [...generationChat.messages]
         .reverse()
@@ -2021,16 +2035,25 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
+      const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      if (!skillsEnabledForTurn) {
+        piSession = await projectVisibleHistoryWithoutSkills(piSession, priorVisibleMessages, model);
+      }
+      const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
       if (currentUser) {
         if (
           initialization.skillInvocation?.userMessageId === currentUser.id &&
           initialization.skillPrompt
         ) {
+          if ((await configStore.getSettings()).skillsEnabled === false) {
+            throw new Error("Skills are disabled in Settings → Skills.");
+          }
           if (preparedBotContext) {
             const allowedSkill = skillSnapshot?.available.find(
               (skill) =>
-                skill.name === currentUser.skill?.name && skill.source === currentUser.skill.source,
+                skill.name === initialization.skillInvocation?.provenance.name &&
+                skill.source === initialization.skillInvocation.provenance.source,
             );
             if (!allowedSkill) {
               throw new Error("This skill is not enabled for this Bot chat.");
@@ -3243,6 +3266,15 @@ export const llmClient = {
 
   abandonChatTurn(chatId: string, turnId: string, ownerId: string): boolean {
     return chatTurnAdmission.releaseMatching(chatId, turnId, ownerId);
+  },
+
+  /** Discard active snapshots when the user disables skills across the app. */
+  cancelForSkillsDisabled(): void {
+    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
+      this.cancel(streamId, "user_stop");
+    }
+    // Detached children may retain skill instructions in their forked context.
+    subagentRuntimeRegistry.abortAll();
   },
 
   /** Closing the global gate cancels every snapshot that could race the setting change. */

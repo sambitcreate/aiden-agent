@@ -377,15 +377,21 @@ async function fixture(options: {
         calls.push(`bots:restore:${deviceId}:${botId}:${revision}:${key}`);
         return { ...botDetail, id: botId, revision: "bot_revision_3" };
       },
-      capabilityCatalog: async (deviceId) => {
-        calls.push(`bots:catalog:${deviceId}`);
+      capabilityCatalog: async (deviceId, botId) => {
+        calls.push(`bots:catalog:${deviceId}:${botId ?? "generic"}`);
+        if (botId === "bot-missing") {
+          throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+        }
         return {
           revision: "bot_catalog_revision_1",
           providers: [],
           fileScopes: [],
           shellAvailable: true,
           connections: [],
-          skills: [],
+          skills: botId === undefined
+            ? []
+            : [{ id: `skill_saved_${botId}`, label: "Saved skill", available: false }],
+          skillsEnabled: false,
           otherCapabilities: [],
           notice,
         };
@@ -989,7 +995,7 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
 
     assert.deepEqual(app.calls.filter((call) => call.startsWith("bots:")), [
       "bots:list:true",
-      "bots:catalog:device-authorized-12345678",
+      "bots:catalog:device-authorized-12345678:generic",
       "bots:favorites:get",
       "bots:create:device-authorized-12345678:bot-create-key-0001",
       "bots:get:bot-1",
@@ -1002,6 +1008,53 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
       "bots:archive:bot-1:bot_revision_2",
       "bots:restore:device-authorized-12345678:bot-1:bot_revision_2:bot-restore-key-001",
     ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
+  const app = await fixture({ capabilities: ["bot:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const generic = await fetch(`${app.base}/bot-capabilities`, { headers });
+    assert.equal(generic.status, 200);
+    const genericBody = await generic.json();
+    assert.equal(genericBody.skillsEnabled, false);
+    assert.deepEqual(genericBody.skills, []);
+
+    const target = await fetch(`${app.base}/bot-capabilities?botId=bot-1`, { headers });
+    assert.equal(target.status, 200);
+    assert.deepEqual((await target.json()).skills, [
+      { id: "skill_saved_bot-1", label: "Saved skill", available: false },
+    ]);
+    assert.ok(app.calls.includes("bots:catalog:device-authorized-12345678:bot-1"));
+
+    const otherTarget = await fetch(`${app.base}/bot-capabilities?botId=bot-2`, { headers });
+    assert.equal(otherTarget.status, 200);
+    assert.deepEqual((await otherTarget.json()).skills, [
+      { id: "skill_saved_bot-2", label: "Saved skill", available: false },
+    ]);
+
+    for (const query of [
+      "botId=bot-1&botId=bot-2",
+      "target=bot-1",
+      "botId=",
+      `botId=${"b".repeat(161)}`,
+      "botId=bot/id",
+      "botId=bot-1&",
+    ]) {
+      const response = await fetch(`${app.base}/bot-capabilities?${query}`, { headers });
+      assert.equal(response.status, 400, query);
+      assert.equal((await response.json()).error.code, "invalid_request", query);
+    }
+
+    const missing = await fetch(`${app.base}/bot-capabilities?botId=bot-missing`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
   } finally {
     await app.close();
   }
