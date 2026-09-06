@@ -31,7 +31,8 @@ test("Tailscale operator denials map to a stable permission code", () => {
 test("existing Tailscale route codes stay exact for renderer mapping", () => {
   const classified = classifyAidenRemoteDesktopFailure(new Error("tailscale_https_unavailable"));
   assert.equal(classified.code, "tailscale_https_unavailable");
-  assert.equal(classified.message, "tailscale_https_unavailable");
+  assert.notEqual(classified.message, "tailscale_https_unavailable");
+  assert.match(classified.message, /couldn't safely update the Tailscale route/u);
 });
 
 test("remoteDesktopResult never rejects operational failures", async () => {

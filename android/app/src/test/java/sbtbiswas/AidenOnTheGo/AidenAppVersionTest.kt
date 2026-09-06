@@ -5,7 +5,7 @@ import org.junit.Test
 
 class AidenAppVersionTest {
     @Test
-    fun testClientVersionMatchesPublishedName() {
-        assertEquals("0.1.0", AidenAppVersion.NAME)
+    fun testClientVersionMatchesGradleVersionName() {
+        assertEquals(BuildConfig.VERSION_NAME, AidenAppVersion.NAME)
     }
 }

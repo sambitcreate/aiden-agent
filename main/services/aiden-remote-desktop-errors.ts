@@ -84,7 +84,10 @@ export function classifyAidenRemoteDesktopFailure(error: unknown): {
         message: USER_FACING_MESSAGES.tailscale_permission_denied,
       };
     }
-    return { code: thrown as `tailscale_${string}`, message: thrown };
+    return {
+      code: thrown as `tailscale_${string}`,
+      message: USER_FACING_MESSAGES.tailscale_operation_failed,
+    };
   }
   if (isAidenRemoteTlsTimeoutError(error)) {
     return { code: "tls_endpoint_timeout", message: USER_FACING_MESSAGES.tls_endpoint_timeout };

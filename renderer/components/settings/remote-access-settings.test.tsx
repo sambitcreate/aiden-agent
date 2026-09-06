@@ -61,6 +61,12 @@ test("Tailscale setup failures retain typed actionable remediation", () => {
   assert.match(source, /status\.tailscaleErrorCode === "https_unavailable"/u);
   assert.match(source, /Open Tailscale and sign in/u);
   assert.match(source, /Enable HTTPS for this Tailscale device name/u);
+  assert.match(source, /Tailscale isn't installed/u);
+  assert.match(source, /tailscale_status_unavailable/u);
+  assert.match(source, /tailscale_takeover_unavailable/u);
+  assert.match(source, /tailscale_reconciliation_unavailable/u);
+  assert.match(source, /tailscale_target_invalid/u);
+  assert.match(source, /if \(code\.includes\("tailscale_"\)\) return/u);
   assert.match(source, /<Badge color=\{status\.tailscaleConnected \? "green"/u);
   assert.match(source, /transportAllowsTailscale[\s\S]*!status\.tailscaleConnected/u);
   assert.match(source, /Local ready · \$\{tailscalePresentation\.badge\}/u);

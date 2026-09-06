@@ -139,6 +139,12 @@ pre-release updates. The release notes visibly identify the Beta channel.
 Never place an Apple private key, certificate password, or notarization credential in
 `package.json`, workflow logs, or an application resource.
 
+## October 2026 public cutover
+
+macOS 1.0 and public Android availability are planned for October 2026. Until that cutover, keep the present-tense **Beta** release process in this document: publish `Aiden-Agent-Beta-arm64.dmg`, keep `package.json` `"title": "Aiden Agent Beta"`, and leave the website and Homebrew consumers on the Beta alias.
+
+Rename Beta artifacts only at GA, and only after the `sambitcreate/aiden-website` and `sambitcreate/homebrew-tap` consumers are updated and deployed first. iPhone and iPad stay Internal TestFlight-only; App Store GA is not part of the October 2026 Mac/Android window.
+
 ## Version-line changes
 
 For every planned release, change the complete version in `package.json` and `package-lock.json`

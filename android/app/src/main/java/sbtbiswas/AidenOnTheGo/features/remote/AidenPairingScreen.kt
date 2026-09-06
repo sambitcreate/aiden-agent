@@ -54,12 +54,13 @@ fun AidenPairingScreen(
     var installationPendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
 
     fun formatCrockfordCode(input: String): String {
-        val clean = input.uppercase().replace("-", "").filter { it in "0123456789ABCDEFGHJKMNPQRSTVWXYZIL" }.take(20)
+        val clean = input.uppercase().replace("-", "").filter { it in "0123456789ABCDEFGHJKMNPQRSTVWXYZ" }.take(20)
         val chunks = clean.chunked(4)
         return chunks.joinToString("-")
     }
 
     fun handleScannedQRCode(scannedText: String) {
+        if (isPairing) return
         scope.launch {
             isPairing = true
             errorMessage = null
@@ -284,12 +285,13 @@ fun AidenPairingScreen(
 
             when (selectedTab) {
                 0 -> {
-                    // Live Camera QR Code Scanner
-                    AidenQRCodeScanner(
-                        onCodeScanned = { scanned ->
-                            handleScannedQRCode(scanned)
-                        }
-                    )
+                    if (!isPairing) {
+                        AidenQRCodeScanner(
+                            onCodeScanned = { scanned ->
+                                handleScannedQRCode(scanned)
+                            }
+                        )
+                    }
                     if (isPairing) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(

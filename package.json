@@ -2,6 +2,7 @@
   "name": "aiden-agent",
   "version": "0.38.1",
   "private": true,
+  "license": "MIT",
   "description": "A macOS AI workspace agent for local and hosted models",
   "keywords": [
     "ai-agent",

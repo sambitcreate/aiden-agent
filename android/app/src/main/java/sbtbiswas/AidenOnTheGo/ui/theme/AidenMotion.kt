@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.pow
 
@@ -68,12 +69,19 @@ fun Modifier.tactilePress(
     this
         .scale(scale)
         .pointerInput(onClick) {
-            awaitEachGesture {
-                awaitFirstDown().also { isPressed = true }
-                val up = waitForUpOrCancellation()
-                isPressed = false
-                if (up != null && onClick != null) {
-                    onClick()
+            if (onClick == null) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Final)
+                        isPressed = event.changes.any { it.pressed }
+                    }
+                }
+            } else {
+                awaitEachGesture {
+                    awaitFirstDown().also { isPressed = true }
+                    val up = waitForUpOrCancellation()
+                    isPressed = false
+                    if (up != null) onClick()
                 }
             }
         }

@@ -87,7 +87,7 @@ npm install
 npm run dev
 ```
 
-The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.md). It is not part of the Electron development command; open `ios/AidenOnTheGo.xcodeproj` or use the documented physical-device `xcodebuild` commands separately.
+The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.md). The Android validation client lives in [`android/`](android/README.md). Neither is part of the Electron development command; open `ios/AidenOnTheGo.xcodeproj` or the Android Gradle project separately.
 
 ### Mobile distribution
 

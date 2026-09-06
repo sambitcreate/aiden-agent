@@ -2,6 +2,8 @@
 
 Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS. The Mac owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
 
+iPhone and iPad stay **Internal TestFlight-only**. App Store GA is not part of the October 2026 macOS 1.0 and Android public window.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)

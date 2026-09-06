@@ -149,8 +149,23 @@ function friendlyTailscaleError(error: unknown): string {
   if (code.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
   if (code.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
   if (code.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
+  if (code.includes("tailscale_not_installed")) return "Tailscale isn't installed. Install Tailscale, then try again.";
   if (code.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
+  if (code.includes("tailscale_status_unavailable")) return "Aiden couldn't read Tailscale status. Open Tailscale, then try again.";
+  if (
+    code.includes("tailscale_takeover_unavailable")
+    || code.includes("tailscale_takeover_token_failed")
+  ) {
+    return "Aiden couldn't take over the Tailscale route. Check Tailscale Serve, then try again.";
+  }
+  if (code.includes("tailscale_reconciliation_unavailable")) {
+    return "Aiden couldn't refresh the Tailscale route. Check Tailscale Serve, then try again.";
+  }
+  if (code.includes("tailscale_target_invalid")) {
+    return "The Tailscale route target is invalid. Check Tailscale Serve, then try again.";
+  }
   if (code.includes("tailscale_route_busy")) return "Another Aiden profile is updating this Mac’s mobile route. Wait a moment and try again.";
+  if (code.includes("tailscale_")) return "Aiden couldn’t safely update the Tailscale route.";
   if (error instanceof AidenRemoteDesktopError) return error.message;
   return "Aiden couldn’t safely update the Tailscale route.";
 }

@@ -1,5 +1,5 @@
 package sbtbiswas.AidenOnTheGo
 
 object AidenAppVersion {
-    const val NAME = "0.1.0"
+    val NAME: String = BuildConfig.VERSION_NAME
 }

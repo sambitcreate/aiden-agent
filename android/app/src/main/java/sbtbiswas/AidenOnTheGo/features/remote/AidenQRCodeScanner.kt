@@ -34,7 +34,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -47,6 +47,7 @@ import com.google.mlkit.vision.common.InputImage
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * High-fidelity CameraX and MLKit QR Code Scanner with Viewfinder Overlay.
@@ -136,7 +137,8 @@ private fun CameraPreview(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var deliveredCode by remember { mutableStateOf(false) }
+    val closed = remember { AtomicBoolean(false) }
+    val delivered = remember { AtomicBoolean(false) }
 
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val scanner = remember {
@@ -149,14 +151,15 @@ private fun CameraPreview(
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(lifecycleOwner) {
+        closed.set(false)
         onDispose {
-            cameraExecutor.shutdown()
+            closed.set(true)
+            cameraExecutor.shutdownNow()
             scanner.close()
-            try {
+            runCatching {
                 if (cameraProviderFuture.isDone) {
                     cameraProviderFuture.get().unbindAll()
                 }
-            } catch (_: Exception) {
             }
         }
     }
@@ -168,6 +171,7 @@ private fun CameraPreview(
             }
 
             cameraProviderFuture.addListener({
+                if (closed.get()) return@addListener
                 val cameraProvider = cameraProviderFuture.get()
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
@@ -179,7 +183,7 @@ private fun CameraPreview(
 
                 imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                     val mediaImage = imageProxy.image
-                    if (mediaImage != null && !deliveredCode) {
+                    if (mediaImage != null && !closed.get() && !delivered.get()) {
                         val image = InputImage.fromMediaImage(
                             mediaImage,
                             imageProxy.imageInfo.rotationDegrees
@@ -187,8 +191,7 @@ private fun CameraPreview(
                         scanner.process(image)
                             .addOnSuccessListener { barcodes ->
                                 val qr = barcodes.firstOrNull()?.rawValue
-                                if (qr != null && !deliveredCode) {
-                                    deliveredCode = true
+                                if (qr != null && !closed.get() && delivered.compareAndSet(false, true)) {
                                     onCodeScanned(qr)
                                 }
                             }
@@ -201,6 +204,10 @@ private fun CameraPreview(
                 }
 
                 try {
+                    if (closed.get()) {
+                        cameraProvider.unbindAll()
+                        return@addListener
+                    }
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner,
