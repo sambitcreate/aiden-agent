@@ -1,6 +1,6 @@
 # Unified settings and workspace presentation
 
-Status: Active — implementation and review complete; PR/CI delivery pending (2026-09-06).
+Status: Complete — implemented, reviewed, and delivered in PR #97 (2026-09-06).
 
 ## Scope
 
@@ -35,4 +35,8 @@ Status: Active — implementation and review complete; PR/CI delivery pending (2
 - Repository automated review then identified operator-compaction and additional Bot-catalog paths. Manual LLM/VCC compaction now uses visible-only history while Skills is disabled, and disabling cancels active operator compactions. Real journal/provider tests verify no hidden skill payload or cancelled checkpoint.
 - Bot catalogs pause discovery and incarnation reconciliation. Saved exact skill bindings survive disabled reads, unrelated edits, restart, and re-enable; real content changes still fail closed. Targeted editor catalogs and authenticated dormant chat-selection entries preserve saved choices without granting new skills.
 - The additive optional catalog `skillsEnabled` field is documented in the normative API/OpenAPI and shared fixtures. Desktop, iOS, and Android preserve saved choices while still preventing unavailable additions and rejecting malformed flags. Android14 focused tests passed, iOS generic app/test compilation passed, and an independent source review found no actionable concerns. Physical iPhone13 execution remains blocked by the lock screen.
-- Focused remediation suites, lint, and type checks passed. Final full local validation and latest-head CI are pending before archive.
+- Focused remediation suites, full local tests/build/E2E, lint, type checks, and implementation CI passed after all fixes; see Delivery below.
+
+## Delivery
+
+PR [#97](https://github.com/sambitcreate/aiden-agent/pull/97) contains the completed implementation. Full local tests, production build, lint, type checks, and Electron E2E passed after all fixes. The CI workflow and Release consumer contract passed for implementation revision `4ad6e5ec1`, confirmed by the requested GPT-5.6 Luna max watcher. The final archive-only revision is tracked by the PR’s live checks. iOS physical execution remains the explicitly recorded device-lock limitation.
