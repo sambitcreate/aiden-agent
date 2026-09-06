@@ -247,7 +247,7 @@ test.describe("with a workspace", () => {
     await expect(sidebarResizer).toHaveAttribute("aria-valuenow", "340");
 
     const workspaceActions = page.getByRole("button", {
-      name: /^Actions for Aiden E2E workspace,/u,
+      name: "Actions for Aiden E2E workspace", exact: true,
     });
     await workspaceActions.evaluate((node) => node.scrollIntoView({ block: "end" }));
     const triggerBounds = await workspaceActions.boundingBox();

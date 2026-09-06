@@ -76,7 +76,7 @@ export function ScheduledTasksSettings() {
           </Button>
         </Callout>
       ) : null}
-      <FieldSet title="Scheduled tasks">
+      <FieldSet title="Background execution">
         <Field
           label="Enable scheduled tasks"
           description="Pause or resume every automatic task without deleting its schedule."

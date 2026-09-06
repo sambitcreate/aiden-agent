@@ -14,6 +14,14 @@ test("every settings destination uses the shared page and grouped row system", (
     read("./web-search-settings.tsx"),
     /<header className="settings-page-heading flex[\s\S]*?Web Search[\s\S]*?Allow Web Search/u,
   );
+  for (const [page, title] of [
+    ["about", "About"],
+    ["memory", "Memory"],
+    ["remote-access", "Remote Access"],
+    ["scheduled-tasks", "Scheduled tasks"],
+  ]) {
+    assert.ok(!read(`./${page}-settings.tsx`).includes(`<FieldSet title="${title}">`));
+  }
   const ui = read("../ui.tsx");
   assert.match(ui, /settings-group-card/u);
   assert.match(ui, /settings-field-control/u);

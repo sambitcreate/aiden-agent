@@ -1,5 +1,18 @@
 import { E2E_MODEL_DISPLAY_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
+type PadReachability = {
+  fits: boolean;
+  pad: { top: number; bottom: number; height: number };
+  scrollport: {
+    top: number;
+    bottom: number;
+    clientHeight: number;
+    scrollHeight: number;
+    scrollTop: number;
+  } | null;
+  viewport: { width: number; height: number };
+};
+
 // Measure rendered geometry in Electron, including both navigation columns and
 // native zoom; CSS/source assertions cannot catch a square extending offscreen.
 test("Model Pad fits resized settings and keeps models usable at native zoom", async ({
@@ -74,15 +87,45 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
           fitsViewport: true,
         });
       // Small/zoomed windows scroll their chrome; the entire Pad remains reachable.
-      await pad.scrollIntoViewIfNeeded();
       await expect
-        .poll(() =>
-          pad.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            return bounds.top >= 0 && bounds.bottom <= innerHeight;
-          }),
+        .poll(
+          () =>
+            pad.evaluate(async (element): Promise<PadReachability> => {
+              // A sidebar collapse or supporting-panel transition can finish after
+              // the first scroll. Reapply the user's scroll after layout settles,
+              // then sample on the following frame.
+              element.scrollIntoView({ block: "center", inline: "nearest" });
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              const bounds = element.getBoundingClientRect();
+              let scrollport = element.parentElement;
+              while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
+                scrollport = scrollport.parentElement;
+              }
+              const scrollportBounds = scrollport?.getBoundingClientRect();
+              const visibleTop = Math.max(0, scrollportBounds?.top ?? 0);
+              const visibleBottom = Math.min(innerHeight, scrollportBounds?.bottom ?? innerHeight);
+              return {
+                fits: bounds.top >= visibleTop && bounds.bottom <= visibleBottom,
+                pad: {
+                  top: Math.round(bounds.top),
+                  bottom: Math.round(bounds.bottom),
+                  height: Math.round(bounds.height),
+                },
+                scrollport: scrollportBounds
+                  ? {
+                      top: Math.round(scrollportBounds.top),
+                      bottom: Math.round(scrollportBounds.bottom),
+                      clientHeight: scrollport!.clientHeight,
+                      scrollHeight: scrollport!.scrollHeight,
+                      scrollTop: scrollport!.scrollTop,
+                    }
+                  : null,
+                viewport: { width: innerWidth, height: innerHeight },
+              };
+            }),
+          { message: `reachable Pad at ${width}×${height}, ${zoom} zoom, ${panel}` },
         )
-        .toBe(true);
+        .toMatchObject({ fits: true });
       const legend = page.locator(".model-pad-legend");
       await legend.scrollIntoViewIfNeeded();
       await expect(legend).toBeInViewport();

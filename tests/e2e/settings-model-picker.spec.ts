@@ -50,7 +50,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Remote Access":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Remote Access", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Remote Access", exact: true }),
       ).toBeVisible();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
@@ -64,7 +64,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Scheduled tasks":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Scheduled tasks", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Scheduled tasks", exact: true }),
       ).toBeVisible();
       return;
     case "Aiden":
@@ -73,7 +73,7 @@ async function assertRenderedSettingsDestination(
       ).toBeVisible();
       return;
     case "Computer Use":
-      await expect(page.getByRole("heading", { level: 2, name: /^Computer Use/u })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();
       return;
     case "Voice":
       await expect(
@@ -92,7 +92,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "About":
       await expect(
-        page.getByRole("heading", { level: 2, name: "About", exact: true }),
+        page.getByRole("heading", { level: 1, name: "About", exact: true }),
       ).toBeVisible();
   }
 }

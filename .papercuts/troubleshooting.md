@@ -345,3 +345,6 @@ owns; reopen the terminal before judging the final live state.
   validate at dispatch and generation, and keep only raw arguments in ChatStore.
   Refresh command registration after a gate change without blocking Settings;
   bound that registration request so later updates cannot wait forever.
+
+- 2026-09-06 Settings CI: full Electron coverage exposed duplicate destination/group headings on About (also audited Memory/Remote Access), and a sidebar fixture selector that assumed the old visible path suffix. Give groups distinct labels, assert one exact destination heading across all pages, and select the new path-free workspace accessible label.
+- The hosted Model Pad reachability check failed after a one-time `scrollIntoViewIfNeeded`, while the same matrix passed locally. Retry standard centered scrolling while responsive layout settles, sample the next frame, and assert against the intersection of the actual scrollport and viewport. Include matrix and geometry values in failures. A responsive-layout race is the working explanation; deterministic product overflow was not reproduced.

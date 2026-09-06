@@ -462,7 +462,7 @@ export function RemoteAccessSettings() {
 
   if (settingsQuery.isLoading) {
     return (
-      <FieldSet title="Remote Access">
+      <FieldSet title="Connection">
         <Field label="Status" description="Checking Aiden's local remote service.">
           <span className="flex items-center justify-end gap-2 text-small text-secondary">
             <Loader2 className="size-4 animate-spin" /> Checking…
@@ -516,7 +516,7 @@ export function RemoteAccessSettings() {
 
   return (
     <>
-      <FieldSet title="Remote Access">
+      <FieldSet title="Connection">
         <Field
           label={(
             <span className="flex items-center gap-1.5">
