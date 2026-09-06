@@ -1676,6 +1676,7 @@ export class BotCapabilityStateEditor {
     botId: string;
     chatId?: string;
     snapshot: BotCapabilityCatalogSnapshot;
+    skillsEnabled?: boolean;
   }): BoundBotCustomSelection | undefined {
     const policy = this.policy(input.botId);
     const model = storedBotModelAuthority(policy);
@@ -1686,13 +1687,18 @@ export class BotCapabilityStateEditor {
       assertBoundBotProviderModelCurrent(policy.visionModel.binding, input.snapshot);
     }
     if (policy.accessMode === "custom") {
-      assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot);
+      assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot, {
+        skillsEnabled: input.skillsEnabled,
+      });
     }
     if (input.chatId) {
       const chat = this.chat(input.chatId);
       if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
       if (chat.mode === "custom") {
-        validateSelectionAgainstCatalog(chat.custom, input.snapshot.catalog);
+        validateSelectionAgainstCatalog(
+          input.skillsEnabled === false ? { ...chat.custom, skillIds: [] } : chat.custom,
+          input.snapshot.catalog,
+        );
       }
     }
     return policy.accessMode === "custom"

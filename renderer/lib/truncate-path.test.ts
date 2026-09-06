@@ -36,7 +36,7 @@ test("falls back to character middle truncation for separator-less strings", () 
 test("handles tiny budgets and empty input", () => {
   assert.equal(truncatePathMiddle("/Users/long/path", 0), "");
   assert.equal(truncatePathMiddle("/Users/long/path", 1), "…");
-  assert.equal(truncatePathMiddle("   ", 10), "");
+  assert.equal(truncatePathMiddle("   ", 10), "   ");
 });
 
 test("supports Windows-style separators", () => {

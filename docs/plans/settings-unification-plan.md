@@ -1,0 +1,30 @@
+# Unified settings and workspace presentation
+
+Status: Active — implementation and review complete; PR/CI delivery pending (2026-09-06).
+
+## Scope
+
+1. Hide workspace folder labels by default. Add persisted Appearance controls to show paths and choose beginning/end, last folders, or beginning truncation. Apply consistently to workspace navigation while retaining useful branch and no-folder identity.
+2. Fit Personal Model Pad to its actual available width and height, including narrow/short windows, browser panels, and zoom. Keep all controls reachable by scrolling when the window cannot contain the entire page.
+3. Add a global Skills switch with authoritative runtime enforcement for configured and discovered skills, stale invocations, and chat entry points. Preserve individual skill choices. Explain the control during onboarding.
+4. Use Appearance's page hierarchy, soft grouped cards, inset row separators, spacing, and right-aligned controls across Settings. Preserve input focus behavior and visible keyboard focus. Align Telegram switches to the right and correct misleading setup copy.
+5. Use an SD-card icon for Memory and remove brain glyphs elsewhere.
+
+## Validation and delivery
+
+- Extend configuration, path formatting, runtime skill enforcement, settings accessibility, and responsive layout tests; register new suites.
+- Inspect both native clients for shared skill behavior and run applicable focused mobile suites.
+- Run type checks, relevant tests, build, and an Electron settings size matrix. Record environmental limits and workflow friction.
+- Request three independent fresh-context GPT-5.6 Sol reviewers at medium effort: adversarial runtime/security, edge cases/responsiveness, and integration/accessibility/regression. Fix validated findings and rerun affected checks.
+- Create a PR in sambitcreate/aiden-agent. Have a fresh GPT-5.6 Luna reviewer at max effort watch CI; fix failures until all required checks pass.
+- Update project memory and archive this plan after delivery completes.
+
+## Implementation and verification
+
+- All five scope items are implemented. Settings uses shared page, group, row, and semantic token conventions documented in `docs/settings-design-system.md`.
+- Workspace paths are opt-in, persist across relaunch, support all three formats, and preserve grapheme clusters and meaningful whitespace. Duplicate workspace names retain distinct short IDs when paths are hidden.
+- Model Pad uses measured available space. Electron coverage includes 390–1440px widths, short windows, 125%/150% zoom, open model/insight panels, keyboard movement, and saving. A 160px minimum canvas remains scrollable in very short windows.
+- Global Skills enforcement covers discovery, tools, stale attachments, queued Telegram commands, existing chat journals/compaction, and Bot runtime grants without erasing saved choices. An Electron provider-boundary test verifies hidden skill instructions are absent from the next request after disabling Skills.
+- Three fresh-context GPT-5.6 Sol medium reviews covered runtime/adversarial behavior, layout/edge cases, and integration/accessibility. Confirmed findings were fixed and regression-tested; runtime re-review reported no remaining actionable findings.
+- Final local checks passed: full `npm test`, production build, lint, renderer and E2E type checks, focused runtime/settings/onboarding suites, existing model-picker E2E, new settings E2E, and responsive Model Pad E2E. Android's 12 focused Bot contract tests passed. The iOS test bundle compiled, but execution was blocked because both connected physical iPhones were locked; repository policy prohibits simulator fallback.
+- CI and PR outcome will be recorded here before archiving.

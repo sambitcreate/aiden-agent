@@ -126,7 +126,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "appearance",
     title: "Appearance",
     group: "App",
-    keywords: ["theme", "light", "dark"],
+    keywords: ["theme", "light", "dark", "workspace", "folder", "paths", "truncation"],
   },
   {
     id: "about",

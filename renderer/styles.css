@@ -529,9 +529,8 @@ textarea {
  * the current model instead of turning the map into an unlabeled mood field.
  */
 .model-pad-fieldset {
-  --model-pad-fieldset-width: max(100%, min(64rem, calc(100vw - 19rem)));
-  width: var(--model-pad-fieldset-width);
-  margin-inline: calc((100% - var(--model-pad-fieldset-width)) / 2);
+  width: 100%;
+  min-width: 0;
   container: model-pad-fieldset / inline-size;
 }
 
@@ -551,17 +550,13 @@ textarea {
 }
 
 .settings-model-pad-grid[data-panel-open="true"] {
-  grid-template-columns: minmax(28rem, 40rem) minmax(16rem, 18rem);
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
 }
 
 .model-pad-canvas {
   width: min(100%, 40rem);
   margin-inline: auto;
   view-transition-name: model-pad-canvas;
-}
-
-.settings-model-pad-grid[data-panel-open="true"] .model-pad-canvas {
-  width: min(100%, 40rem);
 }
 
 .model-pad-browser {
@@ -593,6 +588,8 @@ textarea {
 }
 
 .model-pad-axis-label {
+  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  margin-inline: auto;
   color: var(--text-secondary);
   font-size: var(--text-strong);
   font-weight: 600;
@@ -601,6 +598,8 @@ textarea {
 }
 
 .model-pad {
+  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  margin-inline: auto;
   cursor: crosshair;
   contain: layout paint;
   background:
@@ -780,7 +779,7 @@ textarea {
 }
 
 .model-pad-catalog {
-  max-height: min(48rem, calc(100vh - 12rem));
+  max-height: max(8rem, var(--model-pad-available-size, calc(100dvh - 24rem)));
 }
 
 .model-pad-catalog-shell {
@@ -955,6 +954,107 @@ textarea {
 
 .settings-responsive {
   container: settings-content / inline-size;
+  --settings-card-radius: 16px;
+  --settings-card-fill: color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  --settings-row-inset: 16px;
+  --settings-row-gap: 18px;
+}
+
+/* All Settings destinations share Appearance's page, group, and row language. */
+.settings-page {
+  min-width: 0;
+  padding-bottom: 28px;
+}
+
+.settings-page-heading {
+  margin: 0 4px 26px;
+}
+
+.settings-page-heading h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 32px;
+}
+
+.settings-page-heading p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.settings-page .settings-group-title {
+  margin: 0 4px 12px;
+  padding: 0;
+  font-size: var(--text-strong);
+  font-weight: 600;
+}
+
+.settings-page .settings-card,
+.settings-page .settings-group-card {
+  border: 1px solid var(--border-separator);
+  border-radius: var(--settings-card-radius);
+  background: var(--settings-card-fill);
+  box-shadow: var(--elevation-control);
+}
+
+.settings-page .settings-field {
+  min-width: 0;
+  min-height: 64px;
+  padding: 12px var(--settings-row-inset);
+  gap: var(--settings-row-gap);
+}
+
+.settings-page .settings-field-horizontal {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.settings-page .settings-field-control > * {
+  max-width: 100%;
+}
+
+/* Compact controls stay at the trailing edge, even when the row wraps. */
+.settings-page .settings-field-control > button,
+.settings-page .settings-field-control > [role="switch"] {
+  display: flex;
+  margin-left: auto;
+}
+
+
+.settings-page .settings-field-horizontal:has(> .settings-field-control > [role="switch"]) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.settings-page .settings-field-control > .flex {
+  flex-wrap: wrap;
+}
+
+.settings-page .settings-field-control input {
+  min-width: 0;
+}
+
+.settings-page .settings-field:has(> .settings-field-control:empty) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-page :is(button, [role="button"], summary):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@container settings-content (max-width: 540px) {
+  .settings-page .settings-field-horizontal {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .settings-page-heading.flex {
+    flex-wrap: wrap;
+  }
 }
 
 @container composer (max-width: 520px) {
@@ -1808,8 +1908,8 @@ textarea {
 .appearance-preferences-card {
   overflow: hidden;
   border: 1px solid var(--border-separator);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  border-radius: var(--settings-card-radius, 16px);
+  background: var(--settings-card-fill, color-mix(in srgb, var(--surface-popover) 72%, transparent));
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.025);
 }
 

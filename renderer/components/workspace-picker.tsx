@@ -1,7 +1,9 @@
 import * as React from "react";
 import { Check, Folder, FolderX, Loader2 } from "lucide-react";
 import type { Workspace } from "../lib/types";
-import { truncatePathMiddle } from "../lib/truncate-path";
+import { workspaceDisplayName } from "../lib/workspace-path-display";
+import { WorkspacePathLabel } from "./workspace-path-label";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import {
   Command,
   CommandEmpty,
@@ -32,6 +34,7 @@ export function WorkspacePicker({
   onCreateScratchWorkspace,
   blockedReason,
 }: WorkspacePickerProps) {
+  const pathPreferences = useWorkspacePathPreferences();
   const [open, setOpen] = React.useState(false);
   const [pending, setPending] = React.useState<string | null>(null);
   const blockedReasonId = React.useId();
@@ -108,15 +111,10 @@ export function WorkspacePicker({
                   <Folder className="size-4.5 shrink-0 text-secondary" />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-regular">
-                      {workspace.name}
+                      {workspaceDisplayName(workspace, workspaces)}
                     </span>
-                    {workspace.folderPath ? (
-                      <span
-                        className="text-small text-tertiary"
-                        title={workspace.folderPath}
-                      >
-                        {truncatePathMiddle(workspace.folderPath)}
-                      </span>
+                    {workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                      <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
                     ) : null}
                   </span>
                   {pending === workspace.id ? (

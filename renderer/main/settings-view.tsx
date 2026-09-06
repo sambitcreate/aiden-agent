@@ -20,7 +20,6 @@ import {
   Clock3,
   Send,
   Smartphone,
-  BrainCircuit,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -36,6 +35,8 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { MemoryCardIcon } from "../components/memory-card-icon";
+import { SettingsPage } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
@@ -82,7 +83,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <AidenSidebarLogo />,
   computerUse: <MousePointer2 className="size-5" />,
-  memory: <BrainCircuit className="size-5" />,
+  memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
@@ -113,6 +114,24 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
+};
+
+const DESCRIPTIONS: Record<SettingsSection, string> = {
+  providers: "Connect models to Aiden and manage the providers you use.",
+  modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
+  skills: "Choose the reusable instructions Aiden can load in chats.",
+  mcp: "Connect tools and services to extend what Aiden can do.",
+  telegram: "Connect your Telegram bots and choose how they respond.",
+  remoteAccess: "Pair your devices to use Aiden on the go.",
+  websearch: "Choose how Aiden searches and reads the web.",
+  computerUse: "Manage Aiden’s access to native apps and your screen.",
+  memory: "Control what Aiden remembers and how long chats stay manageable.",
+  scheduledTasks: "Manage when Aiden works in the background.",
+  assistant: "Choose how your Aiden companion works with you.",
+  voice: "Set up voice input, transcription, and dictation.",
+  shortcut: "Customize the keyboard controls for Aiden and the app.",
+  appearance: "Shape Aiden’s light and dark interfaces independently. Changes apply live.",
+  about: "App information, updates, and diagnostics.",
 };
 
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
@@ -191,7 +210,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                                 replace: true,
                               })
                             }
-                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none ${
+                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring ${
                               selected
                                 ? "bg-list-selection text-primary hover:bg-list-selection"
                                 : "text-primary"
@@ -218,8 +237,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       }
     >
       <ScrollArea className="h-full" title="Settings">
-        <div className="settings-responsive mx-auto w-full max-w-2xl px-5 py-6">
-          <ActiveSection />
+        <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
+          <SettingsPage heading={!["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(section)} title={NAV.find((item) => item.id === section)?.title ?? "Settings"} description={DESCRIPTIONS[section]}>
+            <ActiveSection />
+          </SettingsPage>
         </div>
       </ScrollArea>
     </SplitView>

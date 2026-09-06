@@ -3,12 +3,13 @@ import { chmod, open, readFile, readdir, rename, stat, unlink, writeFile } from 
 import path from "node:path";
 import {
   type AgentMessage,
+  buildSessionContext,
 } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
 import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
-import type { PiPersistentSessionMetadata, PiSessionPort } from "./pi-session-port.js";
+import type { PiPersistentSessionMetadata, PiSessionMetadata, PiSessionPort, PiSessionEntry, PiEntryProjector } from "./pi-session-port.js";
 import {
   createCurrentPiSessionRepository,
   type PiSessionRepositoryPort,
@@ -270,6 +271,59 @@ export async function syncChatMessagesToPiSession(
     });
     synchronized.add(message.id);
   }
+}
+
+/**
+ * Execute from visible history while skills are disabled. Old journal messages
+ * may contain expanded skill inputs, tool results, or summaries of those values.
+ * They stay durable but must not enter inference, compaction, or history recall.
+ * New messages still append to the real journal, including normal tool pairs.
+ */
+export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMetadata>(
+  session: PiSessionPort<M>,
+  messages: readonly ChatMessage[],
+  model: Model<Api>,
+): Promise<PiSessionPort<M>> {
+  const originalEntries = await session.getEntries();
+  const originalLeafId = await session.getLeafId();
+  const cutoff = originalEntries.reduce((latest, entry) => Math.max(latest, entry.seq), -1);
+  const visible: PiSessionEntry[] = messages.flatMap((message, index) => {
+    const id = `visible-skill-free-${message.id}`;
+    const parentId = index === 0 ? null : `visible-skill-free-marker-${messages[index - 1]!.id}`;
+    return [
+      { type: "message" as const, id, parentId, seq: index * 2 - messages.length * 2,
+        timestamp: message.createdAt, message: chatMessageToPiMessage(message, model, true) },
+      { type: "custom" as const, id: `visible-skill-free-marker-${message.id}`, parentId: id,
+        seq: index * 2 + 1 - messages.length * 2, timestamp: message.createdAt,
+        customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id } },
+    ];
+  });
+  // Compaction fences writes against the real durable leaf. Keep that identity
+  // as an inert boundary after the synthetic prefix, without exposing its data.
+  if (originalLeafId) visible.push({
+    type: "custom", id: originalLeafId, parentId: visible[visible.length - 1]?.id ?? null,
+    seq: cutoff, timestamp: 0, customType: "aiden.skills-hidden-context-boundary.v1",
+  });
+  const view = (projectors: Readonly<Record<string, PiEntryProjector>> = {}): PiSessionPort<M> => {
+    const getBranch = async () => [
+      ...structuredClone(visible),
+      ...(await session.getBranch()).filter((entry) => entry.seq > cutoff),
+    ];
+    return {
+      appendMessage: (message) => session.appendMessage(message),
+      appendCustomEntry: (type, data) => session.appendCustomEntry(type, data),
+      appendCompaction: (input) => session.appendCompaction(input),
+      getBranch,
+      // Recall must not bypass the projection by traversing historical branches.
+      getEntries: getBranch,
+      buildContext: async () => buildSessionContext(await getBranch(), { entryProjectors: projectors }),
+      getLeafId: () => session.getLeafId(),
+      getMetadata: () => session.getMetadata(),
+      moveTo: (entryId) => session.moveTo(entryId),
+      withEntryProjectors: (additional) => view({ ...projectors, ...additional }),
+    };
+  };
+  return view();
 }
 
 async function appendPiTransaction<T>(

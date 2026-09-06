@@ -311,3 +311,37 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+## 2026-09-06 — Model Pad responsive Settings
+
+- A square bounded only by window width still overflows short Settings windows;
+  measure the actual scrollport and the title, toolbar, axes, and legend height.
+  Compensate for scrollTop so browsing supporting panels cannot grow the Pad.
+- Constraining the legend to a small square causes extra wrapping and consumes
+  the saved height. Keep the legend at column width and center the square and
+  axis labels independently. Remove duplicate Pad titles once Settings supplies
+  its shared page heading. The Electron matrix covers minimum window size and
+  native 125% zoom as well as wide/short layouts.
+
+## 2026-09-06 — Global skills gate verification
+
+- Skill availability has two production readers: the workspace registry and Bot
+  capability inventory. Gate both before discovery and check again after an
+  asynchronous scan; otherwise a cached or in-flight snapshot can expose skills
+  after disabling them. Existing skill tools also need an execution-time check.
+- Android verification needs the installed Homebrew JDK 21 path; macOS
+  `java_home` did not discover it. iOS XCTest compiled with Xcode beta but the
+  default physical iPhone was locked, so verification retried the other connected
+  physical iPhone in accordance with the no-simulator project requirement. Both
+  devices were locked, so signed XCTest execution remains pending an unlocked
+  device; the app and test bundle compiled successfully.
+- Disabling discovery alone does not remove skill instructions already expanded
+  into a Pi journal. The disabled execution view must project visible messages
+  and new turn entries for inference, compaction, and recall. Pi v4 stores an
+  explicit retained tail, but compaction still fences against the durable leaf:
+  keep that leaf identity as an inert boundary and prove JSONL reopen parity.
+- Telegram commands previously expanded instructions before queue dispatch and
+  persisted that expansion as user text. Queue opaque skill provenance instead,
+  validate at dispatch and generation, and keep only raw arguments in ChatStore.
+  Refresh command registration after a gate change without blocking Settings;
+  bound that registration request so later updates cannot wait forever.

@@ -565,6 +565,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSounds",
     "showLocalModelReasoning",
     "memoryEnabled",
+    "skillsEnabled",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",

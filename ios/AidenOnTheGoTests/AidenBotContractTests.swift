@@ -1496,6 +1496,28 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
+    func testGloballyDisabledSkillsRejectStaleSelectionsAndAllowSkillFreeChoices() throws {
+        let fixture = try sharedFixtureObject()
+        var catalogObject = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        catalogObject["skills"] = [] as [[String: Any]]
+        let catalog = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self, from: data(for: catalogObject)
+        )
+        let update = try XCTUnwrap(fixture["botPolicyUpdate"] as? [String: Any])
+        let request = try XCTUnwrap(update["request"] as? [String: Any])
+        var selectionObject = try XCTUnwrap(request["custom"] as? [String: Any])
+        let stale = try AidenRemoteJSONDecoder.decode(
+            AidenBotCustomSelection.self, from: data(for: selectionObject)
+        )
+        XCTAssertFalse(stale.skillIds.isEmpty)
+        XCTAssertFalse(catalog.containsAvailable(stale))
+        selectionObject["skillIds"] = [] as [String]
+        let skillFree = try AidenRemoteJSONDecoder.decode(
+            AidenBotCustomSelection.self, from: data(for: selectionObject)
+        )
+        XCTAssertTrue(catalog.containsAvailable(skillFree))
+    }
+
     func testCatalogKeepsResponseTombstonesButRejectsUnavailableMutationSelections() throws {
         let fixture = try sharedFixtureObject()
         var catalogObject = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])

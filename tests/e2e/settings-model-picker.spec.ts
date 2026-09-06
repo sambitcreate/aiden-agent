@@ -30,7 +30,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Model Pad":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Personal Model Pad", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Model Pad", exact: true }),
       ).toBeVisible();
       return;
     case "Skills":

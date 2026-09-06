@@ -11,7 +11,7 @@ import type { GenerationThinkingLevel } from "../../../renderer/shared/generatio
 import type { UsageRequestSource } from "../usage-store-core.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { scheduledProviderFingerprint } from "../schedule-provider-binding.js";
-import type { TelegramBotBindingSnapshot } from "./telegram-queue.js";
+import type { TelegramBotBindingSnapshot, TelegramSkillInvocation } from "./telegram-queue.js";
 import { telegramBotNoticeAudienceId } from "./telegram-profile-config.js";
 
 /** Minimal llmClient surface the shim needs. */
@@ -39,6 +39,7 @@ export interface TelegramLlmClient {
       turnId: string;
       botAudienceId?: string;
       providerFingerprint?: string;
+      telegramSkillInvocation?: TelegramSkillInvocation;
     },
   ): Promise<boolean>;
   isChatBusy(chatId: string): boolean;
@@ -240,7 +241,7 @@ export async function sendTelegramTurn(
   workspace?: TelegramWorkspaceResolution,
   attachments?: readonly Attachment[],
   observer?: (channel: NotificationChannel, payload: unknown) => void,
-  options?: { binding?: TelegramBotBindingSnapshot },
+  options?: { binding?: TelegramBotBindingSnapshot; skillInvocation?: TelegramSkillInvocation },
 ): Promise<TelegramTurnResult> {
   const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
   if (resolvedWorkspace.kind === "stale") {
@@ -354,6 +355,7 @@ export async function sendTelegramTurn(
         interactionSurface: "telegram",
         usageSource: "telegram",
         turnId: streamId,
+        ...(options?.skillInvocation ? { telegramSkillInvocation: options.skillInvocation } : {}),
         ...(options?.binding
           ? {
               botAudienceId: telegramBotNoticeAudienceId(

@@ -215,6 +215,16 @@ class AidenBotContractTest {
     }
 
     @Test
+    fun testGloballyDisabledSkillsRejectStaleSelectionsAndAllowSkillFreeChoices() {
+        val fixture = loadSharedContractFixture()
+        val catalog = fixture.botCapabilityCatalog.copy(skills = emptyList())
+        val stale = requireNotNull(fixture.botPolicyUpdate.request.custom)
+        assertTrue(stale.skillIds.isNotEmpty())
+        assertFalse(catalog.containsAvailable(stale))
+        assertTrue(catalog.containsAvailable(stale.copy(skillIds = emptyList())))
+    }
+
+    @Test
     fun testBotCustomSelectionSubsetRules() {
         val ceiling = AidenBotCustomSelection(
             fileScopeIds = listOf("scope_1", "scope_2"),

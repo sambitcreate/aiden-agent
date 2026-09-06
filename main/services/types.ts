@@ -567,6 +567,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
+  /** Global skill discovery/invocation gate. Omitted means enabled. */
+  skillsEnabled?: boolean;
   /** Global durable-memory gate. Omitted means enabled. */
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */

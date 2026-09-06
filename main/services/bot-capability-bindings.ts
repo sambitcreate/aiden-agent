@@ -1247,6 +1247,7 @@ function findOrAdoptByIdentity<T extends { option: { id: string } }>(
 export function botCustomSelectionDrift(
   binding: BoundBotCustomSelection,
   current: BotCapabilityCatalogSnapshot,
+  options: { skillsEnabled?: boolean } = {},
 ): BotCapabilityDriftIssue[] {
   binding = parseBoundBotCustomSelection(binding);
   const issues: BotCapabilityDriftIssue[] = [];
@@ -1306,12 +1307,14 @@ export function botCustomSelectionDrift(
       : resourceIssue("connection", bound.option.id, bound.exactFingerprint, found);
     if (foundIssue) issues.push(foundIssue);
   }
-  for (const bound of binding.skills) {
-    const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
-    const foundIssue = found?.sourceId !== bound.sourceId
-      ? issue("skill", bound.option.id, "changed_or_removed")
-      : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
-    if (foundIssue) issues.push(foundIssue);
+  if (options.skillsEnabled !== false) {
+    for (const bound of binding.skills) {
+      const found = findByIdOrSource(current.resources.skills, bound.option.id, bound.sourceId);
+      const foundIssue = found?.sourceId !== bound.sourceId
+        ? issue("skill", bound.option.id, "changed_or_removed")
+        : resourceIssue("skill", bound.option.id, bound.exactFingerprint, found);
+      if (foundIssue) issues.push(foundIssue);
+    }
   }
   for (const bound of binding.otherCapabilities) {
     const found = current.resources.otherCapabilities.find(
@@ -1336,8 +1339,9 @@ export function botCustomSelectionDrift(
 export function assertBoundBotCustomSelectionCurrent(
   binding: BoundBotCustomSelection,
   current: BotCapabilityCatalogSnapshot,
+  options: { skillsEnabled?: boolean } = {},
 ): void {
-  const issues = botCustomSelectionDrift(binding, current);
+  const issues = botCustomSelectionDrift(binding, current, options);
   if (issues.length > 0) throw new BotCapabilityBindingDriftError(issues);
 }
 

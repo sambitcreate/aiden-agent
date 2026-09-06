@@ -37,3 +37,24 @@ test("skill tool execution does not traverse a directory replaced after discover
   assert.match(text, /snapshotted instructions/u);
   assert.doesNotMatch(text, /CANARY_SECRET_NAME/u);
 });
+
+test("a skill tool created before global disable refuses to return its instructions", async () => {
+  let enabled = true;
+  const tool = makeSkillTool(
+    {
+      stableId: "configured:one",
+      name: "Review",
+      description: "Review code",
+      instructions: "PRIVATE_SKILL_INSTRUCTIONS",
+      source: "configured",
+      enabled: true,
+      available: true,
+      invocationId: `sk1_${"a".repeat(43)}`,
+      toolKey: "skill_review",
+    },
+    async () => enabled,
+  );
+  assert.match(JSON.stringify(await tool.execute("first", {})), /PRIVATE_SKILL_INSTRUCTIONS/u);
+  enabled = false;
+  await assert.rejects(tool.execute("second", {}), /Skills are disabled/u);
+});

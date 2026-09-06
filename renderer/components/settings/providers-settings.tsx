@@ -333,10 +333,10 @@ export function ProvidersSettings() {
 
   return (
     <div className="providers-settings flex flex-col gap-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
-            <Text variant="strong">Providers</Text>
+            <Text as="h1" variant="heading1">Providers</Text>
             <ProviderInfo label="About provider connections" title="Provider connections">
               Aiden manages built-in provider endpoints and model catalogs. Use Add provider for a
               local, private, or vendor-compatible endpoint.
@@ -423,7 +423,7 @@ export function ProvidersSettings() {
         </div>
       </div>
 
-      <div className="-mt-4 rounded-card border border-separator px-4 py-3" aria-live="polite">
+      <div className="-mt-4 settings-card rounded-card border border-separator px-4 py-3" aria-live="polite">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Text variant="small" color="secondary">
             {catalogOutcome ??
@@ -470,7 +470,7 @@ export function ProvidersSettings() {
 
       {foundationModels.data ? (
         <div
-          className="rounded-card border border-separator"
+          className="settings-card rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
         >
           <div className="flex items-start gap-3 px-4 py-3">
@@ -549,7 +549,7 @@ export function ProvidersSettings() {
         </div>
       ) : null}
 
-      <div className="grid gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-2">
         <div className="px-1">
           <div className="flex items-center gap-1">
             <Text variant="small-strong">Built into Aiden</Text>
@@ -563,7 +563,7 @@ export function ProvidersSettings() {
             Connect with credentials when required; Aiden keeps their model catalogs current.
           </Text>
         </div>
-        <div className="rounded-card border border-separator">
+        <div className="settings-card rounded-card border border-separator">
           <BuiltinProviderRows
             providers={featuredBuiltins}
             onSetUp={openBuiltinSetup}
@@ -592,7 +592,7 @@ export function ProvidersSettings() {
           ) : null}
         </div>
         {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
-          <div id="more-pi-providers" className="rounded-card border border-separator">
+          <div id="more-pi-providers" className="settings-card rounded-card border border-separator">
             <div className="px-4 py-3">
               <Text variant="small-strong">More built-in providers</Text>
               <Text variant="small" color="tertiary" className="mt-0.5 block">
@@ -610,14 +610,14 @@ export function ProvidersSettings() {
       </div>
 
       {customProviders.length > 0 ? (
-        <div className="grid gap-2">
+        <div className="grid min-w-0 grid-cols-1 gap-2">
           <div className="px-1">
             <Text variant="small-strong">Custom connections</Text>
             <Text variant="small" color="tertiary" className="mt-0.5 block">
               Configure local, private, and vendor-compatible endpoints here.
             </Text>
           </div>
-          <div className="rounded-card border border-separator">
+          <div className="settings-card rounded-card border border-separator">
             {customProviders.map((p, i) => (
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}

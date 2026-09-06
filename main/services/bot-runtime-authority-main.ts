@@ -14,6 +14,7 @@ import {
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
 import * as fs from "node:fs/promises";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
+import { configStore } from "./config-store.js";
 
 const resolver = createBotRuntimeAuthorityResolver({
   botStore,
@@ -22,6 +23,7 @@ const resolver = createBotRuntimeAuthorityResolver({
   catalog: botCapabilityCatalog,
   managedWorkspace: botManagedWorkspace,
   inventoryLeases: botRuntimeInventoryLeases,
+  skillsEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
 });
 
 export const BOT_DESKTOP_AUDIENCE_ID = "desktop:local";

@@ -580,6 +580,8 @@ export class BotCapabilityStore {
     chatId?: string;
     /** Required whenever the effective authority is Custom. */
     snapshot?: BotCapabilityCatalogSnapshot;
+    /** A closed global gate preserves durable grants while excluding them from runtime authority. */
+    skillsEnabled?: boolean;
   }): Promise<BotCapabilityAdmission> {
     this.requireInitialized();
     return this.serialized(async () => {
@@ -598,6 +600,7 @@ export class BotCapabilityStore {
           botId: input.botId,
           ...(input.chatId ? { chatId: input.chatId } : {}),
           snapshot: input.snapshot,
+          skillsEnabled: input.skillsEnabled,
         });
       }
       const lease = this.leases.acquire({
@@ -634,6 +637,7 @@ export class BotCapabilityStore {
     botId: string;
     chatId?: string;
     snapshot: BotCapabilityCatalogSnapshot;
+    skillsEnabled?: boolean;
   }): Promise<BoundBotCustomSelection | undefined> {
     this.requireInitialized();
     return this.serialized(async () =>

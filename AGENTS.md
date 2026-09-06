@@ -20,6 +20,8 @@ Keep status colors in soft semantic fills, labels, and icons. Do not add decorat
 
 Text-entry controls must not add an accent border, outline, or ring when focused. Keep their resting border unchanged and communicate focus with the existing input-background and caret states. This rule applies to inputs, textareas, and search-field wrappers, not to non-text keyboard controls that still require a visible `focus-visible` treatment.
 
+Settings must follow [`docs/settings-design-system.md`](docs/settings-design-system.md): use the shared page headings, grouped card surfaces, inset separators, and trailing controls derived from Appearance. Use the SD-card `MemoryCardIcon` for Memory. Never introduce brain icons or brain illustrations anywhere in the app.
+
 ## Release model metadata
 
 models.dev may be contacted only by `npm run models:refresh`, the release refresh invoked by `npm run dist`, the scoped post-merge catalog workflow, or the user-initiated foreground **Update model catalogs** action in Settings → Providers. The live action may request only the fixed `https://models.dev/api.json` endpoint without credentials, cookies, prompts, chats, selections, custom endpoints, or a device identifier; its validated device-local cache is display-only and must never change runtime limits, routing, or selectable inventory. Never add a models.dev call to startup, normal development, unpacked builds, ordinary live-app reads, onboarding navigation, or background polling. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
