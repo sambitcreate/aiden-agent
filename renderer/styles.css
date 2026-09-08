@@ -615,6 +615,16 @@ textarea {
     inset 0 1px 0 rgb(255 255 255 / 7%);
 }
 
+/* The pad is a large listbox. An offset outline sits in the picker padding and
+   reads as a second chrome ring around the canvas; keep keyboard focus inside. */
+.model-pad:focus-visible {
+  outline: none !important;
+  box-shadow:
+    inset 0 0 0 2px var(--focus-ring),
+    inset 0 0 0 0.5px var(--border-separator),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
 .model-pad::after {
   position: absolute;
   inset: 0;
