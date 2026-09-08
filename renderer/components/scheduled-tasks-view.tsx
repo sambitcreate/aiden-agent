@@ -597,7 +597,7 @@ export function ScheduledTasksView() {
                   />
                 </div>
               ) : (
-                <div className="overflow-hidden rounded-card bg-well">
+                <div className="overflow-visible rounded-card bg-well">
                   {visible.map((task, index) => {
                     const status = statusPresentation(task);
                     const busy = busyTaskId === task.id;

@@ -1204,15 +1204,19 @@ textarea {
   max-width: 100%;
 }
 
-/* Compact controls stay at the trailing edge, even when the row wraps. */
-.settings-page .settings-field-control > button,
-.settings-page .settings-field-control > [role="switch"] {
+/* Trailing compact controls, including switches wrapped in status/action clusters. */
+.settings-page .settings-field-horizontal > .settings-field-control {
   display: flex;
-  margin-left: auto;
+  align-items: center;
+  justify-content: flex-end;
 }
 
+.settings-page .settings-field-control [role="switch"] {
+  flex: 0 0 auto;
+  max-width: none;
+}
 
-.settings-page .settings-field-horizontal:has(> .settings-field-control > [role="switch"]) {
+.settings-page .settings-field-horizontal:has(.settings-field-control [role="switch"]) {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
@@ -1238,6 +1242,11 @@ textarea {
   .settings-page .settings-field-horizontal {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .settings-page .settings-field-horizontal:has(.settings-field-control [role="switch"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
   .settings-page-heading.flex {
@@ -2094,7 +2103,7 @@ textarea {
 
 .appearance-editor-card,
 .appearance-preferences-card {
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--border-separator);
   border-radius: var(--settings-card-radius, 16px);
   background: var(--settings-card-fill, color-mix(in srgb, var(--surface-popover) 72%, transparent));
@@ -2444,9 +2453,18 @@ textarea {
     gap: 7px;
     padding-block: 12px;
   }
+  .appearance-editor-row:has([role="switch"]),
+  .appearance-preference-row:has([role="switch"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
   .appearance-editor-row > div,
   .appearance-preference-control {
     justify-content: flex-start;
+  }
+  .appearance-editor-row:has([role="switch"]) > div,
+  .appearance-preference-row:has([role="switch"]) .appearance-preference-control {
+    justify-content: flex-end;
   }
   .appearance-value-select,
   .appearance-range-control {
