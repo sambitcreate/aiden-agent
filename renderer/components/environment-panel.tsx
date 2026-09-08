@@ -1397,11 +1397,11 @@ function EnvironmentPanelSurface({
           hidden={panel.tab !== "browser"}
           className="h-full min-h-0"
         >
-          <BrowserPanel
-            workspaceId={active?.id ?? "default"}
+          {active && <BrowserPanel
+            workspaceId={active.id}
             active={presented && panel.tab === "browser"}
             onDock={() => panel.showTools("browser")}
-          />
+          />}
         </div>
       </div>
     </aside>

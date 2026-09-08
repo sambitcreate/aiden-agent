@@ -344,3 +344,4 @@ owns; reopen the terminal before judging the final live state.
 - Host preparation runs after a tool turn, and Pi journals an aborted assistant on Stop. Cancellation tests must reach that boundary and preserve its journal record; an abort rejection must not become a policy fault, while an independent host failure must still fail closed.
 
 - Electron main-process evaluation cannot dynamically import a module from the Playwright utility world. The delayed-acquisition regression uses `process.getBuiltinModule` and synchronizes builtin ESM exports so its filesystem gate actually reaches the production namespace import; restored in test cleanup.
+- Final dev restart exposed Browser mounting with a fabricated default workspace while workspace data loaded. Mount it only after the selected workspace exists; verify cold startup and the existing Environment/browser integration suites.
