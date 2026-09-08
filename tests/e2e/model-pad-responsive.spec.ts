@@ -51,6 +51,10 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     for (const panel of ["closed", "models", "insights"] as const) {
       if (panel === "models") await browse.click();
       if (panel === "insights") await insights.click();
+      await page.evaluate(async () => {
+        const animations = document.getAnimations?.() ?? [];
+        await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+      });
       await page.locator(".model-pad-fieldset").evaluate((element) => {
         let parent = element.parentElement;
         while (parent && !/(auto|scroll)/u.test(getComputedStyle(parent).overflowY))

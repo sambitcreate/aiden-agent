@@ -777,6 +777,10 @@ textarea {
 
 .model-pad {
   width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  min-width: 0;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  align-self: start;
   margin-inline: auto;
   cursor: crosshair;
   contain: layout paint;
@@ -947,6 +951,10 @@ textarea {
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
   .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
+}
+
+.model-pad-legend {
+  min-height: 2.5rem;
 }
 
 .model-pad-legend-marker {

@@ -107,6 +107,18 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
   );
   assert.match(styles, /\.model-pad-canvas\s*\{\s*width: min\(100%, 40rem\)/u);
   assert.match(styles, /\.model-pad\s*\{\s*width: min\(100%, var\(--model-pad-available-size/u);
+  assert.match(source, /measureModelPadAvailableSize/u);
+  assert.match(source, /observer\.observe\(grid\)/u);
+  assert.doesNotMatch(source, /labelsHeight/u);
+  assert.doesNotMatch(
+    source,
+    /canvas\.getBoundingClientRect\(\)\.height - pad\.getBoundingClientRect\(\)\.height/u,
+  );
+  assert.match(
+    styles,
+    /\.model-pad\s*\{[\s\S]*aspect-ratio: 1 \/ 1;[\s\S]*flex-shrink: 0/u,
+  );
+  assert.match(styles, /\.model-pad-legend\s*\{\s*min-height: 2\.5rem/u);
   assert.match(styles, /@container model-pad-fieldset \(max-width: 760px\)/u);
   assert.match(
     styles,

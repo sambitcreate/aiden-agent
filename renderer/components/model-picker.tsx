@@ -257,7 +257,8 @@ function ModelHoverDetails({
   ].filter((row): row is [string, string] => Boolean(row));
 
   return (
-    <aside className="pointer-events-none w-56 shrink-0 rounded-popover bg-popover p-3 text-primary shadow-popover">
+    <aside className="pointer-events-auto flex h-[min(22.5rem,70vh)] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
       <div className="flex min-w-0 items-start gap-2">
         <span className="mt-0.5 shrink-0 text-tertiary">
           <ProviderIcon
@@ -321,13 +322,14 @@ function ModelHoverDetails({
             href={attributionUrl}
             target="_blank"
             rel="noreferrer"
-            className="pointer-events-auto mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+            className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
             {info?.benchmark
               ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
               : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
           </a>
         ) : null}
+      </div>
       </div>
     </aside>
   );
