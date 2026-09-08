@@ -48,9 +48,11 @@ test("renderer owner reload releases managed previews and scrubs echoed capabili
       "(() => { const token=new URL(location.href).searchParams.get('__aiden_preview'); document.title=token; console.log(token); return {token,encoded:encodeURIComponent(location.href), keys:{[token]:true, '[private-preview]':false}}; })()",
   });
   expect(echoed.value).toMatchObject({ token: "[private-preview]" });
-  expect(echoed.value).toMatchObject({
-    keys: { "[private-preview]": true, "[private-preview] (2)": false },
-  });
+  // CDP may enumerate the original object's keys in either order. Redaction
+  // must retain both entries with safe, distinct names regardless of that order.
+  const redactedKeys = (echoed.value as { keys: Record<string, boolean> }).keys;
+  expect(Object.keys(redactedKeys).sort()).toEqual(["[private-preview]", "[private-preview] (2)"]);
+  expect(Object.values(redactedKeys).sort()).toEqual([false, true]);
   expect(JSON.stringify(echoed.value)).toContain("[private-preview]");
   const snapshot = await command(page, { action: "snapshot", tabId: tab.id, includeImage: false });
   expect(

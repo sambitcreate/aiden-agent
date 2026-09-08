@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,10 +21,95 @@ function filesUnder(relative, extension) {
   return output;
 }
 
+const consoleMethods = new Set(["debug", "info", "log", "warn", "error"]);
+
+function unwrapExpression(node) {
+  while (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) node = node.expression;
+  return node;
+}
+
+function memberName(node) {
+  node = unwrapExpression(node);
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isElementAccessExpression(node) && node.argumentExpression) {
+    const key = unwrapExpression(node.argumentExpression);
+    if (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) return key.text;
+  }
+  return undefined;
+}
+
+function runtimeConsoleCalls(source, fileName = "fixture.ts") {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  assert.deepEqual(file.parseDiagnostics, [], `Cannot parse diagnostic-policy input: ${fileName}`);
+  const calls = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const method = unwrapExpression(node.expression);
+      if (consoleMethods.has(memberName(method))) {
+        const receiver = unwrapExpression(method.expression);
+        if (ts.isIdentifier(receiver) && receiver.text === "console" || memberName(receiver) === "console") {
+          calls.push(file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1);
+        }
+      }
+    }
+    // Literal source text has no call nodes; template substitutions and nested
+    // function bodies do, and must still satisfy the main-process sink policy.
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return calls;
+}
+
+test("console policy ignores source strings, comments, regexes and uncalled references", () => {
+  assert.deepEqual(runtimeConsoleCalls([
+    '// console.warn("comment");',
+    '/* globalThis.console.error("comment"); */',
+    'export const injectedSource = "console.log(\\"guest\\")";',
+    "const template = `console.info('guest') ${'console.error(guest)'}`;",
+    'const pattern = /console.log\\(/;',
+    'const reference = console.warn;',
+  ].join("\n")), []);
+});
+
+test("console policy detects direct, global, computed and optional runtime calls", () => {
+  const calls = [
+    'console.debug("debug");',
+    'console.info("info");',
+    '(console.log)("log");',
+    'globalThis.console.warn("warn");',
+    'global["console"]["error"]("error");',
+    'window.console?.log?.("optional");',
+    'self.console[`info`]("computed");',
+    '(console as Console)!.warn("typed");',
+    'console["l\\u006fg"]("escaped method");',
+    'const unrelated = { console: { log() {} } }; unrelated.console.log();',
+    'class Worker { run() { this.console.log("qualified receiver"); } }',
+    'getContext().console.error("qualified receiver");',
+  ];
+  assert.deepEqual(runtimeConsoleCalls(calls.join("\n")), calls.map((_, index) => index + 1));
+});
+
+test("console policy traverses nested code and executable template substitutions", () => {
+  assert.deepEqual(runtimeConsoleCalls([
+    'function nested() { return () => { console.error("nested"); }; }',
+    'class Worker { run() { globalThis.console.warn("nested method"); } }',
+    'const template = `guest code ${console.log("main process")}`;',
+    'const tagged = String.raw`guest ${(() => console.debug("main process"))()}`;',
+  ].join("\n")), [1, 2, 3, 4]);
+  assert.throws(() => runtimeConsoleCalls('console.log("unterminated)'), /Cannot parse/);
+});
+
 test("desktop runtime console calls are confined to the reviewed sink", () => {
   const offenders = filesUnder("main", ".ts")
     .filter((file) => !file.endsWith(".test.ts") && path.basename(file) !== "platform.ts")
-    .filter((file) => /console\.(?:debug|info|log|warn|error)\s*\(/u.test(fs.readFileSync(file, "utf8")));
+    .flatMap((file) => runtimeConsoleCalls(fs.readFileSync(file, "utf8"), file)
+      .map((line) => `${path.relative(root, file)}:${line}`));
   assert.deepEqual(offenders, []);
 });
 

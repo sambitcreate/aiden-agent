@@ -345,3 +345,7 @@ owns; reopen the terminal before judging the final live state.
 
 - Electron main-process evaluation cannot dynamically import a module from the Playwright utility world. The delayed-acquisition regression uses `process.getBuiltinModule` and synchronizes builtin ESM exports so its filesystem gate actually reaches the production namespace import; restored in test cleanup.
 - Final dev restart exposed Browser mounting with a fabricated default workspace while workspace data loaded. Mount it only after the selected workspace exists; verify cold startup and the existing Environment/browser integration suites.
+
+## PR99 hosted CI follow-up — 2026-09-08
+- Diagnostics source scanning treated console calls in the serialized Playwright guest runtime as executable main-process logging. Use syntax-aware scanning with regression cases, retaining the reviewed-sink boundary.
+- Hosted CDP returned redacted object keys in a different order; the test incorrectly tied collision suffixes to boolean values. Verify distinct sanitized keys and preservation of both values without relying on enumeration order.
