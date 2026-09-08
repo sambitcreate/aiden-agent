@@ -1732,8 +1732,15 @@ export class BrowserService {
         let reservation: BrowserFileReservation | undefined;
         let created: LiveTab | undefined;
         try {
+          // Only a direct user open may discover static local dependencies. The
+          // agent's approved descriptor and explicit asset list remain unchanged.
+          const userPreview = context.source === "user" && command.assetPaths === undefined && !context.preparedFile
+            ? await browserFileService.prepareUserPreview(workspaceId, command.path, { signal: acquisitionSignal })
+            : undefined;
           reservation = await browserFileService.open(workspaceId, command.path, {
-            preparedFile: context.preparedFile, assetPaths: command.assetPaths, signal: acquisitionSignal,
+            preparedFile: userPreview?.preparedFile ?? context.preparedFile,
+            assetPaths: userPreview?.preparedFile.assetPaths ?? command.assetPaths,
+            signal: acquisitionSignal,
           });
           browserAbort(acquisitionSignal);
           const show = command.show ?? (context.source === "user" || this.defaults.autoShow);
@@ -1747,6 +1754,13 @@ export class BrowserService {
             if (command.readiness !== "none") await browserDeadline(created.initialLoad!, command.timeoutMs ?? 15000, acquisitionSignal);
           }
           browserAbort(acquisitionSignal);
+          const openedTab = result.tabId ? this.tabs.get(result.tabId) : undefined;
+          if (openedTab && userPreview?.warnings.length) {
+            openedTab.diagnostics.push(...userPreview.warnings.map((message) => ({
+              level: "warning", message: browserFileService.redactText(message).slice(0, 4_000), timestamp: Date.now(),
+            })));
+            openedTab.diagnostics = openedTab.diagnostics.slice(-200);
+          }
         } catch (error) {
           if (created) this.close(created);
           throw error;

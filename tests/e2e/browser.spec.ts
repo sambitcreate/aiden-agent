@@ -195,7 +195,7 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   await mkdir(path.join(aiden.workspaceDir, "docs"), { recursive: true });
   await writeFile(path.join(aiden.workspaceDir, "docs", "preview.html"), '<!doctype html><title>Workspace preview</title><link rel="stylesheet" href="/preview.css"><h1>Local document</h1>');
   await writeFile(path.join(aiden.workspaceDir, "preview.css"), 'h1 { color: rgb(12, 34, 56); }');
-  const opened = await command(page, { action: "open_file", path: "docs/preview.html", assetPaths: ["../preview.css"] });
+  const opened = await command(page, { action: "open_file", path: "docs/preview.html" });
   const tabId = opened.state.activeTabId!;
   await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Workspace preview");
   expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe("rgb(12, 34, 56)");
@@ -224,6 +224,53 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   expect(restored.agentAccessAllowed).toBe(false);
   expect(restored.history).toEqual([]);
   expect(restored.tabs).toEqual([]);
+});
+
+test("direct user document links discover static sidecars without widening agent file grants", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const folder = path.join(aiden.workspaceDir, "user-preview");
+  await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, "index.html"), '<!doctype html><title>User resource preview</title><link rel="stylesheet" href="./style.css"><script type="module" src="./main.js"></script><h1>Local resource graph</h1>');
+  await writeFile(path.join(folder, "style.css"), '@import "./colors.css"; h1 { color: var(--preview-color); }');
+  await writeFile(path.join(folder, "colors.css"), ':root { --preview-color: rgb(12, 34, 56); }');
+  await writeFile(path.join(folder, "main.js"), 'import { message } from "./message.js"; window.previewMessage = message;');
+  await writeFile(path.join(folder, "message.js"), 'export const message = "static module loaded";');
+  await writeFile(path.join(folder, "unrelated.js"), 'PRIVATE_UNDECLARED_SIBLING');
+  // Exercise the app's real local-link handler, which supplies only the path,
+  // just like Files → Open in Browser and terminal document links.
+  await page.evaluate(() => {
+    const link = document.createElement("a");
+    link.href = "user-preview/index.html";
+    link.textContent = "Open local resource preview";
+    document.body.append(link);
+  });
+  await page.getByRole("link", { name: "Open local resource preview" }).click();
+  await expect.poll(async () => (await state(page)).tabs.length).toBe(1);
+  const userTab = (await state(page)).tabs[0]!;
+  const content = async (tabId: string) => (await command(page, { action: "evaluate", tabId,
+    expression: "(() => { const heading=document.querySelector('h1'); return heading ? {color:getComputedStyle(heading).color,message:window.previewMessage??null} : null; })()" })).value;
+  await expect.poll(() => content(userTab.id)).toEqual({ color: "rgb(12, 34, 56)", message: "static module loaded" });
+  expect((await command(page, { action: "evaluate", tabId: userTab.id,
+    expression: "fetch('./unrelated.js').then(async response=>({status:response.status,text:await response.text()}))" })).value)
+    .toMatchObject({ status: 403 });
+
+  await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
+  const prompt = "Strict local browser grant scenario: open user-preview/index.html without declaring assets.";
+  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
+    { name: "browser", arguments: {} },
+    { name: "browser_open", arguments: { path: "user-preview/index.html", reuseExistingTab: false } },
+  ], finalText: "The strict local preview is open." });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("The strict local preview is open.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  expect(scenario.error).toBeUndefined();
+  expect(scenario.completed).toBe(true);
+  const agentTab = (await state(page)).tabs.find(tab => tab.id !== userTab.id)!;
+  expect(new URL(agentTab.url).origin).not.toBe(new URL(userTab.url).origin);
+  expect(await content(agentTab.id)).toEqual({ color: "rgb(0, 0, 0)", message: null });
+  await command(page, { action: "close", tabId: agentTab.id });
+  await command(page, { action: "close", tabId: userTab.id });
 });
 
 test("browser recording produces a real bounded WebM artifact", async ({ aiden }) => {

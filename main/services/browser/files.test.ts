@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { request as httpRequest } from "node:http";
 import { BROWSER_PREVIEW_AUTH_HEADER, BrowserFileService, browserPreviewRequestHeaders, type BrowserFileWorkspace } from "./files.js";
 
-async function fixture(beforeRead?: () => Promise<void>) {
+async function fixture(beforeRead?: () => Promise<void>, beforeDiscoveryRead?: (filePath: string) => Promise<void>) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-browser-files-"));
   const root = path.join(folder, "workspace");
   await fs.mkdir(path.join(root, "docs"), { recursive: true });
@@ -33,6 +33,7 @@ async function fixture(beforeRead?: () => Promise<void>) {
   const service = new BrowserFileService({
     getWorkspace: async (id) => (id === "workspace" ? workspace : undefined),
     beforeRead,
+    beforeDiscoveryRead,
   });
   return {
     folder,
@@ -94,6 +95,139 @@ function authorization(url: string): Record<string, string> {
   assert.ok(token);
   return { [BROWSER_PREVIEW_AUTH_HEADER]: token };
 }
+
+test("user discovery grants a bounded static workspace resource graph while agent preparation stays explicit", async () => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.root, "assets", "app.js"), "import './module.js';export * from './reexport.js';import('./chunk.js');fetch('/assets/private.svg');");
+    for (const name of ["module.js", "reexport.js", "chunk.js"]) await fs.writeFile(path.join(f.root, "assets", name), "export const ready=true;");
+    await fs.writeFile(path.join(f.root, "assets", "private.svg"), "private");
+    const discovered = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.equal(discovered.preparedFile.requiresApproval, false);
+    assert.deepEqual(discovered.warnings, []);
+    assert.deepEqual(new Set(discovered.preparedFile.assetPaths), new Set(["style.css", "../assets/app.js", "../assets/icon.svg", "../assets/module.js", "../assets/reexport.js", "../assets/chunk.js"]));
+    const opened = await f.service.open("workspace", "docs/index.html", { preparedFile: discovered.preparedFile, assetPaths: discovered.preparedFile.assetPaths });
+    for (const asset of ["/docs/style.css", "/assets/app.js", "/assets/icon.svg", "/assets/module.js", "/assets/chunk.js"])
+      assert.equal((await raw(new URL(asset, opened.url).href, { headers: authorization(opened.url) })).status, 200);
+    assert.equal((await raw(new URL("/assets/private.svg", opened.url).href, { headers: authorization(opened.url) })).status, 404);
+    const agent = await f.service.prepare("workspace", "docs/index.html");
+    assert.deepEqual(agent.assetPaths, []);
+    const strict = await f.service.open("workspace", "docs/index.html", { preparedFile: agent });
+    assert.notEqual(new URL(strict.url).origin, new URL(opened.url).origin);
+    assert.equal((await raw(new URL("/docs/style.css", strict.url).href, { headers: authorization(strict.url) })).status, 404);
+    const wider = await f.service.open("workspace", "docs/index.html", { assetPaths: ["../assets/private.svg"] });
+    assert.notEqual(new URL(wider.url).origin, new URL(opened.url).origin);
+    assert.equal((await raw(new URL("/assets/private.svg", opened.url).href, { headers: authorization(opened.url) })).status, 404);
+  } finally { await f.close(); }
+});
+
+test("document bases and relative CSS/module dependencies use browser URL resolution", async () => {
+  const f = await fixture();
+  try {
+    await fs.mkdir(path.join(f.root, "assets", "nested"));
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<base href="/assets/"><link rel="stylesheet" href="nested/main.css"><script type="module">import "./nested/main.js"</script>');
+    await fs.writeFile(path.join(f.root, "assets", "nested", "main.css"), '@import "../extra.css";body{background:url(../icon.svg)}');
+    await fs.writeFile(path.join(f.root, "assets", "extra.css"), 'body{color:red}');
+    await fs.writeFile(path.join(f.root, "assets", "nested", "main.js"), 'export * from "../app.js"');
+    const local = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.deepEqual(new Set(local.preparedFile.assetPaths), new Set(["../assets/nested/main.css", "../assets/nested/main.js", "../assets/extra.css", "../assets/icon.svg", "../assets/app.js"]));
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<base href="https://example.invalid/"><link rel="stylesheet" href="style.css"><script type="module">import "./app.js"</script>');
+    const remote = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.deepEqual(remote.preparedFile.assetPaths, []);
+  } finally { await f.close(); }
+});
+
+test("discovery skips missing, secret, outside symlink and document references without preventing the entry opening", async () => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.folder, "outside.css"), "outside");
+    await fs.symlink(path.join(f.folder, "outside.css"), path.join(f.root, "docs", "escape.css"));
+    await fs.writeFile(path.join(f.root, "docs", ".hidden.css"), "hidden");
+    await fs.writeFile(path.join(f.root, "docs", "other.html"), "other");
+    await fs.symlink("other.html", path.join(f.root, "docs", "disguised.css"));
+    await fs.symlink("../report.pdf", path.join(f.root, "docs", "disguised.svg"));
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<link rel="stylesheet" href="missing.css"><link rel="stylesheet" href="escape.css"><link rel="stylesheet" href=".hidden.css"><link rel="stylesheet" href="disguised.css"><img src="disguised.svg"><img src="other.html"><iframe src="other.html"></iframe><a href="other.html">Other</a>');
+    const result = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.deepEqual(result.preparedFile.assetPaths, []);
+    assert.ok(result.warnings.length >= 3);
+    const opened = await f.service.open("workspace", "docs/index.html", { preparedFile: result.preparedFile });
+    assert.equal((await raw(opened.url)).status, 200);
+  } finally { await f.close(); }
+});
+
+test("absolute URL spellings cannot impersonate the synthetic local resolution origin", async () => {
+  const f = await fixture();
+  try {
+    const external = ["http://aiden-preview.invalid/assets/app.js", "//aiden-preview.invalid/assets/app.js", "\\\\aiden-preview.invalid/assets/app.js", "/\\aiden-preview.invalid/assets/app.js", "h\nttp://aiden-preview.invalid/assets/app.js", "&#1;http://aiden-preview.invalid/assets/app.js"];
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), external.map(url => `<script src="${url}"></script>`).join(""));
+    assert.deepEqual((await f.service.prepareUserPreview("workspace", "docs/index.html")).preparedFile.assetPaths, []);
+    for (const base of ["http://aiden-preview.invalid/", "//aiden-preview.invalid/", "\\\\aiden-preview.invalid/"]) {
+      await fs.writeFile(path.join(f.root, "docs", "index.html"), `<base href="${base}"><script src="assets/app.js"></script>`);
+      assert.deepEqual((await f.service.prepareUserPreview("workspace", "docs/index.html")).preparedFile.assetPaths, []);
+    }
+  } finally { await f.close(); }
+});
+
+test("cycles are deduplicated and discovery file, source-byte and depth limits preserve a usable entry", async () => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<link rel="stylesheet" href="cycle.css">' + Array.from({ length: 80 }, (_, index) => `<img src="asset-${index}.svg">`).join(""));
+    await fs.writeFile(path.join(f.root, "docs", "cycle.css"), '@import "cycle.css";');
+    for (let index = 0; index < 80; index++) await fs.writeFile(path.join(f.root, "docs", `asset-${index}.svg`), "<svg/>");
+    const many = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.equal(many.preparedFile.displayPaths.length, 64);
+    assert.ok(many.warnings.some(warning => warning.includes("limit")));
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<link rel="stylesheet" href="deep-0.css">');
+    for (let index = 0; index < 12; index++) await fs.writeFile(path.join(f.root, "docs", `deep-${index}.css`), `@import "deep-${index + 1}.css";`);
+    const deep = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.equal(deep.preparedFile.displayPaths.length, 9);
+    assert.ok(deep.warnings.some(warning => warning.includes("depth")));
+    await fs.writeFile(path.join(f.root, "docs", "index.html"), '<link rel="stylesheet" href="huge.css">');
+    await fs.writeFile(path.join(f.root, "docs", "huge.css"), "/*" + "x".repeat(1024 * 1024) + '*/body{background:url(hidden.svg)}');
+    const huge = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    assert.deepEqual(huge.preparedFile.assetPaths, ["huge.css"]);
+    assert.ok(huge.warnings.some(warning => warning.includes("source size")));
+  } finally { await f.close(); }
+});
+
+test("discovered source contents are pinned and reopening edited sources creates a distinct immutable origin", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    const original = await f.service.open("workspace", "docs/index.html", { preparedFile: first.preparedFile, assetPaths: first.preparedFile.assetPaths });
+    await fs.writeFile(path.join(f.root, "docs", "style.css"), "body{color:red}");
+    assert.equal((await raw(new URL("/docs/style.css", original.url).href, { headers: authorization(original.url) })).status, 409);
+    const second = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    const edited = await f.service.open("workspace", "docs/index.html", { preparedFile: second.preparedFile, assetPaths: second.preparedFile.assetPaths });
+    assert.notEqual(new URL(edited.url).origin, new URL(original.url).origin);
+    assert.equal((await raw(new URL("/docs/style.css", edited.url).href, { headers: authorization(edited.url) })).body, "body{color:red}");
+    assert.equal((await raw(new URL("/docs/style.css", original.url).href, { headers: authorization(original.url) })).status, 409);
+    // An editor may save identical bytes with a new modification time.
+    const assetPath = path.join(f.root, "docs", "style.css");
+    const assetStat = await fs.stat(assetPath);
+    await fs.utimes(assetPath, assetStat.atime, new Date(assetStat.mtimeMs + 2000));
+    const touched = await f.service.prepareUserPreview("workspace", "docs/index.html");
+    const reopened = await f.service.open("workspace", "docs/index.html", { preparedFile: touched.preparedFile, assetPaths: touched.preparedFile.assetPaths });
+    assert.notEqual(new URL(reopened.url).origin, new URL(edited.url).origin);
+    assert.equal((await raw(new URL("/docs/style.css", reopened.url).href, { headers: authorization(reopened.url) })).body, "body{color:red}");
+  } finally { await f.close(); }
+});
+
+test("in-place source edits, inode replacement and cancellation during discovery cannot publish a widened grant", async () => {
+  let mutate: ((filePath: string) => Promise<void>) | undefined;
+  const f = await fixture(undefined, async filePath => { await mutate?.(filePath); });
+  try {
+    const entry = path.join(f.root, "docs", "index.html");
+    mutate = async filePath => { if (filePath.endsWith("style.css")) await fs.writeFile(entry, '<script src="/assets/private.js"></script>'); };
+    await assert.rejects(f.service.prepareUserPreview("workspace", "docs/index.html"), /source changed/);
+    await fs.writeFile(entry, '<link rel="stylesheet" href="style.css">');
+    mutate = async filePath => { if (filePath === entry) { await fs.rename(entry, `${entry}.old`); await fs.writeFile(entry, '<script src="/assets/private.js"></script>'); } };
+    await assert.rejects(f.service.prepareUserPreview("workspace", "docs/index.html"), /changed/);
+    const controller = new AbortController();
+    mutate = async () => { controller.abort(new Error("cancelled discovery")); };
+    await assert.rejects(f.service.prepareUserPreview("workspace", "docs/index.html", { signal: controller.signal }), /cancelled discovery/);
+  } finally { await f.close(); }
+});
 
 test("serves HTML unchanged with explicitly declared relative and root-relative assets", async () => {
   const f = await fixture();

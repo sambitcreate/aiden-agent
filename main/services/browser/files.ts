@@ -1,9 +1,10 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
+import { BROWSER_DISCOVERY_LIMITS, browserAssetReferences, type BrowserAssetSourceKind } from "./asset-discovery.js";
 
 const CAPABILITY_QUERY = "__aiden_preview";
 export const BROWSER_PREVIEW_AUTH_HEADER = "X-Aiden-Preview-Authorization";
@@ -45,6 +46,8 @@ export interface BrowserFileServiceOptions {
   getWorkspace(workspaceId: string): Promise<BrowserFileWorkspace | undefined>;
   /** Deterministic filesystem-race seam; production leaves this unset. */
   beforeRead?(): Promise<void>;
+  /** Deterministic discovery-race seam; production leaves this unset. */
+  beforeDiscoveryRead?(filePath: string): Promise<void>;
   onLifecycle?(event: {
     leaseId: string;
     event: "created" | "attached" | "released" | "closed";
@@ -68,6 +71,7 @@ interface ExactFileIdentity {
   configured: string;
   device: number;
   inode: number;
+  source?: { size: number; modified: number; digest: string };
 }
 interface PreparedDetails {
   epoch: number;
@@ -151,6 +155,46 @@ function confinedRelative(root: string, candidate: string): string {
 }
 function identityMatches(identity: RootIdentity, stat: { dev: number; ino: number }): boolean {
   return identity.device === stat.dev && identity.inode === stat.ino;
+}
+function exactGrantKey(workspaceId: string, root: RootIdentity, files: Map<string, ExactFileIdentity>): string {
+  return `exact:${workspaceId}:${JSON.stringify([root.canonicalPath, [...files.entries()].map(([route, file]) => [route, file.canonical, file.device, file.inode, file.source ? [file.source.digest, file.source.size, file.source.modified] : undefined]).sort()])}`;
+}
+function sameRoot(left: RootIdentity, right: RootIdentity): boolean {
+  return left.configuredPath === right.configuredPath && left.canonicalPath === right.canonicalPath && left.device === right.device && left.inode === right.inode;
+}
+const DISCOVERY_SOURCE_KINDS: Readonly<Record<string, BrowserAssetSourceKind>> = { ".html": "html", ".htm": "html", ".css": "css", ".js": "module", ".mjs": "module" };
+function externalAssetReference(value: string): boolean {
+  // Match URL parsing's ignored ASCII controls before classifying references.
+  let cleaned = [...value].filter(character => ![9, 10, 13].includes(character.charCodeAt(0))).join("");
+  let start = 0;
+  let end = cleaned.length;
+  while (start < end && cleaned.charCodeAt(start) <= 32) start++;
+  while (end > start && cleaned.charCodeAt(end - 1) <= 32) end--;
+  cleaned = cleaned.slice(start, end);
+  return /^[a-z][a-z0-9+.-]*:/i.test(cleaned) || /^[\\/]{2}/.test(cleaned);
+}
+async function readExactFile(file: fs.FileHandle, size: number): Promise<Buffer> {
+  const content = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const { bytesRead } = await file.read(content, offset, size - offset, offset);
+    if (!bytesRead) throw new FilePreviewError(409, "The preview source changed. Open it again.");
+    offset += bytesRead;
+  }
+  return content;
+}
+async function verifySourceFingerprint(file: ExactFileIdentity): Promise<void> {
+  if (!file.source) return;
+  const handle = await fs.open(file.canonical, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = await handle.stat();
+    if (before.dev !== file.device || before.ino !== file.inode || before.size !== file.source.size || before.mtimeMs !== file.source.modified)
+      throw new FilePreviewError(409, "The discovered preview source changed. Open it again.");
+    const content = await readExactFile(handle, before.size);
+    const after = await handle.stat();
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || createHash("sha256").update(content).digest("hex") !== file.source.digest)
+      throw new FilePreviewError(409, "The discovered preview source changed. Open it again.");
+  } finally { await handle.close(); }
 }
 /** Never forward an internal bearer header, including across redirects. */
 export function browserPreviewRequestHeaders(
@@ -383,9 +427,123 @@ export class BrowserFileService {
       approved: workspaceOnly,
       // Each origin owns an immutable route/file grant. Opening another document
       // cannot give a previously loaded page access to that document or its assets.
-      key: `exact:${workspaceId}:${JSON.stringify([root.canonicalPath, [...files.entries()].map(([route, file]) => [route, file.canonical, file.device, file.inode]).sort()])}`,
+      key: exactGrantKey(workspaceId, root, files),
     });
     return prepared;
+  }
+
+  /** Main-only convenience for a user opening a workspace document without an asset list. */
+  async prepareUserPreview(
+    workspaceId: string,
+    suppliedPath: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ preparedFile: PreparedBrowserFile; warnings: readonly string[] }> {
+    const original = await this.prepare(workspaceId, suppliedPath, options);
+    const details = this.preparations.get(original)!;
+    if (original.requiresApproval || ![".html", ".htm"].includes(path.extname(suppliedPath).toLowerCase()))
+      return { preparedFile: original, warnings: [] };
+    const files = new Map(details.files);
+    const entry = files.get(details.relative)!;
+    const configuredDirectory = path.dirname(entry.configured);
+    const canonicalDirectory = path.dirname(entry.canonical);
+    const directoryStat = await fs.stat(canonicalDirectory);
+    const warnings: string[] = [];
+    const warn = (message: string) => { if (warnings.length < BROWSER_DISCOVERY_LIMITS.warnings && !warnings.includes(message)) warnings.push(message); };
+    const check = async () => {
+      options.signal?.throwIfAborted();
+      this.assertOpening(workspaceId, details.epoch);
+      if (!sameRoot(details.workspaceRoot, await this.resolveRoot(workspaceId)) ||
+          await fs.realpath(configuredDirectory) !== canonicalDirectory) throw new FilePreviewError(409, "The workspace preview directory changed. Open the file again.");
+      const currentDirectory = await fs.stat(canonicalDirectory);
+      if (currentDirectory.dev !== directoryStat.dev || currentDirectory.ino !== directoryStat.ino) throw new FilePreviewError(409, "The workspace preview directory changed. Open the file again.");
+      options.signal?.throwIfAborted();
+      this.assertOpening(workspaceId, details.epoch);
+    };
+    const verifyIdentity = async (route: string, expected: ExactFileIdentity) => {
+      const current = await this.inspectFile(details.root, route);
+      if (current.canonical !== expected.canonical || current.stat.dev !== expected.device || current.stat.ino !== expected.inode || await fs.realpath(expected.configured) !== expected.canonical)
+        throw new FilePreviewError(409, "The preview file changed during asset discovery. Open it again.");
+      return current;
+    };
+    let sourceBytes = 0;
+    const queue = [{ route: details.relative, depth: 0 }];
+    const visited = new Set<string>([details.relative]);
+    for (let index = 0; index < queue.length; index++) {
+      await check();
+      const { route, depth } = queue[index]!;
+      const file = files.get(route)!;
+      const kind = DISCOVERY_SOURCE_KINDS[path.extname(route).toLowerCase()];
+      if (!kind) continue;
+      const current = await verifyIdentity(route, file);
+      if (current.stat.size > BROWSER_DISCOVERY_LIMITS.sourceBytes || sourceBytes + current.stat.size > BROWSER_DISCOVERY_LIMITS.totalSourceBytes) {
+        warn("Some asset references were skipped because the preview source size limit was reached.");
+        continue;
+      }
+      await this.options.beforeDiscoveryRead?.(file.configured);
+      await check();
+      const handle = await fs.open(file.canonical, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let content: Buffer;
+      try {
+        const before = await handle.stat();
+        if (before.dev !== file.device || before.ino !== file.inode || before.size !== current.stat.size || before.mtimeMs !== current.stat.mtimeMs)
+          throw new FilePreviewError(409, "The preview source changed during asset discovery. Open it again.");
+        content = await readExactFile(handle, before.size);
+        const after = await handle.stat();
+        if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new FilePreviewError(409, "The preview source changed during asset discovery. Open it again.");
+        file.source = { size: before.size, modified: before.mtimeMs, digest: createHash("sha256").update(content).digest("hex") };
+      } finally { await handle.close(); }
+      await check();
+      await verifyIdentity(route, file);
+      sourceBytes += content.length;
+      const references = browserAssetReferences(content.toString("utf8"), kind);
+      if (references.incomplete) warn("Some asset references could not be parsed or exceeded the preview limits.");
+      const sourceUrl = new URL(`http://aiden-preview.invalid/${route.split(path.sep).map(encodeURIComponent).join("/")}`);
+      let baseUrl = sourceUrl;
+      if (references.baseHref !== undefined && externalAssetReference(references.baseHref)) continue;
+      try { if (references.baseHref !== undefined) baseUrl = new URL(references.baseHref, sourceUrl); }
+      catch { warn("An invalid document base URL was ignored."); }
+      for (const reference of references.urls) {
+        if (!reference.trim() || reference.trim().startsWith("#")) continue;
+        if (externalAssetReference(reference)) continue;
+        let candidate: string;
+        let assetRoute: string;
+        try {
+          const url = new URL(reference, baseUrl);
+          if (url.origin !== sourceUrl.origin || url.username || url.password) continue;
+          const segments = safeSegments(url.pathname.slice(1).split("/").map(decodeURIComponent));
+          candidate = path.join(details.root.configuredPath, ...segments);
+          assetRoute = confinedRelative(details.root.configuredPath, candidate);
+        } catch { warn("An asset outside the workspace or with an unsupported path was skipped."); continue; }
+        if (visited.has(assetRoute)) continue;
+        visited.add(assetRoute);
+        const extension = path.extname(assetRoute).toLowerCase();
+        if (!MIME_TYPES[extension] || ENTRY_EXTENSIONS.has(extension)) { warn("A reference to another document or unsupported asset type was skipped."); continue; }
+        if (depth >= BROWSER_DISCOVERY_LIMITS.depth || files.size >= BROWSER_DISCOVERY_LIMITS.files) { warn("Some assets were skipped because the preview file or depth limit was reached."); continue; }
+        try {
+          const inspected = await this.inspectFile(details.root, assetRoute);
+          if (ENTRY_EXTENSIONS.has(path.extname(inspected.canonical).toLowerCase())) {
+            warn("A reference to another document was skipped.");
+            continue;
+          }
+          files.set(assetRoute, { configured: candidate, canonical: inspected.canonical, device: inspected.stat.dev, inode: inspected.stat.ino });
+          queue.push({ route: assetRoute, depth: depth + 1 });
+        } catch { await check(); warn(`An unavailable asset was skipped: ${path.basename(candidate).slice(0, 120)}.`); }
+      }
+    }
+    // Publish the identities and source fingerprints we actually parsed, never a
+    // second path preparation that could silently admit replacements after parsing.
+    for (const [route, file] of files) {
+      await check();
+      await verifyIdentity(route, file);
+      if (file.source) await verifySourceFingerprint(file);
+    }
+    await check();
+    const preparedFile: PreparedBrowserFile = Object.freeze({ ...original,
+      assetPaths: Object.freeze([...files.values()].filter(file => file !== entry).map(file => path.relative(configuredDirectory, file.configured))),
+      displayPaths: Object.freeze([...files.values()].map(file => file.configured)),
+    });
+    this.preparations.set(preparedFile, { ...details, files, key: exactGrantKey(workspaceId, details.root, files) });
+    return { preparedFile, warnings: Object.freeze(warnings) };
   }
 
   /** Called only by the main approval coordinator after this exact descriptor was allowed. */
@@ -665,6 +823,7 @@ export class BrowserFileService {
       expected.canonical !== grant.canonical ||
       expected.stat.dev !== grant.device ||
       expected.stat.ino !== grant.inode ||
+      (grant.source && (expected.stat.size !== grant.source.size || expected.stat.mtimeMs !== grant.source.modified)) ||
       (await fs.realpath(grant.configured)) !== grant.canonical
     )
       throw new FilePreviewError(409, "The approved file identity changed. Open the file again.");
@@ -825,8 +984,12 @@ export class BrowserFileService {
           throw error;
         }
         const length = Math.max(0, range.end - range.start + 1);
-        const content = request.method === "HEAD" ? undefined : Buffer.alloc(length);
-        if (content) {
+        const sourceFingerprint = lease.files.get(relative)?.source;
+        const pinnedContent = request.method !== "HEAD" && sourceFingerprint ? await readExactFile(file, before.size) : undefined;
+        if (pinnedContent && createHash("sha256").update(pinnedContent).digest("hex") !== sourceFingerprint!.digest)
+          throw new FilePreviewError(409, "The discovered preview source changed. Open it again.");
+        const content = request.method === "HEAD" ? undefined : pinnedContent ? pinnedContent.subarray(range.start, range.end + 1) : Buffer.alloc(length);
+        if (content && !pinnedContent) {
           let offset = 0;
           while (offset < content.length) {
             if (request.destroyed || lease.revoked || this.stopped)

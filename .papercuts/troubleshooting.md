@@ -355,3 +355,7 @@ owns; reopen the terminal before judging the final live state.
 - Matching-first input probing showed Chromium suppresses the duplicate injected keyDown, so a timing-only expectation could swallow the only physical event. Use Electron's native debugger-source flag for keyboard input, and interrupt unexpected repeats. Mouse-down/up omit this flag and retain a bounded documented collision fallback.
 - The next hosted Electron gate exposed immediate recording stop before the encoder produced a frame (both attempts). Validate recorder readiness instead of weakening the WebM assertion. Completed-job logs during an active run require the jobs/logs API; gh run view waits for whole-run completion.
 - Independent Chromium reproduction showed per-port preview cookies leaked to other localhost ports because cookies ignore ports. Replace cookies with native frame/origin-scoped request authorization, strip inherited headers and legacy cookies, and test redirects against a controlled server.
+
+## PR99 direct-preview follow-up — 2026-09-08
+- Exact-grant hardening left path-only Files/chat/terminal previews unable to load local sidecars. Derive a bounded static resource set for user-originated opens only, preserve strict explicit agent grants, and test the actual path-only entry point.
+- Static-discovery review found a sidecar symlink could target an excluded HTML/PDF, and same-content rewrites could reuse an older modification-time fingerprint. Reject canonical document targets and include pinned source metadata in grant identity.
