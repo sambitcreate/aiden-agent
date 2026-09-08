@@ -351,6 +351,17 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
     throw new Error("Appearance settings are incomplete.");
   }
   const normalized = normalizeAppearanceConfig(value);
+  // Optional for older v1 exports; reject malformed explicitly supplied preferences.
+  if (value.showWorkspacePaths !== undefined && typeof value.showWorkspacePaths !== "boolean") {
+    throw new Error("Workspace path visibility must be a boolean value.");
+  }
+  if (value.workspacePathFormat !== undefined && value.workspacePathFormat !== normalized.workspacePathFormat) {
+    throw new Error("Workspace path format is unsupported.");
+  }
+  // Older V1 settings did not contain this preference. Keep them loadable.
+  if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
+    throw new Error("Composer context preference must be a boolean value.");
+  }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);
     for (const key of ["accent", "background", "foreground"]) {
@@ -380,10 +391,6 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   }
   if (typeof value.pointerCursors !== "boolean" || typeof value.fontSmoothing !== "boolean") {
     throw new Error("Appearance toggle preferences must be boolean values.");
-  }
-  // Older V1 settings did not contain this preference. Keep them loadable.
-  if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
-    throw new Error("Composer context preference must be a boolean value.");
   }
   if (normalized.mode !== value.mode || normalized.dockIcon !== value.dockIcon || normalized.reduceMotion !== value.reduceMotion || normalized.diffMarkers !== value.diffMarkers) {
     throw new Error("Appearance settings contain an unsupported option.");

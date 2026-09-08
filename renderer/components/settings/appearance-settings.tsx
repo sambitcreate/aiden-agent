@@ -762,7 +762,7 @@ export function AppearanceSettings() {
 
   return (
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
-      <div className="appearance-heading">
+      <div className="settings-page-heading appearance-heading">
         <h1>Appearance</h1>
         <p>Shape Aiden’s light and dark interfaces independently. Changes apply live.</p>
       </div>
