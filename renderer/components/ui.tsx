@@ -46,7 +46,6 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     | "destructive";
   size?: "small" | "medium" | "large";
   iconOnly?: boolean;
-  radius?: "full" | "rounded";
   asChild?: boolean;
   pressFeedback?: boolean;
 };
@@ -57,7 +56,6 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     variant = "filled",
     size = "medium",
     iconOnly,
-    radius = "full",
     asChild,
     pressFeedback = false,
     type = "button",
@@ -74,7 +72,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       className={cn(
         "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
-        radius === "full" ? "rounded-pill" : "rounded-control",
+        "rounded-button",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",

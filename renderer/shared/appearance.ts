@@ -25,6 +25,7 @@ export interface AppearanceConfig {
   light: ThemeVariantConfig;
   dark: ThemeVariantConfig;
   pointerCursors: boolean;
+  autoHideComposerContext: boolean;
   dockIcon: DockIconPreference;
   reduceMotion: ReduceMotionPreference;
   uiFontSize: number;
@@ -211,6 +212,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   light: getPresetVariant("aiden", "light"),
   dark: getPresetVariant("aiden", "dark"),
   pointerCursors: false,
+  autoHideComposerContext: true,
   dockIcon: "aiden",
   reduceMotion: "system",
   uiFontSize: 14,
@@ -294,6 +296,9 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     pointerCursors: typeof value.pointerCursors === "boolean"
       ? value.pointerCursors
       : fallback.pointerCursors,
+    autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
+      ? value.autoHideComposerContext
+      : fallback.autoHideComposerContext,
     dockIcon: value.dockIcon === "monochrome" || value.dockIcon === "aiden"
       ? value.dockIcon
       : fallback.dockIcon,
@@ -365,6 +370,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   }
   if (typeof value.pointerCursors !== "boolean" || typeof value.fontSmoothing !== "boolean") {
     throw new Error("Appearance toggle preferences must be boolean values.");
+  }
+  // Older V1 settings did not contain this preference. Keep them loadable.
+  if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
+    throw new Error("Composer context preference must be a boolean value.");
   }
   if (normalized.mode !== value.mode || normalized.dockIcon !== value.dockIcon || normalized.reduceMotion !== value.reduceMotion || normalized.diffMarkers !== value.diffMarkers) {
     throw new Error("Appearance settings contain an unsupported option.");

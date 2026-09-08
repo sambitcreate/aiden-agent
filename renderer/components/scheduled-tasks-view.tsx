@@ -543,7 +543,6 @@ export function ScheduledTasksView() {
                       tabIndex={tab === value ? 0 : -1}
                       key={value}
                       size="small"
-                      radius="rounded"
                       variant={tab === value ? "filled" : "transparent"}
                       onClick={() => setTab(value)}
                       onKeyDown={(event) => {

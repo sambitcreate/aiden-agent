@@ -179,7 +179,7 @@ const featureBentos: FeatureBento[] = [
     id: "workspace",
     group: "create",
     title: "Workspace Agent",
-    description: "Read, search, edit, and run commands inside the workspace you choose.",
+    description: "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response.",
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",

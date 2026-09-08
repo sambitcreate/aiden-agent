@@ -436,6 +436,9 @@ function Preferences({
     >
       <h2 id="appearance-preferences-title">Preferences</h2>
       <div className="appearance-preferences-card">
+        <PreferenceRow label="Auto-hide workspace bar" description="Slide the workspace and Local bar away after your first message. Turn off to keep it above the composer.">
+          <Switch checked={config.autoHideComposerContext} onCheckedChange={(checked) => onChange({ autoHideComposerContext: checked })} aria-label="Auto-hide workspace bar" />
+        </PreferenceRow>
         <PreferenceRow label="Use pointer cursors" description="Show a pointer when hovering over interactive elements.">
           <Switch checked={config.pointerCursors} onCheckedChange={(checked) => onChange({ pointerCursors: checked })} aria-label="Use pointer cursors" />
         </PreferenceRow>

@@ -311,3 +311,12 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+
+## 2026-09-04: queued composer controls
+- This detached worktree had no .memory directory. Read the canonical checkout's PROJECT-CONTEXT.md and PLANNED.md before implementation; wrote scoped memory here.
+- Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop → persistence barrier → normal append for the desktop Steer action and explain its behavior in the control tooltip.
+- E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.
+- The selected local Xcode began rejecting compiler/git calls for unaccepted license terms during this task. Used the installed Command Line Tools for git and rebuilt the renderer/Electron bundles with existing native helpers; native sources are unchanged and CI checks the full build.
+- Appearance persistence uses the `settings` envelope in settings.json; E2E disk assertions must read `settings.appearance`, then verify the preference after an app relaunch.
+- A CI navigation test raced the provider transport: queue removal confirms durable append, but does not mean the mock HTTP server has received the next generation request. Wait for that specific request before asserting its conversation history.
+- The shared button radius overrides legacy per-corner utility classes. Joined actions need an explicit shared group rule: square inner seams, the common outer squircle radius, and visible overflow for focus outlines. Check hover fills and each seam's corner radius, not only the uniform outer radius.

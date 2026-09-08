@@ -305,6 +305,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
+  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);

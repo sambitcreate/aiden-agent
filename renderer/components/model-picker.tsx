@@ -561,7 +561,6 @@ export function ModelPicker({
               tabIndex={view === "list" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "list" && "bg-popover shadow-control",
@@ -579,7 +578,6 @@ export function ModelPicker({
               tabIndex={view === "pad" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "pad" && "bg-popover shadow-control",
