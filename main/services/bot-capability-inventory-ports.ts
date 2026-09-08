@@ -380,8 +380,17 @@ export function createBotCapabilityInventoryPorts(
       if (signal.aborted) throw signal.reason;
       return connectionInventory(servers, scopes);
     },
+    async skillsEnabled() {
+      return (await dependencies.getSettings()).skillsEnabled !== false;
+    },
     async inspectSkills(signal, target) {
+      if (signal.aborted) throw signal.reason;
+      // A global pause is not removal: do not tombstone durable incarnations or
+      // discover instructions until the user enables Skills again.
+      if ((await dependencies.getSettings()).skillsEnabled === false) return [];
       const resolved = await dependencies.listSkills(target);
+      if ((await dependencies.getSettings()).skillsEnabled === false) return [];
+      if (signal.aborted) throw signal.reason;
       const partitions = new Set([
         "global",
         ...(target ? [`bot:${target.botId}`] : []),

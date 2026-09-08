@@ -192,13 +192,14 @@ test("chat shortcuts follow the rows rendered by the active organization", () =>
 
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /function workspaceSecondaryLabel/u);
+  assert.match(sidebar, /useWorkspacePathPreferences/u);
+  assert.match(source("../lib/workspace-path-display.ts"), /function workspaceSecondaryLabel/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
-  assert.match(sidebar, /Target: \{workspaceSecondaryLabel\(deletingWorktree\)\}/u);
-  assert.match(sidebar, /workspaceSecondaryLabel\(removingWorkspace\)/u);
+  assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
+  assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
 });
 
 test("sidebar overflow menus open beyond the sidebar's right edge", () => {
@@ -228,7 +229,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
 });
 
@@ -328,7 +329,7 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   const settings = source("../main/settings-view.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
-  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-5xl/u);
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);

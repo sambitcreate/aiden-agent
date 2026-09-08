@@ -46,7 +46,6 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     | "destructive";
   size?: "small" | "medium" | "large";
   iconOnly?: boolean;
-  radius?: "full" | "rounded";
   asChild?: boolean;
   pressFeedback?: boolean;
 };
@@ -57,7 +56,6 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     variant = "filled",
     size = "medium",
     iconOnly,
-    radius = "full",
     asChild,
     pressFeedback = false,
     type = "button",
@@ -74,7 +72,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       className={cn(
         "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
-        radius === "full" ? "rounded-pill" : "rounded-control",
+        "rounded-button",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
@@ -305,9 +303,9 @@ export function FieldSet({
   children,
 }: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
   return (
-    <section className={cn("mb-7", className)}>
-      {title ? <h2 className="mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
-      <div className="overflow-hidden rounded-card bg-well">{children}</div>
+    <section className={cn("settings-group mb-7", className)}>
+      {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
+      <div className="settings-group-card overflow-hidden rounded-card bg-well">{children}</div>
     </section>
   );
 }
@@ -332,7 +330,7 @@ export function Field({
       aria-labelledby={label ? labelId : undefined}
       aria-describedby={description ? descriptionId : undefined}
       className={cn(
-        "relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
+        "settings-field relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
         orientation === "horizontal"
           ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:gap-2"
           : "flex flex-col gap-3",
@@ -351,7 +349,7 @@ export function Field({
           </div>
         ) : null}
       </div>
-      <div className="min-w-0">{children}</div>
+      <div className="settings-field-control min-w-0">{children}</div>
     </div>
   );
 }

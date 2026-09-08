@@ -666,6 +666,12 @@ export interface TerminalSnapshot {
   sequence: number;
 }
 
+export const browserApi = {
+  getState: (workspaceId: string) => invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) => invoke<import("../shared/browser").BrowserCommandResult>("browser:command", workspaceId, command),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) => onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
@@ -859,7 +865,7 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: () => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getCapabilityCatalog: (botId?: string) => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),

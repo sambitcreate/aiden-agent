@@ -112,7 +112,7 @@ test("bot editor owns access mode, model selection, and capability toggles", () 
   assert.match(view, /invalidateQueries\(\{ queryKey: queryKeys\.botAccess\(saved\.id\) \}\)/u);
   assert.match(view, /invalidateQueries\(\{ queryKey: queryKeys\.botCapabilityCatalog \}\)/u);
   assert.match(queries, /botCapabilityCatalog: \["bot-capability-catalog"\] as const/u);
-  assert.match(queries, /useBotCapabilityCatalog\(enabled: boolean\)/u);
+  assert.match(queries, /useBotCapabilityCatalog\(enabled: boolean, botId\?: string\)/u);
   assert.match(queries, /useBotAccess\(botId: string \| undefined\)/u);
 });
 
@@ -520,4 +520,17 @@ test("Remote Bot and chat notifications invalidate every dependent Bot cache", (
     root,
     /onNotification\("bots:changed"[\s\S]*queryKey: queryKeys\.bots[\s\S]*\["bot"\][\s\S]*\["bot-chats"\][\s\S]*\["bot-telegram-binding"\][\s\S]*queryKeys\.botTelegramTargets/u,
   );
+});
+
+
+test("Bot editor reads a target-scoped dormant catalog and retains disabled skill choices", () => {
+  const view = readFileSync(new URL("./bots-view.tsx", import.meta.url), "utf8");
+  const ipc = readFileSync(new URL("../lib/ipc.ts", import.meta.url), "utf8");
+  const handlers = readFileSync(new URL("../../main/handlers/bots.ts", import.meta.url), "utf8");
+  assert.match(view, /useBotCapabilityCatalog\(true, committedBot\?\.id\)/u);
+  assert.match(view, /botsApi\.getCapabilityCatalog\(saved\.id\)/u);
+  assert.match(view, /option\.available \|\| catalog\.skillsEnabled === false/u);
+  assert.match(view, /Skills are off globally/u);
+  assert.match(ipc, /getCapabilityCatalog: \(botId\?: string\)/u);
+  assert.match(handlers, /id === undefined \? undefined : parseBotId\(id\)/u);
 });

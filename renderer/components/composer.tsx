@@ -25,6 +25,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  ListPlus,
   Loader2,
   Lock,
   Mic,
@@ -37,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { ComposerContextBar } from "./composer-context-bar";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -44,7 +46,10 @@ import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi } from "../lib/ipc";
+import { attachmentsApi, browserApi } from "../lib/ipc";
+import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -122,6 +127,9 @@ interface ComposerProps {
     skillInvocation?: SkillInvocationV1,
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
+  onQueue?: ComposerProps["onSend"];
+  queuedMessages?: React.ReactNode;
+  hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -265,6 +273,9 @@ export function Composer({
   chatId,
   onSend,
   onStop,
+  onQueue,
+  queuedMessages,
+  hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
   configurationBusy = false,
@@ -356,6 +367,33 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  React.useLayoutEffect(() => {
+    if (!workspace?.id) return;
+    const available = () => {
+      const input = inputRef?.current;
+      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+    };
+    const receive = (annotation: BrowserAnnotation) => {
+      if (!available()) return false;
+      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const comment = annotation.comment.trim();
+      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      if (result.attachments.length) {
+        attachmentRevisionRef.current += 1;
+        updateAttachments((current) => [...current, ...result.attachments]);
+      }
+      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
+    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+    });
+    return () => { unregister(); unsubscribe(); };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
   const attachmentOperationRef = React.useRef(false);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
@@ -408,7 +446,7 @@ export function Composer({
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
-      isGenerating,
+      isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
@@ -792,7 +830,8 @@ export function Composer({
       });
 
       try {
-        await onSend(
+        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
@@ -839,7 +878,7 @@ export function Composer({
         setSending(false);
       }
     },
-    [onSend, setText, updateAttachments],
+    [onSend, onQueue, isGenerating, hasQueuedMessages, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
@@ -1415,7 +1454,7 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         <div className="composer-responsive pointer-events-auto relative isolate">
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
@@ -1485,7 +1524,9 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
+          {queuedMessages}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1561,9 +1602,9 @@ export function Composer({
               />
             ) : null}
           </div>
-
+          </ComposerContextBar>
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer"
+            className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -1735,7 +1776,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || isGenerating || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -1943,7 +1984,7 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || isGenerating || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -1953,12 +1994,19 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating && canStopGeneration ? (
+                {onQueue && isGenerating ? (
+                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
+                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
+                    <ListPlus />
+                  </Button>
+                ) : null}
+                {isGenerating ? (
                   <Button
                     variant="filled"
                     size="small"
                     iconOnly
                     onClick={onStop}
+                    disabled={!canStopGeneration}
                     aria-label="Stop generating"
                   >
                     <Square className="fill-current" />
@@ -1970,9 +2018,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label="Send message"
+                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
                   >
-                    <ArrowUp />
+                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>

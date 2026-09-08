@@ -48,8 +48,8 @@ test("fresh renderer capabilities fail closed until main explicitly enables suba
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
   });
-  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files"]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser"]);
 });
 
 test("a disabled renderer presents a stored Subagents destination as Review without erasing it", () => {
@@ -157,7 +157,7 @@ test("floating Environment remains non-modal across every app-level interaction 
     environment,
     /const toggleTools = React\.useCallback/u,
   );
-  assert.match(environment, /<div className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u);
+  assert.match(environment, /<div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u);
   assert.doesNotMatch(environment, /bg-black|backdrop-blur|aria-modal|role=\{.*dialog/u);
   assert.doesNotMatch(environment, /environmentCompactModal|setCompactModalOpen/u);
 

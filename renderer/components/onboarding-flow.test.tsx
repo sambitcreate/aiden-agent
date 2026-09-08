@@ -18,6 +18,7 @@ const featureAssetPaths = [
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
+  "features/browser.png",
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
@@ -305,6 +306,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
+  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
@@ -317,7 +319,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,
@@ -382,12 +384,15 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /ordinary browsing stays offline/u);
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);
+  assert.match(featurePresentation, /Browser & Annotations/u);
+  assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
+  assert.match(featurePresentation, /Incognito is temporary/u);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 25);
+  assert.equal(featureAssetPaths.length, 26);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.ok(featureAssetPaths.includes("features/bots.png"));

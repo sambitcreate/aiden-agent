@@ -1,3 +1,6 @@
+import { QueuedMessages } from "../components/queued-messages";
+import { chatMessageQueue } from "../lib/chat-message-queue";
+import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 // The active chat: transcript (ScrollArea) + composer. Generation runs inline
 // against a concrete chatId in the active workspace, streams tokens via
 // startGeneration, and surfaces tool-approval prompts when the workspace is in
@@ -1044,6 +1047,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
           },
           onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
+            chatMessageQueue(chatId).pause();
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -1184,6 +1188,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         return;
       }
+      if (chatMessageQueue(chatId).getSnapshot().messages.length === 0) chatMessageQueue(chatId).resume();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
@@ -1276,6 +1281,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
   }, [canStopGeneration]);
+
+  const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
+    chatId,
+    contextKey: JSON.stringify([providerId, model, effectiveWorkspaceId, effectiveWorkspace?.permission]),
+    enabled: ready && !isGenerating && !isStartingGeneration && !isStoppingGeneration &&
+      !detachedGenerationDraining && !thinkingSaving && !computerUseSaving &&
+      !environmentPanel.gitOperationBusy && !imageArtifactRecoveryPending &&
+      !imageArtifactRecoveryUnavailable && !questionnaire && approvals.length === 0,
+    send: (message) => {
+      if (visionSupported === false && message.attachments.some((attachment) => attachment.kind === "image")) {
+        return Promise.reject(new Error("Switch to a vision-capable model before resuming these queued images."));
+      }
+      return handleSend(message.text, message.attachments, message.skillInvocation, message.options);
+    },
+  });
+
+  const queueMessage = React.useCallback(async (
+    text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean; btw?: boolean },
+  ) => {
+    messageQueue.add({ id: createChatTurnId(), text, attachments, skillInvocation,
+      options: options?.visualize ? { visualize: true } : undefined });
+  }, [messageQueue]);
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -2059,8 +2087,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
             hasMessages={hasMessages}
             chatId={chatId}
             onSend={handleSend}
-            onStop={handleStop}
-            isGenerating={isGenerating}
+            onQueue={queueMessage}
+            hasQueuedMessages={queuedState.messages.length > 0}
+            queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
+              canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
+              returnFocus={() => composerRef.current}
+              onSteer={(id) => {
+                if (!canStopGeneration || isStoppingGeneration) return;
+                messageQueue.move(id, 0);
+                messageQueue.resume();
+                handleStop();
+              }} />}
+            onStop={() => { messageQueue.pause(); handleStop(); }}
+            isGenerating={isGenerating || isStartingGeneration}
             canStopGeneration={canStopGeneration}
             configurationBusy={thinkingSaving}
             inputRef={composerRef}

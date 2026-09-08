@@ -326,6 +326,46 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testBotCapabilityCatalogRoutesSavedChoicesToTheirBot() = runBlocking {
+        val fixture = javaClass.classLoader!!.getResource("contract.json")!!.readText()
+        val catalog = Json { ignoreUnknownKeys = true }.decodeFromString<AidenBotCapabilityCatalog>(
+            Json.parseToJsonElement(fixture).jsonObject.getValue("botCapabilityCatalog").toString()
+        )
+        val disabled = catalog.copy(skillsEnabled = false, skills = catalog.skills.map { it.copy(available = false) })
+        val generic = disabled.copy(skills = emptyList())
+        server.enqueue(MockResponse().setBody(Json.encodeToString(generic)))
+        server.enqueue(MockResponse().setBody(Json.encodeToString(disabled)))
+
+        assertTrue(client.botCapabilityCatalog().skills.isEmpty())
+        val genericRequest = server.takeRequest()
+        assertEquals("/api/aiden/v1/bot-capabilities", genericRequest.path)
+
+        val targeted = client.botCapabilityCatalog("bot_fixture_01")
+        val targetRequest = server.takeRequest()
+        assertEquals("GET", targetRequest.method)
+        assertEquals("/api/aiden/v1/bot-capabilities?botId=bot_fixture_01", targetRequest.path)
+        assertEquals("Bearer test_credential_123", targetRequest.getHeader("Authorization"))
+        assertEquals(0L, targetRequest.bodySize)
+        assertFalse(targeted.skillsEnabled)
+        assertTrue(targeted.skills.isNotEmpty())
+        assertEquals(disabled.skills, targeted.skills)
+        assertTrue(targeted.skills.all { !it.available })
+    }
+
+    @Test
+    fun testBotCapabilityCatalogRejectsUnsafeTargetsBeforeSending() = runBlocking {
+        for (id in listOf("", "bot&botId=other", "../bot", "bot?extra=true", "a".repeat(161))) {
+            try {
+                client.botCapabilityCatalog(id)
+                fail("Accepted invalid Bot ID: $id")
+            } catch (_: sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException) {
+                // Validation must precede network access.
+            }
+        }
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun testBotLifecycleAndIfMatchHeaders() = runBlocking {
         // 1. Bot list
         server.enqueue(

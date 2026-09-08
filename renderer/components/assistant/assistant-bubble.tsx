@@ -4,11 +4,11 @@ import { unreadBadgeLabel } from "../../lib/assistant-dock";
 const AIDEN_MARK_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 
 /**
- * The minimized Aiden affordance: the app mark cropped to a circle, with an
+ * The minimized Aiden affordance: the app mark cropped to the shared button shape, with an
  * unread badge and an optional one-line preview of the latest reply.
  *
  * The mark is the macOS icon, which carries transparent padding around its
- * squircle. Scaling it past the circular mask lets the artwork bleed to the
+ * squircle. Scaling it past the mask lets the artwork bleed to the
  * edge instead of leaving a ring of empty pixels.
  */
 interface AssistantBubbleProps {
@@ -36,9 +36,9 @@ export const AssistantBubble = React.forwardRef<HTMLButtonElement, AssistantBubb
           type="button"
           aria-label={badge ? `Open Aiden (${badge} unread)` : "Open Aiden"}
           onClick={onOpen}
-          className="pointer-events-auto relative size-12 shrink-0 rounded-full shadow-composer outline outline-1 outline-field/60 transition-transform duration-150 ease-out hover:scale-105 active:scale-95"
+          className="pointer-events-auto relative size-12 shrink-0 shadow-composer outline outline-1 outline-field/60 transition-transform duration-150 ease-out hover:scale-105 active:scale-95"
         >
-          <span className="block size-full overflow-hidden rounded-full">
+          <span className="squircle-control block size-full overflow-hidden">
             <img src={AIDEN_MARK_URL} alt="" className="size-full scale-[1.32] object-cover" />
           </span>
           {badge ? (

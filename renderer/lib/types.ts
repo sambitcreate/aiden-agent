@@ -826,6 +826,8 @@ export interface AppSettings {
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
+  /** Global skill discovery/invocation gate. Omitted means enabled. */
+  skillsEnabled?: boolean;
   memoryEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;

@@ -9,6 +9,7 @@ import {
   FileCode2,
   Folder,
   FolderOpen,
+  Globe,
   Link2,
   RefreshCw,
   Save,
@@ -16,7 +17,7 @@ import {
   WrapText,
 } from "lucide-react";
 import { AlertDialog, Button, EmptyState, Input, Text, toast } from "./ui";
-import { workspacesApi } from "../lib/ipc";
+import { browserApi, workspacesApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import {
@@ -193,6 +194,7 @@ export function FilesPanel({
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<SaveIssue | null>(null);
   const [saved, setSaved] = React.useState(false);
+  const [openingBrowser, setOpeningBrowser] = React.useState(false);
   const [wrap, setWrap] = React.useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const gutterRef = React.useRef<HTMLPreElement>(null);
@@ -680,6 +682,21 @@ export function FilesPanel({
               >
                 {saving ? "Saving…" : interactionBlocked ? "Git operation…" : saveError ? "Save failed" : dirty ? "Edited" : saved ? "Saved" : ""}
               </Text>
+              {/\.(?:html?|pdf)$/iu.test(selectedPath) ? <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                disabled={openingBrowser || saving || interactionBlocked || !workspace?.id}
+                aria-label="Open in Browser"
+                title={dirty ? "Open the saved file in Browser" : "Open in Browser"}
+                onClick={() => {
+                  if (!workspace?.id) return;
+                  setOpeningBrowser(true);
+                  void browserApi.command(workspace.id, { action: "open_file", path: selectedPath })
+                    .catch((error) => toast.error(errorMessage(error, "Could not open this file in Browser.")))
+                    .finally(() => setOpeningBrowser(false));
+                }}
+              ><Globe /></Button> : null}
               <Button
                 variant="transparent"
                 size="small"

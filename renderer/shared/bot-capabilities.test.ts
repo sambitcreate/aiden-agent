@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   botCustomSelectionIsSubset,
+  BOT_FULL_ACCESS_NOTICE_VERSION,
   BOT_FILE_SCOPE_SELECTION_GUIDANCE,
   botFileScopeSelectionIsCoherent,
   intersectBotCustomSelections,
   nextBotFileScopeIds,
   parseBotAccessUpdate,
+  validateSelectionAgainstCatalog,
+  type BotCapabilityCatalog,
   type BotCustomSelection,
   type BotFileScopeOption,
 } from "./bot-capabilities.js";
@@ -127,4 +130,23 @@ test("file-scope intersection preserves a chat reduction below Full Mac", () => 
     intersectBotCustomSelections(selection(["full"]), selection(["home"]), scopes).fileScopeIds,
     ["home"],
   );
+});
+
+
+test("disabled catalog preserves only saved skill grants and leaves every other capability check strict", () => {
+  const catalog: BotCapabilityCatalog = {
+    revision: "catalog:paused", providers: [{ id: "provider", label: "Provider", available: true,
+      models: [{ id: "model", label: "Model", available: true }] }],
+    fileScopes: scopes, shellAvailable: true, connections: [],
+    skills: [{ id: "saved", label: "Saved skill", available: false }, { id: "other", label: "Other skill", available: true }],
+    skillsEnabled: false, otherCapabilities: [],
+    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
+  };
+  const chosen = { ...selection(["home"]), skillIds: ["saved"] };
+  const retainedSkillIds = ["saved"];
+  assert.doesNotThrow(() => validateSelectionAgainstCatalog(chosen, catalog, { retainedSkillIds }));
+  assert.throws(() => validateSelectionAgainstCatalog(chosen, catalog), /disabled/u);
+  assert.throws(() => validateSelectionAgainstCatalog({ ...chosen, skillIds: ["other"] }, catalog, { retainedSkillIds }), /disabled/u);
+  assert.throws(() => validateSelectionAgainstCatalog({ ...chosen, connectionIds: ["unknown"] }, catalog, { retainedSkillIds }), /connection/u);
+  assert.throws(() => validateSelectionAgainstCatalog(chosen, { ...catalog, skillsEnabled: true }, { retainedSkillIds }), /skill/u);
 });

@@ -24,6 +24,7 @@ export const contextLifecycleService = new ContextLifecycleService({
       development: !isPackagedRuntime(),
       behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
     }),
+  skillsEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getChat: (chatId) => chatStore.get(chatId),
   listChatsByBot: (botId) => chatStore.listByBot(botId),
   isBotArchived: async (botId) => (await botStore.get(botId))?.archivedAt !== undefined,

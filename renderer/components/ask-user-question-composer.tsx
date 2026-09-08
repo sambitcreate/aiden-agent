@@ -120,7 +120,7 @@ export function AskUserQuestionComposer({
   };
 
   return (
-    <div className="aiden-dock-inset chat-content-column">
+    <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column">
       <section
         className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}

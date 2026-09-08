@@ -36,6 +36,7 @@ export interface SkillRegistrySnapshot {
 
 export interface SkillRegistryDependencies {
   getWorkspace(id: string): Promise<Workspace | undefined>;
+  isEnabled(): Promise<boolean>;
   listConfigured(): Promise<Skill[]>;
   discover(workspaceRoot?: string): Promise<DiscoveredSkill[]>;
   now(): number;
@@ -120,6 +121,7 @@ export class SkillRegistry {
 
   constructor(dependencies: SkillRegistryOptions) {
     this.#dependencies = {
+      isEnabled: async () => true,
       now: () => Date.now(),
       invocationKey: randomBytes(32),
       cacheTtlMs: DEFAULT_CACHE_TTL_MS,
@@ -151,6 +153,11 @@ export class SkillRegistry {
   ): Promise<SkillRegistrySnapshot> {
     if (!workspace.id || workspace.id.length > 256) {
       throw new SkillInvocationError("workspace_changed", "Invalid skill workspace.");
+    }
+    // The global gate precedes cache reuse and all discovery/file reads.
+    if (!(await this.#dependencies.isEnabled())) {
+      this.invalidate(workspace.id);
+      return this.#project(workspace, []);
     }
     const now = this.#dependencies.now();
     const cached = this.#cache.get(workspace.id);
@@ -228,6 +235,7 @@ export class SkillRegistry {
   async #load(
     workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
   ): Promise<SkillRegistrySnapshot> {
+    if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const [configured, discovered] = await Promise.all([
       this.#dependencies.listConfigured(),
       // No Access is also a discovery boundary: do not read workspace skill
@@ -236,10 +244,19 @@ export class SkillRegistry {
         workspace.permission === "none" ? undefined : workspace.folderPath,
       ),
     ]);
+    // A disable may race an in-flight disk scan. Never publish that snapshot.
+    if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const resolved = resolveSkillCandidates([
       ...configured.map(configuredCandidate),
       ...discovered.map((skill) => discoveredCandidate(skill, workspace.permission)),
     ]);
+    return this.#project(workspace, resolved);
+  }
+
+  #project(
+    workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+    resolved: readonly ResolvedSkillCandidate[],
+  ): SkillRegistrySnapshot {
     const fingerprint = skillRegistryFingerprint(workspace, resolved);
     const revision = `rf_${fingerprint}`;
     const projectionContext = {

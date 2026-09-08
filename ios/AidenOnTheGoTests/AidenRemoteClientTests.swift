@@ -3707,6 +3707,47 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertNil(restored)
     }
 
+    func testBotCatalogRequestsUseExactTargetAndKeepLegacyCreateGeneric() async throws {
+        let client = makeClient()
+        let data = try botFixtureData(at: ["botCapabilityCatalog"])
+        let targets: [String?] = [nil, "bot:first", "bot:second"]
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            let target = targets[requests]
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-capabilities")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(query, target.map { [URLQueryItem(name: "botId", value: $0)] } ?? [])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertFalse(request.url!.absoluteString.contains("device-credential"))
+            return Self.response(for: request, status: 200, data: data)
+        }
+        _ = try await client.botCapabilityCatalog()
+        _ = try await client.botCapabilityCatalog(botId: "bot:first")
+        _ = try await client.botCapabilityCatalog(botId: "bot:second")
+        XCTAssertEqual(requests, 3)
+    }
+
+    func testBotCatalogRejectsInvalidTargetsBeforeIssuingAnyRequest() async throws {
+        let client = makeClient()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            requests += 1
+            XCTFail("Invalid Bot target reached the transport: \(request.url?.path ?? "")")
+            throw AidenRemoteClientError.invalidResponse
+        }
+        for target in ["", "../bot", "bot/other", "bot?other", "bot&other", "bot other", "bot\nother", String(repeating: "a", count: AidenRemoteProtocol.maxBotIdentifierLength + 1)] {
+            do {
+                _ = try await client.botCapabilityCatalog(botId: target)
+                XCTFail("Invalid Bot target was accepted")
+            } catch {
+                XCTAssertTrue(error is AidenRemoteClientError)
+            }
+        }
+        XCTAssertEqual(requests, 0)
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

@@ -190,6 +190,8 @@ export function createFetchTransport(tokenResolver: () => Promise<string | null>
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      // A menu refresh must not indefinitely block later gate changes.
+      ...(method === "setMyCommands" ? { signal: AbortSignal.timeout(10_000) } : {}),
     });
     return (await response.json()) as TelegramApiResponse<unknown>;
   };

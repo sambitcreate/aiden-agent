@@ -3,6 +3,7 @@ import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import {
@@ -517,6 +518,10 @@ export function registerProviderHandlers(): void {
       next.compactionEngine = p.compactionEngine;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    if (p.skillsEnabled !== undefined) {
+      if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
+      next.skillsEnabled = p.skillsEnabled;
+    }
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (
@@ -528,6 +533,19 @@ export function registerProviderHandlers(): void {
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     const saved = await configStore.setSettings(next);
+    if (next.skillsEnabled !== undefined) {
+      skillRegistry.invalidate();
+      invalidateBotRuntimeInventoryAuthority("skill_configuration");
+      if (!next.skillsEnabled) {
+        const { llmClient } = await import("../services/llm-client.js");
+        llmClient.cancelForSkillsDisabled();
+        const { contextLifecycleService } =
+          await import("../services/context-lifecycle-service-main.js");
+        contextLifecycleService.cancelForSkillsDisabled();
+      }
+      const { telegramService } = await import("../services/telegram/telegram-service.js");
+      void telegramService.refreshCommands();
+    }
     if (next.appearance) {
       const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
       ipcMain.broadcast("settings:appearance-changed", appearance);

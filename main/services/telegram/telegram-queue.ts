@@ -39,11 +39,18 @@ export interface TelegramBotBinding {
 /** Alias that makes the snapshot semantics explicit at call sites. */
 export type TelegramBotBindingSnapshot = TelegramBotBinding;
 
+export interface TelegramSkillInvocation {
+  readonly workspaceId: string;
+  readonly invocationId: string;
+}
+
 export interface QueuedTelegramTurn {
   /** Process-local opaque id used by Telegram queue controls. */
   readonly id?: number;
   readonly lane: QueueLane;
   readonly text: string;
+  /** Opaque skill selection; instructions are resolved only at dispatch/generation. */
+  readonly skillInvocation?: TelegramSkillInvocation;
   readonly attachments?: readonly Attachment[];
   /** Telegram chat ID — used for API calls (sendMessage, sendChatAction). */
   readonly chatId: number;

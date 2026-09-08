@@ -1129,3 +1129,35 @@ test("the shipping app icon is the reviewed opaque RayChat artwork", async () =>
     "bb4c7fdd6f5597e415348823902e606bba75098a12289c15a3e434df7619fb6c",
   );
 });
+
+test("Bot catalog requests stay scoped through editor, selection, chat, files, and offline cache", async () => {
+  const read = (path) => readFile(new URL(`../ios/${path}`, import.meta.url), "utf8");
+  const [client, editor, custom, chat, cache, clientTests, cacheTests] = await Promise.all([
+    read("AidenOnTheGo/Networking/AidenRemoteClient.swift"),
+    read("AidenOnTheGo/Features/Bots/AidenBotEditorView.swift"),
+    read("AidenOnTheGo/Features/Bots/AidenBotCustomAccessFlowView.swift"),
+    read("AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift"),
+    read("AidenOnTheGo/Persistence/AidenBotCache.swift"),
+    read("AidenOnTheGoTests/AidenRemoteClientTests.swift"),
+    read("AidenOnTheGoTests/AidenBotCacheTests.swift"),
+  ]);
+  assert.match(client, /func botCapabilityCatalog\(botId: String\? = nil\)[\s\S]*?validateBotIdentifier\(botId\)[\s\S]*?URLQueryItem\(name: "botId", value: \$0\)/u);
+  assert.equal((editor.match(/botCapabilityCatalog\(\)/gu) ?? []).length, 1, "only new-Bot creation uses generic inventory");
+  assert.match(editor, /case \.create:[\s\S]*?client\.botCapabilityCatalog\(\)/u);
+  assert.match(editor, /botCapabilityCatalog\(botId: botID\)/u);
+  assert.match(editor, /botCapabilityCatalog\(botId: attempt\.botID\)/u);
+  for (const source of [custom, chat]) assert.doesNotMatch(source, /botCapabilityCatalog\(\)/u);
+  assert.match(custom, /loadSelectedBot[\s\S]*?botCapabilityCatalog\(botId: request\.botID\)/u);
+  assert.match(custom, /selectedBot\?\.id == selectedBotID/u);
+  assert.match(chat, /botCapabilityCatalog\(botId: botID\)/u);
+  assert.equal((chat.match(/botCapabilityCatalog\(botId: grant\.botID\)/gu) ?? []).length, 2, "file load and pre-effect revalidation use the grant owner");
+  assert.match(editor, /cached\.catalog\(forBotID: mode\.catalogBotID\)/u);
+  assert.match(custom, /cached\.catalog\(forBotID: selectedBotID\)/u);
+  assert.match(chat, /cached\.catalog\(forBotID: botID\)/u);
+  assert.match(cache, /if let botID \{ return catalogsByBotID\?\[botID\] \}/u);
+  assert.match(cache, /maximumEnvelopeBytes = 4 \* 1_024 \* 1_024/u);
+  assert.match(clientTests, /testBotCatalogRequestsUseExactTargetAndKeepLegacyCreateGeneric/u);
+  assert.match(clientTests, /testBotCatalogRejectsInvalidTargetsBeforeIssuingAnyRequest/u);
+  assert.match(cacheTests, /testTargetedCatalogsNeverOverwriteOrFallbackToGlobalOrAnotherBot/u);
+  assert.match(cacheTests, /testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes/u);
+});

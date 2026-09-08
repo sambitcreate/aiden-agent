@@ -130,7 +130,7 @@ export function ComputerUseSettings() {
       <FieldSet
         title={
           <span className="inline-flex items-center gap-2">
-            Computer Use <Badge color="blue">Beta</Badge>
+            Desktop control <Badge color="blue">Beta</Badge>
           </span>
         }
       >

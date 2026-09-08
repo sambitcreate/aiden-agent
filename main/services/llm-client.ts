@@ -20,6 +20,19 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
+import {
+  BROWSER_AGENT_GUIDANCE,
+  BROWSER_MUTATION_TOOL_NAMES,
+  browserToolApprovalSummary,
+  browserLocalFileRequest,
+  createBrowserAgentTools,
+  canUseBrowserTools,
+  isBrowserToolName,
+} from "./browser-tools.js";
+import { prepareBrowserToolApproval, assertBrowserToolApproval, type BrowserToolApproval } from "./browser/approval.js";
+import type { PreparedBrowserFile } from "./browser/files.js";
+import { createBrowserDiscovery } from "./browser-discovery.js";
+import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
 import { webSearchService } from "./web-search-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -138,6 +151,7 @@ import {
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
+  projectVisibleHistoryWithoutSkills,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
@@ -341,6 +355,8 @@ function piResourcesForSkillSnapshot(
 }
 
 export interface GenerationExecutionOptions {
+  /** Main-owned Telegram queue provenance, resolved freshly at generation. */
+  telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
   /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
   permission?: GenerationPermission;
   /** Scheduled and other background runs can withhold tools that would recurse or mutate. */
@@ -578,8 +594,9 @@ async function buildSystemPrompt(
       ? formatAvailableSkills(skillSnapshot, availableToolNames)
       : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
+  const browserSuffix = availableToolNames?.has("browser_open") ? `\n\n${BROWSER_AGENT_GUIDANCE}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -604,7 +621,8 @@ async function buildSystemPrompt(
         ? "You may make changes and run commands directly."
         : "") +
     delegation +
-    skillsSuffix
+    skillsSuffix +
+    browserSuffix
   );
 }
 
@@ -618,6 +636,7 @@ async function prepareGeneration(
   activatedComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
   rendererOwner: boolean,
+  browserOwner: ChatGenerationOwner,
   options: GenerationExecutionOptions,
 ) {
   const sharedImages: Attachment[] = [];
@@ -963,6 +982,59 @@ async function prepareGeneration(
           }).map(({ name }) => name),
         )
       : new Set<string>();
+  const browserFileApprovals = new Map<string, PreparedBrowserFile>();
+  const browserActionApprovals = new Map<string, { approval: BrowserToolApproval; args: Record<string, unknown> }>();
+  const browserSelection: { initialized: boolean; tabId?: string } = { initialized: false };
+  const browserEligible = workspace && canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
+  const browserState = browserEligible ? await (await import("./browser/service.js")).browserService.getState(workspace.id) : undefined;
+  const browserEnabled = browserState && resolveBrowserAgentAccess(browserState.defaults.agentAccess, browserState.agentAccessOverride);
+  const browserTools =
+    workspace && browserEnabled
+      ? createBrowserAgentTools({
+          workspaceId: workspace.id,
+          chatId: params.chatId,
+          generationId: streamId,
+          signal,
+          supportsImages,
+          selection: browserSelection,
+          revalidate: async () => {
+            if (signal.aborted || !active.has(streamId)) throw new Error("This browser generation is no longer active.");
+            const currentWorkspace = await configStore.getWorkspace(workspace.id);
+            if (!currentWorkspace || currentWorkspace.permission === "none" || currentWorkspace.permission !== workspace.permission || currentWorkspace.folderPath !== workspace.folderPath) {
+              throw new Error("Browser workspace access changed. Start a new response.");
+            }
+          },
+          port: {
+            getState: async () => (await import("./browser/service.js")).browserService.getState(workspace.id),
+            command: async (command, browserSignal, callId) => {
+              const { browserService } = await import("./browser/service.js");
+              const approvedAction = callId ? browserActionApprovals.get(callId) : undefined;
+              const beforeEffect = approvedAction ? () => assertBrowserToolApproval(
+                approvedAction.approval, approvedAction.approval.toolName, approvedAction.args,
+                browserService.getApprovalTarget(workspace.id, approvedAction.approval.target.tabId),
+              ) : undefined;
+              beforeEffect?.();
+              return browserService.command(workspace.id, command, {
+                source: "agent", signal: browserSignal, supportsImages, beforeEffect,
+                ...(callId && browserFileApprovals.has(callId) ? { preparedFile: browserFileApprovals.get(callId)! } : {}),
+                ...(browserOwner.id !== 0 ? { owner: browserOwner } : {}),
+              });
+            },
+          },
+        })
+      : [];
+  const disclosedBrowserTools = browserTools.filter(({ name }) => !options.excludeToolNames?.has(name));
+  const browserDiscovery = disclosedBrowserTools.length ? createBrowserDiscovery(
+    disclosedBrowserTools,
+    async () => {
+      signal.throwIfAborted();
+      if (!active.has(streamId) || !workspace) throw new Error("This browser generation is no longer active.");
+      const current = await configStore.getWorkspace(workspace.id);
+      if (!current || current.permission !== workspace.permission || current.folderPath !== workspace.folderPath) throw new Error("Browser workspace access changed. Start a new response.");
+      const state = await (await import("./browser/service.js")).browserService.getState(workspace.id);
+      if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
+    },
+  ) : undefined;
   let tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
@@ -970,6 +1042,7 @@ async function prepareGeneration(
       skillSnapshot,
       permission: toolPermission,
       computerUse,
+      browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -1268,6 +1341,7 @@ async function prepareGeneration(
   }
   return {
     runtime: { ...runtime, model },
+    browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
     permission,
     folderPath,
     git,
@@ -1494,6 +1568,17 @@ export const llmClient = {
           authoritativeMode,
         );
       }
+      if (options.telegramSkillInvocation) {
+        const selection = options.telegramSkillInvocation;
+        const currentUser = [...authoritativeChat.messages].reverse().find((message) => message.role === "user");
+        if (options.interactionSurface !== "telegram" || selection.workspaceId !== authoritativeWorkspaceId || !currentUser) {
+          throw new Error("The queued Telegram skill no longer matches this conversation.");
+        }
+        const skill = await skillRegistry.resolveFresh(selection.workspaceId, selection.invocationId);
+        const prepared = formatPreparedSkillInvocation(skill, currentUser.content, selection.workspaceId, currentUser.id);
+        initialization.skillInvocation = prepared;
+        initialization.skillPrompt = prepared.formattedPrompt;
+      }
       if (workspaceMutationGate.isChanging(authoritativeWorkspaceId)) {
         throw new Error("The workspace is changing. Try again in a moment.");
       }
@@ -1516,6 +1601,7 @@ export const llmClient = {
         },
         owner.documentId,
         owner.id !== 0,
+        owner,
         options,
       );
     } catch (error) {
@@ -1557,6 +1643,7 @@ export const llmClient = {
     }
     const {
       runtime,
+      browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
       permission,
       folderPath,
       git,
@@ -1957,6 +2044,10 @@ export const llmClient = {
         runtimeExtensionSnapshot.revision,
       );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const generationContextOptions = {
+        contextWindow: model.contextWindow, systemPrompt, tools: runtimeTools,
+        supportsImages, providerId: model.provider, modelId: model.id,
+      };
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -2013,7 +2104,7 @@ export const llmClient = {
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
       };
-      const promptJournal = piSession;
+
 
       const currentUser = [...generationChat.messages]
         .reverse()
@@ -2021,16 +2112,25 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
+      const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      if (!skillsEnabledForTurn) {
+        piSession = await projectVisibleHistoryWithoutSkills(piSession, priorVisibleMessages, model);
+      }
+      const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
       if (currentUser) {
         if (
           initialization.skillInvocation?.userMessageId === currentUser.id &&
           initialization.skillPrompt
         ) {
+          if ((await configStore.getSettings()).skillsEnabled === false) {
+            throw new Error("Skills are disabled in Settings → Skills.");
+          }
           if (preparedBotContext) {
             const allowedSkill = skillSnapshot?.available.find(
               (skill) =>
-                skill.name === currentUser.skill?.name && skill.source === currentUser.skill.source,
+                skill.name === initialization.skillInvocation?.provenance.name &&
+                skill.source === initialization.skillInvocation.provenance.source,
             );
             if (!allowedSkill) {
               throw new Error("This skill is not enabled for this Bot chat.");
@@ -2111,14 +2211,7 @@ export const llmClient = {
             }
           : {}),
         transformContext: createGenerationContextTransform(
-          {
-            contextWindow: model.contextWindow,
-            systemPrompt,
-            tools: runtimeTools,
-            supportsImages,
-            providerId: model.provider,
-            modelId: model.id,
-          },
+          generationContextOptions,
           (result) => {
             logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
               model: model.id,
@@ -2168,8 +2261,13 @@ export const llmClient = {
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = context;
-          let changed = false;
+          let nextContext = browserDiscovery ? await browserDiscovery.prepare(context) : context;
+          let changed = nextContext !== context;
+          if (changed) {
+            assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });
+            generationContextOptions.tools = nextContext.tools ?? [];
+            generationContextOptions.systemPrompt = nextContext.systemPrompt;
+          }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
               consecutiveAttendedToolErrorTurns,
@@ -2194,6 +2292,22 @@ export const llmClient = {
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
+          let browserFileApproval: PreparedBrowserFile | undefined;
+          let browserActionApproval: BrowserToolApproval | undefined;
+          if (context.toolCall.name === "browser_open" || context.toolCall.name === "browser_navigate") {
+            try {
+              const file = browserLocalFileRequest(context.toolCall.name, context.args as Record<string, unknown>);
+              if (file && workspaceId) {
+                const { browserFileService } = await import("./browser/files.js");
+                browserFileApproval = await browserFileService.prepare(workspaceId, file.path, { assetPaths: file.assetPaths, signal });
+                if (!browserFileApproval.requiresApproval) browserFileApprovals.set(context.toolCall.id, browserFileApproval);
+              }
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Local preview access failed." };
+            }
+          }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
@@ -2231,7 +2345,7 @@ export const llmClient = {
             const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
-              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+              permission === "ask" && (APPROVAL_TOOL_NAMES.has(context.toolCall.name) || BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -2244,7 +2358,8 @@ export const llmClient = {
               !workspaceApproval &&
               !disclosureApproval &&
               !memoryApproval &&
-              !botMcpApproval
+              !botMcpApproval &&
+              !browserFileApproval?.requiresApproval
             ) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
@@ -2368,7 +2483,32 @@ export const llmClient = {
                   ? preparedStandardScheduleSummary
                   : scheduleApproval
                     ? summarizeScheduleToolCall(context.args)
-                    : summarizeToolCall(context.toolCall.name, context.args);
+                    : isBrowserToolName(context.toolCall.name)
+                      ? browserToolApprovalSummary(context.toolCall.name)
+                      : summarizeToolCall(context.toolCall.name, context.args);
+          }
+          if (browserFileApproval?.requiresApproval) {
+            summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
+          }
+          if (workspaceId && BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name)) {
+            try {
+              const { browserService } = await import("./browser/service.js");
+              if (!browserSelection.initialized) {
+                const state = await browserService.getState(workspaceId);
+                browserSelection.tabId = state.activeTabId ?? undefined;
+                browserSelection.initialized = true;
+              }
+              const args = context.args as Record<string, unknown>;
+              const tabId = typeof args.tabId === "string" ? args.tabId : browserSelection.tabId;
+              if (!tabId) throw new Error("No current browser tab is available. Call browser_open first.");
+              browserActionApproval = prepareBrowserToolApproval(context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, tabId));
+              args.tabId = browserActionApproval.target.tabId;
+              summary = browserActionApproval.summary;
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Browser approval target is unavailable." };
+            }
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const approvalOutcome = await approvals.request(
@@ -2388,6 +2528,25 @@ export const llmClient = {
           );
           const allowed = approvalOutcome === "allowed";
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (allowed && (browserFileApproval || browserActionApproval)) {
+            try {
+              signal?.throwIfAborted();
+              if (browserFileApproval) {
+                (await import("./browser/files.js")).browserFileService.approve(browserFileApproval);
+                browserFileApprovals.set(context.toolCall.id, browserFileApproval);
+              }
+              if (browserActionApproval && workspaceId) {
+                const { browserService } = await import("./browser/service.js");
+                const args = context.args as Record<string, unknown>;
+                assertBrowserToolApproval(browserActionApproval, context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId));
+                browserActionApprovals.set(context.toolCall.id, { approval: browserActionApproval, args });
+              }
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Browser approval expired." };
+            }
+          }
           if (allowed && attendedScheduleApproval) {
             attachAssistantScheduleMcpApproval(context.args, approvedScheduleMcpBindings);
           }
@@ -3243,6 +3402,15 @@ export const llmClient = {
 
   abandonChatTurn(chatId: string, turnId: string, ownerId: string): boolean {
     return chatTurnAdmission.releaseMatching(chatId, turnId, ownerId);
+  },
+
+  /** Discard active snapshots when the user disables skills across the app. */
+  cancelForSkillsDisabled(): void {
+    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
+      this.cancel(streamId, "user_stop");
+    }
+    // Detached children may retain skill instructions in their forked context.
+    subagentRuntimeRegistry.abortAll();
   },
 
   /** Closing the global gate cancels every snapshot that could race the setting change. */

@@ -25,6 +25,9 @@ export interface AppearanceConfig {
   light: ThemeVariantConfig;
   dark: ThemeVariantConfig;
   pointerCursors: boolean;
+  autoHideComposerContext: boolean;
+  showWorkspacePaths: boolean;
+  workspacePathFormat: "middle" | "end" | "start";
   dockIcon: DockIconPreference;
   reduceMotion: ReduceMotionPreference;
   uiFontSize: number;
@@ -211,6 +214,9 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   light: getPresetVariant("aiden", "light"),
   dark: getPresetVariant("aiden", "dark"),
   pointerCursors: false,
+  autoHideComposerContext: true,
+  showWorkspacePaths: false,
+  workspacePathFormat: "middle",
   dockIcon: "aiden",
   reduceMotion: "system",
   uiFontSize: 14,
@@ -294,6 +300,15 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     pointerCursors: typeof value.pointerCursors === "boolean"
       ? value.pointerCursors
       : fallback.pointerCursors,
+    autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
+      ? value.autoHideComposerContext
+      : fallback.autoHideComposerContext,
+    showWorkspacePaths: typeof value.showWorkspacePaths === "boolean"
+      ? value.showWorkspacePaths
+      : fallback.showWorkspacePaths,
+    workspacePathFormat: value.workspacePathFormat === "middle" || value.workspacePathFormat === "end" || value.workspacePathFormat === "start"
+      ? value.workspacePathFormat
+      : fallback.workspacePathFormat,
     dockIcon: value.dockIcon === "monochrome" || value.dockIcon === "aiden"
       ? value.dockIcon
       : fallback.dockIcon,
@@ -336,6 +351,17 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
     throw new Error("Appearance settings are incomplete.");
   }
   const normalized = normalizeAppearanceConfig(value);
+  // Optional for older v1 exports; reject malformed explicitly supplied preferences.
+  if (value.showWorkspacePaths !== undefined && typeof value.showWorkspacePaths !== "boolean") {
+    throw new Error("Workspace path visibility must be a boolean value.");
+  }
+  if (value.workspacePathFormat !== undefined && value.workspacePathFormat !== normalized.workspacePathFormat) {
+    throw new Error("Workspace path format is unsupported.");
+  }
+  // Older V1 settings did not contain this preference. Keep them loadable.
+  if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
+    throw new Error("Composer context preference must be a boolean value.");
+  }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);
     for (const key of ["accent", "background", "foreground"]) {

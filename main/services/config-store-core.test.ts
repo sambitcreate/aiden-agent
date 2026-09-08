@@ -2868,3 +2868,18 @@ test("compaction preference defaults to LLM and survives a restart independently
   await next.setSettings({ compactionEngine: "llm" });
   assert.equal((await next.getSettings()).compactionEngine, "llm");
 });
+
+test("global skills preference persists independently of individual skill choices", async (t) => {
+  const h = await harness(t);
+  assert.notEqual((await h.store.getSettings()).skillsEnabled, false);
+  const skill = { id: "saved-skill", name: "Review", description: "Review code", instructions: "Review carefully", enabled: true };
+  await h.store.saveSkill(skill);
+  await h.store.setSettings({ skillsEnabled: false });
+  await h.store.setSettings({ profileName: "Unrelated preference" });
+  assert.equal((await h.store.getSettings()).skillsEnabled, false);
+  assert.equal((await readJson<{ settings: { skillsEnabled: boolean } }>(h.settingsFile)).settings.skillsEnabled, false);
+  assert.deepEqual(await h.store.listSkills(), [skill]);
+  await h.store.setSettings({ skillsEnabled: true });
+  assert.equal((await h.store.getSettings()).skillsEnabled, true);
+  assert.deepEqual(await h.store.listSkills(), [skill]);
+});

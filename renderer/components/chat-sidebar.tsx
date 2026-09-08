@@ -2,6 +2,9 @@
 // projections, route-driven selection, and workspace/chat management actions.
 
 import * as React from "react";
+import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
+import { WorkspacePathLabel } from "./workspace-path-label";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -89,17 +92,8 @@ interface ChatSidebarProps {
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
-function workspaceSecondaryLabel(workspace: Workspace): string {
-  if (workspace.managedWorktree?.branch) {
-    return workspace.folderPath
-      ? `${workspace.managedWorktree.branch} · ${workspace.folderPath}`
-      : workspace.managedWorktree.branch;
-  }
-  return workspace.folderPath ?? `No folder · ${workspace.id.slice(0, 8)}`;
-}
-
-function workspaceAccessibleName(workspace: Workspace): string {
-  return `${workspace.name}, ${workspaceSecondaryLabel(workspace)}`;
+function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+  return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
 }
 
 function SidebarOverflowMenu({
@@ -487,6 +481,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 }
 
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
+  const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -1236,7 +1231,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 />
               ) : (
                 projection.groups.map((group) => {
-                  const secondaryLabel = workspaceSecondaryLabel(group.workspace);
+                  const secondaryLabel = workspaceSecondaryLabel(group.workspace, pathPreferences);
                   const expanded =
                     Boolean(search.trim()) || expandedWorkspaceIds.has(group.workspace.id);
                   const revealAll =
@@ -1258,18 +1253,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{group.workspace.name}</span>
-                              <span className="truncate text-small text-tertiary">
-                                {secondaryLabel}
-                              </span>
+                              <span className="truncate">{workspaceDisplayName(group.workspace, workspaces)}</span>
+                              {group.workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                                  {group.workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{group.workspace.managedWorktree.branch} ·</span> : null}
+                                  <WorkspacePathLabel path={group.workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                                </span>
+                              ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                             </span>
                           }
-                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace)}`}
+                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(group.workspace.id)}
                         />
                         <SidebarOverflowMenu
-                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace)}`}
+                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
                           triggerClassName="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                           contentClassName="w-64"
                         >
@@ -1470,7 +1468,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
               deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
-              Dirty worktrees are refused. Target: {workspaceSecondaryLabel(deletingWorktree)}.
+              Dirty worktrees are refused. Target: {deletingWorktree.folderPath ?? deletingWorktree.name}.
               {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
@@ -1494,7 +1492,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             <Text variant="small" color="secondary">
               “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be
               listed. The folder itself is not touched. Target:{" "}
-              {workspaceSecondaryLabel(removingWorkspace)}.
+              {removingWorkspace.folderPath ?? removingWorkspace.name}.
               {environmentPanel.editorState.workspaceId === removingWorkspace.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`

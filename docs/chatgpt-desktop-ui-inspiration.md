@@ -4,6 +4,8 @@ Research date: 2026-07-18
 
 ## Scope and confidence
 
+For current reusable Aiden components and shape rules, follow the [design guide](design-guide.md). The observations below provide historical interaction inspiration.
+
 This audit covers the installed `/Applications/ChatGPT.app`, build `26.715.31925` (`com.openai.codex`). Although the app is displayed as ChatGPT, its package and renderer identify it as the current ChatGPT-branded Codex desktop product. The findings therefore mix classic Chat, Codex agent, project, review, browser, and terminal flows.
 
 Evidence used:

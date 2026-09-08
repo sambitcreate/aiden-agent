@@ -6,6 +6,22 @@ function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
+test("workspace context collapses only after a persisted user message and retains portal controls", () => {
+  const composer = source("./composer.tsx");
+  const bar = source("./composer-context-bar.tsx");
+  const styles = source("../styles.css");
+  assert.match(composer, /sessionChat\?\.messages\.some\(\(message\) => message\.role === "user"\)/u);
+  assert.match(bar, /autoHide && hasUserMessages/u);
+  assert.match(bar, /inert=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /aria-hidden=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /APPEARANCE_CHANGE_EVENT/u);
+  assert.match(styles, /\.composer-context-collapse\[data-collapsed="true"\][\s\S]*?grid-template-rows: 0fr/u);
+  assert.match(styles, /transform: translateY\(8px\)/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.composer-context-content \{\s*transition: none;/u);
+  // A hidden strip must not unmount slash-opened worktree dialogs.
+  assert.match(bar, /className="composer-context-content">\{children\}/u);
+});
+
 test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
   const styles = source("../styles.css");
@@ -167,7 +183,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
   const optimisticClear = composer.indexOf('setText("");');
-  const sendAwait = composer.indexOf("await onSend(");
+  const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
   assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);
@@ -252,4 +268,30 @@ test("workspace access keyboard navigation moves focus without changing permissi
   );
   assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
   assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
+});
+
+test("model picker details sit beside the menu without overlapping the pad", () => {
+  const modelPicker = source("./model-picker.tsx");
+  const pad = source("./model-picker-pad.tsx");
+  const styles = source("../styles.css");
+
+  assert.match(
+    modelPicker,
+    /className="flex w-max max-w-\[calc\(100vw-1\.5rem\)\] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="relative w-\[min\(19\.75rem,calc\(100vw-1\.5rem\)\)\] overflow-hidden rounded-popover bg-popover shadow-popover"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="pointer-events-none w-56 shrink-0 rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
+  );
+  assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
+  assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);
+  assert.doesNotMatch(pad, /focus-visible:bg-list-selection/u);
+  assert.match(
+    styles,
+    /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
+  );
 });

@@ -381,6 +381,32 @@ final class AidenChatTests: XCTestCase {
     }
 
     func testCurrentChatRecallUsesFixedPrivateActivityLabel() {
+        let browserLabels = [
+            "browser": "Loaded browser tools",
+            "browser_status": "Checked browser",
+            "browser_open": "Opened browser",
+            "browser_navigate": "Navigated browser",
+            "browser_resize": "Resized browser",
+            "browser_set_appearance": "Set browser appearance",
+            "browser_snapshot": "Inspected browser",
+            "browser_click": "Clicked in browser",
+            "browser_type": "Typed in browser",
+            "browser_press": "Pressed browser keys",
+            "browser_scroll": "Scrolled browser",
+            "browser_evaluate": "Evaluated page",
+            "browser_wait_for": "Waited for page",
+            "browser_recording_start": "Started browser recording",
+            "browser_recording_stop": "Stopped browser recording",
+        ]
+        for (name, expected) in browserLabels {
+            let browserStep = AidenAgentStep(
+                id: name, order: 0, kind: .tool, toolName: name,
+                label: name, status: .completed, startedAt: 1_000,
+                updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+                durationMs: 1_000, target: nil, detail: nil, lineChanges: nil
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.line(for: browserStep), expected)
+        }
         let step = AidenAgentStep(
             id: "recall-1", order: 0, kind: .tool, toolName: "vcc_recall",
             label: "Recall chat history", status: .completed, startedAt: 1_000,
