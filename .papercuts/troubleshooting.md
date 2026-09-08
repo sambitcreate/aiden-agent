@@ -349,3 +349,9 @@ owns; reopen the terminal before judging the final live state.
 ## PR99 hosted CI follow-up — 2026-09-08
 - Diagnostics source scanning treated console calls in the serialized Playwright guest runtime as executable main-process logging. Use syntax-aware scanning with regression cases, retaining the reviewed-sink boundary.
 - Hosted CDP returned redacted object keys in a different order; the test incorrectly tied collision suffixes to boolean values. Verify distinct sanitized keys and preservation of both values without relying on enumeration order.
+
+- Pullfrog identified silent sensitive guest permissions and a workspace-wide local-preview origin. Restrict guest grants and serve exact pinned document/asset sets with distinct origins; keep declared workspace-file authorization while blocking unrelated siblings.
+- Ad-hoc `tsx -e` selected CommonJS and rejected the ESM-only Pi package exports. Use `node --import tsx --input-type=module` for token-estimate probes.
+- Matching-first input probing showed Chromium suppresses the duplicate injected keyDown, so a timing-only expectation could swallow the only physical event. Use Electron's native debugger-source flag for keyboard input, and interrupt unexpected repeats. Mouse-down/up omit this flag and retain a bounded documented collision fallback.
+- The next hosted Electron gate exposed immediate recording stop before the encoder produced a frame (both attempts). Validate recorder readiness instead of weakening the WebM assertion. Completed-job logs during an active run require the jobs/logs API; gh run view waits for whole-run completion.
+- Independent Chromium reproduction showed per-port preview cookies leaked to other localhost ports because cookies ignore ports. Replace cookies with native frame/origin-scoped request authorization, strip inherited headers and legacy cookies, and test redirects against a controlled server.

@@ -1346,7 +1346,10 @@ export class PiAgentRuntimeHarness {
         }
         const context = hostPrepared?.context ?? input.context;
         // Host-disclosed tools must participate in compaction budgeting and remain
-        // installed if emergency recovery continues this same generation.
+        // installed if emergency recovery continues this same generation. A Stop
+        // after this synchronous install can leave schemas in the cancelled
+        // generation's state; the checks below prevent a provider turn, and the
+        // next generation constructs a fresh discovery registry.
         if (hostPrepared?.context) {
           this.agent.state.tools = [...(context.tools ?? [])];
           this.agent.state.systemPrompt = context.systemPrompt;

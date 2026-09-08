@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { request as httpRequest } from "node:http";
-import { BrowserFileService, type BrowserFileWorkspace } from "./files.js";
+import { BROWSER_PREVIEW_AUTH_HEADER, BrowserFileService, browserPreviewRequestHeaders, type BrowserFileWorkspace } from "./files.js";
 
 async function fixture(beforeRead?: () => Promise<void>) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-browser-files-"));
@@ -89,17 +89,18 @@ function raw(
     request.end();
   });
 }
-function cookie(response: { headers: import("node:http").IncomingHttpHeaders }): string {
-  const value = response.headers["set-cookie"]?.[0];
-  assert.ok(value);
-  assert.match(value, /HttpOnly; SameSite=Strict/);
-  return value.split(";", 1)[0]!;
+function authorization(url: string): Record<string, string> {
+  const token = new URL(url).searchParams.get("__aiden_preview");
+  assert.ok(token);
+  return { [BROWSER_PREVIEW_AUTH_HEADER]: token };
 }
 
-test("serves HTML unchanged with both relative and root-relative CSS/script/image assets", async () => {
+test("serves HTML unchanged with explicitly declared relative and root-relative assets", async () => {
   const f = await fixture();
   try {
-    const url = await f.open("workspace", "docs/index.html");
+    const url = await f.open("workspace", "docs/index.html", {
+      assetPaths: ["style.css", "../assets/app.js", "../assets/icon.svg"],
+    });
     assert.equal(f.service.isPreviewUrl(url), true);
     assert.equal(f.service.isPreviewUrl(new URL("/report.pdf", url).href), true);
     assert.equal(f.service.isPreviewUrl("http://127.0.0.1:1/report.pdf"), false);
@@ -109,7 +110,7 @@ test("serves HTML unchanged with both relative and root-relative CSS/script/imag
     assert.equal(initial.body, await fs.readFile(path.join(f.root, "docs/index.html"), "utf8"));
     assert.match(initial.headers["content-type"]!, /text\/html/);
     const headers = {
-      Cookie: cookie(initial),
+      ...authorization(url),
       "Sec-Fetch-Site": "same-origin",
     };
     assert.equal(
@@ -124,9 +125,164 @@ test("serves HTML unchanged with both relative and root-relative CSS/script/imag
     assert.equal(initial.headers["cache-control"], "no-store");
     assert.equal(initial.headers["referrer-policy"], "no-referrer");
     assert.equal(initial.headers["access-control-allow-origin"], undefined);
+    assert.equal(initial.headers["set-cookie"], undefined);
     assert.equal(initial.headers["cross-origin-resource-policy"], "same-origin");
     await f.service.closeForWorkspace("workspace");
     assert.equal(f.service.isPreviewUrl(new URL("/report.pdf", url).href), true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("workspace previews implicitly authorize only the entry and declared assets, never siblings", async () => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.root, "payroll.js"), "confidential payroll data");
+    await fs.writeFile(path.join(f.root, "docs", "other.html"), "private sibling document");
+    const prepared = await f.service.prepare("workspace", "docs/index.html", {
+      assetPaths: ["style.css"],
+    });
+    assert.equal(prepared.requiresApproval, false);
+    const reservation = await f.service.open("workspace", "docs/index.html", {
+      preparedFile: prepared,
+      assetPaths: ["style.css"],
+    });
+    const headers = { ...authorization(reservation.url), "Sec-Fetch-Site": "same-origin" };
+    assert.equal((await raw(new URL("style.css", reservation.url).href, { headers })).status, 200);
+    for (const route of [
+      "/payroll.js",
+      "/docs/other.html",
+      "/report.pdf",
+      "/assets/app.js",
+      "/assets/icon.svg",
+    ]) {
+      const result = await raw(new URL(route, reservation.url).href, { headers });
+      assert.equal(result.status, 404, route);
+      assert.doesNotMatch(result.body, /confidential payroll|private sibling/);
+    }
+    reservation.release();
+    f.setWorkspace({ id: "workspace", folderPath: f.root, permission: "ask" });
+    const ask = await f.service.prepare("workspace", "docs/index.html", {
+      assetPaths: ["style.css"],
+    });
+    assert.equal(ask.requiresApproval, false);
+    const askReservation = await f.service.open("workspace", "docs/index.html", {
+      preparedFile: ask,
+      assetPaths: ["style.css"],
+    });
+    assert.equal((await raw(askReservation.url)).status, 200);
+    askReservation.release();
+  } finally {
+    await f.close();
+  }
+});
+
+test("a second workspace document or expanded asset grant cannot widen an earlier origin", async () => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.root, "docs", "second.html"), "second document");
+    const first = await f.open("workspace", "docs/index.html", { assetPaths: ["style.css"] });
+    const firstHeaders = authorization(first);
+    const second = await f.open("workspace", "docs/second.html", {
+      assetPaths: ["../assets/app.js"],
+    });
+    const secondHeaders = authorization(second);
+    assert.notEqual(new URL(first).origin, new URL(second).origin);
+    assert.equal(
+      (await raw(new URL("/assets/app.js", second).href, { headers: secondHeaders })).status,
+      200,
+    );
+    assert.equal(
+      (await raw(new URL("/docs/second.html", first).href, { headers: firstHeaders })).status,
+      404,
+    );
+    assert.equal(
+      (await raw(new URL("/assets/app.js", first).href, { headers: firstHeaders })).status,
+      404,
+    );
+    assert.equal(
+      (await raw(new URL("/docs/index.html", second).href, { headers: secondHeaders })).status,
+      404,
+    );
+    const expanded = await f.open("workspace", "docs/index.html", {
+      assetPaths: ["style.css", "../assets/app.js"],
+    });
+    assert.notEqual(new URL(first).origin, new URL(expanded).origin);
+    assert.equal(
+      (await raw(new URL("/assets/app.js", first).href, { headers: firstHeaders })).status,
+      404,
+    );
+    const repeated = await f.open("workspace", "docs/index.html", { assetPaths: ["style.css"] });
+    assert.equal(new URL(repeated).origin, new URL(first).origin);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an outside asset added to a workspace document requires exact approval", async () => {
+  const f = await fixture();
+  try {
+    const outsideAsset = path.join(f.folder, "outside.css");
+    await fs.writeFile(outsideAsset, "p{color:blue}");
+    const prepared = await f.service.prepare("workspace", "docs/index.html", {
+      assetPaths: [outsideAsset],
+    });
+    assert.equal(prepared.requiresApproval, true);
+    await assert.rejects(
+      f.service.open("workspace", "docs/index.html", {
+        preparedFile: prepared,
+        assetPaths: [outsideAsset],
+      }),
+      /needs approval/,
+    );
+    f.service.approve(prepared);
+    const opened = await f.service.open("workspace", "docs/index.html", {
+      preparedFile: prepared,
+      assetPaths: [outsideAsset],
+    });
+    const headers = authorization(opened.url);
+    assert.equal(
+      (await raw(new URL("../../outside.css", opened.url).href, { headers })).body,
+      "p{color:blue}",
+    );
+    assert.equal(
+      (await raw(new URL("/workspace/assets/app.js", opened.url).href, { headers })).status,
+      404,
+    );
+    opened.release();
+  } finally {
+    await f.close();
+  }
+});
+
+test("workspace entry and asset identities stay pinned after preparation", async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.service.prepare("workspace", "docs/index.html", {
+      assetPaths: ["style.css"],
+    });
+    const opened = await f.service.open("workspace", "docs/index.html", {
+      preparedFile: prepared,
+      assetPaths: ["style.css"],
+    });
+    const headers = authorization(opened.url);
+    const asset = path.join(f.root, "docs/style.css");
+    await fs.rename(asset, `${asset}.original`);
+    await fs.writeFile(asset, "replacement must not be served");
+    const denied = await raw(new URL("style.css", opened.url).href, { headers });
+    assert.equal(denied.status, 409);
+    assert.doesNotMatch(denied.body, /replacement must not be served/);
+    const entry = path.join(f.root, "docs/index.html");
+    await fs.rename(entry, `${entry}.original`);
+    await fs.writeFile(entry, "replacement entry must not be served");
+    await assert.rejects(
+      f.service.open("workspace", "docs/index.html", {
+        preparedFile: prepared,
+        assetPaths: ["style.css"],
+      }),
+      /identity changed/,
+    );
+    opened.release();
   } finally {
     await f.close();
   }
@@ -160,11 +316,11 @@ test("rejects missing/tampered capabilities, hostile hosts, cross-origin fetches
   const f = await fixture();
   try {
     const url = await f.open("workspace", "docs/index.html");
-    const opened = await raw(url);
-    const headers = { Cookie: cookie(opened) };
+    const headers = authorization(url);
     const plain = new URL(url);
     plain.search = "";
     assert.equal((await raw(plain.href)).status, 403);
+    assert.equal((await raw(plain.href, { headers: { Cookie: `aiden_preview_old=${new URL(url).searchParams.get("__aiden_preview")}` } })).status, 403);
     assert.equal((await raw(`${plain.href}?__aiden_preview=wrong`, { headers })).status, 403);
     assert.equal((await raw(url, { headers: { Host: "evil.example" } })).status, 403);
     assert.equal((await raw(url, { headers: { Origin: "https://evil.example" } })).status, 403);
@@ -191,6 +347,45 @@ test("rejects missing/tampered capabilities, hostile hosts, cross-origin fetches
   }
 });
 
+test("native request authorization requires an active exact grant and the committed frame origin", async () => {
+  const f = await fixture();
+  try {
+    const opened = await f.service.open("workspace", "docs/index.html", { assetPaths: ["style.css"] });
+    const parsed = new URL(opened.url);
+    const token = parsed.searchParams.get("__aiden_preview");
+    const asset = new URL("style.css", opened.url).href;
+    assert.equal(f.service.authorizationForRequest("workspace", asset, parsed.origin), token);
+    for (const [workspace, target, initiator] of [
+      ["another-workspace", asset, parsed.origin],
+      ["workspace", new URL("/assets/app.js", opened.url).href, parsed.origin],
+      ["workspace", asset, "https://attacker.example"],
+      ["workspace", asset, "http://127.0.0.1:1"],
+      ["workspace", asset, "null"],
+      ["workspace", asset, ""],
+      ["workspace", "http://127.0.0.1:1/collect", parsed.origin],
+    ]) assert.equal(f.service.authorizationForRequest(workspace!, target!, initiator!), undefined);
+    assert.equal(f.service.redactText(`${BROWSER_PREVIEW_AUTH_HEADER}: ${token}`), `${BROWSER_PREVIEW_AUTH_HEADER}: [private-preview]`);
+    opened.release();
+    assert.equal(f.service.authorizationForRequest("workspace", asset, parsed.origin), undefined);
+  } finally { await f.close(); }
+});
+
+test("every outbound request strips supplied internal authorization and legacy preview cookies", () => {
+  const supplied = {
+    [BROWSER_PREVIEW_AUTH_HEADER]: "old-preview-token",
+    [BROWSER_PREVIEW_AUTH_HEADER.toLowerCase()]: "spoofed-preview-token",
+    Cookie: "site_session=keep; aiden_preview_old=secret; aiden_preview_other=other; preference=light",
+    Authorization: "Bearer ordinary-site-auth",
+  };
+  const publicHeaders = browserPreviewRequestHeaders(supplied);
+  assert.deepEqual(publicHeaders, { Cookie: "site_session=keep; preference=light", Authorization: "Bearer ordinary-site-auth" });
+  const previewHeaders = browserPreviewRequestHeaders(supplied, "current-exact-grant");
+  assert.equal(previewHeaders[BROWSER_PREVIEW_AUTH_HEADER], "current-exact-grant");
+  assert.deepEqual(browserPreviewRequestHeaders(previewHeaders), publicHeaders, "redirects and unowned requests lose the grant");
+  assert.deepEqual(browserPreviewRequestHeaders({ cookie: "aiden_preview_old=secret" }), {});
+  assert.equal(supplied[BROWSER_PREVIEW_AUTH_HEADER], "old-preview-token");
+});
+
 test("blocks traversal, dotfiles, directories, secrets and unsupported assets", async () => {
   const f = await fixture();
   try {
@@ -199,7 +394,7 @@ test("blocks traversal, dotfiles, directories, secrets and unsupported assets", 
     await fs.writeFile(path.join(f.root, "credentials.js"), "secret");
     await fs.writeFile(path.join(f.root, "data.json"), "{}");
     const url = await f.open("workspace", "docs/index.html");
-    const headers = { Cookie: cookie(await raw(url)) };
+    const headers = authorization(url);
     for (const requestPath of [
       "/../outside.html",
       "/%2e%2e/outside.html",
@@ -283,7 +478,7 @@ test("external documents need authentic exact-file approval and expose only decl
     });
     const initial = await raw(reservation.url);
     assert.equal(initial.status, 200);
-    const headers = { Cookie: cookie(initial) };
+    const headers = authorization(reservation.url);
     assert.equal(
       (await raw(new URL("sample.css", reservation.url).href, { headers })).body,
       "p{color:red}",
@@ -590,7 +785,7 @@ test("literal URL punctuation in filenames is encoded and each workspace closure
     const url = await f.open("workspace", "report ?#%.html");
     assert.equal((await raw(url)).body, "literal filename");
     const repeated = await f.open("workspace", "docs/index.html");
-    assert.equal(new URL(repeated).origin, new URL(url).origin);
+    assert.notEqual(new URL(repeated).origin, new URL(url).origin);
     await f.service.closeForWorkspace("workspace");
     await assert.rejects(raw(url));
     const fresh = await f.open("workspace", "docs/index.html");

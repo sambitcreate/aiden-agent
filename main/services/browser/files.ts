@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 
 const CAPABILITY_QUERY = "__aiden_preview";
+export const BROWSER_PREVIEW_AUTH_HEADER = "X-Aiden-Preview-Authorization";
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_WORKSPACES = 24;
 const MAX_CONCURRENT_READS = 8;
@@ -74,7 +75,7 @@ interface PreparedDetails {
   root: RootIdentity;
   relative: string;
   key: string;
-  files?: Map<string, ExactFileIdentity>;
+  files: Map<string, ExactFileIdentity>;
   approved: boolean;
 }
 interface RootIdentity {
@@ -89,12 +90,11 @@ interface Lease {
   workspaceId: string;
   workspaceRoot: RootIdentity;
   root: RootIdentity;
-  files?: Map<string, ExactFileIdentity>;
+  files: Map<string, ExactFileIdentity>;
   server: Server;
   origin: string;
   host: string;
   token: string;
-  cookieName: string;
   revoked: boolean;
   retiring: boolean;
   reads: number;
@@ -152,14 +152,26 @@ function confinedRelative(root: string, candidate: string): string {
 function identityMatches(identity: RootIdentity, stat: { dev: number; ino: number }): boolean {
   return identity.device === stat.dev && identity.inode === stat.ino;
 }
-function cookieValue(request: IncomingMessage, name: string): string | undefined {
-  const matches = (request.headers.cookie ?? "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith(`${name}=`));
-  return matches.length === 1 ? matches[0]!.slice(name.length + 1) : undefined;
+/** Never forward an internal bearer header, including across redirects. */
+export function browserPreviewRequestHeaders(
+  headers: Record<string, string>,
+  authorization?: string,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === BROWSER_PREVIEW_AUTH_HEADER.toLowerCase()) continue;
+    if (key.toLowerCase() === "cookie") {
+      // Earlier previews used host-wide cookies. Do not send those historical
+      // bearer values to another loopback port after this policy changes.
+      const retained = value.split(";").map((part) => part.trim())
+        .filter((part) => !part.startsWith("aiden_preview_"));
+      if (retained.length) result[key] = retained.join("; ");
+    } else result[key] = value;
+  }
+  if (authorization) result[BROWSER_PREVIEW_AUTH_HEADER] = authorization;
+  return result;
 }
-function requestSegments(request: IncomingMessage): string[] {
+function requestSegments(request: Pick<IncomingMessage, "url">): string[] {
   const rawPath = (request.url ?? "").split("?", 1)[0]!;
   if (!rawPath.startsWith("/") || rawPath.startsWith("//") || rawPath.length > 8192)
     throw new FilePreviewError(404, "Invalid preview path.");
@@ -225,6 +237,26 @@ export class BrowserFileService {
       return false;
     }
   }
+  /** Called only by the native guest request interceptor, never by page JavaScript. */
+  authorizationForRequest(
+    workspaceId: string,
+    value: string,
+    requestingOrigin: string,
+  ): string | undefined {
+    if (this.stopped) return undefined;
+    try {
+      const url = new URL(value);
+      if (url.origin !== requestingOrigin || url.username || url.password) return undefined;
+      const relative = requestSegments({ url: url.pathname }).join(path.sep);
+      const lease = [...this.leases.values()].find((candidate) =>
+        candidate.workspaceId === workspaceId && candidate.origin === url.origin &&
+        !candidate.revoked && !candidate.retiring && candidate.files.has(relative),
+      );
+      return lease?.token;
+    } catch {
+      return undefined;
+    }
+  }
   /** Never persist raw capabilities echoed by an untrusted page into text results. */
   redactText(value: string): string {
     if (value.length < 32) return value;
@@ -282,12 +314,32 @@ export class BrowserFileService {
       /* An exact external grant may authorize this document. */
     }
     let root = workspaceRoot;
-    let files: Map<string, ExactFileIdentity> | undefined;
+    let files: Map<string, ExactFileIdentity>;
     let displayPaths = [candidate, ...assets];
-    if (relative) {
-      await this.inspectFile(root, relative);
-      for (const asset of assets)
-        await this.inspectFile(root, confinedRelative(root.configuredPath, asset));
+    let workspaceOnly = Boolean(relative);
+    if (workspaceOnly) {
+      for (const asset of assets) {
+        try {
+          confinedRelative(root.configuredPath, asset);
+        } catch {
+          workspaceOnly = false;
+          break;
+        }
+      }
+    }
+    if (workspaceOnly) {
+      files = new Map();
+      for (const configured of displayPaths) {
+        check();
+        const route = confinedRelative(root.configuredPath, configured);
+        const inspected = await this.inspectFile(root, route);
+        files.set(route, {
+          configured,
+          canonical: inspected.canonical,
+          device: inspected.stat.dev,
+          inode: inspected.stat.ino,
+        });
+      }
     } else {
       const identities: ExactFileIdentity[] = [];
       for (const configured of displayPaths) {
@@ -320,18 +372,18 @@ export class BrowserFileService {
       path: suppliedPath,
       assetPaths: Object.freeze([...(options.assetPaths ?? [])]),
       displayPaths: Object.freeze(displayPaths),
-      requiresApproval: Boolean(files),
+      requiresApproval: !workspaceOnly,
     });
     this.preparations.set(prepared, {
       epoch,
       workspaceRoot,
       root,
-      relative,
+      relative: relative!,
       files,
-      approved: !files,
-      key: files
-        ? `exact:${workspaceId}:${JSON.stringify([...files.values()].map((file) => [file.canonical, file.device, file.inode]).sort())}`
-        : `workspace:${workspaceId}`,
+      approved: workspaceOnly,
+      // Each origin owns an immutable route/file grant. Opening another document
+      // cannot give a previously loaded page access to that document or its assets.
+      key: `exact:${workspaceId}:${JSON.stringify([root.canonicalPath, [...files.entries()].map(([route, file]) => [route, file.canonical, file.device, file.inode]).sort()])}`,
     });
     return prepared;
   }
@@ -605,16 +657,15 @@ export class BrowserFileService {
     return { canonical, stat, mime };
   }
   private async inspectLeaseFile(lease: Lease, relative: string) {
-    const grant = lease.files?.get(relative);
-    if (lease.files && !grant)
+    const grant = lease.files.get(relative);
+    if (!grant)
       throw new FilePreviewError(404, "This asset was not included in the approved file grant.");
     const expected = await this.inspectFile(lease.root, relative);
     if (
-      grant &&
-      (expected.canonical !== grant.canonical ||
-        expected.stat.dev !== grant.device ||
-        expected.stat.ino !== grant.inode ||
-        (await fs.realpath(grant.configured)) !== grant.canonical)
+      expected.canonical !== grant.canonical ||
+      expected.stat.dev !== grant.device ||
+      expected.stat.ino !== grant.inode ||
+      (await fs.realpath(grant.configured)) !== grant.canonical
     )
       throw new FilePreviewError(409, "The approved file identity changed. Open the file again.");
     return expected;
@@ -630,7 +681,6 @@ export class BrowserFileService {
       origin: "",
       host: "",
       token: randomBytes(32).toString("base64url"),
-      cookieName: `aiden_preview_${randomBytes(12).toString("hex")}`,
       revoked: false,
       retiring: false,
       reads: 0,
@@ -654,7 +704,7 @@ export class BrowserFileService {
     const address = lease.server.address() as AddressInfo;
     lease.host = `127.0.0.1:${address.port}`;
     lease.origin = `http://${lease.host}`;
-    this.event(lease, "created", details.files ? "exact_grant" : "workspace_grant");
+    this.event(lease, "created", "exact_grant");
     return lease;
   }
   private closeLease(lease: Lease, reason: string, drain: boolean): Promise<void> {
@@ -727,9 +777,11 @@ export class BrowserFileService {
       const parsed = new URL(request.url ?? "", lease.origin);
       const tokens = parsed.searchParams.getAll(CAPABILITY_QUERY);
       const tokenAccess = tokens.length === 1 && equalSecret(tokens[0], lease.token);
+      const authorization = request.headers[BROWSER_PREVIEW_AUTH_HEADER.toLowerCase()];
+      const headerAccess = typeof authorization === "string" && equalSecret(authorization, lease.token);
       if (
         (tokens.length > 0 && !tokenAccess) ||
-        (!tokenAccess && !equalSecret(cookieValue(request, lease.cookieName), lease.token))
+        (!tokenAccess && !headerAccess)
       )
         throw new FilePreviewError(403, "This browser preview requires its private access URL.");
       if (request.headers.origin && request.headers.origin !== lease.origin)
@@ -800,11 +852,6 @@ export class BrowserFileService {
           final.stat.ino !== before.ino
         )
           throw new FilePreviewError(409, "The preview file changed. Reload it.");
-        if (tokenAccess)
-          response.setHeader(
-            "Set-Cookie",
-            `${lease.cookieName}=${lease.token}; Path=/; HttpOnly; SameSite=Strict`,
-          );
         response.setHeader("Content-Type", expected.mime);
         response.setHeader("Content-Length", length);
         response.setHeader("Accept-Ranges", "bytes");

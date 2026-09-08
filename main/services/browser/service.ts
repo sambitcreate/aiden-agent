@@ -53,8 +53,9 @@ import {
 } from "./core.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
-import { browserFileService, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
+import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
 import type { BrowserApprovalTarget } from "./approval.js";
+import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
 
 type CommandContext = {
@@ -98,7 +99,7 @@ interface LiveTab {
   visible: boolean;
   bounds?: BrowserBounds;
   closing: boolean;
-  expectedInputs: Array<{ type: string; key?: string; expires: number }>;
+  expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
   picking?: boolean;
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
@@ -183,6 +184,7 @@ function boundedBounds(value: BrowserBounds): BrowserBounds {
 export class BrowserService {
   private readonly workspaces = new Map<string, WorkspaceBrowser>();
   private readonly tabs = new Map<string, LiveTab>();
+  private readonly popupOwners = new Map<number, { workspaceId: string; ownerDocumentId: string }>();
   private readonly sessions = new Map<string, Session>();
   private readonly recordings = new Map<string, BrowserRecording>();
   private readonly terminalTails = new Map<string, string>();
@@ -380,16 +382,38 @@ export class BrowserService {
           .replace(/\s*Electron\/[\d.]+/g, "")
           .replace(/\s*aiden[^\s]*\/[\d.]+/gi, ""),
       );
-      const allowed = new Set([
-        "clipboard-read",
-        "clipboard-sanitized-write",
-        "notifications",
-        "geolocation",
-      ]);
-      browserSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
-      browserSession.setPermissionRequestHandler((_wc, permission, callback) =>
-        callback(allowed.has(permission)),
-      );
+      configureBrowserPermissionHandlers(browserSession, (contents) => {
+        if (!contents || contents.isDestroyed()) return undefined;
+        const owned = [...this.tabs.values()].some(
+          (tab) => !tab.closing && tab.view.webContents === contents,
+        );
+        return owned ? contents.getURL() : undefined;
+      });
+      browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        let authorization: string | undefined;
+        try {
+          const contents = details.webContents;
+          if (contents && !contents.isDestroyed() && details.frame) {
+            const tab = [...this.tabs.values()].find((candidate) =>
+              !candidate.closing && candidate.view.webContents === contents,
+            );
+            const popup = this.popupOwners.get(contents.id);
+            const workspaceId = tab?.state.workspaceId ?? popup?.workspaceId;
+            const owner = workspaceId ? this.workspaces.get(workspaceId)?.owner : undefined;
+            if (workspaceId && owner && !owner.isDestroyed() &&
+              (tab || popup?.ownerDocumentId === owner.documentId)) {
+              // Use the committed frame's security origin, including inherited
+              // about:blank origins; the destination URL never supplies authority.
+              authorization = browserFileService.authorizationForRequest(
+                workspaceId, details.url, details.frame.origin,
+              );
+            }
+          }
+        } catch {
+          // Navigation/disposal can invalidate frame handles synchronously.
+        }
+        callback({ requestHeaders: browserPreviewRequestHeaders(details.requestHeaders, authorization) });
+      });
       browserSession.on("will-download", (_event, item, wc) => {
         if (![...this.tabs.values()].some((t) => t.view.webContents === wc)) {
           item.cancel();
@@ -518,13 +542,24 @@ export class BrowserService {
       this.emit(tab.state.workspaceId);
     });
     wc.setIgnoreMenuShortcuts(true);
-    const humanInput = (type: string, key?: string) => {
+    const humanInput = (type: string, key?: string, modifiers?: number, button?: string, nativeModifiers?: number) => {
       if (tab.picking) return true;
       tab.expectedInputs = tab.expectedInputs.filter((expected) => expected.expires > Date.now());
-      const index = tab.expectedInputs.findIndex(
+      // Pinned Electron 43.1.1 keyboard/generic converter exposes _modifiers:
+      // https://github.com/electron/electron/blob/v43.1.1/shell/common/gin_converters/blink_converter.cc
+      // Blink's WebInputEvent::kFromDebugger = 1 << 23 identifies injected input:
+      // https://github.com/chromium/chromium/blob/main/third_party/blink/public/common/input/web_input_event.h
+      // Keyboard metadata must be present; missing flags fail closed on upgrade.
+      // Electron's specialized mouse converter omits the flags, so those events
+      // still require bounded matching and cannot identify an exact collision.
+      const fromDebugger = Number.isSafeInteger(nativeModifiers) && ((nativeModifiers! & (1 << 23)) !== 0);
+      const mayMatch = fromDebugger || (key === undefined && nativeModifiers === undefined);
+      const index = mayMatch ? tab.expectedInputs.findIndex(
         (expected) =>
-          expected.type === type && (expected.key === undefined || expected.key === key),
-      );
+          expected.type === type && (expected.key === undefined || expected.key === key) &&
+          (expected.modifiers === undefined || expected.modifiers === modifiers) &&
+          (expected.button === undefined || expected.button === button),
+      ) : -1;
       if (index >= 0) {
         tab.expectedInputs.splice(index, 1);
         return true;
@@ -533,8 +568,10 @@ export class BrowserService {
       return false;
     };
     wc.on("before-input-event", (event, input) => {
-      if (input.isAutoRepeat) return;
-      const synthetic = humanInput(input.type, input.key);
+      // A repeated physical key is still user control; only debugger-marked
+      // echoes may consume expectations, regardless of auto-repeat.
+      const modifiers = Number(input.alt) | (Number(input.control) << 1) | (Number(input.meta) << 2) | (Number(input.shift) << 3);
+      const synthetic = humanInput(input.type, input.key, modifiers, undefined, (input as typeof input & { _modifiers?: number })._modifiers);
       if (synthetic || input.type !== "keyDown" || !(input.meta || input.control) || input.alt)
         return;
       const key = input.key.toLowerCase();
@@ -560,7 +597,7 @@ export class BrowserService {
     });
     wc.on("before-mouse-event", (_event, input) => {
       if (input.type !== "mouseMove" && input.type !== "mouseEnter" && input.type !== "mouseLeave")
-        humanInput(input.type);
+        humanInput(input.type, undefined, undefined, input.button, (input as typeof input & { _modifiers?: number })._modifiers);
     });
     wc.on("console-message", (details) => {
       tab.diagnostics.push({
@@ -608,6 +645,13 @@ export class BrowserService {
     });
     wc.on("did-create-window", (window, details) => {
       const consumerId = `browser-popup:${window.webContents.id}`;
+      const owner = this.workspaces.get(tab.state.workspaceId)?.owner;
+      if (!owner || owner.isDestroyed()) { window.destroy(); return; }
+      this.popupOwners.set(window.webContents.id, {
+        workspaceId: tab.state.workspaceId, ownerDocumentId: owner.documentId,
+      });
+      const popupId = window.webContents.id;
+      window.once("closed", () => { this.popupOwners.delete(popupId); });
       let pending: BrowserFileReservation | undefined;
       try { pending = browserFileService.reserveUrl(tab.state.workspaceId, details.url); } catch { window.destroy(); return; }
       const releasePending = () => { const value = pending; pending = undefined; value?.release(); };
@@ -880,22 +924,15 @@ export class BrowserService {
       wc.debugger.attach("1.3");
       await wc.debugger.sendCommand("Network.enable");
     }
-    if (method === "Input.dispatchKeyEvent")
-      tab.expectedInputs.push({
-        type: String(params.type),
-        key: String(params.key),
-        expires: Date.now() + 500,
-      });
-    if (method === "Input.dispatchMouseEvent")
-      tab.expectedInputs.push({
-        type:
-          params.type === "mousePressed"
-            ? "mouseDown"
-            : params.type === "mouseReleased"
-              ? "mouseUp"
-              : String(params.type),
-        expires: Date.now() + 500,
-      });
+    // Keyboard/generic echoes require Blink's debugger marker; specialized
+    // mouse events use bounded matching. No exemption outlives pending dispatch.
+    const expected: LiveTab["expectedInputs"][number] | undefined = method === "Input.dispatchKeyEvent"
+      ? { type: String(params.type), key: String(params.key), modifiers: Number(params.modifiers ?? 0), expires: Date.now() + 500 }
+      : method === "Input.dispatchMouseEvent" && params.type !== "mouseMoved"
+        ? { type: params.type === "mousePressed" ? "mouseDown" : params.type === "mouseReleased" ? "mouseUp" : String(params.type),
+            ...(params.type === "mousePressed" || params.type === "mouseReleased" ? { button: String(params.button ?? "left") } : {}), expires: Date.now() + 500 }
+        : undefined;
+    if (expected) tab.expectedInputs.push(expected);
     try {
       return await browserDeadline(
         wc.debugger.sendCommand(method, params),
@@ -911,6 +948,9 @@ export class BrowserService {
       )
         void wc.debugger.sendCommand("Runtime.terminateExecution").catch(() => {});
       throw error;
+    } finally {
+      // Failed/no-echo dispatches must not leave a 500ms exemption for real input.
+      if (expected) tab.expectedInputs = tab.expectedInputs.filter((entry) => entry !== expected);
     }
   }
   private async evaluate(
@@ -1368,9 +1408,67 @@ export class BrowserService {
       } catch {
         browserAbort(signal);
       }
-      await recorder.webContents.executeJavaScript(
-        `(async () => { const canvas=document.querySelector('canvas'); canvas.width=${Math.max(1, Math.min(1920, bounds.width))}; canvas.height=${Math.max(1, Math.min(1080, bounds.height))}; const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,canvas.width,canvas.height);${initialImage ? `const initialImage=new Image();initialImage.src=${JSON.stringify(`data:${initialImage.mimeType};base64,${initialImage.data}`)};await initialImage.decode();context.drawImage(initialImage,0,0,canvas.width,canvas.height);` : ""}const chunks=[]; let bytes=0; const stream=canvas.captureStream(${fps}); const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm'; const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000}); globalThis.__aidenRecording={canvas,media,chunks,stream,error:null}; media.ondataavailable=e=>{bytes+=e.data.size;if(bytes>${RECORDING_MAX_BYTES}){globalThis.__aidenRecording.error='Recording reached its size limit.';media.stop();}else chunks.push(e.data);}; media.start(100);stream.getVideoTracks()[0].requestFrame?.();await new Promise(resolve=>setTimeout(resolve,125));context.drawImage(canvas,0,0);stream.getVideoTracks()[0].requestFrame?.();return true; })()`,
+      await browserDeadline(
+        recorder.webContents.executeJavaScript(
+          `(async () => {
+            const canvas=document.querySelector('canvas');
+            canvas.width=${Math.max(1, Math.min(1920, bounds.width))};
+            canvas.height=${Math.max(1, Math.min(1080, bounds.height))};
+            const context=canvas.getContext('2d');
+            const stream=canvas.captureStream(${fps});
+            const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
+            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000});
+            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null};
+            media.ondataavailable=e=>{
+              if(!e.data.size)return;
+              state.bytes+=e.data.size;
+              if(state.bytes>${RECORDING_MAX_BYTES}){
+                state.error='Recording reached its size limit.';
+                if(media.state!=='inactive')media.stop();
+              }else state.chunks.push(e.data);
+            };
+            media.onerror=e=>{state.error=e.error?.message||'The video encoder failed.';};
+            state.publish=()=>{
+              if(media.state!=='recording')return;
+              context.drawImage(canvas,0,0);
+              stream.getVideoTracks()[0].requestFrame?.();
+            };
+            media.start(100);
+            context.fillStyle='white';context.fillRect(0,0,canvas.width,canvas.height);
+            ${initialImage ? `const initialImage=new Image();initialImage.src=${JSON.stringify(`data:${initialImage.mimeType};base64,${initialImage.data}`)};await initialImage.decode();context.drawImage(initialImage,0,0,canvas.width,canvas.height);` : ""}
+            state.publish();
+          })()`,
+        ),
+        5_000,
+        signal,
       );
+      // Hidden renderers may not composite a changed canvas until explicitly captured.
+      // Readiness is encoded data, not elapsed time: immediate Stop must yield a video.
+      const firstFrameDeadline = Date.now() + 5_000;
+      while (true) {
+        browserAbort(signal);
+        const status = await browserDeadline(
+          recorder.webContents.executeJavaScript(
+            "(() => { const state=globalThis.__aidenRecording; state.publish(); return {bytes:state.bytes,error:state.error}; })()",
+          ),
+          1_000,
+          signal,
+        );
+        if (status.error) throw new Error(status.error);
+        if (status.bytes > 0) break;
+        if (Date.now() >= firstFrameDeadline)
+          throw new Error("The browser video encoder did not produce its first frame.");
+        await browserDeadline(
+          recorder.webContents.capturePage(undefined, { stayHidden: true }),
+          1_000,
+          signal,
+        );
+        await browserDeadline(
+          new Promise((resolve) => setTimeout(resolve, Math.min(100, 1000 / fps))),
+          1_000,
+          signal,
+        );
+      }
       const recording: RecordingSession = {
         id: `recording-${randomUUID()}`,
         started: Date.now(),
@@ -1391,9 +1489,9 @@ export class BrowserService {
         );
       } catch (error) {
         clearTimeout(recording.stopTimer);
-        recorder.destroy();
         tab.recording = undefined;
         tab.state.recording = false;
+        if (!recorder.isDestroyed()) recorder.destroy();
         throw error;
       }
       tab.pendingRecorder = undefined;
@@ -1424,7 +1522,7 @@ export class BrowserService {
         if (recording.recorder.isDestroyed()) return;
         await browserDeadline(
           recording.recorder.webContents.executeJavaScript(
-            `(async () => { const state=globalThis.__aidenRecording; const image=new Image(); image.src=${JSON.stringify(`data:image/jpeg;base64,${params.data}`)}; await image.decode(); state.canvas.getContext('2d').drawImage(image,0,0,state.canvas.width,state.canvas.height); })()`,
+            `(async () => { const state=globalThis.__aidenRecording; const image=new Image(); image.src=${JSON.stringify(`data:image/jpeg;base64,${params.data}`)}; await image.decode(); state.canvas.getContext('2d').drawImage(image,0,0,state.canvas.width,state.canvas.height); state.publish(); })()`,
           ),
           3_000,
         );

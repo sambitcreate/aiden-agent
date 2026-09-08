@@ -195,7 +195,7 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   await mkdir(path.join(aiden.workspaceDir, "docs"), { recursive: true });
   await writeFile(path.join(aiden.workspaceDir, "docs", "preview.html"), '<!doctype html><title>Workspace preview</title><link rel="stylesheet" href="/preview.css"><h1>Local document</h1>');
   await writeFile(path.join(aiden.workspaceDir, "preview.css"), 'h1 { color: rgb(12, 34, 56); }');
-  const opened = await command(page, { action: "open_file", path: "docs/preview.html" });
+  const opened = await command(page, { action: "open_file", path: "docs/preview.html", assetPaths: ["../preview.css"] });
   const tabId = opened.state.activeTabId!;
   await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Workspace preview");
   expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe("rgb(12, 34, 56)");
@@ -231,12 +231,33 @@ test("browser recording produces a real bounded WebM artifact", async ({ aiden }
   await finishLmStudioOnboarding(page);
   const opened = await command(page, { action: "create" });
   const tabId = opened.state.activeTabId!;
-  await command(page, { action: "record_start", tabId, fps: 10 });
-  await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.recording).toBe(true);
-  const stopped = await command(page, { action: "record_stop", tabId });
-  expect(stopped.recording?.mimeType).toContain("video/webm");
-  const bytes = await readFile(stopped.recording!.path);
-  expect([...bytes.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
-  expect(stopped.recording!.sizeBytes).toBe(bytes.length);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await command(page, { action: "record_start", tabId, fps: 10 });
+    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.recording).toBe(true);
+    const stopped = await command(page, { action: "record_stop", tabId });
+    expect(stopped.recording?.mimeType).toContain("video/webm");
+    const bytes = await readFile(stopped.recording!.path);
+    expect([...bytes.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(stopped.recording!.sizeBytes).toBe(bytes.length);
+    const decoded = await page.evaluate(async (base64) => {
+      const video = document.createElement("video");
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(base64), character => character.charCodeAt(0))], { type: "video/webm" }));
+      try {
+        return await new Promise<{ width: number; height: number }>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("Recorded WebM did not decode a video frame.")), 8_000);
+          video.onloadeddata = () => { clearTimeout(timer); resolve({ width: video.videoWidth, height: video.videoHeight }); };
+          video.onerror = () => { clearTimeout(timer); reject(new Error(video.error?.message || "Recorded WebM could not be decoded.")); };
+          video.src = url;
+          video.load();
+        });
+      } finally {
+        video.removeAttribute("src");
+        video.load();
+        URL.revokeObjectURL(url);
+      }
+    }, bytes.toString("base64"));
+    expect(decoded.width).toBeGreaterThan(0);
+    expect(decoded.height).toBeGreaterThan(0);
+  }
   await command(page, { action: "close", tabId });
 });

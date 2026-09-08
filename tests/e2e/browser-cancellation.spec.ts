@@ -14,6 +14,7 @@ type BrowserTestWindow = Window & {
 };
 type HeldInput = {
   downDelivered: boolean;
+  events?: Array<Record<string, unknown>>;
   releases: number;
   release: () => void;
   restore: () => void;
@@ -119,8 +120,8 @@ test("semantic clicks cannot hit an overlay introduced by hover or just before d
   }
 });
 
-for (const kind of ["mouse", "key"] as const) {
-  test(`browser user takeover releases ${kind} input when cancellation races the down response`, async ({
+for (const kind of ["mouse", "key"] as const) for (const takeover of ["input", "access"] as const) {
+  test(`browser ${takeover === "input" ? "user takeover" : "access revocation"} releases ${kind} input when cancellation races the down response`, async ({
     aiden,
   }) => {
     const { page, app } = aiden;
@@ -178,11 +179,19 @@ for (const kind of ["mouse", "key"] as const) {
           ),
         )
         .toBe(true);
-      await app.evaluate(({ webContents }, id) => {
-        // This event is unrelated to the protocol-generated down event and represents
-        // a person taking control while Chromium's dispatch response is still pending.
-        webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
-      }, guestId);
+      if (takeover === "input") {
+        await app.evaluate(({ webContents }, id) => {
+          // This event is unrelated to the protocol-generated down event and represents
+          // a person taking control while Chromium's dispatch response is still pending.
+          webContents.fromId(id)!.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+        }, guestId);
+      } else if (kind === "mouse") {
+        await command(page, { action: "agent_access", access: "off" });
+      } else {
+        const state = await page.evaluate((workspaceId) =>
+          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
+        await command(page, { action: "defaults", defaults: { ...state.defaults, agentAccess: "off" } });
+      }
       await expect(pending).resolves.toMatchObject({
         error: expect.stringMatching(/interrupted/i),
       });
@@ -195,6 +204,80 @@ for (const kind of ["mouse", "key"] as const) {
         state?.release();
         state?.restore();
         delete (globalThis as BrowserTestGlobal).__browserHeldInput;
+      });
+      await command(page, { action: "close", tabId });
+    }
+  });
+}
+
+for (const kind of ["mouse", "key"] as const) {
+  test(`matching human ${kind} input arriving before the CDP echo still interrupts the action`, async ({ aiden }) => {
+    const { page, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    const tabId = (await command(page, { action: "create" })).tabId!;
+    const guestId = await blankGuestId(app);
+    await app.evaluate(({ webContents }, { guestId, kind }) => {
+      const guest = webContents.fromId(guestId)!;
+      guest.focus();
+      const original = guest.debugger.sendCommand.bind(guest.debugger);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const events: Array<Record<string, unknown>> = [];
+      const observe = (_event: unknown, input: object) => { events.push({ ...input }); };
+      guest.on("before-input-event", observe);
+      guest.on("before-mouse-event", observe);
+      const state: HeldInput = { downDelivered: false, releases: 0, release, events,
+        restore: () => { guest.debugger.sendCommand = original; guest.removeListener("before-input-event", observe); guest.removeListener("before-mouse-event", observe); } };
+      (globalThis as BrowserTestGlobal).__browserHeldInput = state;
+      const method = kind === "mouse" ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
+      const down = kind === "mouse" ? "mousePressed" : "keyDown";
+      const up = kind === "mouse" ? "mouseReleased" : "keyUp";
+      guest.debugger.sendCommand = async (name, params, sessionId) => {
+        if (name === method && params?.type === down && !state.downDelivered) {
+          state.downDelivered = true;
+          await held;
+        }
+        if (name === method && params?.type === up) state.releases += 1;
+        return original(name, params, sessionId);
+      };
+    }, { guestId, kind });
+    try {
+      const pending = command(page, kind === "mouse"
+        ? { action: "click", tabId, x: 20, y: 20 }
+        : { action: "press", tabId, key: "a" }).then(() => ({ error: "" }), error => ({ error: String(error) }));
+      await expect.poll(() => app.evaluate(() => Boolean((globalThis as BrowserTestGlobal).__browserHeldInput?.downDelivered))).toBe(true);
+      await app.evaluate(async ({ webContents }, { guestId, kind }) => {
+        const guest = webContents.fromId(guestId)!;
+        // Physical keys are rejected immediately by their native source marker.
+        // Mouse events lack that marker: a matching first event can consume the
+        // expectation, but its subsequent CDP echo must interrupt continuation.
+        await new Promise<void>((resolve) => {
+          if (kind === "mouse") {
+            guest.once("before-mouse-event", () => resolve());
+            guest.sendInputEvent({ type: "mouseDown", x: 20, y: 20, button: "left", clickCount: 1 });
+          } else {
+            guest.once("before-input-event", () => resolve());
+            guest.sendInputEvent({ type: "keyDown", keyCode: "a" });
+          }
+        });
+        (globalThis as BrowserTestGlobal).__browserHeldInput!.release();
+      }, { guestId, kind });
+      const outcome = await pending;
+      const events = await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.events);
+      expect(outcome.error, JSON.stringify(events)).toMatch(/interrupted/i);
+      if (kind === "key") {
+        // Pin Electron's native contract: physical inputs are unmarked, while
+        // the mandatory cleanup keyUp carries Blink's debugger source flag.
+        expect(events?.find(event => event.type === "keyDown")?._modifiers).toBe(0);
+        expect(events?.some(event => (Number(event._modifiers) & (1 << 23)) !== 0)).toBe(true);
+      } else {
+        expect(events?.find(event => event.type === "mouseDown")?._modifiers).toBeUndefined();
+      }
+      expect(await app.evaluate(() => (globalThis as BrowserTestGlobal).__browserHeldInput?.releases)).toBe(1);
+    } finally {
+      await app.evaluate(() => {
+        const state = (globalThis as BrowserTestGlobal).__browserHeldInput;
+        state?.release(); state?.restore(); delete (globalThis as BrowserTestGlobal).__browserHeldInput;
       });
       await command(page, { action: "close", tabId });
     }
