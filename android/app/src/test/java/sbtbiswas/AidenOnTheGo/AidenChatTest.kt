@@ -762,6 +762,33 @@ class AidenChatTest {
 
     @Test
     fun currentChatRecallUsesFixedPrivateActivityLabel() {
+        val browserLabels = mapOf(
+            "browser" to "Loaded browser tools",
+            "browser_status" to "Checked browser",
+            "browser_open" to "Opened browser",
+            "browser_navigate" to "Navigated browser",
+            "browser_resize" to "Resized browser",
+            "browser_set_appearance" to "Set browser appearance",
+            "browser_snapshot" to "Inspected browser",
+            "browser_click" to "Clicked in browser",
+            "browser_type" to "Typed in browser",
+            "browser_press" to "Pressed browser keys",
+            "browser_scroll" to "Scrolled browser",
+            "browser_evaluate" to "Evaluated page",
+            "browser_wait_for" to "Waited for page",
+            "browser_recording_start" to "Started browser recording",
+            "browser_recording_stop" to "Stopped browser recording"
+        )
+        for ((name, expected) in browserLabels) {
+            val browserStep = AidenAgentStep(
+                id = name, order = 0, kind = AidenAgentStep.Kind.TOOL,
+                toolName = name, label = name,
+                status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0,
+                updatedAt = 2000.0, finishedAt = 2000.0, contentOffset = 0,
+                durationMs = 1000.0
+            )
+            assertEquals(expected, AidenAgentActivityPresentation.line(browserStep))
+        }
         val step = AidenAgentStep(
             id = "recall-1", order = 0, kind = AidenAgentStep.Kind.TOOL,
             toolName = "vcc_recall", label = "Recall chat history",

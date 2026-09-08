@@ -17,6 +17,8 @@ test("shared action buttons use the same squircle for labeled and icon-only acti
   assert.doesNotMatch(buttonSource, /rounded-pill|radius =/u);
   assert.match(buttonSource, /iconOnly && "aspect-square px-0"/u);
   assert.match(buttonSource, /pressFeedback && "button-press-feedback"/u);
+  assert.match(buttonSource, /pressFeedback = false/u);
+  assert.match(styles, /\.button-press-feedback:active:not\(:disabled\)\s*\{\s*scale: 0\.96;/u);
   assert.match(buttonSource, /motion-reduce:transform-none/u);
 });
 

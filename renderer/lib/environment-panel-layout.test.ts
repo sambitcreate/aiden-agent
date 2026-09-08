@@ -13,7 +13,7 @@ import {
   resolveQuickViewLayout,
 } from "./environment-panel-layout.js";
 
-const COMPACT_TABS_BREAKPOINT = 520;
+const COMPACT_TABS_BREAKPOINT = 620;
 const SUBAGENTS_COMPACT_BREAKPOINT = 620;
 
 test("inline requires the minimum panel beside the conversation floor", () => {
@@ -50,7 +50,7 @@ test("resolves the exact narrow overlay matrix", () => {
 
 test("keeps icon-only and Subagents compact breakpoints exact at their boundaries", () => {
   const iconOnlyBoundary = resolveEnvironmentPanelLayout(
-    DEFAULT_PANEL_WIDTH,
+    MAX_PANEL_WIDTH,
     PANEL_EDGE_GUTTER + COMPACT_TABS_BREAKPOINT,
   );
   assert.deepEqual(iconOnlyBoundary, {
@@ -71,7 +71,7 @@ test("keeps icon-only and Subagents compact breakpoints exact at their boundarie
 
   assert.ok(
     resolveEnvironmentPanelLayout(
-      DEFAULT_PANEL_WIDTH,
+      MAX_PANEL_WIDTH,
       PANEL_EDGE_GUTTER + COMPACT_TABS_BREAKPOINT - 1,
     ).width < COMPACT_TABS_BREAKPOINT,
   );

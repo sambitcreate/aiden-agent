@@ -44,6 +44,8 @@ export interface ToolContext {
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Main-created tools bound to this generation's workspace and browser host. */
+  browserTools?: readonly AgentTool[];
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
@@ -158,6 +160,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
   if (ctx.allowScheduling !== false) {
     tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
   }

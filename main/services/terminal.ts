@@ -212,6 +212,11 @@ async function trySpawnShell(
 }
 
 export class TerminalService {
+  private outputObserver?: (workspaceId: string, data: string) => void;
+
+  setOutputObserver(observer: (workspaceId: string, data: string) => void): void {
+    this.outputObserver = observer;
+  }
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
@@ -342,6 +347,7 @@ export class TerminalService {
       current.sequence += 1;
       // Persist new output (the store sanitizes and debounces the disk write).
       this.historyStore?.append(workspaceId, data);
+      try { this.outputObserver?.(workspaceId, data); } catch { /* Browser suggestions cannot interrupt terminal output. */ }
       try {
         owner.send("terminal:data", { sessionId: id, sequence: current.sequence, data });
       } catch {

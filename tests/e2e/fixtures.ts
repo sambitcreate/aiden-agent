@@ -15,27 +15,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-export async function expectSquircleButtons(page: Page): Promise<void> {
-  const actions = page.locator('button, [role="button"], [data-slot="button"]');
-  const failures = await actions.evaluateAll((elements) => elements.filter((element) => {
-    if (["switch", "radio", "checkbox"].includes(element.getAttribute("role") ?? "")) return false;
-    if (!element.getClientRects().length) return false;
-    const style = getComputedStyle(element);
-    if (element.parentElement?.classList.contains("squircle-action-group")) {
-      const first = element === element.parentElement.firstElementChild;
-      const last = element === element.parentElement.lastElementChild;
-      return style.getPropertyValue("corner-shape") !== "squircle"
-        || style.borderStartStartRadius !== (first ? "16px" : "0px")
-        || style.borderEndStartRadius !== (first ? "16px" : "0px")
-        || style.borderStartEndRadius !== (last ? "16px" : "0px")
-        || style.borderEndEndRadius !== (last ? "16px" : "0px");
-    }
-    return style.getPropertyValue("corner-shape") !== "squircle" || style.borderTopLeftRadius !== "16px";
-  }).map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim()));
-  playwrightTest.expect(failures).toEqual([]);
-}
-
 export const LM_STUDIO_PROVIDER_ID = "custom:lmstudio";
 export const E2E_MODEL_ID = "aiden-e2e-vision";
 export const E2E_MODEL_DISPLAY_NAME = "Aiden E2E Vision";
@@ -115,6 +94,20 @@ export type LmStudioEndpoint = {
   requests: CapturedLmStudioRequest[];
   holdCompletions?: () => void;
   releaseCompletions?: () => void;
+  /** Exact prompt-matched scripts, available only on the disposable deterministic model. */
+  enqueueToolScenario?: (scenario: DeterministicToolScenario) => DeterministicToolScenarioState;
+};
+
+export type DeterministicToolScenario = {
+  prompt: string;
+  calls: ReadonlyArray<{ name: string; arguments: Record<string, unknown> }>;
+  finalText: string;
+};
+export type DeterministicToolScenarioState = {
+  issuedToolNames: string[];
+  results: Array<{ name: string; content: unknown }>;
+  completed: boolean;
+  error?: string;
 };
 
 export type AidenE2e = {
@@ -184,6 +177,7 @@ function writeJson(response: import("node:http").ServerResponse, value: unknown)
 
 function writeCompletion(
   response: import("node:http").ServerResponse,
+  reply: { text: string } | { id: string; name: string; arguments: Record<string, unknown> } = { text: E2E_ASSISTANT_RESPONSE },
   hold?: (finish: () => void) => void,
 ): void {
   const common = {
@@ -202,7 +196,9 @@ function writeCompletion(
       choices: [
         {
           index: 0,
-          delta: { role: "assistant", content: E2E_ASSISTANT_RESPONSE },
+          delta: "text" in reply
+            ? { role: "assistant", content: reply.text }
+            : { role: "assistant", tool_calls: [{ index: 0, id: reply.id, type: "function", function: { name: reply.name, arguments: JSON.stringify(reply.arguments) } }] },
           finish_reason: null,
         },
       ],
@@ -212,7 +208,7 @@ function writeCompletion(
     response.write(
       `data: ${JSON.stringify({
         ...common,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        choices: [{ index: 0, delta: {}, finish_reason: "text" in reply ? "stop" : "tool_calls" }],
       })}\n\n`,
     );
     response.end("data: [DONE]\n\n");
@@ -225,6 +221,16 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
   const requests: CapturedLmStudioRequest[] = [];
   let holding = false;
   const held = new Set<() => void>();
+  const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
+  const enqueueToolScenario = (scenario: DeterministicToolScenario): DeterministicToolScenarioState => {
+    if (!scenario.prompt.trim() || scenario.calls.length > 16 || scenarios.length >= 8) {
+      throw new Error("A deterministic tool scenario needs a unique prompt and 0–16 calls; at most 8 scenarios may be queued.");
+    }
+    if (scenarios.some(({ script }) => script.prompt === scenario.prompt)) throw new Error("A deterministic tool scenario prompt must be unique.");
+    const state: DeterministicToolScenarioState = { issuedToolNames: [], results: [], completed: false };
+    scenarios.push({ script: structuredClone(scenario), state, id: `aiden-e2e-script-${scenarios.length}` });
+    return state;
+  };
   const nativeModel = {
     key: E2E_MODEL_ID,
     display_name: E2E_MODEL_DISPLAY_NAME,
@@ -262,8 +268,11 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
       if (method === "POST" && url === "/v1/chat/completions") {
         const body = await readJsonBody(request);
         requests.push({ method, url, headers: { ...request.headers }, body });
-        writeCompletion(
+        const sendCompletion = (
+          reply: { text: string } | { id: string; name: string; arguments: Record<string, unknown> } = { text: E2E_ASSISTANT_RESPONSE },
+        ) => writeCompletion(
           response,
+          reply,
           holding
             ? (finish) => {
                 held.add(finish);
@@ -271,6 +280,38 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
               }
             : undefined,
         );
+        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
+        const latestUser = [...(completion?.messages ?? [])].reverse().find(({ role }) => role === "user");
+        const userText = typeof latestUser?.content === "string"
+          ? latestUser.content
+          : JSON.stringify(latestUser?.content ?? "");
+        const scenario = scenarios.find(({ script }) => userText.includes(script.prompt));
+        // A title request can quote the prompt but has no tool definitions. Only
+        // the agent completion with its actual available schema consumes a script.
+        if (scenario && completion?.tools?.length) {
+          const { script, state, id } = scenario;
+          const results = new Map((completion.messages ?? []).filter(({ role, tool_call_id }) => role === "tool" && tool_call_id?.startsWith(`${id}-`)).map((message) => [message.tool_call_id!, message.content]));
+          let next = 0;
+          while (next < script.calls.length && results.has(`${id}-${next}`)) next += 1;
+          state.results = script.calls.slice(0, next).map((call, index) => ({ name: call.name, content: results.get(`${id}-${index}`) }));
+          if (next === script.calls.length) {
+            state.completed = true;
+            sendCompletion({ text: script.finalText });
+            return;
+          }
+          const call = script.calls[next]!;
+          if (!completion.tools.some((tool) => tool.function?.name === call.name)) {
+            state.error = `The real generation did not advertise required tool ${call.name}.`;
+            sendCompletion({ text: state.error });
+            return;
+          }
+          // Correlate progress with returned call IDs so a retried request cannot
+          // skip a browser action or consume a second queued scenario.
+          if (state.issuedToolNames.length === next) state.issuedToolNames.push(call.name);
+          sendCompletion({ id: `${id}-${next}`, ...call });
+          return;
+        }
+        sendCompletion();
         return;
       }
       response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
@@ -307,6 +348,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
       for (const finish of held) finish();
       held.clear();
     },
+    enqueueToolScenario,
     server,
   };
 }

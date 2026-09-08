@@ -311,29 +311,71 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+- The environment-browser checkout has no `.memory/` directory despite AGENTS guidance; use current source, existing design references, and the scoped browser parity document as implementation evidence.
+- t3code's browser spans profiles/import, recording, annotations, device emulation, and agent control across desktop/server/web. Track a source-backed feature matrix before porting; a navigation-only webview would silently miss the requested parity.
+- `npm ci` completed without Electron's macOS payload in this worktree; `node node_modules/electron/install.js` restored `Electron.app` before UI testing.
+- T3's hardcoded `source3` Playwright extraction points at a different bundle string in installed Playwright 1.62.1; locate the named generated module to preserve selector-engine parity.
+- Generated onboarding art had real alpha but a 1254px canvas despite the requested 1024px; normalize the final PNG to the repository's exact 1024px contract and validate its alpha.
+- System `java_home` has no registered JDK, but Android Studio's bundled JBR works for Gradle; use its `Contents/jbr/Contents/Home` and the existing Android SDK explicitly for focused mobile tests.
+- No physical iOS device is connected for this run, and repository guidance prohibits simulators. Generic iOS `build-for-testing` with signing disabled compiles the app/tests; actual XCTest execution remains a physical-device check.
+- Electron 43 emits the console-message payload on the event object; reading the legacy second argument as that payload threw during first navigation and blocked the test app behind an exception dialog. Use the current typed event and verify in real Electron, not just service mocks.
 
-## 2026-09-04: queued composer controls
-- This detached worktree had no .memory directory. Read the canonical checkout's PROJECT-CONTEXT.md and PLANNED.md before implementation; wrote scoped memory here.
-- Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop → persistence barrier → normal append for the desktop Steer action and explain its behavior in the control tooltip.
+- 2026-09-07: Native Browser views sit above renderer menus/dialogs. Presentation now observes visible overlays and serializes tab show/hide across remounts so delayed cleanup cannot hide the replacement view.
+- Renderer-only Playwright captures omit native WebContentsViews; use the exact worktree Electron.app with CUA for visual proof. Several installed Electron copies share a bundle ID, so resolve the full app path.
+- Streaming reveal briefly renders duplicate final message text; E2E assertions must target the visible transcript occurrence and independently check the scripted tool scenario completed.
+- Browser preflight exposed two existing source-contract mismatches in unchanged provider badges and button press-feedback tests. Keep that baseline distinct from browser regression results.
+- Responsive emulation letterboxes inside the native slot. Crop captures to the rendered viewport before translating annotation coordinates; using the full slot silently distorts vertical selections.
+
+## 2026-09-07 — Browser integration verification
+
+- Floating placement measured the workbench wrapper and covered the Environment close control. Measure the chat viewport and visible side surfaces; retain a normal pointer-click regression.
+- Approval summaries and tool admission both use browser policy helpers. Full-mode E2E misses Ask-mode summary errors; retain TypeScript validation and an actual approval-loop regression.
+- Reverting live styles during the preview debounce must still enqueue the restored desired state; comparing only the last completed key leaves an in-flight change applied.
+- Native visual verification exposed empty-chat composer overlap and CDP visible-size ownership. Reserve every composer and use `dontSetVisibleSize` so device emulation cannot override the measured native slot.
+- Browser tab titles and renderer selection can lag the main state response. E2E waits for `aria-selected`, closes the intended row, and canonicalizes URLs when finding the native guest.
+- Launching the shared Dev profile hit existing artifact/history recovery errors. Browser testing uses `build/browser-dev-profile/` with separate portable/user-data roots, copied provider setup, and a fresh workspace history.
+- Live browser test: agent tried `browser_open(file:///tmp/sample.html)` and received HTTP(S)-only rejection, then recovered with a Python server serving all of `/tmp` on port 8899. UI workspace `open_file` is not exposed to agent tools; add explicit local-preview guidance and a bounded file-preview route through existing tools, including intentional handling of user-requested files outside the workspace and server cleanup.
+
+## Browser lifecycle and progressive disclosure — 2026-09-08
+- An agent-created Python preview outlived its document. Verified the exact task-owned PID/start/cwd/port, terminated it, confirmed the HTML was absent, and removed its log. Managed exact-file previews now replace that fallback.
+- Review found queued actions could resume after human takeover, approvals could outlive page identity, and hover overlays could intercept semantic clicks. Added focused regression coverage and fixes. A cursor-cleanup review incorrectly read evaluate's isolated-world argument; the live cursor test caught the regression, and cleanup was restored to the creation context.
+- Progressive disclosure must install executable tools and update both outbound and durable-compaction budgets at a turn boundary. A setup-return wiring mistake was caught by TypeScript/review before Electron validation.
+- `tsx -e` uses CommonJS here and cannot load Pi's ESM-only export; use `node --import tsx --input-type=module` for measurement scripts.
+- Host preparation runs after a tool turn, and Pi journals an aborted assistant on Stop. Cancellation tests must reach that boundary and preserve its journal record; an abort rejection must not become a policy fault, while an independent host failure must still fail closed.
+
+- Electron main-process evaluation cannot dynamically import a module from the Playwright utility world. The delayed-acquisition regression uses `process.getBuiltinModule` and synchronizes builtin ESM exports so its filesystem gate actually reaches the production namespace import; restored in test cleanup.
+- Final dev restart exposed Browser mounting with a fabricated default workspace while workspace data loaded. Mount it only after the selected workspace exists; verify cold startup and the existing Environment/browser integration suites.
+
+## PR99 hosted CI follow-up — 2026-09-08
+- Diagnostics source scanning treated console calls in the serialized Playwright guest runtime as executable main-process logging. Use syntax-aware scanning with regression cases, retaining the reviewed-sink boundary.
+- Hosted CDP returned redacted object keys in a different order; the test incorrectly tied collision suffixes to boolean values. Verify distinct sanitized keys and preservation of both values without relying on enumeration order.
+
+- Pullfrog identified silent sensitive guest permissions and a workspace-wide local-preview origin. Restrict guest grants and serve exact pinned document/asset sets with distinct origins; keep declared workspace-file authorization while blocking unrelated siblings.
+- Ad-hoc `tsx -e` selected CommonJS and rejected the ESM-only Pi package exports. Use `node --import tsx --input-type=module` for token-estimate probes.
+- Matching-first input probing showed Chromium suppresses the duplicate injected keyDown, so a timing-only expectation could swallow the only physical event. Use Electron's native debugger-source flag for keyboard input, and interrupt unexpected repeats. Mouse-down/up omit this flag and retain a bounded documented collision fallback.
+- The next hosted Electron gate exposed immediate recording stop before the encoder produced a frame (both attempts). Validate recorder readiness instead of weakening the WebM assertion. Completed-job logs during an active run require the jobs/logs API; gh run view waits for whole-run completion.
+- Independent Chromium reproduction showed per-port preview cookies leaked to other localhost ports because cookies ignore ports. Replace cookies with native frame/origin-scoped request authorization, strip inherited headers and legacy cookies, and test redirects against a controlled server.
+
+## PR99 direct-preview follow-up — 2026-09-08
+- Exact-grant hardening left path-only Files/chat/terminal previews unable to load local sidecars. Derive a bounded static resource set for user-originated opens only, preserve strict explicit agent grants, and test the actual path-only entry point.
+- Static-discovery review found a sidecar symlink could target an excluded HTML/PDF, and same-content rewrites could reuse an older modification-time fingerprint. Reject canonical document targets and include pinned source metadata in grant identity.
+
+## 2026-09-04 — Queued composer controls
+
+- Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop, a persistence barrier, and normal append for desktop Steer.
 - E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.
-- The selected local Xcode began rejecting compiler/git calls for unaccepted license terms during this task. Used the installed Command Line Tools for git and rebuilt the renderer/Electron bundles with existing native helpers; native sources are unchanged and CI checks the full build.
-- Appearance persistence uses the `settings` envelope in settings.json; E2E disk assertions must read `settings.appearance`, then verify the preference after an app relaunch.
-- A CI navigation test raced the provider transport: queue removal confirms durable append, but does not mean the mock HTTP server has received the next generation request. Wait for that specific request before asserting its conversation history.
-- The shared button radius overrides legacy per-corner utility classes. Joined actions need an explicit shared group rule: square inner seams, the common outer squircle radius, and visible overflow for focus outlines. Check hover fills and each seam's corner radius, not only the uniform outer radius.
+- Appearance persistence uses the `settings` envelope in settings.json; verify the preference from that envelope after relaunch.
+- Queue removal confirms durable append, not provider receipt. Wait for the exact provider request before asserting conversation history.
+- Joined actions need explicit square inner seams, shared outer squircle radii, visible focus overflow, and observable hover/focus tests.
 
-## 2026-09-06 — Model Pad responsive Settings
+## 2026-09-06 — Settings and global Skills verification
 
-- A square bounded only by window width still overflows short Settings windows; measure the actual scrollport and the title, toolbar, axes, and legend height. Compensate for scrollTop so browsing supporting panels cannot grow the Pad.
-- Constraining the legend to a small square causes extra wrapping and consumes the saved height. Keep the legend at column width and center the square and axis labels independently. Remove duplicate Pad titles once Settings supplies its shared page heading.
-
-## 2026-09-06 — Global skills gate verification
-
-- Gate both production skill readers before and after asynchronous discovery, and recheck at execution time; cached or in-flight snapshots must not expose skills after disabling them.
-- Disabled inference, compaction, recall, Telegram queues, and Bot catalog/edit surfaces must project skill instructions and grants out without destroying durable identities needed after re-enable.
+- Responsive Model Pad sizing must use the actual Settings scrollport and account for titles, controls, axes, legends, zoom, and scroll position.
+- Gate both skill inventory readers before and after asynchronous discovery, and recheck at execution time; disabled projection must cover inference, compaction, recall, Telegram queues, and every Bot catalog/edit surface.
 - Keep full tests and production builds sequential in one checkout because both build native helpers and concurrent runs can race over universal binaries.
 - Route Bot-scoped catalog identity end to end and isolate per-Bot iOS caches; Android has no persistent catalog cache.
 
 ## 2026-09-08 — 0.39.0 four-PR integration
 
-- Zsh does not split scalar loop values by default; use explicit delimiters when scripting pairwise merge probes so branch names are not accidentally concatenated.
-- Standalone green PRs can still conflict in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+- Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
+- Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.

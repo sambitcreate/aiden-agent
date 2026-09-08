@@ -5,6 +5,7 @@ import { llmClient } from "./llm-client.js";
 import { scheduleService } from "./schedule-service.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { terminalService } from "./terminal.js";
+import { browserService } from "./browser/service.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import {
@@ -17,6 +18,7 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   llmClient,
   scheduleService,
   terminalService,
+  browserService,
   workspaceMutationGate,
   workspaceOperationRegistry,
   createScratchWorkspaceDirectory,

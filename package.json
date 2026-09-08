@@ -136,7 +136,8 @@
     "test:vcc": "tsx --test main/services/pi-vcc/*.test.ts renderer/shared/compaction.test.ts",
     "prevcc:evaluate": "npm run build:vcc",
     "vcc:evaluate": "node --import tsx scripts/pi-vcc-evaluation.mjs",
-    "test:settings-design": "tsx --test renderer/lib/workspace-path-display.test.ts renderer/components/settings/settings-design.test.tsx renderer/shared/appearance.test.ts renderer/components/chat-sidebar.test.tsx renderer/components/settings/memory-settings.test.tsx"
+    "test:settings-design": "tsx --test renderer/lib/workspace-path-display.test.ts renderer/components/settings/settings-design.test.tsx renderer/shared/appearance.test.ts renderer/components/chat-sidebar.test.tsx renderer/components/settings/memory-settings.test.tsx",
+    "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
