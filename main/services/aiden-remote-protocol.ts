@@ -343,6 +343,8 @@ export interface AidenRemoteBotCapabilityCatalog {
   shellAvailable: boolean;
   connections: AidenRemoteBotCapabilityOption[];
   skills: AidenRemoteBotCapabilityOption[];
+  /** Legacy omission means enabled; false temporarily suppresses saved grants. */
+  skillsEnabled?: boolean;
   otherCapabilities: AidenRemoteBotCapabilityOption[];
   notice: AidenRemoteBotAccessNoticeStatus;
 }
@@ -2052,6 +2054,9 @@ export function parseAidenRemoteBotCapabilityCatalog(
     shellAvailable: requiredBooleanValue(value.shellAvailable, "Bot catalog shellAvailable"),
     connections,
     skills,
+    ...(value.skillsEnabled === undefined ? {} : {
+      skillsEnabled: requiredBooleanValue(value.skillsEnabled, "Bot catalog skillsEnabled"),
+    }),
     otherCapabilities,
     notice: parseBotAccessNoticeStatus(value.notice),
   };
@@ -2141,7 +2146,11 @@ function validateBotSelectionAgainstCatalog(
   };
   requireCatalogOption(selection.fileScopeIds, catalog.fileScopes, "file scope");
   requireCatalogOption(selection.connectionIds, catalog.connections, "connection");
-  requireCatalogOption(selection.skillIds, catalog.skills, "skill");
+  requireCatalogOption(
+    selection.skillIds,
+    catalog.skills.map((option) => ({ ...option, available: option.available || catalog.skillsEnabled === false })),
+    "skill",
+  );
   requireCatalogOption(
     selection.otherCapabilityIds,
     catalog.otherCapabilities,

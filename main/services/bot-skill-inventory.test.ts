@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveBotCapabilitySkills } from "./bot-skill-inventory.js";
+import { resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings } from "./bot-skill-inventory.js";
 
 test("Bot skills resolve configured, global, and only the selected Bot home without paths", async () => {
   const discoveredRoots: Array<string | undefined> = [];
@@ -39,4 +39,18 @@ test("create-Bot skill inventory never discovers a managed Bot home", async () =
   });
   assert.deepEqual(discoveredRoots, [undefined]);
   assert.deepEqual(skills.map(({ label }) => label), ["Global"]);
+});
+
+
+test("global disable withholds Bot catalogs and runtime bindings without reading skill content", async () => {
+  const unexpectedRead = async (): Promise<never> => { throw new Error("Skill storage must not be read"); };
+  const dependencies = {
+    isEnabled: async () => false,
+    loadIdentityKey: unexpectedRead,
+    listConfigured: unexpectedRead,
+    loadBotHomePath: unexpectedRead,
+    discover: unexpectedRead,
+  };
+  assert.deepEqual(await resolveBotCapabilitySkills(dependencies), []);
+  assert.deepEqual(await resolveBotRuntimeSkillBindings(dependencies), []);
 });

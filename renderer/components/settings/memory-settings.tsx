@@ -112,7 +112,7 @@ export function MemorySettings() {
         </Text>
       </FieldSet>
 
-      <FieldSet title="Memory">
+      <FieldSet title="Memory controls">
         <Field
           label="Use memory"
           description="Lets Aiden recall approved facts, suggest new facts during chats, and index conversation metadata for retrieval."

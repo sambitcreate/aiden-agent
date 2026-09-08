@@ -26,6 +26,8 @@ export interface AppearanceConfig {
   dark: ThemeVariantConfig;
   pointerCursors: boolean;
   autoHideComposerContext: boolean;
+  showWorkspacePaths: boolean;
+  workspacePathFormat: "middle" | "end" | "start";
   dockIcon: DockIconPreference;
   reduceMotion: ReduceMotionPreference;
   uiFontSize: number;
@@ -213,6 +215,8 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   dark: getPresetVariant("aiden", "dark"),
   pointerCursors: false,
   autoHideComposerContext: true,
+  showWorkspacePaths: false,
+  workspacePathFormat: "middle",
   dockIcon: "aiden",
   reduceMotion: "system",
   uiFontSize: 14,
@@ -299,6 +303,12 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
       ? value.autoHideComposerContext
       : fallback.autoHideComposerContext,
+    showWorkspacePaths: typeof value.showWorkspacePaths === "boolean"
+      ? value.showWorkspacePaths
+      : fallback.showWorkspacePaths,
+    workspacePathFormat: value.workspacePathFormat === "middle" || value.workspacePathFormat === "end" || value.workspacePathFormat === "start"
+      ? value.workspacePathFormat
+      : fallback.workspacePathFormat,
     dockIcon: value.dockIcon === "monochrome" || value.dockIcon === "aiden"
       ? value.dockIcon
       : fallback.dockIcon,

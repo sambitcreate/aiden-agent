@@ -439,6 +439,19 @@ function Preferences({
         <PreferenceRow label="Auto-hide workspace bar" description="Slide the workspace and Local bar away after your first message. Turn off to keep it above the composer.">
           <Switch checked={config.autoHideComposerContext} onCheckedChange={(checked) => onChange({ autoHideComposerContext: checked })} aria-label="Auto-hide workspace bar" />
         </PreferenceRow>
+        <PreferenceRow label="Show workspace folder paths" description="Show folder locations below workspace names in the sidebar and workspace picker.">
+          <Switch checked={config.showWorkspacePaths} onCheckedChange={(checked) => onChange({ showWorkspacePaths: checked })} aria-label="Show workspace folder paths" />
+        </PreferenceRow>
+        <PreferenceRow label="Workspace path format" description="Choose which part of a long folder path stays visible.">
+          <Select value={config.workspacePathFormat} onValueChange={(value) => onChange({ workspacePathFormat: value as AppearanceConfig["workspacePathFormat"] })} disabled={!config.showWorkspacePaths}>
+            <SelectTrigger size="small" className="appearance-value-select" aria-label="Workspace path format"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="middle">Beginning and end · /Users/xyz/…/aiden</SelectItem>
+              <SelectItem value="end">Last folders · …/projects/aiden</SelectItem>
+              <SelectItem value="start">Beginning · /Users/xyz/…</SelectItem>
+            </SelectContent>
+          </Select>
+        </PreferenceRow>
         <PreferenceRow label="Use pointer cursors" description="Show a pointer when hovering over interactive elements.">
           <Switch checked={config.pointerCursors} onCheckedChange={(checked) => onChange({ pointerCursors: checked })} aria-label="Use pointer cursors" />
         </PreferenceRow>

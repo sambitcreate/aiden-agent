@@ -563,3 +563,19 @@ test("owner.send throws after destroy is called", () => {
   assert.equal(bg.owner.isDestroyed(), true);
   assert.throws(() => bg.owner.send("chat:done", { content: "late" }), /no longer active/);
 });
+
+
+test("Telegram skill provenance reaches generation while only raw user text is persisted", async () => {
+  const chat = mockChatStore();
+  const selection = { workspaceId: "project", invocationId: "opaque-skill" };
+  const { deps } = mockDeps({ store: chat.store, llm: mockLlm(async (streamId, params, owner, options) => {
+    assert.deepEqual(options.telegramSkillInvocation, selection);
+    assert.equal(params.messages[0]?.content, "inspect this patch");
+    owner.send("chat:done", { streamId, content: "Reviewed" });
+    return true;
+  }) });
+  const result = await sendTelegramTurn(deps, "telegram-test", "inspect this patch",
+    { kind: "project", workspaceId: "project" }, undefined, undefined, { skillInvocation: selection });
+  assert.equal(result.ok, true);
+  assert.deepEqual(chat.appended.map(({ content }) => content), ["inspect this patch"]);
+});

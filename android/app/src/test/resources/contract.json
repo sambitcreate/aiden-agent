@@ -598,6 +598,7 @@
     }
   },
   "botCapabilityCatalog": {
+    "skillsEnabled": true,
     "revision": "bot_catalog_revision_3",
     "providers": [
       {

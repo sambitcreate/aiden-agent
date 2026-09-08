@@ -209,7 +209,11 @@ function buildBotAccessUpdate(
   };
   assertAvailable(catalog.fileScopes, draft.fileScopeIds, "file access");
   assertAvailable(catalog.connections, draft.connectionIds, "connection");
-  assertAvailable(catalog.skills, draft.skillIds, "skill");
+  assertAvailable(
+    catalog.skills.map((option) => ({ ...option, available: option.available || catalog.skillsEnabled === false })),
+    draft.skillIds,
+    "skill",
+  );
   assertAvailable(catalog.otherCapabilities, draft.otherCapabilityIds, "capability");
   if (draft.shellEnabled && !catalog.shellAvailable) {
     throw new Error("Run commands is not currently available on this Mac.");
@@ -303,7 +307,7 @@ function BotEditor({
   const [saving, setSaving] = React.useState(false);
   const [noticing, setNoticing] = React.useState(false);
   const savingRef = React.useRef(false);
-  const catalogQuery = useBotCapabilityCatalog(true);
+  const catalogQuery = useBotCapabilityCatalog(true, committedBot?.id);
   const accessQuery = useBotAccess(bot?.id);
   const catalog = catalogQuery.data;
   const [accessDraft, setAccessDraft] = React.useState<BotAccessDraft | null>(null);
@@ -353,7 +357,7 @@ function BotEditor({
         // and access either become visible together or are rolled back together.
         // Re-read the catalog so Custom grants bind against current opaque ids.
         const latestCatalog = await botsApi.getCapabilityCatalog();
-        qc.setQueryData(queryKeys.botCapabilityCatalog, latestCatalog);
+        qc.setQueryData([...queryKeys.botCapabilityCatalog, undefined], latestCatalog);
         saved = await botsApi.create({
           bot: createInputFromDraft(draft),
           access: buildBotAccessUpdate(accessDraft, latestCatalog),
@@ -385,7 +389,7 @@ function BotEditor({
         // catalog. Unrelated changes from iOS or another Mac surface survive.
         const [state, latestCatalog] = await Promise.all([
           botsApi.getBotAccess(saved.id),
-          botsApi.getCapabilityCatalog(),
+          botsApi.getCapabilityCatalog(saved.id),
         ]);
         if (!state) throw new Error("This bot’s access policy could not be read.");
         const authoritativeAccess = accessDraftFromState(state, latestCatalog);
@@ -396,7 +400,7 @@ function BotEditor({
         );
         setAccessDraft(rebasedAccess);
         setAccessBaseline(authoritativeAccess);
-        qc.setQueryData(queryKeys.botCapabilityCatalog, latestCatalog);
+        qc.setQueryData([...queryKeys.botCapabilityCatalog, saved.id], latestCatalog);
         const update = buildBotAccessUpdate(rebasedAccess, latestCatalog);
         if (botAccessDiffers(update, state)) {
           await botsApi.updateBotAccess({
@@ -920,7 +924,9 @@ function BotEditor({
             </Field>
             {([
               ["Connections", "Services and accounts this bot may use.", catalog.connections, "connectionIds"],
-              ["Skills", "Aiden skills this bot may use.", catalog.skills, "skillIds"],
+              ["Skills", catalog.skillsEnabled === false
+                ? "Skills are off globally. Saved choices are kept and will be checked again when Skills is enabled."
+                : "Aiden skills this bot may use.", catalog.skills, "skillIds"],
               ["Other capabilities", "Additional capabilities available on this Mac.", catalog.otherCapabilities, "otherCapabilityIds"],
             ] as const).map(([title, description, options, key]) => {
               // Match iOS: hide unusable, unselected tombstones (e.g. skills
@@ -1089,7 +1095,7 @@ function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void })
 
 function BotAccessSummary({ botId }: { botId: string }) {
   const accessQuery = useBotAccess(botId);
-  const catalogQuery = useBotCapabilityCatalog(true);
+  const catalogQuery = useBotCapabilityCatalog(true, botId);
   const state = accessQuery.data;
   const model = botModelLabel(catalogQuery.data, state);
   if (!state) return null;

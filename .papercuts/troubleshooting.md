@@ -320,3 +320,20 @@ owns; reopen the terminal before judging the final live state.
 - Appearance persistence uses the `settings` envelope in settings.json; E2E disk assertions must read `settings.appearance`, then verify the preference after an app relaunch.
 - A CI navigation test raced the provider transport: queue removal confirms durable append, but does not mean the mock HTTP server has received the next generation request. Wait for that specific request before asserting its conversation history.
 - The shared button radius overrides legacy per-corner utility classes. Joined actions need an explicit shared group rule: square inner seams, the common outer squircle radius, and visible overflow for focus outlines. Check hover fills and each seam's corner radius, not only the uniform outer radius.
+
+## 2026-09-06 — Model Pad responsive Settings
+
+- A square bounded only by window width still overflows short Settings windows; measure the actual scrollport and the title, toolbar, axes, and legend height. Compensate for scrollTop so browsing supporting panels cannot grow the Pad.
+- Constraining the legend to a small square causes extra wrapping and consumes the saved height. Keep the legend at column width and center the square and axis labels independently. Remove duplicate Pad titles once Settings supplies its shared page heading.
+
+## 2026-09-06 — Global skills gate verification
+
+- Gate both production skill readers before and after asynchronous discovery, and recheck at execution time; cached or in-flight snapshots must not expose skills after disabling them.
+- Disabled inference, compaction, recall, Telegram queues, and Bot catalog/edit surfaces must project skill instructions and grants out without destroying durable identities needed after re-enable.
+- Keep full tests and production builds sequential in one checkout because both build native helpers and concurrent runs can race over universal binaries.
+- Route Bot-scoped catalog identity end to end and isolate per-Bot iOS caches; Android has no persistent catalog cache.
+
+## 2026-09-08 — 0.39.0 four-PR integration
+
+- Zsh does not split scalar loop values by default; use explicit delimiters when scripting pairwise merge probes so branch names are not accidentally concatenated.
+- Standalone green PRs can still conflict in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.

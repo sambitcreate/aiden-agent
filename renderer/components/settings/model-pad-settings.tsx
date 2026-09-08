@@ -372,6 +372,53 @@ export function ModelPadSettings() {
   const catalogRef = React.useRef<HTMLDivElement | null>(null);
   const modelsPanelRef = React.useRef<HTMLElement | null>(null);
   const panelTransitionRef = React.useRef<ViewTransition | null>(null);
+
+  React.useLayoutEffect(() => {
+    const pad = padRef.current;
+    const canvas = pad?.parentElement;
+    const grid = canvas?.parentElement;
+    if (!pad || !canvas || !grid) return;
+
+    // Measure the real settings viewport: window width alone ignores the app
+    // sidebar, settings navigation, wrapped controls, and user interface zoom.
+    let scrollport = grid.parentElement;
+    while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
+      scrollport = scrollport.parentElement;
+    }
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const viewportBottom = Math.min(
+        window.innerHeight,
+        scrollport?.getBoundingClientRect().bottom ?? window.innerHeight,
+      );
+      // Compensate for page scrolling so scrolling down never grows the Pad.
+      const canvasTop = canvas.getBoundingClientRect().top + (scrollport?.scrollTop ?? 0);
+      const labelsHeight = canvas.getBoundingClientRect().height - pad.getBoundingClientRect().height;
+      const size = Math.floor(Math.max(160, viewportBottom - canvasTop - labelsHeight - 24));
+      const value = `${size}px`;
+      if (grid.style.getPropertyValue("--model-pad-available-size") !== value) {
+        grid.style.setProperty("--model-pad-available-size", value);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    // Include ancestors to catch a title or toolbar wrapping after a font or
+    // window change, and labels to converge when a narrow legend wraps.
+    for (let element: HTMLElement | null = canvas; element; element = element.parentElement) {
+      observer.observe(element);
+      if (element === scrollport) break;
+    }
+    measure();
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", schedule);
+    };
+  }, [activePanel]);
   const [catalogScrollState, setCatalogScrollState] = React.useState({
     scrollable: false,
     hasMoreBelow: false,
@@ -644,10 +691,8 @@ export function ModelPadSettings() {
   const activeRow = activePoint ? Math.round((1 - activePoint.y) * (gridSize - 1)) : -1;
 
   return (
-    <FieldSet title="Personal Model Pad" className="model-pad-fieldset">
+    <FieldSet className="model-pad-fieldset">
       <Field
-        label="Arrange your models"
-        description="Choose the models you want close at hand, then snap them to dots by how capable and responsive they feel for your work. The dot matrix adapts to your visible models."
         orientation="vertical"
         className="model-pad-field"
       >

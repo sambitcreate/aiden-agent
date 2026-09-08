@@ -22,6 +22,7 @@ import {
   beginPiVisibleTurnLease,
   PiCompactionSessionStore,
   syncChatMessagesToPiSession,
+  projectVisibleHistoryWithoutSkills,
 } from "./pi-compaction-session-store.js";
 import type { ChatMessage } from "./types.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
@@ -1609,4 +1610,77 @@ test("startup reconciliation removes indexed orphan journals", async (t) => {
 
   await store.reconcileChats(new Set());
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+
+test("disabled skills project visible history without old expanded inputs, results, or compactions", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const visible: ChatMessage[] = [
+    { id: "skill-user", role: "user", content: "Review this code", createdAt: 10 },
+    { id: "skill-answer", role: "assistant", content: "The code looks sound", createdAt: 20 },
+  ];
+  await syncChatMessagesToPiSession(session, visible, model, false,
+    new Map([["skill-user", "HIDDEN_SKILL_INSTRUCTIONS Review this code"]]));
+  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
+  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 30 });
+  await session.appendCompaction({ id: "old-compaction", summary: "HIDDEN_SKILL_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  const durableBefore = JSON.stringify(await session.getEntries());
+  const projected = await projectVisibleHistoryWithoutSkills(session, visible, model);
+  for (const view of [await projected.buildContext(), await projected.getBranch(), await projected.getEntries()]) {
+    assert.doesNotMatch(JSON.stringify(view), /HIDDEN_SKILL/u);
+    assert.match(JSON.stringify(view), /Review this code/u);
+    assert.match(JSON.stringify(view), /The code looks sound/u);
+  }
+  assert.equal(JSON.stringify(await session.getEntries()), durableBefore, "visible projection never deletes or rewrites durable history");
+  const call = { ...assistant(model), content: [{ type: "toolCall" as const, id: "normal-call", name: "read_file", arguments: {} }] };
+  await projected.appendMessage(call);
+  await projected.appendMessage({ role: "toolResult", toolCallId: "normal-call", toolName: "read_file",
+    content: [{ type: "text", text: "CURRENT_TOOL_RESULT" }], isError: false, timestamp: 40 });
+  const context = JSON.stringify(await projected.buildContext());
+  assert.doesNotMatch(context, /HIDDEN_SKILL/u);
+  assert.match(context, /normal-call/u);
+  assert.match(context, /CURRENT_TOOL_RESULT/u);
+  await projected.appendCompaction({ id: "new-compaction", summary: "CLEAN_CURRENT_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  assert.match(JSON.stringify(await projected.buildContext()), /CLEAN_CURRENT_SUMMARY/u);
+  assert.doesNotMatch(JSON.stringify(await projected.buildContext()), /HIDDEN_SKILL/u);
+  assert.match(JSON.stringify(await session.getEntries()), /HIDDEN_SKILL_INSTRUCTIONS/u);
+});
+
+
+test("skill-free visible context compacts and reopens through the real JSONL repository", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-skill-free-jsonl-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { model, models, faux } = compactionFixture();
+  let compactedVisibleContext = false;
+  faux.setResponses([(context) => {
+    const text = JSON.stringify(context);
+    assert.doesNotMatch(text, /HIDDEN_SKILL/u);
+    assert.match(text, /Visible user request/u);
+    compactedVisibleContext = true;
+    return fauxAssistantMessage(structuredSummary("CLEAN_SKILL_FREE_CHECKPOINT"));
+  }]);
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const session = await store.openChat("skill-free-persistent");
+  const messages: ChatMessage[] = [
+    { id: "visible-one", role: "user", content: `Visible user request ${"x".repeat(2000)}`, createdAt: 10 },
+    { id: "visible-two", role: "assistant", content: `Visible response ${"y".repeat(1000)}`, createdAt: 20 },
+    { id: "visible-three", role: "user", content: "Continue with the next part", createdAt: 30 },
+    { id: "visible-four", role: "assistant", content: "Current answer", createdAt: 40 },
+  ];
+  await syncChatMessagesToPiSession(session, messages, model, false,
+    new Map([["visible-one", "HIDDEN_SKILL_EXPANSION"]]));
+  const projected = await projectVisibleHistoryWithoutSkills(session, messages, model);
+  const coordinator = new PiCompactionCoordinator({ session: projected, model, models, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 } });
+  const result = await coordinator.compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(compactedVisibleContext, true);
+  const expected = (await projected.buildContext()).messages;
+  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat("skill-free-persistent");
+  assert.deepEqual((await reopened.buildContext()).messages, expected);
+  assert.match(JSON.stringify(await reopened.getEntries()), /HIDDEN_SKILL_EXPANSION/u,
+    "rich history is still durable when the user re-enables skills");
+  assert.doesNotMatch(JSON.stringify(await reopened.buildContext()), /HIDDEN_SKILL/u);
 });

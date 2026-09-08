@@ -223,6 +223,7 @@ struct AidenBotCustomAccessFlowView: View {
         capturedContext.map(coordinator.isCurrent) == true
             && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
+            && selectedBot?.id == selectedBotID
             && selectedBot?.health != .archived
             && !isLoading
             && !isLoadingBot
@@ -629,19 +630,20 @@ struct AidenBotCustomAccessFlowView: View {
             if let cached = await AidenBotCache.shared.load(
                 instanceId: context.instanceId,
                 deviceId: context.deviceId
-            ), let cachedList = cached.list, let cachedCatalog = cached.catalog {
+            ), let cachedList = cached.list {
                 guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
                 bots = cachedList.bots.filter { $0.health != .archived }
-                catalog = cachedCatalog
                 if !bots.contains(where: { $0.id == selectedBotID }) {
                     selectedBotID = bots.first(where: { $0.id == preferredBotID })?.id ?? bots.first?.id
                 }
                 if let selectedBotID,
+                   let cachedCatalog = cached.catalog(forBotID: selectedBotID),
                    let cachedDetail = cached.details.first(where: { $0.id == selectedBotID }),
                    let cachedDraft = AidenBotCustomAccessDraft(
                        access: cachedDetail.access,
                        catalog: cachedCatalog
                    ) {
+                    catalog = cachedCatalog
                     selectedBot = cachedDetail
                     draft = cachedDraft
                     cleanDraft = cachedDraft
@@ -649,25 +651,12 @@ struct AidenBotCustomAccessFlowView: View {
                 }
             }
             let client = try coordinator.remoteClient(for: context)
-            async let botsRequest = client.bots()
-            async let catalogRequest = client.botCapabilityCatalog()
-            let (list, loadedCatalog) = try await (botsRequest, catalogRequest)
+            let list = try await client.bots()
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
             capturedContext = context
             bots = list.bots.filter { $0.health != .archived }
-            catalog = loadedCatalog
             if !bots.contains(where: { $0.id == selectedBotID }) {
                 selectedBotID = bots.first(where: { $0.id == preferredBotID })?.id ?? bots.first?.id
-            }
-            _ = await coordinator.withRetainedInstallationData(for: context) {
-                _ = try? await AidenBotCache.shared.mergeAndStore(
-                    AidenBotCacheSegments(
-                        catalog: loadedCatalog,
-                        notice: loadedCatalog.notice
-                    ),
-                    instanceId: context.instanceId,
-                    deviceId: context.deviceId
-                )
             }
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
                   !Task.isCancelled else { return }
@@ -690,7 +679,7 @@ struct AidenBotCustomAccessFlowView: View {
     @MainActor
     private func loadSelectedBot(_ request: AidenBotCustomAccessDetailRequest) async {
         guard detailRequest == request, coordinator.isCurrent(request.context),
-              let catalog, loadingBotRequest != request else { return }
+              loadingBotRequest != request else { return }
         loadingBotRequest = request
         defer {
             if loadingBotRequest == request {
@@ -700,11 +689,15 @@ struct AidenBotCustomAccessFlowView: View {
         botError = nil
         if selectedBot?.id != request.botID || draft == nil {
             selectedBot = nil
+            catalog = nil
             draft = nil
             cleanDraft = nil
         }
         do {
-            let detail = try await coordinator.remoteClient(for: request.context).bot(id: request.botID)
+            let client = try coordinator.remoteClient(for: request.context)
+            async let detailResponse = client.bot(id: request.botID)
+            async let catalogResponse = client.botCapabilityCatalog(botId: request.botID)
+            let (detail, catalog) = try await (detailResponse, catalogResponse)
             guard coordinator.isCurrent(request.context), detailRequest == request,
                   capturedContext == request.context,
                   selectedBotID == request.botID else { return }
@@ -712,10 +705,16 @@ struct AidenBotCustomAccessFlowView: View {
                 botError = "No available AI provider and model can be selected on your Mac."
                 return
             }
+            self.catalog = catalog
             selectedBot = detail
             draft = loadedDraft
             cleanDraft = loadedDraft
             _ = await coordinator.withRetainedInstallationData(for: request.context) {
+                _ = try? await AidenBotCache.shared.mergeAndStore(
+                    AidenBotCacheSegments(catalogsByBotID: [request.botID: catalog], notice: catalog.notice),
+                    instanceId: request.context.instanceId,
+                    deviceId: request.context.deviceId
+                )
                 _ = try? await AidenBotCache.shared.upsertDetailAndStore(
                     detail,
                     instanceId: request.context.instanceId,
@@ -786,7 +785,7 @@ struct AidenBotCustomAccessFlowView: View {
             do {
                 let client = try coordinator.remoteClient(for: request.context)
                 async let detailRequest = client.bot(id: request.botID)
-                async let catalogRequest = client.botCapabilityCatalog()
+                async let catalogRequest = client.botCapabilityCatalog(botId: request.botID)
                 let (authoritative, refreshedCatalog) = try await (detailRequest, catalogRequest)
                 guard coordinator.isCurrent(request.context), savingRequest == request,
                       capturedContext == request.context,

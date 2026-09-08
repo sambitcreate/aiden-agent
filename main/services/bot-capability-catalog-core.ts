@@ -946,6 +946,7 @@ export function finalizeBotCapabilityCatalog(input: {
   shellAvailable: boolean;
   connections: BotCapabilityOption[];
   skills: BotCapabilityOption[];
+  skillsEnabled?: boolean;
   otherCapabilities: BotCapabilityOption[];
   notice: BotNoticeStatus;
 }): BotCapabilityCatalog {
@@ -955,6 +956,7 @@ export function finalizeBotCapabilityCatalog(input: {
     shellAvailable: input.shellAvailable,
     connections: input.connections,
     skills: input.skills,
+    ...(input.skillsEnabled === undefined ? {} : { skillsEnabled: input.skillsEnabled }),
     otherCapabilities: input.otherCapabilities,
   };
   const catalog: BotCapabilityCatalog = {
@@ -1037,11 +1039,13 @@ export function assertSafeBotCapabilityCatalogProjection(
     "shellAvailable",
     "connections",
     "skills",
+    "skillsEnabled",
     "otherCapabilities",
     "notice",
   ]);
   if (
-    Object.keys(catalog).length !== 8 ||
+    Object.keys(catalog).length !== (catalog.skillsEnabled === undefined ? 8 : 9) ||
+    (catalog.skillsEnabled !== undefined && typeof catalog.skillsEnabled !== "boolean") ||
     !isPathSafeBotCapabilityId(catalog.revision) ||
     typeof catalog.shellAvailable !== "boolean"
   ) {
@@ -1173,6 +1177,7 @@ export function assertSafeBotCapabilityCatalogProjection(
     shellAvailable: catalog.shellAvailable,
     connections: catalog.connections as BotCapabilityOption[],
     skills: catalog.skills as BotCapabilityOption[],
+    ...(catalog.skillsEnabled === undefined ? {} : { skillsEnabled: catalog.skillsEnabled as boolean }),
     otherCapabilities: catalog.otherCapabilities as BotCapabilityOption[],
   });
   if (catalog.revision !== expectedRevision) {

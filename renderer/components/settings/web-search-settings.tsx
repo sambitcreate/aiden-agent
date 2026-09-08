@@ -1459,7 +1459,7 @@ export function WebSearchSettings() {
             <ChevronLeft className="size-4" />
             All providers
           </Button>
-          <header className="px-1">
+          <header className="settings-page-heading px-1">
             <h1
               ref={providerDetailHeadingRef}
               tabIndex={-1}
@@ -1515,7 +1515,7 @@ export function WebSearchSettings() {
           <ChevronLeft className="size-4" />
           Back to Web Search
         </Button>
-        <header className="px-1">
+        <header className="settings-page-heading px-1">
           <h1
             ref={browserHeadingRef}
             tabIndex={-1}
@@ -1667,7 +1667,7 @@ export function WebSearchSettings() {
 
   return (
     <div className="flex flex-col gap-6 pb-8">
-      <header className="flex items-start justify-between gap-4 px-1">
+      <header className="settings-page-heading flex items-start justify-between gap-4 px-1">
         <div className="min-w-0">
           <Text as="h1" variant="heading1">
             Web Search

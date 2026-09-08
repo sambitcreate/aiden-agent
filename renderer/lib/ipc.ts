@@ -859,7 +859,7 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: () => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getCapabilityCatalog: (botId?: string) => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
