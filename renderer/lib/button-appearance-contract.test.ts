@@ -15,7 +15,9 @@ test("shared action buttons use soft borderless capsules and circular icon geome
   assert.doesNotMatch(buttonSource, /border border-transparent/u);
   assert.match(buttonSource, /radius === "full" \? "rounded-pill"/u);
   assert.match(buttonSource, /iconOnly && "aspect-square px-0"/u);
-  assert.match(buttonSource, /active:scale-\[0\.985\]/u);
+  assert.match(buttonSource, /pressFeedback = false/u);
+  assert.match(buttonSource, /pressFeedback && "button-press-feedback"/u);
+  assert.match(styles, /\.button-press-feedback:active:not\(:disabled\)\s*\{\s*scale: 0\.96;/u);
   assert.match(buttonSource, /motion-reduce:transform-none/u);
 });
 

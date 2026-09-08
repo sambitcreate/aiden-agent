@@ -80,6 +80,7 @@ const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).hr
 const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
+  browser: new URL("../assets/onboarding/features/browser.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
   filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
   reviewDiffs: new URL("../assets/onboarding/features/review-diffs.png", import.meta.url).href,
@@ -200,6 +201,15 @@ const featureBentos: FeatureBento[] = [
     description: "Delegate scout, planner, and reviewer jobs, then inspect their live results.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
+    size: "standard",
+  },
+  {
+    id: "browser",
+    group: "create",
+    title: "Browser & Annotations",
+    description: "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
+    icon: Globe2,
+    imageUrl: FEATURE_ILLUSTRATIONS.browser,
     size: "standard",
   },
   {

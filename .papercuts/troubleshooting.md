@@ -311,3 +311,36 @@ owns; reopen the terminal before judging the final live state.
   platform-independent test that exercises both certificate and keychain paths.
 - A changelog search conflated the stable and prerelease lines. Verify published
   package code before assuming a release contains the upstream patch.
+- The environment-browser checkout has no `.memory/` directory despite AGENTS guidance; use current source, existing design references, and the scoped browser parity document as implementation evidence.
+- t3code's browser spans profiles/import, recording, annotations, device emulation, and agent control across desktop/server/web. Track a source-backed feature matrix before porting; a navigation-only webview would silently miss the requested parity.
+- `npm ci` completed without Electron's macOS payload in this worktree; `node node_modules/electron/install.js` restored `Electron.app` before UI testing.
+- T3's hardcoded `source3` Playwright extraction points at a different bundle string in installed Playwright 1.62.1; locate the named generated module to preserve selector-engine parity.
+- Generated onboarding art had real alpha but a 1254px canvas despite the requested 1024px; normalize the final PNG to the repository's exact 1024px contract and validate its alpha.
+- System `java_home` has no registered JDK, but Android Studio's bundled JBR works for Gradle; use its `Contents/jbr/Contents/Home` and the existing Android SDK explicitly for focused mobile tests.
+- No physical iOS device is connected for this run, and repository guidance prohibits simulators. Generic iOS `build-for-testing` with signing disabled compiles the app/tests; actual XCTest execution remains a physical-device check.
+- Electron 43 emits the console-message payload on the event object; reading the legacy second argument as that payload threw during first navigation and blocked the test app behind an exception dialog. Use the current typed event and verify in real Electron, not just service mocks.
+
+- 2026-09-07: Native Browser views sit above renderer menus/dialogs. Presentation now observes visible overlays and serializes tab show/hide across remounts so delayed cleanup cannot hide the replacement view.
+- Renderer-only Playwright captures omit native WebContentsViews; use the exact worktree Electron.app with CUA for visual proof. Several installed Electron copies share a bundle ID, so resolve the full app path.
+- Streaming reveal briefly renders duplicate final message text; E2E assertions must target the visible transcript occurrence and independently check the scripted tool scenario completed.
+- Browser preflight exposed two existing source-contract mismatches in unchanged provider badges and button press-feedback tests. Keep that baseline distinct from browser regression results.
+- Responsive emulation letterboxes inside the native slot. Crop captures to the rendered viewport before translating annotation coordinates; using the full slot silently distorts vertical selections.
+
+## 2026-09-07 — Browser integration verification
+
+- Floating placement measured the workbench wrapper and covered the Environment close control. Measure the chat viewport and visible side surfaces; retain a normal pointer-click regression.
+- Approval summaries and tool admission both use browser policy helpers. Full-mode E2E misses Ask-mode summary errors; retain TypeScript validation and an actual approval-loop regression.
+- Reverting live styles during the preview debounce must still enqueue the restored desired state; comparing only the last completed key leaves an in-flight change applied.
+- Native visual verification exposed empty-chat composer overlap and CDP visible-size ownership. Reserve every composer and use `dontSetVisibleSize` so device emulation cannot override the measured native slot.
+- Browser tab titles and renderer selection can lag the main state response. E2E waits for `aria-selected`, closes the intended row, and canonicalizes URLs when finding the native guest.
+- Launching the shared Dev profile hit existing artifact/history recovery errors. Browser testing uses `build/browser-dev-profile/` with separate portable/user-data roots, copied provider setup, and a fresh workspace history.
+- Live browser test: agent tried `browser_open(file:///tmp/sample.html)` and received HTTP(S)-only rejection, then recovered with a Python server serving all of `/tmp` on port 8899. UI workspace `open_file` is not exposed to agent tools; add explicit local-preview guidance and a bounded file-preview route through existing tools, including intentional handling of user-requested files outside the workspace and server cleanup.
+
+## Browser lifecycle and progressive disclosure — 2026-09-08
+- An agent-created Python preview outlived its document. Verified the exact task-owned PID/start/cwd/port, terminated it, confirmed the HTML was absent, and removed its log. Managed exact-file previews now replace that fallback.
+- Review found queued actions could resume after human takeover, approvals could outlive page identity, and hover overlays could intercept semantic clicks. Added focused regression coverage and fixes. A cursor-cleanup review incorrectly read evaluate's isolated-world argument; the live cursor test caught the regression, and cleanup was restored to the creation context.
+- Progressive disclosure must install executable tools and update both outbound and durable-compaction budgets at a turn boundary. A setup-return wiring mistake was caught by TypeScript/review before Electron validation.
+- `tsx -e` uses CommonJS here and cannot load Pi's ESM-only export; use `node --import tsx --input-type=module` for measurement scripts.
+- Host preparation runs after a tool turn, and Pi journals an aborted assistant on Stop. Cancellation tests must reach that boundary and preserve its journal record; an abort rejection must not become a policy fault, while an independent host failure must still fail closed.
+
+- Electron main-process evaluation cannot dynamically import a module from the Playwright utility world. The delayed-acquisition regression uses `process.getBuiltinModule` and synchronizes builtin ESM exports so its filesystem gate actually reaches the production namespace import; restored in test cleanup.

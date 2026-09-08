@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   Files,
+  Globe,
   GitCompareArrows,
   List,
   PanelRightClose,
@@ -19,12 +20,14 @@ import {
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { useBrowserLinks } from "../lib/use-browser-links";
 import {
   FilesPanel,
   type FilesEditorState,
   type FilesEditorStateChangeOptions,
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
+import { BrowserPanel } from "./browser-panel";
 import { ReviewPanel } from "./review-panel";
 import { SubagentOrb } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
@@ -38,7 +41,7 @@ import {
 } from "../lib/environment-panel-layout";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
-import { subagentsApi } from "../lib/ipc";
+import { browserApi, subagentsApi } from "../lib/ipc";
 import { type SubagentEffectActivityV1, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   buildSubagentRunViews,
@@ -195,7 +198,7 @@ function storedPanelWidth(): number {
 
 function storedLastToolsTab(currentTab: EnvironmentPanelTab, subagentsEnabled: boolean) {
   const stored = localStorage.getItem(LAST_TOOLS_TAB_STORAGE_KEY);
-  if (stored === "files" || stored === "review") return stored;
+  if (stored === "files" || stored === "review" || stored === "browser") return stored;
   if (stored === "subagents" && subagentsEnabled) return stored;
   return normalizeEnvironmentPanelTab(currentTab, subagentsEnabled);
 }
@@ -203,7 +206,7 @@ function storedLastToolsTab(currentTab: EnvironmentPanelTab, subagentsEnabled: b
 function initialEnvironmentSurfaceState(subagentsEnabled: boolean): EnvironmentSurfaceState {
   const rawTab = localStorage.getItem(TAB_STORAGE_KEY);
   const storedTab: EnvironmentPanelTab =
-    rawTab === "review" || rawTab === "subagents" || rawTab === "files"
+    rawTab === "review" || rawTab === "subagents" || rawTab === "files" || rawTab === "browser"
       ? rawTab
       : storedLastToolsTab("review", subagentsEnabled);
   const migrated = localStorage.getItem(SURFACE_STORAGE_VERSION_KEY) === "2";
@@ -239,6 +242,7 @@ function initialEnvironmentSurfaceState(subagentsEnabled: boolean): EnvironmentS
 
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
   const { activeId } = useActiveWorkspace();
+  useBrowserLinks(activeId);
   const { subagents: subagentsEnabled } = useAppCapabilities();
   const [surfaceState, dispatchSurface] = React.useReducer(
     reduceEnvironmentSurfaceState,
@@ -471,6 +475,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     },
     [activeId, showTools],
   );
+
+  React.useEffect(() => browserApi.onEvent((event) => {
+    if (event.type === "show" && event.workspaceId === (activeId ?? "default")) showTools("browser");
+  }), [activeId, showTools]);
 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
@@ -1095,7 +1103,7 @@ function EnvironmentPanelSurface({
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
-  const compactTabs = width < 520;
+  const compactTabs = width < 620;
   const surfaceRef = React.useRef<HTMLElement | null>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const handledSubagentFocusRef = React.useRef(0);
@@ -1245,8 +1253,8 @@ function EnvironmentPanelSurface({
         >
           {panelTabs.map((tab) => {
             const selected = panel.tab === tab;
-            const Icon = tab === "review" ? GitCompareArrows : Files;
-            const label = tab === "review" ? "Review" : tab === "subagents" ? "Subagents" : "Files";
+            const Icon = tab === "review" ? GitCompareArrows : tab === "browser" ? Globe : Files;
+            const label = tab === "review" ? "Review" : tab === "subagents" ? "Subagents" : tab === "browser" ? "Browser" : "Files";
             return (
               <button
                 key={tab}
@@ -1380,6 +1388,19 @@ function EnvironmentPanelSurface({
               panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
             }
             onEditorStateChange={panel.reportEditorState}
+          />
+        </div>
+        <div
+          id="environment-browser-panel"
+          role="tabpanel"
+          aria-labelledby="environment-browser-tab"
+          hidden={panel.tab !== "browser"}
+          className="h-full min-h-0"
+        >
+          <BrowserPanel
+            workspaceId={active?.id ?? "default"}
+            active={presented && panel.tab === "browser"}
+            onDock={() => panel.showTools("browser")}
           />
         </div>
       </div>
@@ -1610,7 +1631,7 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
       data-environment-stacked={stacked ? "true" : "false"}
       className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
     >
-      <div className="h-full min-h-0 min-w-0 flex-1">{children}</div>
+      <div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">{children}</div>
       <QuickViewCard
         width={quickViewLayout.width}
         right={quickViewLayout.right}

@@ -44,7 +44,10 @@ import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi } from "../lib/ipc";
+import { attachmentsApi, browserApi } from "../lib/ipc";
+import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -356,6 +359,33 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  React.useLayoutEffect(() => {
+    if (!workspace?.id) return;
+    const available = () => {
+      const input = inputRef?.current;
+      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+    };
+    const receive = (annotation: BrowserAnnotation) => {
+      if (!available()) return false;
+      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const comment = annotation.comment.trim();
+      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      if (result.attachments.length) {
+        attachmentRevisionRef.current += 1;
+        updateAttachments((current) => [...current, ...result.attachments]);
+      }
+      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
+    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+    });
+    return () => { unregister(); unsubscribe(); };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
   const attachmentOperationRef = React.useRef(false);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
@@ -1415,7 +1445,7 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         <div className="composer-responsive pointer-events-auto relative isolate">
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}

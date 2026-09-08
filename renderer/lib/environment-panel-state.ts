@@ -1,4 +1,4 @@
-export type EnvironmentPanelTab = "review" | "subagents" | "files";
+export type EnvironmentPanelTab = "review" | "subagents" | "files" | "browser";
 export type EnvironmentSurface = "quick-view" | "tools";
 export type EnvironmentSurfaceMode = "closed" | "tools-pinned" | "tools-floating";
 
@@ -19,8 +19,8 @@ export type EnvironmentSurfaceAction =
   | { type: "activate"; surface: EnvironmentSurface }
   | { type: "close-all" };
 
-export const ENVIRONMENT_PANEL_TABS = ["review", "subagents", "files"] as const;
-const DISABLED_ENVIRONMENT_PANEL_TABS = ["review", "files"] as const;
+export const ENVIRONMENT_PANEL_TABS = ["review", "subagents", "files", "browser"] as const;
+const DISABLED_ENVIRONMENT_PANEL_TABS = ["review", "files", "browser"] as const;
 
 interface EnvironmentPanelStorage {
   getItem(key: string): string | null;
@@ -58,7 +58,9 @@ export function storedEnvironmentPanelTab(
 ): EnvironmentPanelTab {
   const stored = storage.getItem(key);
   const parsed: EnvironmentPanelTab =
-    stored === "review" || stored === "subagents" || stored === "files" ? stored : "review";
+    stored === "review" || stored === "subagents" || stored === "files" || stored === "browser"
+      ? stored
+      : "review";
   // Capability bootstrap starts fail-closed and can become authoritative later.
   // Preserve the raw destination instead of destructively repairing storage.
   return normalizeEnvironmentPanelTab(parsed, subagentsEnabled);

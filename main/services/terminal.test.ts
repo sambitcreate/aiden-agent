@@ -484,6 +484,7 @@ test("terminal sessions cover input, resize, output, snapshot, history, and natu
   const owner = ownerState();
   const child = fakePty();
   const appended: Array<{ workspaceId: string; data: string }> = [];
+  const observed: Array<{ workspaceId: string; data: string }> = [];
   let flushCount = 0;
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
@@ -497,6 +498,10 @@ test("terminal sessions cover input, resize, output, snapshot, history, and natu
     },
   });
   const session = await service.create("workspace-1", "/tmp", owner.owner);
+  service.setOutputObserver((workspaceId, data) => {
+    observed.push({ workspaceId, data });
+    throw new Error("An optional browser suggestion failed.");
+  });
 
   assert.deepEqual(service.snapshot(session.id, owner.owner), {
     buffer: "restored\n",
@@ -518,6 +523,7 @@ test("terminal sessions cover input, resize, output, snapshot, history, and natu
     sequence: 2,
   });
   assert.deepEqual(appended, [{ workspaceId: "workspace-1", data: "live output\n" }]);
+  assert.deepEqual(observed, [{ workspaceId: "workspace-1", data: "live output\n" }]);
   assert.deepEqual(owner.sent[owner.sent.length - 1], {
     channel: "terminal:data",
     payload: { sessionId: session.id, sequence: 2, data: "live output\n" },

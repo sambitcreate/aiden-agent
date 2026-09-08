@@ -666,6 +666,12 @@ export interface TerminalSnapshot {
   sequence: number;
 }
 
+export const browserApi = {
+  getState: (workspaceId: string) => invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) => invoke<import("../shared/browser").BrowserCommandResult>("browser:command", workspaceId, command),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) => onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+};
+
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),

@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -17,7 +18,8 @@ import {
 } from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { browserApi, onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { browserLinkCommand } from "../lib/browser-links";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -328,6 +330,10 @@ function TerminalViewport({
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(host);
+    xterm.loadAddon(new WebLinksAddon((event, url) => {
+      const command = browserLinkCommand(url, event);
+      if (command) void browserApi.command(session.workspaceId, command).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not open this link."));
+    }));
     xtermRef.current = xterm;
     const resize = () => {
       try {
