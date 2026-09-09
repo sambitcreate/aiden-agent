@@ -398,16 +398,16 @@ claimed or selected without its device-local receipts.
   developer installs, new chats, migrated low-risk chats, existing long chats,
   then `v4_only`. The same authoritative chat eligibility controls new v4
   journal creation, legacy migration, automatic and manual Pi checkpoints, and
-   memory. In particular, a pre-existing chat without a journal is not silently
-   classified as new. Rollout-ineligible chats therefore generate journalless
-   over an in-memory session (`openChatIfEligible` reports a structured reason
-   instead of throwing; recall is omitted, effect recovery is never marked
-   durable, and the durable store is never quarantined), so no stage blocks
-   generation — see the "Journalless generation" section of the Phase 7
-   rollout runbook. `AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED=0` is read once at
-   startup and disables journal creation/migration, automatic/manual checkpoint
-   generation, and memory while retaining byte-stable read access to existing
-   v4 journals.
+  memory. In particular, a pre-existing chat without a journal is not silently
+  classified as new. Rollout-ineligible chats therefore generate journalless
+  over an in-memory session (`openChatIfEligible` reports a structured reason
+  instead of throwing; recall is omitted, effect recovery is never marked
+  durable, and the durable store is never quarantined), so no stage blocks
+  generation — see the "Journalless generation" section of the Phase 7
+  rollout runbook. `AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED=0` is read once at
+  startup and disables journal creation/migration, automatic/manual checkpoint
+  generation, and memory while retaining byte-stable read access to existing
+  v4 journals.
 - Rollout advancement reloads current state under a private token/PID lock,
   rejects stale cached writers and stage skips/regressions, and safely reclaims
   an old lock only after its owner is dead and its exact contents remain
