@@ -1,6 +1,6 @@
 # Desktop multi-host control
 
-Status: Active — outbound connection foundation implemented; full multi-host experience incomplete; UI signoff pending.
+Status: Active — outbound connection foundation implemented; full multi-host experience incomplete; UI proposal approved on 2026-09-09.
 Date: 2026-09-09
 Source baseline: `e42b147925e0d6ecbe050687eeb272e2e841233e`.
 
@@ -10,7 +10,7 @@ Any Aiden desktop can act as the user's control surface for its own work and mul
 
 The requested experience includes remote chat discovery and filtering in the existing sidebar, a subtle globe on remote chats, live Aiden activity and control, new chats on another host, and a composer host selector followed by that host's workspace/folder selection. macOS and Linux share the protocol; supported actions depend on host capabilities.
 
-The user authorized implementation and a PR on 2026-09-09 after three GPT-5.6 Sol Medium exploration lanes and two GPT-6 Astra Medium planning lanes. New UI still requires the user’s explicit signoff. The first implementation slice is documented below.
+The user authorized implementation and a PR on 2026-09-09 after three GPT-5.6 Sol Medium exploration lanes and two GPT-6 Astra Medium planning lanes. The user approved the Connections/sidebar/composer proposal on 2026-09-09; material departures still require signoff. The first implementation slice is documented below.
 
 
 ## Implementation checkpoint — 2026-09-09
@@ -22,7 +22,7 @@ Implemented in this branch:
 - Typed IPC for paired-host management and a closed set of existing remote API operations, with document cancellation and credential-free renderer views.
 - Bounded HTTPS JSON and SSE framing. Stream subscription IPC, replay/reconnect reconciliation and renderer consumption remain outstanding.
 - Focused transport/registry tests, including real Remote API pairing over HTTPS, native manual crypto fixture, persistence failure, shutdown, cancellation and host isolation.
-- An interactive [Connections and sidebar proposal](../design/desktop-connections-proposal.html), using sample data only, for UI signoff. It is not production UI.
+- An interactive [Connections and sidebar proposal](../design/desktop-connections-proposal.html), using sample data only, approved by the user on 2026-09-09. It is not production UI.
 
 Not implemented: multi-host sidebar aggregation/filtering, ChatPane adapter and host-scoped cache migration, production host/folder selector, cross-origin live run observation/control, terminal leases, remote Environment surfaces, onboarding, and Linux combined-branch validation. Existing remote stream ownership checks and grants remain unchanged. This foundation alone does not deliver desktop-to-desktop chat control in the app.
 
