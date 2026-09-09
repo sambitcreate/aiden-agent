@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import https from "node:https";
+import type { ServerResponse } from "node:http";
 import { X509Certificate } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
-import { PeerTransport } from "./peer-transport.js";
-import { decryptPeerPairing } from "./peer-pairing.js";
+import { PeerTransport, PeerEventFrames } from "./peer-transport.js";
+import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import { AidenRemotePairingService } from "./aiden-remote-pairing.js";
@@ -72,14 +73,14 @@ test("closed peer operations reject injected routes and require mutation identit
         { operation: "server" },
         { nested: { credential: "secret" } },
       ),
-    /private connection/,
+    /response contract/,
   );
   assert.throws(() =>
     peerOperationResult({ operation: "chat" }, { id: "missing-fields" }),
   );
 });
 
-test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and parses chunked SSE", async () => {
+test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and parses chunked SSE", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-test-"));
   const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
   const pairingService = new AidenRemotePairingService("host_tls", {
@@ -119,6 +120,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     log: () => undefined,
   });
   let redirected = 0;
+  let liveResponse: ServerResponse | undefined;
   const server = https.createServer(
     { key: identity.privateKey, cert: identity.certificateChain },
     (request, response) => {
@@ -135,6 +137,12 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return;
       }
       if (request.url === "/target") redirected++;
+      if (request.url?.endsWith("/live")) {
+        liveResponse = response;
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.write("data: start\n\n");
+        return;
+      }
       if (request.url?.endsWith("/events")) {
         response.writeHead(200, { "Content-Type": "text/event-stream" });
         response.write(': hello\n\nid: 1\ndata: {"text":');
@@ -203,9 +211,149 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     const frames: string[] = [];
     await client.events({ path: "/events" }, (frame) => frames.push(frame));
     assert.deepEqual(frames, ['id: 1\ndata: {"text":"hello"}']);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let received!: () => void;
+    let nextFrame = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const live = client.events({ path: "/live" }, () => received());
+    const rejected = assert.rejects(live);
+    await nextFrame;
+    // Completed frames keep the frame deadline alive, but cannot extend the session cap.
+    for (let i = 0; i < 14; i++) {
+      t.mock.timers.tick(20_000);
+      nextFrame = new Promise<void>((resolve) => {
+        received = resolve;
+      });
+      liveResponse!.write("data: pulse\n\n");
+      await nextFrame;
+    }
+    t.mock.timers.tick(20_000);
+    await rejected;
+    // Even a peer that has sent headers and one valid frame must finish its next frame.
+    nextFrame = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const stalled = client.events({ path: "/live" }, () => received());
+    const stalledRejected = assert.rejects(stalled);
+    await nextFrame;
+    liveResponse!.write("data: partial");
+    t.mock.timers.tick(30_000);
+    await stalledRejected;
+    t.mock.timers.reset();
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test(
+  "SSE one-byte trickles and heartbeat floods have bounded work and size",
+  { timeout: 5000 },
+  () => {
+    const parser = new PeerEventFrames();
+    const one = Buffer.from("a");
+    for (let i = 0; i < 1_048_576; i++)
+      parser.push(
+        one,
+        () => {},
+        () => {},
+      );
+    assert.throws(
+      () =>
+        parser.push(
+          Buffer.from("aaaaa"),
+          () => {},
+          () => {},
+        ),
+      /large/,
+    );
+    const flood = new PeerEventFrames();
+    let boundaries = 0;
+    assert.throws(
+      () =>
+        flood.push(
+          Buffer.from(": ping\n\n".repeat(16_385)),
+          () => {
+            throw new Error("Heartbeat emitted");
+          },
+          () => {
+            boundaries++;
+          },
+        ),
+      /budget/,
+    );
+    assert.equal(boundaries, 16_384);
+    const split = new PeerEventFrames();
+    const frames: string[] = [];
+    for (const byte of Buffer.from("data: ☃\r\n\r\n"))
+      split.push(
+        Buffer.from([byte]),
+        (frame) => frames.push(frame),
+        () => {},
+      );
+    split.end();
+    assert.deepEqual(frames, ["data: ☃"]);
+  },
+);
+
+test("pairing tolerates bounded skew but rejects nonsense expiry", () => {
+  const now = Date.now();
+  for (const delta of [-120_000, 0, 300_000, 420_000])
+    assertPeerPairingExpiry(new Date(now + delta).toISOString(), now);
+  for (const delta of [-120_001, 420_001])
+    assert.throws(() =>
+      assertPeerPairingExpiry(new Date(now + delta).toISOString(), now),
+    );
+  assert.throws(() => assertPeerPairingExpiry("nonsense", now));
+});
+
+test("every exposed operation rejects malformed DTOs and preserves legitimate content", () => {
+  const operations = [
+    "server",
+    "summaries",
+    "workspaces",
+    "models",
+    "chat",
+    "roots",
+    "children",
+    "stream",
+    "approval",
+    "files",
+    "file",
+    "git",
+    "createChat",
+    "send",
+    "renameChat",
+    "deleteChat",
+    "cancel",
+    "respondApproval",
+    "selectFolder",
+    "createWorkspace",
+  ];
+  for (const operation of operations)
+    assert.throws(() => peerOperationResult({ operation }, {}), operation);
+  const models = {
+    providers: [],
+    defaults: { secret: "model-id", headers: "another-model" },
+  };
+  assert.deepEqual(
+    peerOperationResult({ operation: "models" }, models),
+    models,
+  );
+  assert.deepEqual(
+    peerOperationResult({ operation: "approval" }, { approval: null }),
+    { approval: null },
+  );
+  assert.throws(() =>
+    peerOperationResult(
+      { operation: "approval" },
+      { approval: null, credential: "private" },
+    ),
+  );
+  assert.equal(
+    peerOperationResult({ operation: "deleteChat" }, undefined),
+    undefined,
+  );
 });

@@ -5,6 +5,7 @@ import {
   type PeerHostView,
 } from "../../renderer/shared/peer-host.js";
 import {
+  assertPeerPairingExpiry,
   peerRecord,
   peerStrings,
   peerText,
@@ -210,11 +211,7 @@ export class PeerHostRegistry {
           throw new Error(
             "The saved or pairing device limit has been reached.",
           );
-        if (
-          !Number.isFinite(Date.parse(pairing.expiresAt)) ||
-          Date.parse(pairing.expiresAt) <= Date.now()
-        )
-          throw new Error("Pairing code expired.");
+        assertPeerPairingExpiry(pairing.expiresAt);
         this.pairings.set(pairing.instanceId, controller);
         reserved = true;
       });

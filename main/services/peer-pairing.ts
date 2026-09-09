@@ -28,6 +28,20 @@ export interface PeerPairing extends PeerTrust {
   expiresAt: string;
 }
 
+/** Server exchange remains authoritative; tolerate two minutes of client clock skew. */
+export function assertPeerPairingExpiry(
+  expiresAt: string,
+  now = Date.now(),
+): void {
+  const expiry = Date.parse(expiresAt);
+  if (
+    !Number.isFinite(expiry) ||
+    expiry < now - 120_000 ||
+    expiry > now + 420_000
+  )
+    throw new Error("Pairing code expired or invalid.");
+}
+
 export function parsePeerPairing(
   payload: string,
   now = Date.now(),
@@ -45,9 +59,7 @@ export function parsePeerPairing(
   )
     throw new Error("Unsupported pairing protocol.");
   const expiresAt = peerText(bootstrap.expiresAt, 40);
-  const expiry = Date.parse(expiresAt);
-  if (!Number.isFinite(expiry) || expiry <= now || expiry > now + 300_000)
-    throw new Error("Pairing code expired or invalid.");
+  assertPeerPairingExpiry(expiresAt, now);
   const secret = peerText(bootstrap.secret, 43);
   if (!/^[A-Za-z0-9_-]{43}$/u.test(secret))
     throw new Error("Invalid pairing secret.");

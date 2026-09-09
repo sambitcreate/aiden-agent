@@ -19,8 +19,8 @@ Implemented in this branch:
 
 - Main-process outbound registry with encrypted atomic storage, pinned HTTPS, authenticated installation identity, independent host dispatch and bounded request/queue limits.
 - Desktop pairing from the canonical QR payload and manual-payload cryptographic decoder. Mac/Linux client classifications preserve existing grants. Manual bootstrap network acquisition is not yet wired.
-- Typed IPC for paired-host management and a closed set of existing remote API operations, with document cancellation and credential-free renderer views.
-- Bounded HTTPS JSON and SSE framing. Stream subscription IPC, replay/reconnect reconciliation and renderer consumption remain outstanding.
+- Typed IPC for paired-host management and a closed set of existing remote API operations, with document cancellation and credential-free renderer views. Every response is checked against the bundled API schema with structural/byte limits; validators are compiled lazily and cached.
+- Bounded HTTPS JSON and linear SSE byte framing (1 MiB per frame, 16 MiB/16,384 frames per session, 30-second frame deadline and five-minute absolute session cap). Stream subscription IPC, replay/reconnect reconciliation and renderer consumption remain outstanding.
 - Focused transport/registry tests, including real Remote API pairing over HTTPS, native manual crypto fixture, persistence failure, shutdown, cancellation and host isolation.
 - An interactive [Connections and sidebar proposal](../design/desktop-connections-proposal.html), using sample data only, approved by the user on 2026-09-09. It is not production UI.
 
@@ -120,7 +120,7 @@ The complete first-release action matrix must be reviewed before UI implementati
 
 The user supplied three Connections Settings screenshots as visual direction. Reuse their separation between inbound and outbound control, compact device rows, status, Add, toggles and revoke/reconnect actions, adapted to Aiden's settings system. Use platform-neutral wording where appropriate. SSH and keep-awake are pictured but are not automatically included features.
 
-| Decision | Proposed direction, not signed off |
+| Decision | Approved proposal direction |
 | --- | --- |
 | Settings organization | Connections with Control this device and Control other devices; decide whether to rename/relocate Remote Access |
 | Sidebar | All authorized hosts in the existing workspace/recent projection with a host filter; exact default/filter placement pending |
@@ -133,7 +133,7 @@ The user supplied three Connections Settings screenshots as visual direction. Re
 | Optional features | SSH, keep-awake, chat migration, remote screen control and headless daemon are separate decisions |
 | Environment scope | Confirm remote browser viewing and full remote Settings administration separately from Aiden run/file/Git control |
 
-Before implementation, provide concrete mockups of Settings, sidebar/filter, composer/folder selection, and offline/capability states for user signoff. Follow `docs/design-guide.md`, `docs/settings-design-system.md`, `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html`. Preserve semantic tokens, shared action shapes and focus behavior. No new UI is implied approved by this plan.
+Before implementation, provide concrete mockups of Settings, sidebar/filter, composer/folder selection, and offline/capability states for review of any material departures. Follow `docs/design-guide.md`, `docs/settings-design-system.md`, `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html`. Preserve semantic tokens, shared action shapes and focus behavior. The Connections/sidebar/composer proposal was approved on 2026-09-09; material departures require fresh approval.
 
 ## Delivery sequence and gates
 

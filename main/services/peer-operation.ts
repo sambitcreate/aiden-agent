@@ -1,3 +1,4 @@
+import { validatePeerResponse } from "./peer-response.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import type { PeerOperation } from "../../renderer/shared/peer-operation.js";
 import { peerRecord, peerText } from "./peer-pairing.js";
@@ -13,20 +14,7 @@ export function peerOperationResult(
   value: unknown,
 ): unknown {
   const input = peerRecord(operation);
-  const visit = (node: unknown, depth: number): void => {
-    if (depth > 128) throw new Error("Peer response is too deeply nested.");
-    if (!node || typeof node !== "object") return;
-    for (const [key, child] of Object.entries(node)) {
-      if (
-        /^(credential|credentials|secret|secrets|authorization|headers|privatekey|cacertificatederbase64)$/u.test(
-          key.replace(/[_-]/gu, "").toLowerCase(),
-        )
-      )
-        throw new Error("The peer returned private connection data.");
-      visit(child, depth + 1);
-    }
-  };
-  visit(value, 0);
+  validatePeerResponse(peerText(input.operation, 40), value);
   if (input.operation === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
   if (

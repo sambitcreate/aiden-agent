@@ -391,3 +391,6 @@ owns; reopen the terminal before judging the final live state.
 - Pairing network I/O under the registry mutex delayed disconnects on other hosts; reserve identity under lock and perform network work outside it.
 - Xcode found the physical iPad but could not mount its developer disk image, so focused XCTest execution remained blocked; no prohibited simulator fallback was used.
 - Sharing an in-flight identity request also shared its first caller’s cancellation. Cache completed verification only and retain per-request abort lifetimes.
+
+- Pullfrog found quadratic SSE rescanning under one-byte trickles. Scan each byte once; bound total frames/bytes and both frame/session time, with real HTTPS clock-controlled regression tests.
+- Recursive secret-name rejection also rejected legitimate content keys. Validate closed protocol envelopes against the bundled schema and preserve schema-authorized content.

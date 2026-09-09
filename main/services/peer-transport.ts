@@ -27,6 +27,59 @@ const MAX_JSON_BYTES = 1_048_576;
 const MAX_FRAME_BYTES = 1_048_576;
 const DEADLINE_MS = 30_000;
 
+/** Linear byte scanner; each input byte is visited once, including one-byte trickles. */
+export class PeerEventFrames {
+  private buffer = Buffer.allocUnsafe(MAX_FRAME_BYTES + 4);
+  private length = 0;
+  private previousLf = false;
+  private betweenCr = false;
+  private total = 0;
+  private frames = 0;
+  private decoder = new TextDecoder("utf-8", { fatal: true });
+  push(
+    chunk: Buffer,
+    onFrame: (frame: string) => void,
+    onBoundary: () => void,
+  ): void {
+    this.total += chunk.length;
+    if (this.total > 16 * MAX_FRAME_BYTES)
+      throw new Error("Stream byte budget exceeded.");
+    for (const byte of chunk) {
+      if (this.length >= this.buffer.length)
+        throw new Error("Frame too large.");
+      this.buffer[this.length++] = byte;
+      if (byte === 10 && this.previousLf) {
+        if (++this.frames > 16_384)
+          throw new Error("Stream frame budget exceeded.");
+        const raw = this.buffer.subarray(0, this.length);
+        const frame = this.decoder.decode(raw).replace(/\r?\n\r?\n$/u, "");
+        if (Buffer.byteLength(frame) > MAX_FRAME_BYTES)
+          throw new Error("Frame too large.");
+        this.length = 0;
+        this.previousLf = false;
+        this.betweenCr = false;
+        onBoundary();
+        if (
+          frame &&
+          !frame.split(/\r?\n/u).every((line) => line.startsWith(":"))
+        )
+          onFrame(frame);
+      } else if (byte === 10) {
+        this.previousLf = true;
+        this.betweenCr = false;
+      } else if (byte === 13 && this.previousLf && !this.betweenCr) {
+        this.betweenCr = true;
+      } else {
+        this.previousLf = false;
+        this.betweenCr = false;
+      }
+    }
+  }
+  end(): void {
+    if (this.length) throw new Error("Incomplete SSE frame.");
+  }
+}
+
 export class PeerTransportError extends Error {
   constructor(
     readonly code:
@@ -140,10 +193,12 @@ export class PeerTransport {
     return new Promise((resolve, reject) => {
       let settled = false;
       let deadline: ReturnType<typeof setTimeout> | undefined;
+      let sessionDeadline: ReturnType<typeof setTimeout> | undefined;
       const finish = (error?: Error, value?: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
+        clearTimeout(sessionDeadline);
         input.signal?.removeEventListener("abort", abort);
         if (error) reject(error);
         else resolve(value);
@@ -211,7 +266,11 @@ export class PeerTransport {
             fail(new PeerTransportError("invalid_response"));
             return;
           }
-          if (onFrame) clearTimeout(deadline);
+          const frames = onFrame ? new PeerEventFrames() : undefined;
+          const frameBoundary = () => {
+            clearTimeout(deadline);
+            deadline = setTimeout(abort, DEADLINE_MS);
+          };
           const decoder = new TextDecoder("utf-8", { fatal: true });
           let text = "";
           let bytes = 0;
@@ -221,23 +280,8 @@ export class PeerTransport {
               bytes += chunk.length;
               if (!onFrame && bytes > MAX_JSON_BYTES)
                 throw new Error("Response too large.");
-              text += decoder.decode(chunk, { stream: true });
-              if (onFrame) {
-                let separator: RegExpExecArray | null;
-                while ((separator = /\r?\n\r?\n/u.exec(text))) {
-                  const frame = text.slice(0, separator.index);
-                  if (Buffer.byteLength(frame) > MAX_FRAME_BYTES)
-                    throw new Error("Frame too large.");
-                  text = text.slice(separator.index + separator[0].length);
-                  if (
-                    frame &&
-                    !frame.split(/\r?\n/u).every((line) => line.startsWith(":"))
-                  )
-                    onFrame(frame);
-                }
-                if (Buffer.byteLength(text) > MAX_FRAME_BYTES)
-                  throw new Error("Frame too large.");
-              }
+              if (onFrame && frames) frames.push(chunk, onFrame, frameBoundary);
+              else text += decoder.decode(chunk, { stream: true });
             } catch {
               fail(new PeerTransportError("invalid_response"));
             }
@@ -245,8 +289,7 @@ export class PeerTransport {
           response.on("end", () => {
             try {
               text += decoder.decode();
-              if (onFrame && text.trim())
-                throw new Error("Incomplete SSE frame.");
+              frames?.end();
               finish(
                 undefined,
                 onFrame || status === 204
@@ -273,6 +316,7 @@ export class PeerTransport {
       request.on("error", () => finish(new PeerTransportError("unavailable")));
       request.setTimeout(onFrame ? 60_000 : DEADLINE_MS, abort);
       deadline = setTimeout(abort, DEADLINE_MS);
+      if (onFrame) sessionDeadline = setTimeout(abort, 300_000);
       request.end(body);
     });
   }
