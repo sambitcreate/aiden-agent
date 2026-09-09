@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
 import { expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
@@ -485,4 +487,62 @@ test("compaction commands keep cancellation available for every engine", async (
     ).compactionCommandTest.finishExport();
   });
   await expect(composer).toBeEditable();
+});
+
+
+test("composer selector menus use opaque theme surfaces on hover and keyboard focus", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // The deterministic local model has no effort selector. Mount the real component's
+  // markup to exercise its hover/focus CSS against the shipped renderer stylesheet.
+  // Render outside Playwright, whose JSX transform serializes component objects.
+  const thinkingMarkup = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    import { createElement } from "react";
+    import { renderToStaticMarkup } from "react-dom/server";
+    import { ThinkingControl } from "./renderer/components/thinking-control.tsx";
+    process.stdout.write(renderToStaticMarkup(createElement(ThinkingControl, {
+      level: "medium", levels: ["off", "low", "medium", "high"], onChange: () => undefined,
+    })));
+  `], { encoding: "utf8" });
+  await page.evaluate((markup) => {
+    const host = document.createElement("div");
+    host.id = "thinking-surface-fixture";
+    host.style.cssText = "position:fixed;right:40px;bottom:180px;z-index:100";
+    host.innerHTML = markup;
+    document.body.append(host);
+  }, thinkingMarkup);
+  const permission = page.getByRole("button", { name: /^Workspace access:/u });
+  const access = page.getByRole("radiogroup", { name: "Workspace access", exact: true });
+  const thinking = page.getByRole("radiogroup", { name: "Gemini thinking level" });
+  const selectedThinking = thinking.getByRole("radio", { name: "Thinking: medium effort" });
+  for (const scheme of ["light", "dark"] as const) {
+    const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
+    const expected = await page.evaluate((themeTokens) => {
+      for (const [name, value] of Object.entries(themeTokens)) document.documentElement.style.setProperty(name, value);
+      const probe = document.createElement("div");
+      probe.style.backgroundColor = "var(--surface-popover)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    }, tokens);
+    expect(expected).toMatch(/^rgb\(/u);
+    await permission.hover();
+    await expect(access).toHaveCSS("background-color", expected);
+    await expect(access).toHaveCSS("opacity", "1");
+    await permission.press("Escape");
+    await page.mouse.move(0, 0);
+    await permission.focus();
+    await expect(access).toHaveCSS("background-color", expected);
+    await expect(access).toHaveCSS("opacity", "1");
+    await permission.press("Escape");
+    await selectedThinking.hover();
+    await expect(thinking).toHaveCSS("background-color", expected);
+    await selectedThinking.focus();
+    await page.mouse.move(0, 0);
+    await expect(thinking).toHaveCSS("background-color", expected);
+    await expect(selectedThinking).toHaveCSS("outline-style", "solid");
+    await page.locator("textarea").focus();
+    await expect(thinking).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  }
 });

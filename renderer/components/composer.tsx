@@ -1845,7 +1845,7 @@ export function Composer({
                       Boolean(workspaceChangeBlockedReason) ||
                       undefined
                     }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
                   >
                     {PERMISSION_ORDER.map((value, index) => {
                       const meta = PERMISSION_META[value];
