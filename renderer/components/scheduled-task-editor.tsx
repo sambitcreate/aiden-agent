@@ -263,10 +263,13 @@ export function ScheduledTaskEditor({
     const provider = usableProviders.find((candidate) => candidate.id === choice);
     if (!provider) return;
     setDraft((current) => {
+      // A pinned model only stays pinned when the provider is unchanged; a
+      // hidden pinned model survives re-selecting its own provider but a stale
+      // model from another provider must not leak into the new one.
       const { model } = scheduledTaskProviderModelOptions(
         provider,
         hiddenModelsByProvider,
-        current.model,
+        current.providerId === provider.id ? current.model : undefined,
         readModelSelection().model,
       );
       return { ...current, providerId: provider.id, model };

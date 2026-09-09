@@ -58,6 +58,7 @@ import {
 } from "../lib/scheduled-task-view";
 import { readModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import type {
   McpServer,
   Provider,
@@ -130,12 +131,15 @@ function newTask(
   workspaceId: string | undefined,
   mcpServers: McpServer[],
   providers: Provider[] | undefined,
+  hiddenModelsByProvider: HiddenModelsByProvider | undefined,
   template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
   const mode = settings?.defaultMode ?? "llm";
   const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
   const pinned =
-    mode === "llm" ? scheduledTaskProviderPin(providers, readModelSelection()) : undefined;
+    mode === "llm"
+      ? scheduledTaskProviderPin(providers, readModelSelection(), hiddenModelsByProvider)
+      : undefined;
   return {
     name: template?.name ?? "",
     enabled: true,
@@ -458,7 +462,15 @@ export function ScheduledTasksView() {
                   disabled={manualCreationUnavailable}
                   onSelect={() => {
                     setEditingUpdatedAt(undefined);
-                    setEditing(newTask(settings.data, activeId, mcpServers.data ?? [], providers.data));
+                    setEditing(
+                      newTask(
+                        settings.data,
+                        activeId,
+                        mcpServers.data ?? [],
+                        providers.data,
+                        appSettings.data?.hiddenModelsByProvider,
+                      ),
+                    );
                   }}
                 >
                   <PencilLine className="size-4" />
@@ -736,6 +748,7 @@ export function ScheduledTasksView() {
                                   activeId,
                                   mcpServers.data ?? [],
                                   providers.data,
+                                  appSettings.data?.hiddenModelsByProvider,
                                   template,
                                 ),
                               );

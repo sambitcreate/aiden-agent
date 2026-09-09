@@ -177,14 +177,23 @@ export interface ScheduledTaskModelSelection {
   model: string;
 }
 
-/** Pin a provider only when the stored pair still names a usable model in the live list. */
+/**
+ * Pin a provider only when the stored pair still names a usable, visible model
+ * in the live list, so a new-task prefill never starts from a hidden model.
+ */
 export function scheduledTaskProviderPin(
   providers: Provider[] | undefined,
   selection: ScheduledTaskModelSelection | undefined,
+  hidden: HiddenModelsByProvider | undefined,
 ): { providerId: string; model: string } | undefined {
   if (!selection?.providerId || !selection.model) return undefined;
   const provider = providers?.find((candidate) => candidate.id === selection.providerId);
-  if (!provider || !isUsable(provider) || !provider.models.includes(selection.model)) {
+  if (
+    !provider ||
+    !isUsable(provider) ||
+    !provider.models.includes(selection.model) ||
+    isModelHidden(hidden, provider.id, selection.model)
+  ) {
     return undefined;
   }
   return { providerId: provider.id, model: selection.model };
@@ -196,9 +205,13 @@ export interface ScheduledTaskProviderModelOptions {
 }
 
 /**
- * The editor model list for a concrete provider: only visible models, defaulting
- * to the pinned model, then the live app-selection model, then the provider's
- * default (mirroring how schedule-execution resolves an unpinned model).
+ * The editor model list for a concrete provider. When a pinned model exists it
+ * always stays selected and, if hidden or no longer listed, is prepended to the
+ * visible options so the pinned-but-invisible model remains selectable and
+ * honestly displayed until the person replaces it (mirroring the unavailable
+ * MCP treatment). Only when no model is pinned do the live app-selection model
+ * and then the provider default apply, mirroring how schedule execution
+ * resolves an unpinned model.
  */
 export function scheduledTaskProviderModelOptions(
   provider: Provider,
@@ -206,18 +219,24 @@ export function scheduledTaskProviderModelOptions(
   pinnedModel: string | undefined,
   liveModel: string | undefined,
 ): ScheduledTaskProviderModelOptions {
-  const models = provider.models.filter(
+  const visibleModels = provider.models.filter(
     (candidate) => !isModelHidden(hidden, provider.id, candidate),
   );
+  if (pinnedModel !== undefined) {
+    return {
+      models: visibleModels.includes(pinnedModel)
+        ? visibleModels
+        : [pinnedModel, ...visibleModels],
+      model: pinnedModel,
+    };
+  }
   const model =
-    pinnedModel !== undefined && models.includes(pinnedModel)
-      ? pinnedModel
-      : liveModel !== undefined && models.includes(liveModel)
-        ? liveModel
-        : firstVisibleModelForProvider(hidden, provider.id, provider.models, [
-            provider.defaultModel,
-          ]);
-  return { models, model };
+    liveModel !== undefined && visibleModels.includes(liveModel)
+      ? liveModel
+      : firstVisibleModelForProvider(hidden, provider.id, provider.models, [
+          provider.defaultModel,
+        ]);
+  return { models: visibleModels, model };
 }
 
 /** Warn when an LLM task pins no provider and no usable app default provider exists. */

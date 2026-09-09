@@ -31,3 +31,28 @@ test("provider guardrail is a soft inline warning only for LLM tasks without a p
   );
   assert.match(editor, /No provider pinned\./u);
 });
+
+test("the Model select stays bound to the helper's pinned model and never re-filters its options", () => {
+  const editor = source("./scheduled-task-editor.tsx");
+  assert.match(
+    editor,
+    /value=\{providerModelOptions\.model \?\? ""\}/u,
+    "the Select value is the helper's pinned (possibly hidden) model",
+  );
+  assert.match(editor, /providerModelOptions\.models\.map\(/u);
+  assert.match(
+    editor,
+    /scheduledTaskProviderModelOptions\(\s*pinnedProvider,/u,
+    "the editor delegates pinned-model resolution to the shared helper",
+  );
+  assert.doesNotMatch(
+    editor,
+    /providerModelOptions\.models\.filter\(/u,
+    "the editor must not re-filter the helper's prepended pinned-model list",
+  );
+  assert.match(
+    editor,
+    /current\.providerId === provider\.id \? current\.model : undefined/u,
+    "a stale pinned model from another provider never leaks into the new provider",
+  );
+});

@@ -134,22 +134,41 @@ test("human editor controls build bounded persisted cron expressions", () => {
   assert.equal(cronFromScheduleDraft({ ...base, cadence: "monthly", monthDay: 0 }), "0 9 1 * *");
 });
 
-test("new-task prefill pins only a usable resolved model selection", () => {
+test("new-task prefill pins only a usable, visible resolved model selection", () => {
   const selection = { providerId: "openai", model: "gpt-5.2" };
-  assert.deepEqual(scheduledTaskProviderPin([provider()], selection), selection);
+  assert.deepEqual(scheduledTaskProviderPin([provider()], selection, undefined), selection);
   assert.equal(
-    scheduledTaskProviderPin([provider({ hasKey: false })], selection),
+    scheduledTaskProviderPin([provider({ hasKey: false })], selection, undefined),
     undefined,
     "provider without a required key is not pinned",
   );
   assert.equal(
-    scheduledTaskProviderPin([provider({ models: ["gpt-5.2-mini"] })], selection),
+    scheduledTaskProviderPin([provider({ models: ["gpt-5.2-mini"] })], selection, undefined),
     undefined,
     "a model missing from the live list is not pinned",
   );
-  assert.equal(scheduledTaskProviderPin(undefined, selection), undefined);
-  assert.equal(scheduledTaskProviderPin([provider()], { providerId: "", model: "" }), undefined);
-  assert.equal(scheduledTaskProviderPin([provider()], undefined), undefined);
+  assert.equal(scheduledTaskProviderPin(undefined, selection, undefined), undefined);
+  assert.equal(
+    scheduledTaskProviderPin([provider()], { providerId: "", model: "" }, undefined),
+    undefined,
+  );
+  assert.equal(scheduledTaskProviderPin([provider()], undefined, undefined), undefined);
+});
+
+test("new-task prefill rejects a hidden model but accepts a visible one", () => {
+  const hidden = { openai: ["gpt-5.2"] };
+  const selection = { providerId: "openai", model: "gpt-5.2" };
+  const visible = { providerId: "openai", model: "gpt-5.2-mini" };
+  assert.equal(
+    scheduledTaskProviderPin([provider()], selection, hidden),
+    undefined,
+    "a hidden model must never prefill a new task",
+  );
+  assert.deepEqual(
+    scheduledTaskProviderPin([provider()], visible, hidden),
+    visible,
+    "a visible model still prefills under the same hidden map",
+  );
 });
 
 test("editor model options list only visible models and prefer the pinned model", () => {
@@ -183,6 +202,29 @@ test("editor model options list only visible models and prefer the pinned model"
   assert.deepEqual(
     scheduledTaskProviderModelOptions(provider(), { openai: ["*"] }, undefined, undefined),
     { models: [], model: undefined },
+  );
+});
+
+test("editor model options keep a pinned hidden model selected and selectable until replaced", () => {
+  const hidden = { openai: ["gpt-5.2"] };
+  assert.deepEqual(
+    scheduledTaskProviderModelOptions(provider(), hidden, "gpt-5.2", "gpt-5.2-mini"),
+    { models: ["gpt-5.2", "gpt-5.2-mini"], model: "gpt-5.2" },
+    "a hidden pinned model is reported as the selected model and prepended",
+  );
+  assert.deepEqual(
+    scheduledTaskProviderModelOptions(provider(), hidden, "gpt-5.2", undefined),
+    { models: ["gpt-5.2", "gpt-5.2-mini"], model: "gpt-5.2" },
+  );
+  assert.deepEqual(
+    scheduledTaskProviderModelOptions(provider(), undefined, "removed-model", "gpt-5.2"),
+    { models: ["removed-model", "gpt-5.2", "gpt-5.2-mini"], model: "removed-model" },
+    "a pinned model no longer in the live list stays visible until replaced",
+  );
+  assert.equal(
+    scheduledTaskProviderModelOptions(provider(), hidden, undefined, "gpt-5.2").model,
+    "gpt-5.2-mini",
+    "without a pinned model the visible live selection still wins",
   );
 });
 

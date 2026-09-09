@@ -209,7 +209,7 @@ export type AidenRemoteRouteLabel =
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
-const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
+export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
@@ -265,7 +265,8 @@ const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, reado
   unknown: [],
 };
 
-function remoteRouteTemplate(
+/** Resolve the canonical route template for a classified route and concrete request path. */
+export function remoteRouteTemplate(
   route: AidenRemoteRouteLabel,
   requestPath: string,
 ): string | undefined {
