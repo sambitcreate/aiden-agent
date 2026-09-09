@@ -155,6 +155,8 @@ import {
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { createInMemoryPiSession } from "./pi-session-repository-port.js";
+import type { PiSessionPort } from "./pi-session-port.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
@@ -1808,11 +1810,12 @@ export const llmClient = {
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
-    let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
+    let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
+    let piJournalless = false;
     let piUpgradeCompactionEnabled = false;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
@@ -1821,7 +1824,19 @@ export const llmClient = {
         development: !isPackagedRuntime(),
         behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
       });
-      piSession = await piCompactionSessionStore.openChat(params.chatId, generationChat);
+      const piOpen = await piCompactionSessionStore.openChatIfEligible(
+        params.chatId,
+        generationChat,
+      );
+      if (piOpen.session) {
+        piSession = piOpen.session;
+      } else {
+        // The device rollout classifies this chat as pre-activation or holding
+        // a deferred v3 migration. Run the turn journalless over an in-memory
+        // session: no v4 journal is created and no recovery record is claimed.
+        piJournalless = true;
+        piSession = await createInMemoryPiSession(params.chatId);
+      }
       const recallExtension: PiAgentRuntimeExtension = {
         id: "aiden.chat-history-recall",
         tools: [createVccRecallTool(async () => piSession!)],
@@ -1900,7 +1915,9 @@ export const llmClient = {
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
             ...(memoryExtension ? [memoryExtension] : []),
-            recallExtension,
+            // Journalless runs must not offer VCC recall over an empty
+            // in-memory journal; history recall would be dishonest.
+            ...(piJournalless ? [] : [recallExtension]),
             {
               id: "aiden.bot-runtime-authority",
               beforeProviderRequest: async ({ model: requestModel }) => {
@@ -1920,7 +1937,9 @@ export const llmClient = {
             ...runtimeExtensionSnapshot.extensions,
             ...generationExtensions,
             ...(memoryExtension ? [memoryExtension] : []),
-            recallExtension,
+            // Journalless runs must not offer VCC recall over an empty
+            // in-memory journal; history recall would be dishonest.
+            ...(piJournalless ? [] : [recallExtension]),
           ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
@@ -2162,13 +2181,15 @@ export const llmClient = {
       );
       if (recoveryEffects.length > 0) {
         await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects);
-        for (const effect of recoveryEffects) {
-          await piRuntimeEffectStore.markRecoveryRecorded({
-            effectId: effect.effectId,
-            operationId: effect.operationId,
-            runId: effect.runId,
-            chatId: effect.chatId,
-          });
+        if (!piJournalless) {
+          for (const effect of recoveryEffects) {
+            await piRuntimeEffectStore.markRecoveryRecorded({
+              effectId: effect.effectId,
+              operationId: effect.operationId,
+              runId: effect.runId,
+              chatId: effect.chatId,
+            });
+          }
         }
       }
       currentPromptMessage = currentUser
@@ -2817,10 +2838,12 @@ export const llmClient = {
     const quarantineFailedPiRecovery = (message: string, error: unknown) => {
       piJournalHealthy = false;
       logger.error("pi", message, error);
-      piCompactionSessionStore.quarantineChatUntilRecovered(
-        params.chatId,
-        Promise.reject(new Error("Pi journal recovery requires application restart.")),
-      );
+      if (!piJournalless) {
+        piCompactionSessionStore.quarantineChatUntilRecovered(
+          params.chatId,
+          Promise.reject(new Error("Pi journal recovery requires application restart.")),
+        );
+      }
     };
     const finalizePiTurnPersistence = async (persisted: {
       chat: Chat | undefined;
@@ -2855,7 +2878,9 @@ export const llmClient = {
             await syncChatMessagesToPiSession(piJournal, [visibleAssistant], model, supportsImages);
           }
         });
-        piCompactionSessionStore.quarantineChatUntilRecovered(params.chatId, recovery);
+        if (!piJournalless) {
+          piCompactionSessionStore.quarantineChatUntilRecovered(params.chatId, recovery);
+        }
         return;
       }
       const turnLease = piTurnLease;
@@ -2932,7 +2957,9 @@ export const llmClient = {
           markerAlreadyPersisted: reconcileAbandonedVisibleAssistant,
         });
         try {
-          await piRuntimeEffectStore.acknowledgeChatEffectsDurable(params.chatId);
+          if (!piJournalless) {
+            await piRuntimeEffectStore.acknowledgeChatEffectsDurable(params.chatId);
+          }
         } catch (error) {
           // The Pi turn is already durable. Leaving the effect unacknowledged
           // makes startup install a conservative no-repeat boundary.

@@ -536,6 +536,15 @@ export interface PiCompactionSessionStoreOptions {
   };
 }
 
+/**
+ * Outcome of the rollout-aware open probe. Generation callers run the turn
+ * journalless when the probe reports a reason instead of a session, while
+ * `openChat` keeps its fail-closed throws for background callers.
+ */
+export type PiOpenChatIfEligibleResult =
+  | { session: PiSessionPort<PiPersistentSessionMetadata> }
+  | { session: undefined; reason: "v4_creation_rollout" | "legacy_migration_deferred" };
+
 /** Durable, private Pi JSONL journals keyed one-to-one with Aiden chats. */
 export class PiCompactionSessionStore {
   private repositoryPromise?: Promise<{
@@ -543,10 +552,7 @@ export class PiCompactionSessionStore {
     root: string;
   }>;
   private readonly sessions = new Map<string, PiSessionPort<PiPersistentSessionMetadata>>();
-  private readonly opening = new Map<
-    string,
-    Promise<PiSessionPort<PiPersistentSessionMetadata>>
-  >();
+  private readonly opening = new Map<string, Promise<PiOpenChatIfEligibleResult>>();
   private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
 
@@ -650,103 +656,147 @@ export class PiCompactionSessionStore {
     const existing = this.sessions.get(chatId);
     if (existing) return existing;
     const inFlight = this.opening.get(chatId);
+    if (inFlight) return this.sessionFromOpenChatOutcome(await inFlight);
+
+    const opening = this.openChatInner(chatId, chat);
+    this.opening.set(chatId, opening);
+    try {
+      return this.sessionFromOpenChatOutcome(await opening);
+    } finally {
+      this.opening.delete(chatId);
+    }
+  }
+
+  /**
+   * Rollout-aware open probe for the generation path. Mirrors {@link openChat}
+   * exactly: invalid identities, quarantined chats, and migration corruption
+   * still throw the same errors. The two rollout gates are reported as a
+   * structured reason instead of throwing, and a journal is only ever created
+   * through the shared open continuation (`openChatInner`).
+   */
+  async openChatIfEligible(
+    chatId: string,
+    chat?: { createdAt: number },
+  ): Promise<PiOpenChatIfEligibleResult> {
+    if (!SAFE_SESSION_ID.test(chatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    this.assertNotQuarantined(chatId);
+    const existing = this.sessions.get(chatId);
+    if (existing) return { session: existing };
+    const inFlight = this.opening.get(chatId);
     if (inFlight) return inFlight;
 
-    const opening = (async () => {
-      const { repo, root } = await this.repository();
-      const rollout = await this.options.rollout?.load();
-      const rolloutOptions = this.options.rollout && {
-        development: this.options.rollout.development,
-        behaviorEnabled: this.options.rollout.behaviorEnabled,
-      };
-      const migrationFailures: Array<{ path: string; error: unknown }> = [];
-      const deferredMigrations: string[] = [];
-      const migrationPaths = await findMigrationJournals(root, chatId);
-      for (const migrationPath of migrationPaths) {
-        try {
-          if (rollout && rolloutOptions) {
-            const header = await readJournalPrefix(migrationPath);
-            const legacySource = journalHeaderOwnsChat(header, chatId)
-              ? migrationPath
-              : `${migrationPath}.v3-backup`;
-            const legacy = decodeLegacyPiSession(await readFile(legacySource, "utf8"));
-            if (!piUpgradeLegacyMigrationEligible(rollout, legacy.entries.length, rolloutOptions)) {
-              deferredMigrations.push(migrationPath);
-              continue;
-            }
-          }
-          const migration = await migratePiSessionJournal(migrationPath, chatId);
-          await this.rememberPath(root, chatId, migration.receipt.backupPath);
-          await this.rememberPath(root, chatId, migration.receiptPath);
-        } catch (error) {
-          migrationFailures.push({ path: migrationPath, error });
-        }
-      }
-      const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
-      const matches = (await repo.list()).filter(
-        (metadata) =>
-          metadata.id === chatId &&
-          metadata.metadata?.kind === SESSION_METADATA_KIND &&
-          !failedPaths.has(path.resolve(metadata.path)),
-      );
-      // Pi lists newest sessions first. Validate the whole body and quarantine
-      // a malformed duplicate before falling back to the next valid journal.
-      let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
-      for (const metadata of matches) {
-        try {
-          const candidate = await repo.open(metadata);
-          await candidate.getBranch();
-          session = candidate;
-          break;
-        } catch {
-          if (await repairTornFinalLine(metadata.path).catch(() => false)) {
-            try {
-              const repaired = await repo.open(metadata);
-              await repaired.getBranch();
-              session = repaired;
-              break;
-            } catch {
-              // A complete-but-invalid prefix is not safe to guess at.
-            }
-          }
-          await this.quarantine(root, chatId, metadata.path);
-        }
-      }
-      if (session) {
-        for (const failure of migrationFailures) {
-          await this.quarantine(root, chatId, failure.path);
-        }
-      } else if (migrationFailures[0]) {
-        throw migrationFailures[0].error;
-      }
-      if (!session && deferredMigrations.length > 0) {
-        throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
-      }
-      if (
-        !session && rollout && rolloutOptions &&
-        !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
-      ) {
-        throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
-      }
-      session ??= await repo.create({
-        id: chatId,
-        cwd: root,
-        metadata: { kind: SESSION_METADATA_KIND, chatId },
-      });
-      await recoverUncommittedTransaction(session);
-      const persisted = await session.getMetadata();
-      await chmod(path.dirname(persisted.path), 0o700);
-      await chmod(persisted.path, 0o600);
-      await this.rememberPath(root, chatId, persisted.path);
-      this.sessions.set(chatId, session);
-      return session;
-    })();
+    const opening = this.openChatInner(chatId, chat);
     this.opening.set(chatId, opening);
     try {
       return await opening;
     } finally {
       this.opening.delete(chatId);
     }
+  }
+
+  private sessionFromOpenChatOutcome(
+    outcome: PiOpenChatIfEligibleResult,
+  ): PiSessionPort<PiPersistentSessionMetadata> {
+    if (outcome.session) return outcome.session;
+    if (outcome.reason === "legacy_migration_deferred") {
+      throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
+    }
+    throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
+  }
+
+  private async openChatInner(
+    chatId: string,
+    chat: { createdAt: number } | undefined,
+  ): Promise<PiOpenChatIfEligibleResult> {
+    const { repo, root } = await this.repository();
+    const rollout = await this.options.rollout?.load();
+    const rolloutOptions = this.options.rollout && {
+      development: this.options.rollout.development,
+      behaviorEnabled: this.options.rollout.behaviorEnabled,
+    };
+    const migrationFailures: Array<{ path: string; error: unknown }> = [];
+    const deferredMigrations: string[] = [];
+    const migrationPaths = await findMigrationJournals(root, chatId);
+    for (const migrationPath of migrationPaths) {
+      try {
+        if (rollout && rolloutOptions) {
+          const header = await readJournalPrefix(migrationPath);
+          const legacySource = journalHeaderOwnsChat(header, chatId)
+            ? migrationPath
+            : `${migrationPath}.v3-backup`;
+          const legacy = decodeLegacyPiSession(await readFile(legacySource, "utf8"));
+          if (!piUpgradeLegacyMigrationEligible(rollout, legacy.entries.length, rolloutOptions)) {
+            deferredMigrations.push(migrationPath);
+            continue;
+          }
+        }
+        const migration = await migratePiSessionJournal(migrationPath, chatId);
+        await this.rememberPath(root, chatId, migration.receipt.backupPath);
+        await this.rememberPath(root, chatId, migration.receiptPath);
+      } catch (error) {
+        migrationFailures.push({ path: migrationPath, error });
+      }
+    }
+    const failedPaths = new Set(migrationFailures.map((failure) => path.resolve(failure.path)));
+    const matches = (await repo.list()).filter(
+      (metadata) =>
+        metadata.id === chatId &&
+        metadata.metadata?.kind === SESSION_METADATA_KIND &&
+        !failedPaths.has(path.resolve(metadata.path)),
+    );
+    // Pi lists newest sessions first. Validate the whole body and quarantine
+    // a malformed duplicate before falling back to the next valid journal.
+    let session: PiSessionPort<PiPersistentSessionMetadata> | undefined;
+    for (const metadata of matches) {
+      try {
+        const candidate = await repo.open(metadata);
+        await candidate.getBranch();
+        session = candidate;
+        break;
+      } catch {
+        if (await repairTornFinalLine(metadata.path).catch(() => false)) {
+          try {
+            const repaired = await repo.open(metadata);
+            await repaired.getBranch();
+            session = repaired;
+            break;
+          } catch {
+            // A complete-but-invalid prefix is not safe to guess at.
+          }
+        }
+        await this.quarantine(root, chatId, metadata.path);
+      }
+    }
+    if (session) {
+      for (const failure of migrationFailures) {
+        await this.quarantine(root, chatId, failure.path);
+      }
+    } else if (migrationFailures[0]) {
+      throw migrationFailures[0].error;
+    }
+    if (!session && deferredMigrations.length > 0) {
+      return { session: undefined, reason: "legacy_migration_deferred" };
+    }
+    if (
+      !session && rollout && rolloutOptions &&
+      !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
+    ) {
+      return { session: undefined, reason: "v4_creation_rollout" };
+    }
+    session ??= await repo.create({
+      id: chatId,
+      cwd: root,
+      metadata: { kind: SESSION_METADATA_KIND, chatId },
+    });
+    await recoverUncommittedTransaction(session);
+    const persisted = await session.getMetadata();
+    await chmod(path.dirname(persisted.path), 0o700);
+    await chmod(persisted.path, 0o600);
+    await this.rememberPath(root, chatId, persisted.path);
+    this.sessions.set(chatId, session);
+    return { session };
   }
 
   async deleteChat(chatId: string): Promise<void> {

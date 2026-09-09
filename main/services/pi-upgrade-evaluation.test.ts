@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,20 @@ import { runPiUpgradeReplayCases } from "./pi-upgrade-replay-runner.js";
 
 async function passingMeasurements(): Promise<PiUpgradeReplayMeasurement[]> {
   return runPiUpgradeReplayCases();
+}
+
+async function journalFilesUnder(root: string): Promise<string[]> {
+  const matches: string[] = [];
+  const directories = [root];
+  while (directories.length > 0) {
+    const directory = directories.pop()!;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) directories.push(candidate);
+      else if (entry.name.endsWith(".jsonl")) matches.push(candidate);
+    }
+  }
+  return matches;
 }
 
 test("executable replays emit the complete passing scorecard from observed outcomes", async () => {
@@ -194,6 +208,24 @@ test("operator advancement command is registered and uses the guarded store", as
   assert.match(llmText, /piUpgradeChatBehaviorEligible/u);
   assert.match(llmText, /enabled: piUpgradeCompactionEnabled/u);
   assert.match(lifecycleText, /compactionEligible/u);
+
+  // Generation must run rollout-ineligible chats journalless instead of
+  // throwing, and the durable stores must stay fail-closed for those runs.
+  assert.match(llmText, /openChatIfEligible/u);
+  assert.match(lifecycleText, /openChatIfEligible/u);
+  assert.match(llmText, /createInMemoryPiSession/u);
+  assert.match(llmText, /piJournalless = true/u);
+  assert.match(llmText, /!piJournalless[\s\S]{0,200}markRecoveryRecorded/u);
+  assert.match(llmText, /!piJournalless[\s\S]{0,160}acknowledgeChatEffectsDurable/u);
+  const quarantineSites = [...llmText.matchAll(/piCompactionSessionStore\.quarantineChatUntilRecovered/gu)];
+  assert.equal(quarantineSites.length, 2);
+  for (const site of quarantineSites) {
+    assert.match(
+      llmText.slice(Math.max(0, (site.index ?? 0) - 200), site.index ?? 0),
+      /!piJournalless/u,
+      "every durable quarantine call must be gated by the journalless flag",
+    );
+  }
 });
 
 test("production journal creation and legacy migration obey the device rollout without rewriting deferred v3", async (t) => {
@@ -244,4 +276,76 @@ test("production journal creation and legacy migration obey the device rollout w
     rollout: { load: async () => migrationPolicy, development: false, behaviorEnabled: false },
   });
   await assert.rejects(rolledBack.openChat("rollback-new", { createdAt: 2 }), /outside the active device rollout stage/u);
+});
+
+test("openChatIfEligible probes the rollout without creating or rewriting journals", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-open-eligible-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const policy = { version: 1 as const, stage: "new_chats" as const, activatedAt: 1, revision: 1 };
+
+  // (a) An eligible new chat delegates to the shared open continuation: a
+  // session comes back and a v4 journal is created on disk.
+  const createdRoot = path.join(temporary, "created");
+  await mkdir(createdRoot, { recursive: true });
+  const created = new PiCompactionSessionStore({
+    root: async () => createdRoot,
+    rollout: { load: async () => policy, development: false, behaviorEnabled: true },
+  });
+  const createdOutcome = await created.openChatIfEligible("eligible-new", { createdAt: 2 });
+  assert.ok(createdOutcome.session);
+  const createdPath = (await createdOutcome.session.getMetadata()).path;
+  assert.ok((await stat(createdPath)).isFile());
+  assert.equal(JSON.parse((await readFile(createdPath, "utf8")).split("\n")[0]!).version, 4);
+
+  // (b) A pre-activation journal-less chat is reported ineligible and no
+  // journal file appears on disk.
+  const preActivationRoot = path.join(temporary, "pre-activation");
+  await mkdir(preActivationRoot, { recursive: true });
+  const preActivation = new PiCompactionSessionStore({
+    root: async () => preActivationRoot,
+    rollout: { load: async () => policy, development: false, behaviorEnabled: true },
+  });
+  assert.deepEqual(await preActivation.openChatIfEligible("pre-activation", { createdAt: 0 }), {
+    session: undefined,
+    reason: "v4_creation_rollout",
+  });
+  assert.deepEqual(await journalFilesUnder(preActivationRoot), []);
+
+  // (c) A deferred-v3 chat is reported legacy_migration_deferred with its v3
+  // bytes byte-identical afterward.
+  const legacyRoot = path.join(temporary, "legacy-deferred");
+  const legacyDirectory = path.join(legacyRoot, "--legacy--");
+  await mkdir(legacyDirectory, { recursive: true });
+  const journal = path.join(legacyDirectory, "legacy.jsonl");
+  const fixture = (await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")).split("\n");
+  const header = JSON.parse(fixture[0]!) as Record<string, unknown>;
+  header.id = "deferred-legacy";
+  header.cwd = legacyRoot;
+  header.metadata = { kind: "aiden-chat-compaction-v1", chatId: "deferred-legacy" };
+  fixture[0] = JSON.stringify(header);
+  const original = fixture.join("\n");
+  await writeFile(journal, original, { mode: 0o600 });
+  const deferred = new PiCompactionSessionStore({
+    root: async () => legacyRoot,
+    rollout: { load: async () => policy, development: false, behaviorEnabled: true },
+  });
+  assert.deepEqual(await deferred.openChatIfEligible("deferred-legacy", { createdAt: 0 }), {
+    session: undefined,
+    reason: "legacy_migration_deferred",
+  });
+  assert.equal(await readFile(journal, "utf8"), original);
+
+  // (d) behaviorEnabled=false rolls the gate back: an otherwise-eligible new
+  // chat is reported v4_creation_rollout and no journal is created.
+  const rollbackRoot = path.join(temporary, "rollback");
+  await mkdir(rollbackRoot, { recursive: true });
+  const rolledBack = new PiCompactionSessionStore({
+    root: async () => rollbackRoot,
+    rollout: { load: async () => policy, development: false, behaviorEnabled: false },
+  });
+  assert.deepEqual(await rolledBack.openChatIfEligible("rollback-new", { createdAt: 2 }), {
+    session: undefined,
+    reason: "v4_creation_rollout",
+  });
+  assert.deepEqual(await journalFilesUnder(rollbackRoot), []);
 });

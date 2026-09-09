@@ -88,6 +88,10 @@ function fakeDependencies() {
   const calls = {
     validatedScripts: [] as Array<{ script: string; workspaceRoot?: string }>,
   };
+  const settings: { lastProviderId?: string; lastModel?: string } = {
+    lastProviderId: "local-provider",
+    lastModel: "local-model",
+  };
   const workspace: Workspace = {
     id: "workspace-1",
     name: "Project",
@@ -164,8 +168,24 @@ function fakeDependencies() {
       return `${input.workspaceRoot}/.aiden/scripts/${input.script}`;
     },
     isSchedulingEnabled: async () => true,
+    getSettings: async () => structuredClone(settings),
+    selectionProvider: async (providerId) =>
+      providerId === "local-provider"
+        ? {
+            id: "local-provider",
+            kind: "openai",
+            label: "Local Provider",
+            baseUrl: "http://localhost:1234/v1",
+            models: ["local-model"],
+            modelMetadata: { "local-model": { source: "provider", name: "Local Model" } },
+            defaultModel: "local-model",
+            needsKey: false,
+            deployment: "local",
+            isBuiltin: true,
+          }
+        : undefined,
   };
-  return { dependencies, tasks, calls };
+  return { dependencies, tasks, calls, settings };
 }
 
 function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
@@ -1384,4 +1404,107 @@ test("schedule mutations require live approval without exposing prompt contents"
     }),
     /mode to script, access to full/u,
   );
+});
+
+test("standard schedule creation rejects LLM tasks with no chat model and no app default", async () => {
+  const fake = fakeDependencies();
+  fake.settings.lastProviderId = undefined;
+  fake.settings.lastModel = undefined;
+  const tool = createScheduleTaskTool(
+    { kind: "standard", defaultWorkspaceId: "workspace-1" },
+    fake.dependencies,
+  );
+  await assert.rejects(
+    tool.execute("create", {
+      action: "create",
+      name: "Doomed brief",
+      cron: "0 9 * * *",
+      prompt: "Summarize updates.",
+    }),
+    /Choose a provider before creating this scheduled task \(no app default is set\)/u,
+  );
+  assert.equal(fake.tasks.length, 0);
+});
+
+test("standard schedule creation pins the attached chat model selection", async () => {
+  const fake = fakeDependencies();
+  fake.settings.lastProviderId = undefined;
+  fake.settings.lastModel = undefined;
+  const args = {
+    action: "create" as const,
+    name: "Pinned brief",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize updates.",
+  };
+  const prepared = await prepareStandardScheduleApproval(
+    args,
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
+  assert.match(prepared.summary, /Local Provider \/ Local Model/u);
+  const tool = createScheduleTaskTool(
+    {
+      kind: "standard",
+      defaultWorkspaceId: "workspace-1",
+      modelSelection: ASSISTANT_MODEL_SELECTION,
+    },
+    fake.dependencies,
+  );
+  await tool.execute("create-pinned", args);
+  assert.equal(fake.tasks[0]?.providerId, "local-provider");
+  assert.equal(fake.tasks[0]?.model, "local-model");
+});
+
+test("standard schedule creation falls back to the app default without pinning it", async () => {
+  const fake = fakeDependencies();
+  const args = {
+    action: "create" as const,
+    name: "Default brief",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize updates.",
+  };
+  const prepared = await prepareStandardScheduleApproval(args, undefined, fake.dependencies);
+  assert.match(prepared.summary, /App default/u);
+  const tool = createScheduleTaskTool(
+    { kind: "standard", defaultWorkspaceId: "workspace-1" },
+    fake.dependencies,
+  );
+  await tool.execute("create-default", args);
+  assert.equal(fake.tasks[0]?.providerId, undefined);
+  assert.equal(fake.tasks[0]?.model, undefined);
+});
+
+test("standard schedule edits preserve a pinned task provider", async () => {
+  const fake = fakeDependencies();
+  fake.settings.lastProviderId = undefined;
+  fake.settings.lastModel = undefined;
+  fake.tasks.push({
+    ...scheduledTask(
+      {
+        name: "Pinned brief",
+        enabled: true,
+        mode: "llm",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        prompt: "Summarize updates.",
+        permission: "read-only",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      "task-1",
+    ),
+    updatedAt: 5,
+  });
+  const tool = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  await tool.execute("update", {
+    action: "update",
+    id: "task-1",
+    taskName: "Pinned brief",
+    expectedUpdatedAt: 5,
+    name: "Pinned brief renamed",
+  });
+  assert.equal(fake.tasks[0]?.providerId, "provider-1");
+  assert.equal(fake.tasks[0]?.model, "model-1");
 });

@@ -2351,3 +2351,44 @@ test("unknown routes and query aliases fail without reflecting untrusted input",
     await app.close();
   }
 });
+
+test("request logs carry the HTTP method and a query-free canonical route template", async () => {
+  const app = await fixture({ capabilities: ["chat:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    // A matched route failing after resolution still reports the concrete
+    // method and canonical route template (never the literal chat id).
+    const denied = await fetch(`${app.base}/chats/chat-1`, {
+      headers: { "aiden-protocol-version": "1" },
+    });
+    assert.equal(denied.status, 401);
+    let entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "chat");
+    assert.equal(entry.routePath, "/chats/:id");
+    assert.equal(JSON.stringify(app.logs).includes("chat-1"), false);
+
+    // Query strings are never reflected into the recorded route.
+    const listed = await fetch(`${app.base}/chats?workspaceId=workspace-1`, { headers });
+    assert.equal(listed.status, 200);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.routePath, "/chats");
+    assert.equal(JSON.stringify(app.logs).includes("workspaceId"), false);
+    assert.equal(JSON.stringify(app.logs).includes("?"), false);
+
+    // Unknown routes omit the canonical route and never echo the raw path.
+    const missing = await fetch(`${app.base}/missing`);
+    assert.equal(missing.status, 404);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "unknown");
+    assert.equal("routePath" in entry, false);
+    assert.equal(JSON.stringify(app.logs).includes("/missing"), false);
+  } finally {
+    await app.close();
+  }
+});

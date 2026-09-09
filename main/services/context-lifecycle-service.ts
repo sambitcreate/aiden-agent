@@ -51,7 +51,11 @@ export interface ContextLifecycleServiceDeps {
   listChatsByBot(botId: string): Promise<readonly ChatMeta[]>;
   isBotArchived(botId: string): Promise<boolean>;
   beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
-  openSession(chatId: string): Promise<PiSessionPort>;
+  /**
+   * Opens the durable Pi journal for the chat. Rollout-ineligible chats resolve
+   * `null` instead of throwing, so compaction closes benignly.
+   */
+  openSession(chatId: string): Promise<PiSessionPort | null>;
   resolveRuntime(
     providerId: string,
     model: string,
@@ -170,6 +174,9 @@ export class ContextLifecycleService {
       }
 
       let session = await this.deps.openSession(chat.id);
+      if (!session) {
+        return { compacted: false, reason: "already_compact" };
+      }
       await syncChatMessagesToPiSession(
         session,
         chat.messages,
