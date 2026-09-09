@@ -136,7 +136,7 @@ export function ProviderIcon({
   const slug = resolveProviderIconSlug(providerId, modelId);
   const iconUrl = slug ? PROVIDER_ICON_URLS[slug] : undefined;
 
-  if (!iconUrl) {
+  if (!slug || !iconUrl) {
     const initial = providerLabel.trim().charAt(0).toLocaleUpperCase() || "?";
     return (
       <span

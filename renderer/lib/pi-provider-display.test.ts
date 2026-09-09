@@ -222,6 +222,7 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
   assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
   assert.match(
     providerIconSource,
     /if \(artwork\) \{\s*return \(\s*<ThemedProviderMark\s*iconUrl=\{providerArtworkDataUrl\(artwork\)\}\s*mark="custom"/u,
