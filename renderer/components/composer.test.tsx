@@ -296,9 +296,9 @@ test("model picker details sit beside the menu without overlapping the pad", () 
   );
   assert.match(pad, /import \{ ProviderIcon \} from "\.\/provider-icon"/u);
   assert.match(pad, /artwork=\{puckPoint\.providerArtwork\}/u);
-  assert.match(styles, /\.model-pad-knob\s*\{[\s\S]*color: #111110/u);
+  assert.match(styles, /\.model-pad-knob\s*\{[^}]*color: #111110/u);
   assert.match(
     styles,
-    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[\s\S]*color: var\(--accent-foreground\)/u,
+    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--accent-foreground\)/u,
   );
 });

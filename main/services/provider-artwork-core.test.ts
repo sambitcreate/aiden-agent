@@ -86,11 +86,22 @@ test("invalid artwork is dropped, and oversized PNG bytes are re-encoded", () =>
     undefined,
   );
 
+  const oversizedPng = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(oversizedPng);
+  Buffer.from("IHDR", "ascii").copy(oversizedPng, 12);
+  oversizedPng.writeUInt32BE(65, 16);
+  oversizedPng.writeUInt32BE(65, 20);
+  const oversizedBase64 = oversizedPng.toString("base64");
+  assert.equal(
+    normalizeProviderArtwork({ mimeType: "image/png", dataBase64: oversizedBase64 }),
+    undefined,
+  );
+
   const recovered = persistStoredProviderArtwork(
-    { dataBase64: VALID_PNG },
+    { mimeType: "image/png", dataBase64: oversizedBase64 },
     (input) => {
       assert.equal(input.name, "icon.png");
-      assert.equal(input.dataBase64, VALID_PNG);
+      assert.equal(input.dataBase64, oversizedBase64);
       return { mimeType: "image/png", dataBase64: VALID_PNG };
     },
   );
