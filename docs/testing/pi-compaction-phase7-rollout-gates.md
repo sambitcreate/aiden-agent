@@ -3,6 +3,10 @@
 Status: automated evaluation and signed development-package acceptance pass;
 installed production and credentialed-provider evidence remains **Pending** until
 the release owner runs the steps below against the installed candidate.
+Generation is never blocked by the rollout gates at any stage:
+rollout-ineligible chats generate **journalless** over an in-memory session
+instead of failing (see "Journalless generation" below), so advancing the
+stage is a durability decision, not an availability one.
 
 ## Device-local evaluation receipt
 
@@ -46,7 +50,42 @@ Repeat only after observing the current stage and completing the next cohort's a
 
 ## Rollback
 
-Set `AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED=0` before app startup and restart Aiden. This disables new v4 journal creation, legacy migration, automatic/manual Pi checkpoint generation, and durable-memory retrieval or writes. Existing v4 journals remain readable and are not downgraded or rewritten. Remove the override and restart to resume the persisted rollout stage.
+Set `AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED=0` before app startup and restart Aiden. This disables new v4 journal creation, legacy migration, automatic/manual Pi checkpoint generation, and durable-memory retrieval or writes. Existing v4 journals remain readable and are not downgraded or rewritten. With the journalless safety net, chats that have no existing v4 journal continue to generate in the rollback environment — journalless over an in-memory session — rather than failing; durable compaction, memory, and history recall stay disabled for them until the override is removed and the persisted rollout stage resumes. Remove the override and restart to resume the persisted rollout stage.
+
+## Journalless generation (safety net)
+
+`PiCompactionSessionStore.openChatIfEligible()` probes eligibility and reports a
+structured reason instead of throwing; `openChat()` keeps its fail-closed
+contract for background callers. When the probe reports a reason, the
+generation runs over an in-memory session and **no durable journal is created
+and no legacy migration runs** — the fail-closed rollout contract is preserved
+verbatim.
+
+It engages exactly when a chat cannot yet hold a durable journal:
+
+- Stage `new_chats` (production default): chats created before the policy's
+  `activatedAt` (the first launch of the Pi-upgrade build on that device).
+- Any stage: chats whose legacy v3 journal is still deferred (its cohort has
+  not reached `migrated_low_risk_chats`, or it exceeds that stage's 500-entry
+  limit). The v3 bytes are never touched.
+- The rollback environment (`AIDEN_PI_UPGRADE_BEHAVIOR_ENABLED=0`): chats
+  without an existing v4 journal.
+
+Semantics of a journalless run: the request path is identical, visible turns
+persist through the chat store exactly as with journaled runs, but VCC history
+recall is omitted (nothing durable to recall), todo replay reads the empty
+in-memory journal (the todo panel reports the snapshot unavailable),
+automatic and manual Pi checkpoints stay cohort-disabled, effect-recovery
+boundaries are written only in-process and never acknowledged as durable, and
+the durable store can never be quarantined by an in-memory failure.
+
+Verify on a device (any pre-activation chat): send a message — generation
+succeeds; no new journal appears for that chat under the app's
+`pi-compaction-sessions` storage; its todo snapshot reports unavailable;
+requesting compaction resolves as already compact enough. Advancing the stage
+(below) restores durable journals — creation becomes unconditional at
+`migrated_low_risk_chats`, legacy v3 migration unlocks for journals of up to
+500 entries, and later stages follow the cohort ladder to `v4_only`.
 
 ## Provider-native re-audit
 
