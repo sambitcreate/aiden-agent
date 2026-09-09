@@ -222,6 +222,14 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
   assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.match(
+    providerIconSource,
+    /if \(artwork\) \{[\s\S]*<ThemedProviderMark[\s\S]*mark="custom"/u,
+  );
+  assert.doesNotMatch(
+    providerIconSource,
+    /data-provider-icon="custom"/u,
+  );
   assert.doesNotMatch(
     `${providersSettingsSource}\n${codexProviderSettingsSource}`,
     /bg-surface-subtle/u,
