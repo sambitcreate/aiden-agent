@@ -210,7 +210,7 @@ function SettingsDeviceRow({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{device.name}</Text>
         <Text variant="small" color="secondary" className="block">
-          {device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
+          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
             ? "Finishing connection"
             : `${state === "previous" ? "Removed" : "Last seen"} ${friendlyDate(timestamp)}`}
         </Text>

@@ -55,6 +55,18 @@ function fixture(initial?: unknown) {
   };
 }
 
+test("desktop device records round-trip without changing existing mobile grants", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  for (const type of ["mac", "linux"] as const) {
+    await state.registry.issueDevice({ name: type, type, clientVersion: "1" });
+  }
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  assert.deepEqual((await restored.registry.listDevices()).map((device) => device.type), ["mac", "linux"]);
+  assert.ok(state.stored().devices.every((device) => !device.acceptsBotCapabilities));
+});
+
 test("remote device credentials persist only digests and authenticate with capability state", async () => {
   const state = fixture();
   await state.registry.initialize();

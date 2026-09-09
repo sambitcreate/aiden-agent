@@ -379,3 +379,15 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+
+## 2026-09-09 — Desktop remote-control planning
+
+- This checkout has no `.memory/` directory despite AGENTS.md referring to it; use the checked-in plan inventory, remote API documentation, and verified source for planning context.
+- Agent phase handoff can briefly reject a new planner with `agent thread limit reached` after explorers report completion; release exploration work before retrying the planning phase.
+
+## 2026-09-09 — Desktop peer foundation
+
+- Real-router HTTPS pairing caught a missing mandatory protocol-version header that isolated transport mocks missed; retain production-router coverage.
+- Pairing network I/O under the registry mutex delayed disconnects on other hosts; reserve identity under lock and perform network work outside it.
+- Xcode found the physical iPad but could not mount its developer disk image, so focused XCTest execution remained blocked; no prohibited simulator fallback was used.
+- Sharing an in-flight identity request also shared its first caller’s cancellation. Cache completed verification only and retain per-request abort lifetimes.
