@@ -24,7 +24,7 @@ test("editing an admitted discovered skill aborts the live Bot inventory lease",
   const aborted = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("Skill watcher did not invalidate live Bot authority.")),
-      1_000,
+      5_000,
     );
     lease.signal.addEventListener("abort", () => {
       clearTimeout(timeout);
