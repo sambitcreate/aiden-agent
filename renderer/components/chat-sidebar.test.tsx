@@ -38,10 +38,11 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   assert.doesNotMatch(section, /variant="accent"/u);
 });
 
-test("newAgent delegates explicit creation to the active workspace", () => {
+test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
-  assert.match(sidebar, /chatsApi\.create\(\{ workspaceId \}\)/u);
+  assert.match(sidebar, /createChatDraft\(workspaceId\)/u);
+  assert.doesNotMatch(sidebar, /chatsApi\.create\(/u);
   assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
   assert.match(sidebar, /if \(!activeId\) return;/u);
   assert.match(sidebar, /await newAgentInWorkspace\(activeId\)/u);

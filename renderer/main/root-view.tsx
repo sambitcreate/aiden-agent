@@ -1,3 +1,4 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -138,9 +139,13 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      const chat = await chatsApi.create({ workspaceId: activeId });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
-      await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      const chat = createChatDraft(activeId).chat;
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      } catch (error) {
+        discardChatDraft(chat.id);
+        throw error;
+      }
     },
     Boolean(activeId) && !appendReconciliationRequired,
   );

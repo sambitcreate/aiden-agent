@@ -122,7 +122,9 @@ test("session navigation seeds caches, respects route intent, and restores desti
   );
   assert.match(worktree, /setQueryData<Workspace\[\]>/u);
   assert.match(worktree, /chatIdRef\.current !== sourceChatId/u);
-  assert.match(worktree, /The worktree was created, but its chat could not be created/u);
+  assert.match(worktree, /The worktree was created, but Aiden could not open its new chat/u);
+  assert.match(worktree, /createChatDraft\(workspace.id\)/u);
+  assert.doesNotMatch(worktree, /chatsApi\.create\(/u);
   assert.match(worktree, /await navigate/u);
   assert.match(worktree, /requestAnimationFrame\(\(\) => composerRef\.current\?\.focus/u);
 });
@@ -313,4 +315,27 @@ test("a revisited detached stream restores the responding window from its last t
     pane,
     /streamingText:[\s\S]{0,180}detachedGenerationDraining[\s\S]{0,120}displayedStreamingText/u,
   );
+});
+
+test("every ordinary new-agent entry opens a draft without eager creation", () => {
+  for (const file of ["./chat-layout.tsx", "./root-view.tsx", "./chat-pane.tsx", "../components/chat-sidebar.tsx"]) {
+    const implementation = source(file);
+    assert.match(implementation, /createChatDraft\(/u, file);
+    assert.doesNotMatch(implementation, /chatsApi\s*\.create\(/u, file);
+  }
+});
+
+test("first-message promotion seeds the real cache before releasing draft state without navigation", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  assert.match(pane, /useChat\(draft \? undefined : chatId\)/u);
+  assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
+  const seed = send.indexOf("qc.setQueryData(queryKeys.chat(chatId), updated)");
+  const promote = send.indexOf("finishChatDraftSend(chatId, true)");
+  const ownerGuard = send.indexOf("if (!mountedRef.current || chatIdRef.current !== chatId");
+  const start = send.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
+  assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
+  assert.doesNotMatch(send, /navigate\(/u);
+  assert.match(pane, /enabled: !draft && ready/u);
 });

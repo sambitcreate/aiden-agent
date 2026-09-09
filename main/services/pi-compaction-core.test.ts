@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1204,6 +1204,84 @@ test("durable journals are private and delete with their chat", async (t) => {
 
   await store.deleteChat("chat-privacy-test");
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+test("private history inspection preserves indexed, current, legacy, and quarantined journals without opening sessions", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new PiCompactionSessionStore({
+    root: async () => { throw new Error("inspection must not initialize the repository"); },
+    readOnlyRoot: async () => root,
+  });
+  assert.equal(await store.hasChatHistory("empty"), false);
+  assert.deepEqual(await readdir(root), []);
+  await writeFile(path.join(root, "aiden-journal-index.json"), JSON.stringify({ version: 1, chats: { indexed: [path.join(root, "old.jsonl.corrupt-1")] } }));
+  assert.equal(await store.hasChatHistory("indexed"), true);
+  await unlink(path.join(root, "aiden-journal-index.json"));
+  for (const [chatId, file, version] of [
+    ["current", "current.jsonl", 4],
+    ["legacy", "legacy.jsonl", 3],
+    ["backup", "legacy.jsonl.v3-backup", 3],
+    ["quarantine", "current.jsonl.corrupt-1", 4],
+  ] as const) {
+    const header = JSON.stringify({
+      ...(version === 4 ? { kind: "header" } : { type: "session" }), version, id: chatId,
+      metadata: { kind: "aiden-chat-compaction-v1", chatId },
+    });
+    await writeFile(path.join(root, file), `${header}\n{"private":"untouched"}\n`);
+    assert.equal(await store.hasChatHistory(chatId), true);
+    assert.equal(await readFile(path.join(root, file), "utf8"), `${header}\n{"private":"untouched"}\n`);
+  }
+  assert.equal(await store.hasChatHistory("unrelated-empty"), false);
+  assert.equal((await readdir(root)).length, 4);
+  const header = JSON.stringify({ kind: "header", version: 4, id: "multibyte-body", metadata: { kind: "aiden-chat-compaction-v1", chatId: "multibyte-body" } });
+  const contents = `${header}\n${"x".repeat(65_536 - Buffer.byteLength(header) - 2)}€`;
+  await writeFile(path.join(root, "multibyte.jsonl"), contents);
+  assert.equal(await store.hasChatHistory("multibyte-body"), true, "decode only the complete header when the scan ends inside a multibyte body character");
+  assert.equal(await store.hasChatHistory("still-unrelated"), false);
+  store.quarantineChatUntilRecovered("recovering", new Promise<void>(() => {}));
+  assert.equal(await store.hasChatHistory("recovering"), true);
+});
+
+test("private history inspection fails closed on corrupt index, malformed journals, and unreadable paths", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-corrupt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  for (const contents of ["{broken", JSON.stringify({ version: 1, chats: { other: "not-an-array" } })]) {
+    await writeFile(indexPath, contents);
+    await assert.rejects(store.hasChatHistory("empty"));
+    assert.equal(await readFile(indexPath, "utf8"), contents);
+  }
+  await unlink(indexPath);
+  const journal = path.join(root, "unknown.jsonl.corrupt-1");
+  await writeFile(journal, "{broken private history");
+  await assert.rejects(store.hasChatHistory("empty"));
+  assert.equal(await readFile(journal, "utf8"), "{broken private history");
+  await unlink(journal);
+  await symlink(path.join(root, "missing-private-file"), journal);
+  await assert.rejects(store.hasChatHistory("empty"), /symbolic link/u);
+  const absentRoot = path.join(root, "absent");
+  assert.equal(await new PiCompactionSessionStore({ root: async () => absentRoot }).hasChatHistory("empty"), false);
+  await assert.rejects(stat(absentRoot), { code: "ENOENT" });
+});
+
+test("header-only sessions created by old empty-chat reads are empty, but private body entries preserve them", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-header-only-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original = new PiCompactionSessionStore({ root: async () => root });
+  const session = await original.openChat("empty-chat-read");
+  assert.equal(await original.hasChatHistory("empty-chat-read"), true, "an active session stays protected");
+  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory("empty-chat-read");
+  assert.equal(await inspect(), false, "a persisted index plus valid header alone is not private history");
+  const metadata = await session.getMetadata();
+  await appendFile(metadata.path, " \t\n\r\n");
+  assert.equal(await inspect(), false, "trailing JSON whitespace is still empty");
+  await session.appendMessage(user("private retained work"));
+  assert.equal(await inspect(), true);
+  assert.match(await readFile(metadata.path, "utf8"), /private retained work/u);
+  await unlink(metadata.path);
+  assert.equal(await inspect(), true, "an unresolved indexed path stays protected");
 });
 
 test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {

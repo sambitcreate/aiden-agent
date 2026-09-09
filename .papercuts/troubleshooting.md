@@ -379,3 +379,9 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+
+## 2026-09-09 — Draft chat planning
+- The checkout has no `.memory/` directory despite AGENTS.md referencing it; used current source and the plan index for project context.
+- Native verification: no physical iOS device is online and local Java/Android SDK tools are unavailable. Run generic iOS build-for-testing and shared Remote contract suites; device XCTest and Android runtime acceptance remain unavailable locally.
+- Draft lifecycle regression tests intercepted `chats:appendMessage` for first-send failures; updated that fault injection to the new atomic `chats:createWithFirstMessage` boundary.
+- Empty-chat migration must distinguish header-only Pi journals (created by the old Todo snapshot read even before Send) from real private records; preserving every journal would leave ordinary abandoned chats behind.

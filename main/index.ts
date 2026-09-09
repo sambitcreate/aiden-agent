@@ -105,6 +105,8 @@ import {
 } from "./services/git.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
+import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
+import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
 import {
@@ -1873,6 +1875,16 @@ if (!ownsSingleInstanceLock) {
           "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
           error,
         );
+      }
+      // One-time legacy cleanup runs after recoverable artifacts and Bot identity
+      // restoration, but before renderers, schedules, or remote clients can write.
+      try {
+        await migrateLegacyEmptyWorkspaceChats();
+      } catch (error) {
+        // Do not admit new writers after an uncertain initial snapshot write:
+        // otherwise a restart could mistake their new chats for legacy data.
+        if (error instanceof EmptyChatMigrationSnapshotError) throw error;
+        logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
       }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),

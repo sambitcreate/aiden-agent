@@ -139,8 +139,8 @@ test("an unsuccessful first message save keeps the workspace bar and draft visib
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler("chats:appendMessage");
-    ipcMain.handle("chats:appendMessage", () => {
+    ipcMain.removeHandler("chats:createWithFirstMessage");
+    ipcMain.handle("chats:createWithFirstMessage", () => {
       throw new Error("Queue test: message save rejected");
     });
   });

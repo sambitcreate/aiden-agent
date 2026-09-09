@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentMessage,
@@ -14,7 +15,8 @@ import {
   createCurrentPiSessionRepository,
   type PiSessionRepositoryPort,
 } from "./pi-session-repository-port.js";
-import { migratePiSessionJournal } from "./pi-session-migration.js";
+import { migratePiSessionJournal, parsePiSessionMigrationReceipt } from "./pi-session-migration.js";
+import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { decodeLegacyPiSession } from "./pi-legacy-session.js";
 import {
   piUpgradeBehaviorEnabledAtStartup,
@@ -162,6 +164,38 @@ function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boole
     );
   } catch {
     return false;
+  }
+}
+
+/** Read a stable descriptor without decoding or retaining the private journal body. */
+async function inspectJournalHistory(filePath: string): Promise<{ chatId: string; hasBody: boolean }> {
+  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error("Pi journal history is not a regular file.");
+    const buffer = Buffer.alloc(JOURNAL_HEADER_SCAN_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const bytes = buffer.subarray(0, bytesRead);
+    const newline = bytes.indexOf(10);
+    const prefix = decodeUtf8(newline >= 0 ? bytes.subarray(0, newline) : bytes);
+    const header: unknown = JSON.parse(prefix);
+    const id = header && typeof header === "object" && !Array.isArray(header)
+      ? (header as { id?: unknown }).id : undefined;
+    if (typeof id !== "string" || !(journalHeaderOwnsChat(prefix, id) || currentJournalHeaderOwnsChat(prefix, id))) {
+      throw new Error("Pi journal history contains an unreadable session header.");
+    }
+    // Even a malformed body is private state worth preserving. Only an exact
+    // validated header followed by ASCII JSON whitespace counts as empty.
+    const hasContent = (chunk: Buffer) => chunk.some((byte) => byte !== 9 && byte !== 10 && byte !== 13 && byte !== 32);
+    if (newline >= 0 && hasContent(bytes.subarray(newline + 1))) return { chatId: id, hasBody: true };
+    let position = bytesRead;
+    while (true) {
+      const next = await handle.read(buffer, 0, buffer.length, position);
+      if (next.bytesRead === 0) return { chatId: id, hasBody: false };
+      if (hasContent(buffer.subarray(0, next.bytesRead))) return { chatId: id, hasBody: true };
+      position += next.bytesRead;
+    }
+  } finally {
+    await handle.close();
   }
 }
 
@@ -529,6 +563,8 @@ export async function recordPiEffectRecoveryBoundary(
 
 export interface PiCompactionSessionStoreOptions {
   root: () => Promise<string>;
+  /** Resolve the location without creating it when inspecting cleanup eligibility. */
+  readOnlyRoot?: () => Promise<string>;
   rollout?: {
     load(): Promise<PiUpgradeRolloutDocument>;
     development: boolean;
@@ -749,6 +785,74 @@ export class PiCompactionSessionStore {
     }
   }
 
+  /** Conservatively inspect private history without creating, repairing, or migrating a session. */
+  async hasChatHistory(chatId: string): Promise<boolean> {
+    if (!SAFE_SESSION_ID.test(chatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    if (this.sessions.has(chatId) || this.opening.has(chatId) || this.quarantined.has(chatId)) return true;
+    await this.indexMutation;
+    const root = await (this.options.readOnlyRoot ?? this.options.root)();
+    try {
+      if (!(await lstat(root)).isDirectory()) throw new Error("Pi journal history root is not a directory.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    let indexBytes: Buffer | undefined;
+    try {
+      indexBytes = await readRegularFile(path.join(root, JOURNAL_INDEX_FILE), 16 * 1024 * 1024);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (indexBytes) {
+      const index: unknown = JSON.parse(decodeUtf8(indexBytes));
+      if (!index || typeof index !== "object" || Array.isArray(index) ||
+          (index as Partial<JournalIndex>).version !== 1) {
+        throw new Error("Pi journal history index could not be read safely.");
+      }
+      const chats = (index as Partial<JournalIndex>).chats;
+      if (!chats || typeof chats !== "object" || Array.isArray(chats) ||
+          Object.values(chats).some((paths) => !Array.isArray(paths) || paths.some((file) => typeof file !== "string" || !file))) {
+        throw new Error("Pi journal history index could not be read safely.");
+      }
+      if (Object.prototype.hasOwnProperty.call(chats, chatId)) {
+        for (const indexedPath of chats[chatId]!) {
+          const candidate = path.resolve(indexedPath);
+          if (!candidate.startsWith(`${path.resolve(root)}${path.sep}`)) {
+            throw new Error("Pi journal history index escaped its private storage root.");
+          }
+          if (!candidate.endsWith(".jsonl")) return true;
+          try {
+            const history = await inspectJournalHistory(candidate);
+            if (history.chatId !== chatId || history.hasBody) return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+            throw error;
+          }
+        }
+      }
+    }
+    const directories = [root];
+    while (directories.length > 0) {
+      const directory = directories.pop()!;
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const candidate = path.join(directory, entry.name);
+        if (entry.isSymbolicLink()) throw new Error("Pi journal history contains an uninspectable symbolic link.");
+        if (entry.isDirectory()) { directories.push(candidate); continue; }
+        if (!entry.name.includes(".jsonl")) continue;
+        if (entry.name.endsWith(".migration-v1.json")) {
+          const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(candidate, 65_536))));
+          if (receipt.chatId === chatId) return true;
+          continue;
+        }
+        const history = await inspectJournalHistory(candidate);
+        if (history.chatId === chatId && (history.hasBody || !entry.name.endsWith(".jsonl"))) return true;
+      }
+    }
+    return false;
+  }
+
   async deleteChat(chatId: string): Promise<void> {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
@@ -814,6 +918,7 @@ export class PiCompactionSessionStore {
 
 export const piCompactionSessionStore = new PiCompactionSessionStore({
   root: () => ensureUserDataDir("pi-compaction-sessions"),
+  readOnlyRoot: async () => path.join((await import("../platform.js")).app.getPath("userData"), "pi-compaction-sessions"),
   rollout: {
     load: () => piUpgradeRolloutStore.load(),
     development: isDevelopmentRuntime(process.env, Boolean(process.versions.electron)),

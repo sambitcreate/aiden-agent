@@ -778,6 +778,17 @@ export const chatsApi = {
     }),
   create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:create", input),
+  createWithFirstMessage: (input: {
+    draftId: string;
+    title?: string;
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+    computerUseEnabled?: boolean;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+  }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
