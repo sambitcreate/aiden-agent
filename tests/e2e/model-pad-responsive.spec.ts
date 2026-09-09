@@ -28,6 +28,15 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
   const pad = page.getByRole("group", { name: "Personal Model Pad arrangement", exact: true });
   const browse = page.getByRole("button", { name: "Browse models", exact: true });
   const insights = page.getByRole("button", { name: "Benchmark insights", exact: true });
+  await page.evaluate(() => {
+    const sentinel = document.createElement("span");
+    sentinel.style.cssText = "position:fixed;width:1px;height:1px;pointer-events:none;opacity:0";
+    document.body.append(sentinel);
+    sentinel.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
+      duration: 1_000,
+      iterations: Infinity,
+    });
+  });
 
   for (const [width, height, zoom] of [
     [1440, 1000, 1],
@@ -51,10 +60,16 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     for (const panel of ["closed", "models", "insights"] as const) {
       if (panel === "models") await browse.click();
       if (panel === "insights") await insights.click();
-      await page.evaluate(async () => {
-        const animations = document.getAnimations?.() ?? [];
-        await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
-      });
+      await page.evaluate(async (settleTimeoutMs) => {
+        const animations = (document.getAnimations?.() ?? []).filter((animation) => {
+          const endTime = animation.effect?.getComputedTiming().endTime;
+          return typeof endTime === "number" && Number.isFinite(endTime);
+        });
+        await Promise.race([
+          Promise.allSettled(animations.map((animation) => animation.finished)),
+          new Promise<void>((resolve) => window.setTimeout(resolve, settleTimeoutMs)),
+        ]);
+      }, 500);
       await page.locator(".model-pad-fieldset").evaluate((element) => {
         let parent = element.parentElement;
         while (parent && !/(auto|scroll)/u.test(getComputedStyle(parent).overflowY))

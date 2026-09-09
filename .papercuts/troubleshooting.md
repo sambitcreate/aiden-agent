@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- `.papercuts/` is ignored even when its troubleshooting file is present in the PR branch, so persisting a required update needs an explicit `git add -f`.
+- Layout stabilization must race `animation.finished` against a short timeout because paused or infinite document animations never settle; keep geometry polling as the authoritative E2E readiness check.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.
 - `Session.getEntries()` includes abandoned branches. Synchronization markers must be read from `Session.getBranch()` or a rolled-back partial write can still look committed.
 - Child-runtime unit tests load outside Electron. Keep usage accounting behind an injected callback (with a production-only dynamic import) instead of statically importing the Electron-backed singleton into the reusable child registry.
