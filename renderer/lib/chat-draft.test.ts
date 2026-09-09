@@ -59,8 +59,8 @@ test("an in-flight draft survives navigation until its operation settles", async
 
 test("successful promotion removes only the submitted draft and keeps its identity", () => {
   const first = createChatDraft("workspace-a");
-  const second = createChatDraft("workspace-b");
   const releaseFirst = retainChatDraft(first.chat.id);
+  const second = createChatDraft("workspace-b");
   const releaseSecond = retainChatDraft(second.chat.id);
   const submitted = beginChatDraftSend(first.chat.id);
   assert.equal(submitted.chat.id, first.chat.id);
@@ -99,4 +99,25 @@ test("reopening an in-flight draft retains its busy state and unlocks on definit
   beginChatDraftSend(chat.id);
   finishChatDraftSend(chat.id, true);
   reopenedRelease();
+});
+
+
+test("superseded new activations discard unowned drafts while preserving mounted and sending drafts", async () => {
+  const mounted = createChatDraft("workspace-a");
+  const releaseMounted = retainChatDraft(mounted.chat.id);
+  const sending = createChatDraft("workspace-b");
+  const releaseSending = retainChatDraft(sending.chat.id);
+  beginChatDraftSend(sending.chat.id);
+  releaseSending();
+  await flush();
+  const superseded = createChatDraft("workspace-c");
+  const latest = createChatDraft("workspace-d");
+  assert.equal(getChatDraft(superseded.chat.id), undefined);
+  assert.equal(getChatDraft(mounted.chat.id), mounted);
+  assert.equal(getChatDraft(sending.chat.id)?.sending, true);
+  assert.equal(getChatDraft(latest.chat.id), latest);
+  releaseMounted();
+  finishChatDraftSend(sending.chat.id, false);
+  discardChatDraft(latest.chat.id);
+  await flush();
 });

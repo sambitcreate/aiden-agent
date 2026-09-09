@@ -58,31 +58,52 @@ export async function migrateEmptyWorkspaceChats(deps: {
   get(id: string): Promise<Chat | null>;
   eligible(chat: Chat): Promise<boolean>;
   remove(id: string, assertCurrent: (chat: Chat) => Promise<void>): Promise<void>;
+  onPreserved?(error: unknown): void;
 }): Promise<number> {
   let state = await deps.load();
   if (!isEmptyChatMigrationState(state)) throw new Error("Invalid empty-chat migration state.");
   if (state.complete) return 0;
+  const readCandidate = async (id: string) => {
+    try { return await deps.get(id); }
+    catch (error) { deps.onPreserved?.(error); return null; }
+  };
   if (state.pending === null) {
-    const candidates: EmptyChatCandidate[] = [];
-    for (const meta of await deps.list()) {
-      const chat = await deps.get(meta.id);
-      // An unreadable/corrupt record is not proof of an empty conversation.
-      if (chat && await deps.eligible(chat)) candidates.push({ id: chat.id, fingerprint: fingerprint(chat) });
+    try {
+      const candidates: EmptyChatCandidate[] = [];
+      const seen = new Set<string>();
+      for (const meta of await deps.list()) {
+        if (seen.has(meta.id)) continue;
+        seen.add(meta.id);
+        const chat = await readCandidate(meta.id);
+        // Snapshot before consulting any external eligibility store. Unknown
+        // payloads survive; any stored message is already outside cleanup scope.
+        if (chat?.messages.length === 0) candidates.push({ id: chat.id, fingerprint: fingerprint(chat) });
+      }
+      state = { version: 1, pending: candidates, complete: false };
+      await deps.save(state);
+    } catch (error) {
+      throw new EmptyChatMigrationSnapshotError(error);
     }
-    state = { version: 1, pending: candidates, complete: false };
-    try { await deps.save(state); }
-    catch (error) { throw new EmptyChatMigrationSnapshotError(error); }
   }
   let removed = 0;
   for (const candidate of [...state.pending!]) {
     const { id } = candidate;
-    const chat = await deps.get(id);
-    if (chat && fingerprint(chat) === candidate.fingerprint && await deps.eligible(chat)) {
+    const chat = await readCandidate(id);
+    let eligible = false;
+    if (chat && fingerprint(chat) === candidate.fingerprint) {
+      try { eligible = await deps.eligible(chat); }
+      catch (error) { deps.onPreserved?.(error); }
+    }
+    if (eligible) {
       await deps.remove(id, async (current) => {
-        if (fingerprint(current) !== candidate.fingerprint || !await deps.eligible(current)) throw new Error("The empty chat changed during migration.");
+        // Cross-store removal calls this again after deleting private stores;
+        // do not reopen those stores or re-evaluate eligibility at that point.
+        if (current.messages.length !== 0 || fingerprint(current) !== candidate.fingerprint) throw new Error("The empty chat changed during migration.");
       });
       removed++;
     }
+    // Eligibility uncertainty preserves this candidate permanently. It cannot
+    // keep a pre-snapshot retry window open or sweep newer chats on restart.
     state = { version: 1, pending: state.pending!.filter((entry) => entry.id !== id), complete: false };
     await deps.save(state);
   }

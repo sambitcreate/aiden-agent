@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { app } from "../platform.js";
+import { app, logger } from "../platform.js";
 import { DataStore } from "./data-store.js";
 import { readRegularFile, decodeUtf8 } from "./regular-file-read.js";
 import { chatStore } from "./chat-store.js";
@@ -54,23 +54,39 @@ export async function migrateLegacyEmptyWorkspaceChats(): Promise<number> {
     throw new Error("Empty-chat migration receipt could not be read safely.");
   }
   if (state.complete) return 0;
-  if (!displayImageArtifactStore.availability().available || !generativeUiArtifactStore.availability().available) {
-    throw new Error("Empty-chat cleanup requires readable artifact recovery stores.");
-  }
-  const workspaceIds = new Set((await configStore.listWorkspaces()).map((workspace) => workspace.id));
-  const reservedChatIds = await scheduledChatIds();
+  // Defer unrelated stores until after the immutable candidate boundary is
+  // saved. If they are unreadable, preserve affected candidates and finish.
+  let context: Promise<{ workspaceIds: Set<string>; reservedChatIds: Set<string> }> | undefined;
+  const eligibilityContext = () => context ??= (async () => {
+    if (!displayImageArtifactStore.availability().available || !generativeUiArtifactStore.availability().available) {
+      throw new Error("Empty-chat cleanup requires readable artifact recovery stores.");
+    }
+    return {
+      workspaceIds: new Set((await configStore.listWorkspaces()).map((workspace) => workspace.id)),
+      reservedChatIds: await scheduledChatIds(),
+    };
+  })();
+  let reportedPreservation = false;
   return migrateEmptyWorkspaceChats({
     load: async () => state,
     save: async (next) => { await migration.update((current) => Object.assign(current, next)); },
     list: () => chatStore.list(),
     get: (id) => chatStore.get(id),
-    eligible: async (chat) => isLegacyEmptyWorkspaceChat(chat, workspaceIds, reservedChatIds) &&
+    onPreserved: (error) => {
+      if (reportedPreservation) return;
+      reportedPreservation = true;
+      logger.warn("chat", "Empty-chat cleanup preserved records whose private history or ownership could not be read safely.", error);
+    },
+    eligible: async (chat) => {
+      const { workspaceIds, reservedChatIds } = await eligibilityContext();
+      return isLegacyEmptyWorkspaceChat(chat, workspaceIds, reservedChatIds) &&
       !(await displayImageArtifactStore.hasPending(chat.id)) &&
       !(await generativeUiArtifactStore.hasPending(chat.id)) &&
       (await subagentRunStore.listByChat(chat.id)).length === 0 &&
       (await piRuntimeEffectStore.listOperationsByChat(chat.id)).length === 0 &&
       (await piRuntimeEffectStore.listEffectsByChat(chat.id)).length === 0 &&
-      !(await piCompactionSessionStore.hasChatHistory(chat.id)),
+      !(await piCompactionSessionStore.hasChatHistory(chat.id));
+    },
     remove: (id, assertCurrent) => chatApplicationService.remove(id, { assertCurrent }),
   });
 }

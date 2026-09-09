@@ -125,3 +125,51 @@ test("resume preserves a replacement chat reusing a candidate ID", async () => {
   assert.ok(h.records.has("reused"));
   assert.equal(h.state().complete, true);
 });
+
+test("eligibility errors occur after snapshot and preserve candidates without a later resweep", async () => {
+  const h = harness([empty("uncertain"), empty("healthy")]);
+  h.deps.eligible = async (chat) => {
+    assert.notEqual(h.state().pending, null, "freeze identities before reading eligibility stores");
+    if (chat.id === "uncertain") throw new Error("unreadable private journal");
+    return true;
+  };
+  const warnings: unknown[] = [];
+  assert.equal(await migrateEmptyWorkspaceChats({ ...h.deps, onPreserved: (error) => warnings.push(error) }), 1);
+  assert.equal(warnings.length, 1);
+  assert.ok(h.records.has("uncertain"));
+  assert.equal(h.state().complete, true);
+  h.records.set("later", empty("later"));
+  h.deps.eligible = async () => true;
+  assert.equal(await migrateEmptyWorkspaceChats(h.deps), 0);
+  assert.ok(h.records.has("later"));
+});
+
+test("initial enumeration errors use the startup-blocking snapshot error", async () => {
+  const h = harness([empty("one")]);
+  h.deps.list = async () => { throw new Error("unreadable index"); };
+  await assert.rejects(migrateEmptyWorkspaceChats(h.deps), { name: "EmptyChatMigrationSnapshotError" });
+  assert.equal(h.state().pending, null);
+  assert.deepEqual(h.removed, []);
+});
+
+test("unreadable payloads are preserved without preventing healthy empty cleanup", async () => {
+  const h = harness([empty("unreadable"), empty("healthy")]);
+  const get = h.deps.get;
+  h.deps.get = async (id) => { if (id === "unreadable") throw new Error("unreadable payload"); return get(id); };
+  assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
+  assert.ok(h.records.has("unreadable"));
+  assert.equal(h.state().complete, true);
+});
+
+test("cross-store final assertion does not reopen already-deleted private stores", async () => {
+  const h = harness([empty("one")]);
+  let eligibilityReads = 0;
+  h.deps.eligible = async () => { assert.equal(++eligibilityReads, 1); return true; };
+  const remove = h.deps.remove;
+  h.deps.remove = async (id, check) => {
+    await check(h.records.get(id)!); // pre-delete fence
+    await remove(id, check); // application service rechecks after side-store cleanup
+  };
+  assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
+  assert.equal(eligibilityReads, 1);
+});

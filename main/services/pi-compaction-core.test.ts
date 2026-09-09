@@ -26,6 +26,7 @@ import {
 } from "./pi-compaction-session-store.js";
 import type { ChatMessage } from "./types.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
+import { migratePiSessionJournal } from "./pi-session-migration.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1282,6 +1283,43 @@ test("header-only sessions created by old empty-chat reads are empty, but privat
   assert.match(await readFile(metadata.path, "utf8"), /private retained work/u);
   await unlink(metadata.path);
   assert.equal(await inspect(), true, "an unresolved indexed path stays protected");
+});
+
+test("completed migration of an empty legacy journal is disposable with indexed backup and receipt", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-empty-migration-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const chatId = "empty-promoted-chat";
+  const promoted = path.join(root, "empty.jsonl");
+  const header = {
+    type: "session", version: 3, id: chatId, timestamp: "2026-08-31T12:00:00.000Z", cwd: root,
+    metadata: { kind: "aiden-chat-compaction-v1", chatId },
+  };
+  await writeFile(promoted, `${JSON.stringify(header)}\n`);
+  const migration = await migratePiSessionJournal(promoted, chatId);
+  assert.equal(migration.receipt.counts.entries, 0);
+  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
+  assert.equal(await inspect(), false, "discovery recognizes actual empty migration scaffolding");
+  const index = JSON.stringify({ version: 1, chats: { [chatId]: [promoted, migration.receipt.backupPath, migration.receiptPath] } });
+  await writeFile(path.join(root, "aiden-journal-index.json"), index);
+  assert.equal(await inspect(), false, "indexed migration artifacts alone are not conversation history");
+  const originalPromoted = await readFile(promoted, "utf8");
+  const originalBackup = await readFile(migration.receipt.backupPath, "utf8");
+  const originalReceipt = await readFile(migration.receiptPath, "utf8");
+  await appendFile(promoted, '{"private":"preserve additional content"}\n');
+  assert.equal(await inspect(), true);
+  await writeFile(promoted, originalPromoted);
+  await appendFile(migration.receipt.backupPath, '{"private":"preserve backup history"}\n');
+  assert.equal(await inspect(), true);
+  await writeFile(migration.receipt.backupPath, originalBackup);
+  await writeFile(migration.receiptPath, JSON.stringify({ ...migration.receipt, validation: "failed" }));
+  assert.equal(await inspect(), true);
+  await writeFile(migration.receiptPath, originalReceipt);
+  await unlink(migration.receipt.backupPath);
+  assert.equal(await inspect(), true, "incomplete artifact sets remain protected");
+  await writeFile(migration.receipt.backupPath, originalBackup);
+  await writeFile(migration.receiptPath, "{invalid receipt");
+  await assert.rejects(inspect());
+  assert.equal(await readFile(promoted, "utf8"), originalPromoted);
 });
 
 test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {

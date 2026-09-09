@@ -1268,7 +1268,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
         qc.setQueryData(queryKeys.chat(chatId), updated);
         if (firstDraft) finishChatDraftSend(chatId, true);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
-        if (!mountedRef.current || chatIdRef.current !== chatId || generationIntentRef.current !== generationIntent) {
+        if (
+          generationIntentRef.current !== generationIntent ||
+          (firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))
+        ) {
           try {
             await chatsApi.abandonTurn(chatId, messageTurnId);
           } catch (error) {

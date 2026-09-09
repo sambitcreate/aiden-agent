@@ -22,6 +22,11 @@ export function getChatDraft(id: string): ChatDraft | undefined {
 
 export function createChatDraft(workspaceId: string, id = crypto.randomUUID()): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
+  // Multiple New activations can supersede navigation before a pane mounts.
+  // Only keep drafts that acquired a view owner or have a send to settle.
+  for (const [previousId, previous] of drafts) {
+    if (!owners.has(previousId) && !previous.sending) drafts.delete(previousId);
+  }
   const now = Date.now();
   const draft: ChatDraft = {
     chat: { id, workspaceId, title: "New agent", messages: [], createdAt: now, updatedAt: now },

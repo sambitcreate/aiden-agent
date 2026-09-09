@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { constants as fsConstants } from "node:fs";
 import { chmod, lstat, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -196,6 +197,54 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
     }
   } finally {
     await handle.close();
+  }
+}
+
+/** Only the exact scaffolding produced by a completed migration of an empty v3 journal is disposable. */
+async function isCompletedEmptyMigration(promotedPath: string, chatId: string, root: string): Promise<boolean> {
+  const backupPath = `${promotedPath}.v3-backup`;
+  const receiptPath = `${promotedPath}.migration-v1.json`;
+  if (!path.resolve(promotedPath).startsWith(`${path.resolve(root)}${path.sep}`)) return false;
+  try {
+    const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(receiptPath, JOURNAL_HEADER_SCAN_BYTES))));
+    if (receipt.chatId !== chatId || receipt.validation !== "passed" ||
+        path.resolve(receipt.promotedPath) !== path.resolve(promotedPath) ||
+        path.resolve(receipt.backupPath) !== path.resolve(backupPath) ||
+        Object.values(receipt.counts).some((count) => count !== 0)) return false;
+    const backup = await readRegularFile(backupPath, JOURNAL_HEADER_SCAN_BYTES);
+    if (createHash("sha256").update(backup).digest("hex") !== receipt.sourceSha256) return false;
+    const backupText = decodeUtf8(backup);
+    if (backupText.split("\n").filter((line) => line.trim()).length !== 1) return false;
+    const legacy = decodeLegacyPiSession(backupText);
+    if (legacy.header.id !== chatId || legacy.entries.length !== 0 || legacy.tornFinalLine ||
+        !journalHeaderOwnsChat(backupText.split("\n", 1)[0]!, chatId)) return false;
+    const current = decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
+    const records: unknown[] = current.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+    if (records.length !== 4 || !current.endsWith("\n")) return false;
+    const [header, lane, startedValue, finishedValue] = records;
+    if (!startedValue || typeof startedValue !== "object" || !finishedValue || typeof finishedValue !== "object") return false;
+    const started = startedValue as Record<string, unknown>;
+    const finished = finishedValue as Record<string, unknown>;
+    const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+    if (typeof started.id !== "string" || !new RegExp(`^migration-${uuid}$`, "u").test(started.id) ||
+        typeof finished.id !== "string" || !new RegExp(`^migration-finished-${uuid}$`, "u").test(finished.id) ||
+        !Number.isSafeInteger(started.timestamp) || Number(started.timestamp) < 0 ||
+        !Number.isSafeInteger(finished.timestamp) || Number(finished.timestamp) < Number(started.timestamp)) return false;
+    return isDeepStrictEqual(header, {
+      kind: "header", version: 4, id: chatId, createdAt: Date.parse(legacy.header.timestamp), cwd: legacy.header.cwd,
+      ...(legacy.header.parentSession === undefined ? {} : { legacyParentSessionPath: legacy.header.parentSession }),
+      ...(legacy.header.metadata === undefined ? {} : { metadata: legacy.header.metadata }),
+    }) && isDeepStrictEqual(lane, { kind: "lane", seq: 1, lane: "main", leafId: null }) &&
+      isDeepStrictEqual(started, {
+        kind: "record", seq: 2, id: started.id, lane: "main", type: "operation_started", timestamp: started.timestamp,
+        sourceLeafId: null, intent: { kind: "navigation", targetId: null, summarize: false },
+      }) && isDeepStrictEqual(finished, {
+        kind: "record", seq: 3, id: finished.id, lane: "main", type: "operation_finished", timestamp: finished.timestamp,
+        runId: started.id, outcome: "completed",
+      });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -822,10 +871,15 @@ export class PiCompactionSessionStore {
           if (!candidate.startsWith(`${path.resolve(root)}${path.sep}`)) {
             throw new Error("Pi journal history index escaped its private storage root.");
           }
+          if (candidate.endsWith(".jsonl.v3-backup") || candidate.endsWith(".jsonl.migration-v1.json")) {
+            const promoted = candidate.replace(/\.(?:v3-backup|migration-v1\.json)$/u, "");
+            if (!(await isCompletedEmptyMigration(promoted, chatId, root))) return true;
+            continue;
+          }
           if (!candidate.endsWith(".jsonl")) return true;
           try {
             const history = await inspectJournalHistory(candidate);
-            if (history.chatId !== chatId || history.hasBody) return true;
+            if (history.chatId !== chatId || (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
             throw error;
@@ -843,11 +897,16 @@ export class PiCompactionSessionStore {
         if (!entry.name.includes(".jsonl")) continue;
         if (entry.name.endsWith(".migration-v1.json")) {
           const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(candidate, 65_536))));
-          if (receipt.chatId === chatId) return true;
+          if (receipt.chatId === chatId && !(await isCompletedEmptyMigration(candidate.slice(0, -".migration-v1.json".length), chatId, root))) return true;
           continue;
         }
         const history = await inspectJournalHistory(candidate);
-        if (history.chatId === chatId && (history.hasBody || !entry.name.endsWith(".jsonl"))) return true;
+        if (history.chatId === chatId) {
+          if (entry.name.endsWith(".jsonl.v3-backup")) {
+            if (!(await isCompletedEmptyMigration(candidate.slice(0, -".v3-backup".length), chatId, root))) return true;
+          } else if (!entry.name.endsWith(".jsonl") ||
+              (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
+        }
       }
     }
     return false;

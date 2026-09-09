@@ -332,10 +332,18 @@ test("first-message promotion seeds the real cache before releasing draft state 
   assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
   const seed = send.indexOf("qc.setQueryData(queryKeys.chat(chatId), updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
-  const ownerGuard = send.indexOf("if (!mountedRef.current || chatIdRef.current !== chatId");
+  const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
   const start = send.indexOf("await runGeneration(messageTurnId)");
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
   assert.match(pane, /enabled: !draft && ready/u);
+});
+
+
+test("ordinary sends retain their generation-intent guard while draft promotion also checks its view owner", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
+  assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
 });
