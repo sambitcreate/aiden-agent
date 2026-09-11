@@ -50,22 +50,23 @@ test("dedupes rerun checks by workflow and check name while preserving row posit
   ]);
 });
 
-test("queued reruns replace older completed failures even before GitHub reports timestamps", () => {
-  const checks = dedupeGitHubChecks([
-    {
-      name: "test",
-      workflowName: "CI",
-      conclusion: "FAILURE",
-      completedAt: "2026-01-01T00:00:00Z",
-    },
-    {
-      name: "test",
-      workflowName: "CI",
-      status: "QUEUED",
-    },
-  ]);
+test("queued reruns replace older completed failures before timestamps regardless of rollup order", () => {
+  const completedFailure = {
+    name: "test",
+    workflowName: "CI",
+    conclusion: "FAILURE",
+    completedAt: "2026-01-01T00:00:00Z",
+  };
+  const queuedRerun = {
+    name: "test",
+    workflowName: "CI",
+    status: "QUEUED",
+  };
 
-  assert.deepEqual(checks.map((check) => [check.name, check.status]), [["test", "pending"]]);
+  for (const rawChecks of [[completedFailure, queuedRerun], [queuedRerun, completedFailure]]) {
+    const checks = dedupeGitHubChecks(rawChecks);
+    assert.deepEqual(checks.map((check) => [check.name, check.status]), [["test", "pending"]]);
+  }
 });
 
 test("qualifies same-named checks from different workflows", () => {

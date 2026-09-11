@@ -219,9 +219,11 @@ function shouldReplaceCheck(
   next: { check: GitHubPullRequestCheck; timestamp: number },
 ): boolean {
   if (!previous) return true;
-  if (next.timestamp > previous.timestamp) return true;
-  if (next.timestamp === previous.timestamp) return true;
-  return next.timestamp === 0 && (next.check.status === "pending" || next.check.status === "action-required");
+  const isUnstartedPending = (entry: { check: GitHubPullRequestCheck; timestamp: number }) =>
+    entry.timestamp === 0 && (entry.check.status === "pending" || entry.check.status === "action-required");
+  if (isUnstartedPending(next)) return true;
+  if (isUnstartedPending(previous)) return false;
+  return next.timestamp >= previous.timestamp;
 }
 
 export function dedupeGitHubChecks(rawChecks: RawStatusCheckNode[]): GitHubPullRequestCheck[] {
