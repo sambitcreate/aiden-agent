@@ -106,11 +106,14 @@ export function registerChatHistoryHandlers(): void {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+    if (!opened.session) {
+      // Rollout-ineligible chats have no durable journal to replay, so todo is
+      // unavailable exactly like a corrupt journal. Never mint a journal here.
+      return unavailableTodoSnapshot(chatId);
+    }
     try {
-      const snapshot = todoSnapshotForRenderer(
-        chatId,
-        await replayTodoState(await piCompactionSessionStore.openChat(chatId, chat)),
-      );
+      const snapshot = todoSnapshotForRenderer(chatId, await replayTodoState(opened.session));
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       return snapshot;
     } catch (error) {

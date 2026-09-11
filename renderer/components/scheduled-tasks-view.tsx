@@ -43,19 +43,25 @@ import { scheduleApi } from "../lib/ipc";
 import {
   queryKeys,
   useMcpServers,
+  useProviders,
   useScheduledTasks,
   useScheduledTaskSettings,
+  useSettings,
 } from "../lib/queries";
 import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  scheduledTaskProviderPin,
   scheduledTaskStatus,
   type ScheduledTaskTab,
 } from "../lib/scheduled-task-view";
+import { readModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import type {
   McpServer,
+  Provider,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskSettings,
@@ -124,10 +130,16 @@ function newTask(
   settings: ScheduledTaskSettings | undefined,
   workspaceId: string | undefined,
   mcpServers: McpServer[],
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: HiddenModelsByProvider | undefined,
   template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
   const mode = settings?.defaultMode ?? "llm";
   const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
+  const pinned =
+    mode === "llm"
+      ? scheduledTaskProviderPin(providers, readModelSelection(), hiddenModelsByProvider)
+      : undefined;
   return {
     name: template?.name ?? "",
     enabled: true,
@@ -136,6 +148,7 @@ function newTask(
     timezone:
       settings?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     workspaceId,
+    ...(pinned ?? {}),
     prompt: template?.prompt ?? "",
     script: "",
     permission,
@@ -313,6 +326,8 @@ export function ScheduledTasksView() {
   const { activeId, workspaces } = useActiveWorkspace();
   const tasks = useScheduledTasks();
   const settings = useScheduledTaskSettings();
+  const appSettings = useSettings();
+  const providers = useProviders();
   const mcpServers = useMcpServers();
   const [query, setQuery] = React.useState("");
   const [tab, setTab] = React.useState<ScheduledTaskTab>("all");
@@ -447,7 +462,15 @@ export function ScheduledTasksView() {
                   disabled={manualCreationUnavailable}
                   onSelect={() => {
                     setEditingUpdatedAt(undefined);
-                    setEditing(newTask(settings.data, activeId, mcpServers.data ?? []));
+                    setEditing(
+                      newTask(
+                        settings.data,
+                        activeId,
+                        mcpServers.data ?? [],
+                        providers.data,
+                        appSettings.data?.hiddenModelsByProvider,
+                      ),
+                    );
                   }}
                 >
                   <PencilLine className="size-4" />
@@ -720,7 +743,14 @@ export function ScheduledTasksView() {
                             onClick={() => {
                               setEditingUpdatedAt(undefined);
                               setEditing(
-                                newTask(settings.data, activeId, mcpServers.data ?? [], template),
+                                newTask(
+                                  settings.data,
+                                  activeId,
+                                  mcpServers.data ?? [],
+                                  providers.data,
+                                  appSettings.data?.hiddenModelsByProvider,
+                                  template,
+                                ),
                               );
                             }}
                             className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 [--keyboard-focus-offset:-2px] focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"
@@ -795,6 +825,9 @@ export function ScheduledTasksView() {
           workspaces={workspaces}
           mcpServers={mcpServers.data ?? []}
           mcpServersUnavailable={mcpServers.isError}
+          providers={providers.data ?? []}
+          hiddenModelsByProvider={appSettings.data?.hiddenModelsByProvider}
+          lastProviderId={appSettings.data?.lastProviderId}
           assistantOwned={Boolean(
             editing.id &&
             tasks.data?.some(

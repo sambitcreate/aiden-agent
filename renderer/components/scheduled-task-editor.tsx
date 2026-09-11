@@ -17,15 +17,21 @@ import {
   Textarea,
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
+import { isUsable } from "../lib/model-picker-data";
 import {
   cronFromScheduleDraft,
   formatSchedule,
   scheduleDraftFromCron,
+  scheduledTaskProviderGuardrail,
+  scheduledTaskProviderModelOptions,
   type ScheduledTaskCadence,
   type ScheduledTaskScheduleDraft,
 } from "../lib/scheduled-task-view";
+import { readModelSelection } from "../lib/use-model-selection";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import type {
   McpServer,
+  Provider,
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
@@ -62,6 +68,8 @@ const WEEKDAYS = [
   "Saturday",
 ] as const;
 
+const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
+
 export function ScheduledTaskEditor({
   open,
   initial,
@@ -70,6 +78,9 @@ export function ScheduledTaskEditor({
   mcpServersUnavailable = false,
   assistantOwned = false,
   busy,
+  providers,
+  hiddenModelsByProvider,
+  lastProviderId,
   onOpenChange,
   onSave,
 }: {
@@ -79,6 +90,9 @@ export function ScheduledTaskEditor({
   mcpServers: McpServer[];
   mcpServersUnavailable?: boolean;
   assistantOwned?: boolean;
+  providers: Provider[];
+  hiddenModelsByProvider?: HiddenModelsByProvider;
+  lastProviderId?: string;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
@@ -224,6 +238,44 @@ export function ScheduledTaskEditor({
     }
     return [...new Set([localTimezone, draft.timezone ?? localTimezone, "UTC", ...supported])];
   }, [draft.timezone, localTimezone]);
+
+  const usableProviders = providers.filter(isUsable);
+  const pinnedProvider = usableProviders.find((provider) => provider.id === draft.providerId);
+  const providerModelOptions = pinnedProvider
+    ? scheduledTaskProviderModelOptions(
+        pinnedProvider,
+        hiddenModelsByProvider,
+        draft.model,
+        readModelSelection().model,
+      )
+    : undefined;
+  const providerGuardrail = scheduledTaskProviderGuardrail(
+    draft.mode,
+    draft.providerId,
+    lastProviderId,
+    providers,
+  );
+  const chooseProvider = (choice: string) => {
+    if (choice === APP_DEFAULT_PROVIDER_CHOICE) {
+      setDraft((current) => ({ ...current, providerId: undefined, model: undefined }));
+      return;
+    }
+    const provider = usableProviders.find((candidate) => candidate.id === choice);
+    if (!provider) return;
+    setDraft((current) => {
+      // A pinned model only stays pinned when the provider is unchanged; a
+      // hidden pinned model survives re-selecting its own provider but a stale
+      // model from another provider must not leak into the new one.
+      const { model } = scheduledTaskProviderModelOptions(
+        provider,
+        hiddenModelsByProvider,
+        current.providerId === provider.id ? current.model : undefined,
+        readModelSelection().model,
+      );
+      return { ...current, providerId: provider.id, model };
+    });
+  };
+  const chooseModel = (model: string) => setDraft((current) => ({ ...current, model }));
 
   return (
     <Dialog
@@ -509,6 +561,59 @@ export function ScheduledTaskEditor({
         </details>
       </FieldSet>
       <FieldSet title="Run context">
+        {draft.mode === "llm" ? (
+          <Field label="Provider">
+            <Select
+              disabled={assistantOwned}
+              value={draft.providerId ?? APP_DEFAULT_PROVIDER_CHOICE}
+              onValueChange={chooseProvider}
+            >
+              <SelectTrigger aria-label="Scheduled task provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={APP_DEFAULT_PROVIDER_CHOICE}>
+                  App default (follows your selection)
+                </SelectItem>
+                {usableProviders.map((provider) => (
+                  <SelectItem value={provider.id} key={provider.id}>
+                    {provider.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {providerGuardrail ? (
+              <div
+                className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
+                role="status"
+              >
+                <span>
+                  No provider pinned. If no app default is available, this task cannot run.
+                </span>
+              </div>
+            ) : null}
+          </Field>
+        ) : null}
+        {pinnedProvider && providerModelOptions ? (
+          <Field label="Model">
+            <Select
+              disabled={assistantOwned}
+              value={providerModelOptions.model ?? ""}
+              onValueChange={chooseModel}
+            >
+              <SelectTrigger aria-label="Scheduled task model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providerModelOptions.models.map((model) => (
+                  <SelectItem value={model} key={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
         <Field
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."

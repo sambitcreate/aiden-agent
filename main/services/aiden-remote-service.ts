@@ -443,6 +443,8 @@ export class AidenRemoteService {
             details: {
               requestId: entry.requestId,
               route: entry.route,
+              method: entry.method,
+              routePath: entry.routePath,
               status: entry.status,
               latencyMs: entry.latencyMs,
               deviceIdSuffix: entry.deviceIdSuffix,
