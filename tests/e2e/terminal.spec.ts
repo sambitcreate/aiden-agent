@@ -21,7 +21,11 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   const hideTerminal = drawer.getByRole("button", { name: "Hide terminal" });
   await expect(hideTerminal).toBeVisible();
 
-  await drawer.locator(".xterm-screen").click();
+  await expect(drawer.locator(".ghostty-screen")).toBeVisible();
+  await expect(drawer.locator(".ghostty-input")).toBeFocused();
+  // With no selection, Cmd+C still belongs to macOS; it must not prefix the
+  // next shell command with a literal "c" through Ghostty's key encoder.
+  await page.keyboard.press("Meta+C");
   await page.keyboard.type("echo $((314159+271828)); pwd");
   await page.keyboard.press("Enter");
 
@@ -44,6 +48,10 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
     )
     .toContain("585987");
   await expect.poll(() => readFile(historyFile, "utf8")).toContain(aiden.workspaceDir);
+  await expect(drawer.getByRole("log", { name: "Terminal output" })).toContainText("585987");
+
+  await drawer.getByRole("button", { name: "Clear terminal view" }).click();
+  await expect(drawer.getByRole("log", { name: "Terminal output" })).not.toContainText("585987");
 
   await hideTerminal.click();
   await expect(page.getByRole("button", { name: "Show terminal" })).toBeVisible();
