@@ -58,8 +58,10 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
-import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
-import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
+import {
+  normalizeProviderArtworkInput,
+  persistableProviderArtwork,
+} from "../services/provider-artwork.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
@@ -158,7 +160,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
-    artwork: normalizeProviderArtwork(p.artwork),
+    artwork: persistableProviderArtwork(p.artwork),
     baseUrl,
     models,
     modelMetadata,

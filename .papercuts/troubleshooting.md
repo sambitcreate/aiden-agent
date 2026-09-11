@@ -393,3 +393,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Draft lifecycle regression tests intercepted `chats:appendMessage` for first-send failures; updated that fault injection to the new atomic `chats:createWithFirstMessage` boundary.
 - Empty-chat migration must distinguish header-only Pi journals (created by the old Todo snapshot read even before Send) from real private records; preserving every journal would leave ordinary abandoned chats behind.
 - Completed Pi v3-to-v4 promotion adds lane/navigation records even for a header-only source. Empty cleanup must validate the real receipt, backup digest, and exact migration scaffolding rather than treating all promoted records as user history.
+
+## 2026-09-10 — PR #102 readiness
+
+- The initial source-scanning theory incorrectly credited explicit 1x encode arguments that are already Electron's defaults. Exercise the actual fix with a valid oversized PNG through `providers:save`, relaunch, and verify the recovered, decodable 64px-or-smaller result.
+- Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
+- Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
+- The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.
+- On hosted Electron, Playwright `fill("")` can leave a controlled search unchanged; use the native value setter plus a bubbling input event for deterministic test cleanup.

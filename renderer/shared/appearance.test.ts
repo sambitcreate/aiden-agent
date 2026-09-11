@@ -532,6 +532,11 @@ test("status primitives keep semantic fills and icons without decorative edges",
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
     const start = styles.indexOf(scheme === "light" ? ":root {" : ":root.dark {");
     const fallback = styles.slice(start, styles.indexOf("\n}", start));
+    assert.equal(tokens["--model-pad-knob-foreground"], "#000000");
+    assert.ok(
+      fallback.includes(`--model-pad-knob-foreground: ${tokens["--model-pad-knob-foreground"]};`),
+      `${scheme} fallback Model Pad knob foreground matches the resolver`,
+    );
     for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-"].some(prefix => name.startsWith(prefix)))) {
       assert.ok(fallback.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
     }

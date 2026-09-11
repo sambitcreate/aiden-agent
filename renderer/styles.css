@@ -230,6 +230,7 @@
   --border-separator: rgb(61 63 65 / 0.087);
   --accent: #006ad6;
   --accent-foreground: #ffffff;
+  --model-pad-knob-foreground: #000000;
   --accent-hover: #0063c7;
   --accent-active: #005bb8;
   --focus-ring: var(--text-primary);
@@ -302,6 +303,7 @@
   --border-separator: rgb(209 212 218 / 0.097);
   --accent: #3e97f6;
   --accent-foreground: #000000;
+  --model-pad-knob-foreground: #000000;
   --accent-hover: #59a6f7;
   --accent-active: #68aef8;
   --focus-ring: var(--text-primary);
@@ -1120,13 +1122,16 @@ textarea {
 }
 
 .model-pad-knob {
+  color: var(--model-pad-knob-foreground);
   transition:
     background-color 250ms cubic-bezier(0.25, 1, 0.5, 1),
-    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1);
+    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1),
+    color 250ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .model-pad-knob[data-confirmed="true"] {
   background: var(--accent);
+  color: var(--accent-foreground);
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
     var(--elevation-control-hover);
