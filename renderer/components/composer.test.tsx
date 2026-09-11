@@ -186,7 +186,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   const optimisticClear = composer.indexOf('setText("");');
   const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
-  assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
@@ -217,7 +217,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{sessionCommandBusy\}/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /chatsApi\.copyVisibleHistory\([\s\S]{0,100}throughAssistantMessageId/u);
@@ -295,4 +295,23 @@ test("model picker details sit beside the menu without overlapping the pad", () 
     styles,
     /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
   );
+});
+
+test("first-send draft freeze blocks edits and browser annotation delivery until commit", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
+  assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
+  assert.match(composer, /if \(firstSendPendingRef\.current \|\| !available\(\)\) return false/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
+  assert.match(composer, /role="status"[^\n]*Sending…/u);
+});
+
+
+test("reopening a draft uses its shared pending state instead of fresh composer state", () => {
+  const composer = source("./composer.tsx");
+  const pane = source("../main/chat-pane.tsx");
+  assert.match(pane, /firstMessageSaving=\{draft\?\.sending === true\}/u);
+  assert.match(composer, /const firstSendPending = firstMessageSaving \|\| \(freezeWhileSending && sending\)/u);
+  assert.match(composer, /!firstMessageSaving &&/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u);
 });

@@ -1,3 +1,4 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Unified workspace/chat sidebar with alternate workspace-grouped and recent
 // projections, route-driven selection, and workspace/chat management actions.
 
@@ -740,7 +741,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     return () => unregister.forEach((dispose) => dispose());
   }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
 
-  // Move to a workspace and land on one of its chats (creating one if empty).
+  // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
     async (id: string, allowDirtyDiscard = false) => {
       if (environmentPanel.gitOperationBusy) {
@@ -761,13 +762,13 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         toast.error("Reload Aiden before creating a chat in this workspace.");
         return false;
       }
-      const target = list[0] ?? (await chatsApi.create({ workspaceId: id }));
-      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      const target = list[0] ?? createChatDraft(id).chat;
       const previousWorkspaceId = activeId;
       select(id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
       } catch (error) {
+        if (!list.length) discardChatDraft(target.id);
         if (previousWorkspaceId) select(previousWorkspaceId);
         throw error;
       }
@@ -934,11 +935,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         if (workspaceId !== activeId && environmentPanel.agentBusy) {
           environmentPanel.cancelAgent?.();
         }
-        const created = await chatsApi.create({ workspaceId });
-        await qc.invalidateQueries({ queryKey: queryKeys.chats });
+        const created = createChatDraft(workspaceId).chat;
         select(workspaceId);
         setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
-        await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        try {
+          await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        } catch (error) {
+          discardChatDraft(created.id);
+          throw error;
+        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
       }

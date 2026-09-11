@@ -381,28 +381,15 @@ owns; reopen the terminal before judging the final live state.
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
 
-- 2026-09-09: Fresh selector-fix worktree lacks `.memory/` and dependencies; use current design docs and install locked dependencies before validation.
-- 2026-09-09: `npm ci` omitted Electron.app in this worktree; ran `node node_modules/electron/install.js` before Electron tests.
-- 2026-09-09: Playwright JSX transform serializes imported TSX into component objects; render the thinking CSS fixture in a tsx subprocess before mounting its markup in Electron.
-- 2026-09-09: The A2b schedule_task tool work-in-progress in `main/services/schedule-tool.ts` (uncommitted, edited concurrently with renderer Phase A2a) leaves `npm run type-check` failing on that one file until it lands. Isolate renderer verification by filtering `tsc` output to non-`schedule-tool` paths; do not "fix" the WIP file.
-
-## 2026-09-09 — Desktop remote-control planning
-
-- This checkout has no `.memory/` directory despite AGENTS.md referring to it; use the checked-in plan inventory, remote API documentation, and verified source for planning context.
-- Agent phase handoff can briefly reject a new planner with `agent thread limit reached` after explorers report completion; release exploration work before retrying the planning phase.
-
-## 2026-09-09 — Desktop peer foundation
-
-- Real-router HTTPS pairing caught a missing mandatory protocol-version header that isolated transport mocks missed; retain production-router coverage.
-- Pairing network I/O under the registry mutex delayed disconnects on other hosts; reserve identity under lock and perform network work outside it.
-- Xcode found the physical iPad but could not mount its developer disk image, so focused XCTest execution remained blocked; no prohibited simulator fallback was used.
-- Sharing an in-flight identity request also shared its first caller’s cancellation. Cache completed verification only and retain per-request abort lifetimes.
-- Pullfrog found quadratic SSE rescanning under one-byte trickles. Scan each byte once; bound total frames/bytes and both frame/session time, with real HTTPS clock-controlled regression tests.
-- Recursive secret-name rejection also rejected legitimate content keys. Validate closed protocol envelopes against the bundled schema and preserve schema-authorized content.
-
-## 2026-09-10 — Google catalog PR validation
-
 The main checkout's shared node_modules matched Pi's pinned version but lacked
 postcss-value-parser and @xterm/addon-web-links required by this worktree. The
 resulting type errors disappeared after replacing the temporary dependency
 symlink with this checkout's own npm ci. Full type-check and lint then passed.
+
+## 2026-09-09 — Draft chat planning
+
+- The checkout has no `.memory/` directory despite AGENTS.md referencing it; used current source and the plan index for project context.
+- Native verification: no physical iOS device is online and local Java/Android SDK tools are unavailable. Run generic iOS build-for-testing and shared Remote contract suites; device XCTest and Android runtime acceptance remain unavailable locally.
+- Draft lifecycle regression tests intercepted `chats:appendMessage` for first-send failures; updated that fault injection to the new atomic `chats:createWithFirstMessage` boundary.
+- Empty-chat migration must distinguish header-only Pi journals (created by the old Todo snapshot read even before Send) from real private records; preserving every journal would leave ordinary abandoned chats behind.
+- Completed Pi v3-to-v4 promotion adds lane/navigation records even for a header-only source. Empty cleanup must validate the real receipt, backup digest, and exact migration scaffolding rather than treating all promoted records as user history.

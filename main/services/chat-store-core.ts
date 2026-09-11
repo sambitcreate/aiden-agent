@@ -732,6 +732,67 @@ export function createChatStore(
       return serialized(() => readChat(id));
     },
 
+    /** Install the first user message and sidebar metadata as one recoverable transaction. */
+    async createWithFirstMessage(input: {
+      id: string;
+      title?: string;
+      workspaceId: string;
+      providerId?: string;
+      model?: string;
+      computerUseEnabled: boolean;
+      turnId: string;
+      fingerprint: string;
+      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
+      assertCurrent: () => void;
+    }): Promise<Chat> {
+      return serialized(async () => {
+        input.assertCurrent();
+        const existing = await readChat(input.id);
+        if (existing) {
+          if (existing.firstMessageCommit?.turnId !== input.turnId ||
+              existing.firstMessageCommit.fingerprint !== input.fingerprint) {
+            throw new Error("This draft identifier has already been used for a different message.");
+          }
+          return existing;
+        }
+        // readChat returns null for malformed payloads as well as missing
+        // files. Never replace an unreadable existing conversation on an ID
+        // collision; only a genuinely absent path may receive a new draft.
+        try {
+          await fs.lstat(await chatPath(input.id));
+          throw new Error("This draft identifier belongs to an unreadable existing chat.");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (!input.message.content.trim() && !input.message.attachments?.length) {
+          throw new Error("Add a message or attachment before sending.");
+        }
+        const now = Date.now();
+        const message: ChatMessage = {
+          id: input.message.id,
+          role: "user",
+          content: input.message.content,
+          model: input.message.model,
+          attachments: safeStoredAttachments(input.message.attachments),
+          skill: parseSkillProvenanceV1(input.message.skill),
+          createdAt: now,
+        };
+        const chat: Chat = {
+          id: input.id,
+          workspaceId: input.workspaceId,
+          providerId: await resolveProviderId(input.providerId),
+          model: input.model,
+          computerUseEnabled: input.computerUseEnabled,
+          title: input.title?.trim() || deriveChatTitleSeed(message),
+          createdAt: now,
+          updatedAt: now,
+          messages: [message],
+          firstMessageCommit: { turnId: input.turnId, fingerprint: input.fingerprint },
+        };
+        return installNewChat(chat, input.assertCurrent);
+      });
+    },
+
     async create(input: {
       id?: string;
       title?: string;
