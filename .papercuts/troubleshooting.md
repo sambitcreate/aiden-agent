@@ -386,3 +386,4 @@ owns; reopen the terminal before judging the final live state.
 - Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
 - Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
 - The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.
+- On hosted Electron, Playwright `fill("")` can leave a controlled search unchanged; use the native value setter plus a bubbling input event for deterministic test cleanup.
