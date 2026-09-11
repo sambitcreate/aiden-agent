@@ -121,13 +121,17 @@ function safeHttpUrl(value: unknown): string | undefined {
   }
 }
 
+function redactAbsolutePaths(value: string): string {
+  return value.replace(/(^|[\s"'`=(:])\/(?:[\w.-]+\/)+[\w.-]+/gu, "$1[path]");
+}
+
 function publicCommandMessage(error: unknown, cwd: string): string {
   const raw = error instanceof Error ? error.message : String(error || "GitHub CLI failed.");
   const withoutWorkspace = replaceAllLiteral(raw, cwd, "the workspace");
   const withoutHome = replaceAllLiteral(withoutWorkspace, os.homedir(), "~");
-  return withoutHome
+  return redactAbsolutePaths(withoutHome)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/gi, "$1***@")
-    .replace(/([?&](?:access_token|auth|key|password|signature|token)=)[^&\s]+/gi, "$1***")
+    .replace(/([?&](?:access_token|auth|key|password|private_token|signature|token)=)[^&\s]+/gi, "$1***")
     .replace(/\p{Cc}+/gu, " ")
     .trim()
     .slice(0, 600) || "GitHub CLI failed.";

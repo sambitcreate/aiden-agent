@@ -230,7 +230,7 @@ test("service redacts credentials and workspace paths from renderer-facing failu
   const service = new GitHubPullRequestService({
     runner: async () => {
       throw new Error(
-        "failed in /Users/alice/project with https://alice:secret-token@example.test/repo?access_token=also-secret",
+        "Command failed: /opt/homebrew/bin/gh pr view in /Users/alice/project with https://alice:secret-token@example.test/repo?access_token=also-secret&private_token=hidden",
       );
     },
   });
@@ -238,8 +238,8 @@ test("service redacts credentials and workspace paths from renderer-facing failu
   const result = await service.currentPullRequest("/Users/alice/project");
   assert.equal(result.availability, "error");
   assert.ok(result.message?.includes("the workspace"));
-  assert.ok(result.message?.includes("https://***@example.test/repo?access_token=***"));
-  assert.doesNotMatch(result.message ?? "", /secret-token|also-secret|\/Users\/alice\/project/u);
+  assert.ok(result.message?.includes("https://***@example.test/repo?access_token=***&private_token=***"));
+  assert.doesNotMatch(result.message ?? "", /secret-token|also-secret|hidden|\/Users\/alice\/project|\/opt\/homebrew\/bin\/gh/u);
 });
 
 test("service reports subprocess timeouts with the configured timeout", async () => {
