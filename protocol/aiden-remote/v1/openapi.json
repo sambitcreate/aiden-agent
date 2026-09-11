@@ -3526,7 +3526,9 @@
           "deviceType": {
             "enum": [
               "iphone",
-              "ipad"
+              "ipad",
+              "mac",
+              "linux"
             ]
           },
           "clientVersion": {

@@ -77,6 +77,15 @@ function exchange(
   };
 }
 
+test("Mac and Linux pairing keep the existing grants without implicit host-wide authority", async () => {
+  for (const deviceType of ["mac", "linux"] as const) {
+    const pairing = fixture();
+    const opened = pairing.service.begin(endpoint, fingerprint);
+    const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType }, "desktop");
+    assert.deepEqual(result.capabilities, AIDEN_REMOTE_LEGACY_CAPABILITIES);
+  }
+});
+
 test("pairing opens for exactly five minutes and consumes its 256-bit secret once", async () => {
   const pairing = fixture();
   const opened = pairing.service.begin(endpoint, fingerprint);

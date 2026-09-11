@@ -237,6 +237,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "mac", "linux"]);
   assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",

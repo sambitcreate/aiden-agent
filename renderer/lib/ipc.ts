@@ -152,6 +152,8 @@ import {
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import type { PeerHostView } from "../shared/peer-host";
+import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -171,6 +173,15 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
+
+export const peerHostsApi = {
+  list: () => invoke<PeerHostView[]>("remote:peersList"),
+  pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
+  setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
+  remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  operation: (hostId: string, operation: PeerOperation) => invoke<unknown>("remote:peerOperation", hostId, operation),
+  onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+};
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),

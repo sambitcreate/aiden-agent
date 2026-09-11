@@ -386,6 +386,20 @@ owns; reopen the terminal before judging the final live state.
 - 2026-09-09: Playwright JSX transform serializes imported TSX into component objects; render the thinking CSS fixture in a tsx subprocess before mounting its markup in Electron.
 - 2026-09-09: The A2b schedule_task tool work-in-progress in `main/services/schedule-tool.ts` (uncommitted, edited concurrently with renderer Phase A2a) leaves `npm run type-check` failing on that one file until it lands. Isolate renderer verification by filtering `tsc` output to non-`schedule-tool` paths; do not "fix" the WIP file.
 
+## 2026-09-09 — Desktop remote-control planning
+
+- This checkout has no `.memory/` directory despite AGENTS.md referring to it; use the checked-in plan inventory, remote API documentation, and verified source for planning context.
+- Agent phase handoff can briefly reject a new planner with `agent thread limit reached` after explorers report completion; release exploration work before retrying the planning phase.
+
+## 2026-09-09 — Desktop peer foundation
+
+- Real-router HTTPS pairing caught a missing mandatory protocol-version header that isolated transport mocks missed; retain production-router coverage.
+- Pairing network I/O under the registry mutex delayed disconnects on other hosts; reserve identity under lock and perform network work outside it.
+- Xcode found the physical iPad but could not mount its developer disk image, so focused XCTest execution remained blocked; no prohibited simulator fallback was used.
+- Sharing an in-flight identity request also shared its first caller’s cancellation. Cache completed verification only and retain per-request abort lifetimes.
+- Pullfrog found quadratic SSE rescanning under one-byte trickles. Scan each byte once; bound total frames/bytes and both frame/session time, with real HTTPS clock-controlled regression tests.
+- Recursive secret-name rejection also rejected legitimate content keys. Validate closed protocol envelopes against the bundled schema and preserve schema-authorized content.
+
 ## 2026-09-10 — Google catalog PR validation
 
 The main checkout's shared node_modules matched Pi's pinned version but lacked
