@@ -269,6 +269,9 @@ function normalizedStringField(key: string, value: string): string | undefined {
   // applied; instead a strict grammar admits only bounded leading-slash paths
   // of lowercase static segments and `:param` placeholders.
   if (key === "route") return normalizedDiagnosticRoute(value);
+  // Main-generated renderer references are opaque UUIDs, not content identifiers.
+  // Admit the exact UUID grammar before the generic ID redactor removes it.
+  if (key === "referenceId" && /^RD-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)) return value;
   const sanitized = sanitizeDiagnosticText(value);
   if (!sanitized) return undefined;
   const enumerated = ENUM_STRING_FIELDS[key];

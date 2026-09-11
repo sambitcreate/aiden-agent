@@ -14,6 +14,15 @@ import {
 
 const sessionId = "session-test";
 
+test("main-generated renderer references survive normalization without admitting arbitrary content", () => {
+  const referenceId = "RD-e20a0162-266b-49ab-ae0a-078f74efe71c";
+  assert.equal(normalizeDiagnosticFields({ referenceId })?.referenceId, referenceId);
+  assert.equal(createDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-global-error", fields: { referenceId } }, sessionId).fields?.referenceId, referenceId);
+  for (const value of [`${referenceId}\nprivate`, `https://private/${referenceId}`, `Bearer ${referenceId}`]) {
+    assert.equal(normalizeDiagnosticFields({ referenceId: value }), undefined);
+  }
+});
+
 test("structural causes retain HTTP evidence and cancellation without payloads", () => {
   const secret = "private-prompt-auth-endpoint-task-content";
   const error = Object.assign(new Error(secret), { cause: { status: 429, message: secret, request: secret } });
