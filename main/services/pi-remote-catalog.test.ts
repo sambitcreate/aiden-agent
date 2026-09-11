@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   InMemoryCredentialStore,
+  createModels,
   type Api,
   type Credential,
   type CredentialStore,
@@ -35,6 +36,58 @@ import {
   withProviderStreamOverrides,
 } from "./pi-provider-compatibility.js";
 import { piModelMetadataFor } from "./pi-model-metadata.js";
+import { googleProviderModels } from "./google-provider.js";
+import { isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+
+test("Google catalog policy excludes legacy families without excluding current models", () => {
+  for (const id of [
+    "gemini-2.5", "gemini-2.5-pro", "gemini-2.5-flash-lite",
+    "gemini-2.5-computer-use-preview-10-2025", "gemini-2.0-flash-001",
+    "gemini-1.5-pro-latest", "models/gemini-2.5-flash",
+  ]) assert.equal(isSelectableGoogleCatalogModel(id), false, id);
+  for (const id of ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemma-4-31b-it", "gemini-25-flash"])
+    assert.equal(isSelectableGoogleCatalogModel(id), true, id);
+  assert.ok(googleProviderModels().length > 0);
+  assert.ok(googleProviderModels().every((model) => isSelectableGoogleCatalogModel(model.id)));
+});
+
+test("Google legacy models stay excluded across bundled, cached, and refreshed catalogs", async () => {
+  const google = builtinProviders().find((provider) => provider.id === "google");
+  assert.ok(google);
+  const current = google.getModels().find((model) => model.id === "gemini-3.5-flash");
+  assert.ok(current);
+  const legacy = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"].map(
+    (id) => ({ ...current, id, name: id }),
+  );
+  const baseline = { ...google, getModels: () => [current, ...legacy] };
+  const checkedAt = Date.parse("2026-09-10T16:01:00Z");
+  const store = memoryProviderStore({
+    models: legacy,
+    checkedAt,
+    lastModified: Date.parse("2026-09-10T16:00:00Z"),
+  } as ModelsStoreEntry);
+  const provider = withPiRemoteCatalog(baseline, {
+    now: () => checkedAt,
+    fetchImpl: async () => Response.json([current, ...legacy], {
+      headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+    }),
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  const assertCatalog = () => {
+    assert.deepEqual(provider.getModels().map((model) => model.id), [current.id]);
+    assert.ok(models.getModel("google", current.id));
+    for (const model of legacy) assert.equal(models.getModel("google", model.id), undefined);
+  };
+  assertCatalog();
+  await refreshProvider(provider, store, { allowNetwork: false });
+  assertCatalog();
+  await refreshProvider(provider, store, { force: true });
+  assertCatalog();
+
+  const otherProvider = withPiRemoteCatalog({ ...baseline, id: "custom:google" });
+  assert.deepEqual(otherProvider.getModels().map((model) => model.id), [current, ...legacy].map((model) => model.id));
+});
 
 function opencodeGoProvider() {
   const provider = builtinProviders().find((entry) => entry.id === "opencode-go");

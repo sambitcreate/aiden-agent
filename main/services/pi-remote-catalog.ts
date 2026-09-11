@@ -1,4 +1,5 @@
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
+import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
 
 const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
 const MAX_CATALOG_BYTES = 5 * 1024 * 1024;
@@ -318,7 +319,9 @@ export function withPiRemoteCatalog(provider: Provider, options: PiRemoteCatalog
 
   const wrapped: Provider = {
     ...provider,
-    getModels: () => mergeModels(baseline, dynamicModels),
+    getModels: () => mergeModels(baseline, dynamicModels).filter(
+      (model) => provider.id !== GOOGLE_PROVIDER_ID || isSelectableGoogleCatalogModel(model.id),
+    ),
     refreshModels: async (context) => {
       const stored = context.stored as PersistedRemoteCatalog | undefined;
       const restored = restoredCatalog(stored);
