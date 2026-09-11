@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { types as utilTypes } from "node:util";
 import { normalizeDiagnosticErrorType } from "../../renderer/shared/diagnostics.js";
 
 export const DIAGNOSTIC_EVENT_VERSION = 1 as const;
@@ -76,6 +77,8 @@ export const DIAGNOSTIC_BASE_EVENT_NAMES = [
   "process-exit",
   "process-signal",
   "provider-failed",
+  "todo-storage-disabled",
+  "todo-snapshot-invalid",
   "store-write-failed",
   "skills-discovery-failed",
   "oversize",
@@ -120,6 +123,10 @@ export const DIAGNOSTIC_CODES = [
   "provider-failed",
   "rate-limited",
   "renderer-crashed",
+  "renderer-exception",
+  "authentication-failed",
+  "invalid-request",
+  "service-unavailable",
   "crash-loop",
   "storage-failed",
   "timed-out",
@@ -151,6 +158,8 @@ export interface DiagnosticEventV1 extends DiagnosticEventInput {
 export interface DiagnosticErrorProjection {
   code: DiagnosticCode;
   errorType: string;
+  causeCode?: DiagnosticCode;
+  httpStatus?: number;
   fingerprint?: string;
 }
 
@@ -193,6 +202,9 @@ const NUMBER_FIELDS = new Set([
 const BOOLEAN_FIELDS = new Set(["isMainFrame", "retryable", "snapshotFailed", "truncated"]);
 const EXPORT_OMITTED_FIELDS = new Set(["legacyScope", "message"]);
 const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  causeCode: new Set(DIAGNOSTIC_CODES),
+  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "provider-request", "provider-compaction"]),
+  providerCategory: new Set(["authentication", "quota", "rate_limit", "context_window", "context_management", "output_limit", "interrupted", "timeout", "service_unavailable", "model_unavailable", "network", "invalid_request", "unknown"]),
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),
   failureCategory: new Set(["command-failed", "invalid-response", "timed-out"]),
   origin: new Set(["uncaughtException", "unhandledRejection", "unknown"]),
@@ -257,6 +269,9 @@ function normalizedStringField(key: string, value: string): string | undefined {
   // applied; instead a strict grammar admits only bounded leading-slash paths
   // of lowercase static segments and `:param` placeholders.
   if (key === "route") return normalizedDiagnosticRoute(value);
+  // Main-generated renderer references are opaque UUIDs, not content identifiers.
+  // Admit the exact UUID grammar before the generic ID redactor removes it.
+  if (key === "referenceId" && /^RD-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)) return value;
   const sanitized = sanitizeDiagnosticText(value);
   if (!sanitized) return undefined;
   const enumerated = ENUM_STRING_FIELDS[key];
@@ -344,6 +359,8 @@ export function normalizeDiagnosticFields(fields: DiagnosticSafeFields | undefin
     if (typeof value === "string") {
       const safe = normalizedStringField(key, value);
       if (safe !== undefined) normalized[key] = safe;
+    } else if (key === "httpStatus" && validHttpStatus(value)) {
+      normalized[key] = value;
     } else if (typeof value === "number" && NUMBER_FIELDS.has(key)) {
       normalized[key] = boundedNumber(value);
     } else if (typeof value === "boolean" && BOOLEAN_FIELDS.has(key)) {
@@ -418,45 +435,116 @@ export function createDiagnosticEvent(
 }
 
 function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const candidate = (error as { code?: unknown }).code;
-  return typeof candidate === "string" ? candidate.toUpperCase() : undefined;
+  const candidate = diagnosticProperty(error, "code");
+  return typeof candidate === "string" && candidate.length <= 64 ? candidate.toUpperCase() : undefined;
+}
+
+/** Never invoke error getters or stringify untrusted error/request payloads. */
+function diagnosticProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object" || utilTypes.isProxy(value)) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function validHttpStatus(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599;
+}
+
+function structuralHttpStatus(error: unknown): number | undefined {
+  for (const key of ["status", "statusCode"]) {
+    const value = diagnosticProperty(error, key);
+    if (validHttpStatus(value)) return value;
+  }
+  return undefined;
+}
+
+function diagnosticErrorName(error: unknown): unknown {
+  if (utilTypes.isProxy(error)) return undefined;
+  const ownName = diagnosticProperty(error, "name");
+  if (ownName !== undefined) return ownName;
+  try {
+    if (error instanceof DOMException) {
+      return Object.getOwnPropertyDescriptor(DOMException.prototype, "name")?.get?.call(error);
+    }
+    if (utilTypes.isNativeError(error)) {
+      let prototype = Object.getPrototypeOf(error);
+      for (let depth = 0; prototype && depth < 5 && !utilTypes.isProxy(prototype); depth += 1) {
+        const name = diagnosticProperty(prototype, "name");
+        if (name !== undefined) return name;
+        prototype = Object.getPrototypeOf(prototype);
+      }
+      return "Error";
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function diagnosticCodeFor(error: unknown): DiagnosticCode {
   const code = errorCode(error);
+  const name = diagnosticErrorName(error);
+  if (name === "AbortError" || code === "ABORT_ERR") return "cancelled";
+  if (name === "TimeoutError") return "timed-out";
   if (code === "SUBAGENT_TREE_BUDGET_EXHAUSTED") return "contract-rejected";
   if (code === "ENOENT") return "not-found";
   if (code === "EACCES" || code === "EPERM") return "permission-denied";
   if (code === "ENOSPC" || code === "EDQUOT") return "disk-full";
   if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timed-out";
-  if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ENETUNREACH") {
+  if (["ECONNREFUSED", "ECONNRESET", "ENETUNREACH", "EHOSTUNREACH", "EAI_AGAIN", "ENOTFOUND", "UND_ERR_SOCKET"].includes(code ?? "")) {
     return "network-failed";
   }
-  if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+  const status = structuralHttpStatus(error);
+  if (status === 401 || status === 403) return "authentication-failed";
+  if (status === 404) return "not-found";
+  if (status === 429) return "rate-limited";
+  if (status === 408 || status === 504) return "timed-out";
+  if (status !== undefined && status >= 500) return "service-unavailable";
+  if (status === 400 || status === 422) return "invalid-request";
   return "unknown";
 }
 
 export function projectDiagnosticError(error: unknown): DiagnosticErrorProjection {
-  const errorType = normalizeDiagnosticErrorType(error instanceof Error ? error.name : undefined);
-  const safeFrames =
-    error instanceof Error
-      ? (error.stack ?? "")
-          .split("\n")
-          .slice(1, 6)
-          .flatMap((line) => {
-            const match = /^\s*at\s+([A-Za-z_$][A-Za-z0-9_.$<>-]{0,79})/u.exec(line);
-            return match?.[1] ? [match[1]] : [];
-          })
-      : [];
-  const safeSource = [errorType, errorCode(error) ?? "unknown", ...safeFrames].join(":");
+  const errorType = normalizeDiagnosticErrorType(diagnosticErrorName(error));
+  const chain: unknown[] = [];
+  let current = error;
+  while (current && typeof current === "object" && chain.length < 5 && !chain.includes(current)) {
+    chain.push(current);
+    current = diagnosticProperty(current, "cause");
+  }
+  const outerCode = diagnosticCodeFor(error);
+  const classifiedCause = chain.slice(1).find((cause) => diagnosticCodeFor(cause) !== "unknown");
+  const causeCode = classifiedCause === undefined ? undefined : diagnosticCodeFor(classifiedCause);
+  const code = outerCode === "unknown" ? causeCode ?? outerCode : outerCode;
+  // Keep status evidence on the same envelope as the selected classification.
+  // A wrapper's unrelated 200 must not accompany its cause's 503 failure.
+  const source = outerCode === "unknown" && classifiedCause !== undefined ? classifiedCause : error;
+  const httpStatus = structuralHttpStatus(source);
+  // Fingerprints group closed causes, not call sites. V8 exposes stack through
+  // an accessor which may execute custom formatting/name/message getters.
+  // Never materialize it or hash arbitrary payload-derived data.
+  const safeSource = [errorType, code, causeCode ?? "unknown", httpStatus ?? "unknown"].join(":");
   return {
-    code: diagnosticCodeFor(error),
+    code,
     errorType,
+    ...(causeCode ? { causeCode } : {}),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(safeSource
       ? { fingerprint: createHash("sha256").update(safeSource).digest("hex").slice(0, 16) }
       : {}),
   };
+}
+
+export function rendererDiagnosticClassification(
+  errorType: string,
+  suppressed: number = 0,
+): Pick<DiagnosticEventInput, "code" | "outcome"> {
+  if (errorType === "AbortError") return { code: "cancelled", outcome: "cancelled" };
+  return { code: "renderer-exception", outcome: suppressed ? "degraded" : "failed" };
 }
 
 export function diagnosticEventLine(event: DiagnosticEventV1): string {

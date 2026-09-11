@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { types as utilTypes } from "node:util";
 
 import {
   MAX_DIAGNOSTIC_EVENT_BYTES,
@@ -625,13 +626,13 @@ const LEGACY_AREA_MAP: Readonly<Record<string, DiagnosticArea>> = {
 function legacyText(values: unknown[]): string {
   return sanitizeDiagnosticText(
     values
-      .filter((value) => !(value instanceof Error))
+      .filter((value) => !utilTypes.isNativeError(value) && !utilTypes.isProxy(value))
       .map((value) => {
         if (typeof value === "string") return value;
         try {
           return JSON.stringify(value);
         } catch {
-          return String(value);
+          return "[unavailable]";
         }
       })
       .join(" "),
@@ -651,13 +652,28 @@ export function writeLegacyDiagnostic(
   values: unknown[],
   synchronous = false,
 ): DiagnosticEventV1 {
-  const error = values.find((value): value is Error => value instanceof Error);
+  const error = values.find((value) => utilTypes.isNativeError(value)) ?? values.find((value) => {
+    if (!value || typeof value !== "object" || utilTypes.isProxy(value)) return false;
+    try {
+      if (value instanceof DOMException) return true;
+      // SDKs also throw plain structural envelopes. Classification never retains
+      // their message, response body, request, headers, or arbitrary properties.
+      // An arbitrary context object with a status/code alone is not an error.
+      const message = Object.getOwnPropertyDescriptor(value, "message");
+      return message && "value" in message && typeof message.value === "string" &&
+        projectDiagnosticError(value).code !== "unknown";
+    } catch {
+      // Even a non-proxy object may inherit from a hostile/revoked proxy.
+      return false;
+    }
+  });
   const projection = error ? projectDiagnosticError(error) : undefined;
   const input: DiagnosticEventInput = {
     level,
     area: LEGACY_AREA_MAP[scope] ?? "diagnostics",
     event: runtimeProfile === "production" ? legacyEventName(level, LEGACY_AREA_MAP[scope] ?? "diagnostics") : "legacy-log",
-    ...(level === "error" ? { outcome: "failed" as const } : level === "warn" ? { outcome: "degraded" as const } : {}),
+    ...(projection?.code === "cancelled" ? { outcome: "cancelled" as const }
+      : level === "error" ? { outcome: "failed" as const } : level === "warn" ? { outcome: "degraded" as const } : {}),
     ...(projection ? { code: projection.code } : {}),
     fields: {
       legacyScope: sanitizeDiagnosticText(scope, 64) || "unknown",
@@ -666,6 +682,8 @@ export function writeLegacyDiagnostic(
         : {}),
       ...(projection ? { errorType: projection.errorType } : {}),
       ...(projection?.fingerprint ? { fingerprint: projection.fingerprint } : {}),
+      ...(projection?.causeCode ? { causeCode: projection.causeCode } : {}),
+      ...(projection?.httpStatus === undefined ? {} : { httpStatus: projection.httpStatus }),
     },
   };
   if (runtimeProfile === "production" && (level === "debug" || level === "info")) {

@@ -12,7 +12,7 @@ import {
 import { app, BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
-import type { DiagnosticEventName } from "../services/diagnostics-contract.js";
+import { rendererDiagnosticClassification, type DiagnosticEventName } from "../services/diagnostics-contract.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { createRendererDiagnosticRateLimiter } from "../services/renderer-diagnostic-rate.js";
 import {
@@ -110,10 +110,12 @@ export function registerDiagnosticHandlers(): void {
       level: report.suppressed ? "warn" : "error",
       area: "renderer",
       event: RENDERER_EVENT_NAMES[report.kind],
-      outcome: report.suppressed ? "degraded" : "failed",
-      code: "renderer-crashed",
+      ...rendererDiagnosticClassification(report.errorType, report.suppressed),
       fields: {
         errorType: report.errorType,
+        failurePhase: report.kind === "global-error" ? "renderer-script"
+          : report.kind === "unhandled-rejection" ? "renderer-promise"
+            : report.kind === "route-error" ? "renderer-route" : "renderer-react",
         rendererContext: report.context,
         referenceId: durableReferenceId,
         suppressed: report.suppressed ?? 0,

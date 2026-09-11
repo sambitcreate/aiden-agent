@@ -15,6 +15,7 @@ export interface TodoSnapshotViewV1 {
   version: typeof TODO_VIEW_VERSION;
   chatId: string;
   availability: "ready" | "unavailable";
+  unavailableReason?: "storage_not_enabled" | "invalid_snapshot";
   tasks: TodoTaskViewV1[];
 }
 
@@ -72,6 +73,10 @@ export function parseTodoSnapshotView(value: unknown): TodoSnapshotViewV1 | unde
     snapshot.chatId.length < 1 ||
     snapshot.chatId.length > 200 ||
     (snapshot.availability !== "ready" && snapshot.availability !== "unavailable") ||
+    (snapshot.unavailableReason !== undefined &&
+      (snapshot.availability !== "unavailable" ||
+        (snapshot.unavailableReason !== "storage_not_enabled" &&
+          snapshot.unavailableReason !== "invalid_snapshot"))) ||
     !Array.isArray(snapshot.tasks) ||
     snapshot.tasks.length > MAX_TODO_VIEW_TASKS
   ) {
@@ -115,6 +120,9 @@ export function parseTodoSnapshotView(value: unknown): TodoSnapshotViewV1 | unde
     version: TODO_VIEW_VERSION,
     chatId: snapshot.chatId,
     availability: snapshot.availability,
+    ...(snapshot.unavailableReason !== undefined
+      ? { unavailableReason: snapshot.unavailableReason as TodoSnapshotViewV1["unavailableReason"] }
+      : {}),
     tasks,
   };
 }
@@ -147,6 +155,12 @@ export function todoSnapshotForRenderer(
   return parsed;
 }
 
-export function unavailableTodoSnapshot(chatId: string): TodoSnapshotViewV1 {
-  return { version: TODO_VIEW_VERSION, chatId, availability: "unavailable", tasks: [] };
+export function unavailableTodoSnapshot(
+  chatId: string,
+  unavailableReason?: TodoSnapshotViewV1["unavailableReason"],
+): TodoSnapshotViewV1 {
+  return {
+    version: TODO_VIEW_VERSION, chatId, availability: "unavailable", tasks: [],
+    ...(unavailableReason ? { unavailableReason } : {}),
+  };
 }
