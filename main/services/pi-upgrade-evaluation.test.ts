@@ -231,6 +231,31 @@ test("an overlapping first load cannot recreate a policy deleted after the first
   assert.deepEqual(await readdir(root), []);
 });
 
+test("failed advancement still records observation before a waiting first load can recreate policy", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-observed-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "pi-upgrade-rollout-v1.json");
+  await writeFile(file, JSON.stringify({ version: 1, stage: "existing_long_chats", activatedAt: 100, revision: 7 }));
+  let release!: () => void;
+  let arrived!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { arrived = resolve; });
+  let calls = 0;
+  const store = new PiUpgradeRolloutStore({ initialStage: "new_chats", root: async () => {
+    if (++calls === 1) { arrived(); await blocked; }
+    return root;
+  } });
+  const waiting = store.load();
+  const rejection = assert.rejects(waiting, { code: "ENOENT" });
+  await started;
+  await assert.rejects(store.advance("v4_only"), { code: "ENOENT" });
+  await rm(file);
+  release();
+  await rejection;
+  await assert.rejects(store.load(), { code: "ENOENT" });
+  assert.deepEqual(await readdir(root), []);
+});
+
 test("concurrent rollout initialization publishes one complete policy without losing the winner", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-create-"));
   t.after(() => rm(root, { recursive: true, force: true }));

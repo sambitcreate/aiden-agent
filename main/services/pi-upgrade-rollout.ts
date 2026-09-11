@@ -313,9 +313,10 @@ export class PiUpgradeRolloutStore {
     try {
       const parsed = parseDocument(await privateJson(paths.policy));
       if (!parsed) throw new Error("The Pi upgrade rollout document is invalid.");
+      this.hasLoaded = true;
       return parsed;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create || this.hasLoaded) throw error;
       const initial = { version: 1 as const, stage: this.options.initialStage, activatedAt: this.now(), revision: 1 };
       try {
         await atomicPrivateJson(paths.root, paths.policy, initial, true);
