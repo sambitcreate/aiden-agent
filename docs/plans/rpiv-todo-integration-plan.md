@@ -14,7 +14,7 @@ The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobil
 
 1. `main/services/rpiv-todo/contract.ts` defines the closed version-1 snapshot and parameter contract, terminal/control-character sanitization, descriptor-safe plain-JSON checks, hard byte/count/depth limits, dependency DAG validation, and the one-`in_progress` invariant.
 2. `main/services/rpiv-todo/reducer.ts` owns create, update, list, get, tombstone delete, and clear. Validation failures are successful in-band tool results with an unchanged complete snapshot, so the journal remains replayable. Completed tasks cannot reopen; deleted tasks remain tombstones until clear; dependency references are preserved.
-3. `main/services/rpiv-todo/replay.ts` scans the current Pi branch for the newest todo tool result. A malformed newest result fails closed and disables todo for the chat; it never regresses to an older valid state. Compaction entries do not become a second state authority.
+3. `main/services/rpiv-todo/replay.ts` scans the entire current Pi branch in oldest-to-newest order, selects the newest non-`isError` todo tool result, and validates only that authoritative full snapshot. Older malformed snapshots are superseded; a malformed newest checkpoint fails closed and disables todo for the chat, never regressing to an older valid state. Dispatch/schema error results are skipped, and branch read or iteration failures propagate unchanged. Compaction entries do not become a second state authority.
 4. `main/services/rpiv-todo/extension.ts` contributes a generation-local native Pi tool and guidance. Replay policy is `safe`: mutation exists only in the generation closure until the full result is durably journaled, so a crash retry cannot duplicate durable state. Renderer publication waits for a durable `toolResult` `message_end` runtime event.
 5. `main/services/llm-client.ts` opens the private chat session before freezing runtime contributions, replays todo state, requires an explicitly classified chat usage source, publishes the initial projection, and sends later projections only after journal durability. Verified corrupt replay immediately publishes the content-free unavailable projection.
 6. `main/handlers/chats.ts` exposes an owner-fenced `chats:todoSnapshot` read. It rechecks the exact renderer document after asynchronous work. Corrupt todo journals return a content-free unavailable state; other storage errors remain errors.
@@ -37,7 +37,7 @@ The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobil
 `npm run test:todo` is registered in `pretest` and covers:
 
 - strict contract parsing, sanitization, size limits, graph invariants, transitions, tombstones, and unchanged in-band error snapshots;
-- branch replay, compaction survival, no-snapshot initialization, and fail-closed newest-result corruption;
+- branch replay, compaction survival, no-snapshot initialization, superseded corruption, fail-closed newest-checkpoint corruption, skipped dispatch errors, and propagated branch read/iteration failures;
 - admission fencing, per-generation state isolation, cancellation, replay policy, and real harness coverage proving publication follows successful durable append and never follows append failure;
 - closed renderer projection and unavailable-state parsing;
 - slow-initial-read versus live-snapshot ordering and immediate corrupt-replay unavailability;
