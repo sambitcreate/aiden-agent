@@ -347,6 +347,8 @@ function TerminalViewport({
             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
             return true;
           },
+          canActivateLink: (url) =>
+            browserLinkCommand(url, { metaKey: false, ctrlKey: false }) !== null,
           onLinkActivate: (url, event) => {
             const command = browserLinkCommand(url, event);
             if (command) {

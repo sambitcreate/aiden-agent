@@ -26,6 +26,10 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   assert.match(drawer, /browserLinkCommand\(url, event\)/u);
   assert.match(
     drawer,
+    /canActivateLink:[\s\S]*browserLinkCommand\(url, \{ metaKey: false, ctrlKey: false \}\) !== null/u,
+  );
+  assert.match(
+    drawer,
     /browserApi[\s\S]*\.command\(session\.workspaceId, command\)[\s\S]*Could not open this link/u,
   );
   assert.match(

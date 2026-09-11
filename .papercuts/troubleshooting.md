@@ -383,3 +383,6 @@ owns; reopen the terminal before judging the final live state.
 
 - The stale terminal migration conflicted with newer browser-link integration and expanded package scripts; preserve current `main` scripts and link routing, then layer the Ghostty-specific test/build hooks back in before regenerating the lockfile.
 - `npm ci` completed without Electron's macOS payload, and the first focused Playwright command omitted this repo's explicit config; install the payload with `node node_modules/electron/install.js` and pass `--config=playwright.config.ts`.
+- Canvas terminal link detection and host navigation policy had separate truth sources, so unsupported file-like text gained a dead click affordance. Pass the host policy into the surface and filter hover and activation together.
+- Ghostty correctly encodes modified keys, but Meta chords belong to the host; suppress unhandled Meta press/release pairs after terminal copy and paste handling. Do not key this off `navigator.platform`: Chromium may reduce it even in a macOS Electron renderer.
+- The terminal Playwright fixture launches compiled renderer output; rebuild before interpreting a focused E2E failure after source edits, or the test exercises the previous bundle.

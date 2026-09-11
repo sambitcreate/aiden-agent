@@ -391,6 +391,25 @@ export function isTerminalPasteShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+/**
+ * macOS owns Command chords for application and editing shortcuts. Once the
+ * terminal-specific copy/paste paths have had their chance, do not let an
+ * unhandled Command chord fall through to Ghostty and type its base key into
+ * the shell. Ctrl chords remain terminal input on every platform.
+ */
+export function isTerminalHostReservedShortcut(
+  event: Pick<KeyboardEvent, "metaKey">,
+): boolean {
+  return event.metaKey;
+}
+
+export function isTerminalLinkActivatable(
+  text: string,
+  canActivateLink?: (text: string) => boolean,
+): boolean {
+  return canActivateLink?.(text) ?? true;
+}
+
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
@@ -537,6 +556,7 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
+  readonly canActivateLink?: (text: string) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   /**
    * A right-click the running application did not claim through mouse
@@ -1111,6 +1131,10 @@ export class GhosttyTerminalSurface {
           },
         );
       }
+      return;
+    }
+    if (isTerminalHostReservedShortcut(event)) {
+      this.suppressedKeyCodes.add(event.code);
       return;
     }
     // keyCode 229 is Safari's only signal that this keydown opens an IME
@@ -1847,6 +1871,7 @@ export class GhosttyTerminalSurface {
     if (!cell) return null;
     const explicitHyperlink = this.core.hyperlinkAt(cell.x, cell.y);
     if (explicitHyperlink) {
+      if (!isTerminalLinkActivatable(explicitHyperlink, this.options.canActivateLink)) return null;
       const start = { ...cell };
       const end = { ...cell };
       while (true) {
@@ -1876,7 +1901,11 @@ export class GhosttyTerminalSurface {
         range: { start, end },
       };
     }
-    return terminalLinkAtPositionWithRange(this.snapshot.rowData, cell.y, cell.x);
+    const detected = terminalLinkAtPositionWithRange(this.snapshot.rowData, cell.y, cell.x);
+    if (!detected || !isTerminalLinkActivatable(detected.text, this.options.canActivateLink)) {
+      return null;
+    }
+    return detected;
   }
 
   private sendMouse(action: TerminalMouseAction, button: number | null, event: MouseEvent): void {

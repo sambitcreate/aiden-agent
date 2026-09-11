@@ -26,7 +26,7 @@ test("vendored libghostty-vt stays pinned and exposes the C ABI", async () => {
   assert.equal(embeddedRevision, pinned);
 });
 
-test("GhosttyRuntime loads wasm, parses VT output, and encodes Enter", async () => {
+test("GhosttyRuntime loads wasm and accepts VT output through the C ABI", async () => {
   const runtime = await GhosttyRuntime.load();
   const optionsSize = runtime.layout("GhosttyTerminalOptions").size;
   const options = runtime.alloc(optionsSize);
