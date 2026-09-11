@@ -56,6 +56,8 @@ test("Tailscale takeover is disclosed only for a stale Aiden route with bounded 
 });
 
 test("Tailscale setup failures retain typed actionable remediation", () => {
+  assert.match(source, /Error invoking remote method/u);
+  assert.match(source, /replace\(\/\^Error:\\s\*\/iu, ""\)/u);
   assert.match(source, /status\.tailscaleErrorCode === "not_installed"/u);
   assert.match(source, /status\.tailscaleErrorCode === "not_connected"/u);
   assert.match(source, /status\.tailscaleErrorCode === "https_unavailable"/u);

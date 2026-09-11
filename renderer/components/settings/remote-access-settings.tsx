@@ -130,7 +130,9 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
 }
 
 function friendlyTailscaleError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
+  const message = (error instanceof Error ? error.message : "")
+    .replace(/^Error invoking remote method ['"][^'"]+['"]:\s*/iu, "")
+    .replace(/^Error:\s*/iu, "");
   if (message.includes("tailscale_route_live")) return "Another Aiden profile is active on this route. Nothing was changed.";
   if (message.includes("tailscale_takeover_changed") || message.includes("tailscale_takeover_expired")) return "The route changed or this review expired. Review it again before taking over.";
   if (message.includes("tailscale_funnel_conflict")) return "Tailscale Funnel is using this listener. Aiden did not change it.";

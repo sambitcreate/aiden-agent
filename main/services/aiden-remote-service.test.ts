@@ -110,6 +110,7 @@ interface FixtureOptions {
   portCandidates?: readonly number[];
   failSaveWhen?: (document: AidenRemoteStateDocument) => boolean;
   failBonjourStart?: boolean;
+  failTailscaleDisconnect?: boolean;
   tailscaleServeStatus?: AidenTailscaleStatus;
   tailscaleStatusFailureAtCall?: number;
   enableTailscaleTakeover?: boolean;
@@ -221,6 +222,7 @@ async function fixture(
     ) => {
       tailscale.disconnects += 1;
       tailscale.disconnectTargets.push(target);
+      if (options.failTailscaleDisconnect) throw new Error("tailscale route unavailable");
       await clearOwnership?.();
     },
     reconcilePendingOutcome: async () => {
@@ -1681,6 +1683,26 @@ test("a failed fresh Tailscale pairing restores the original connection mode", a
     assert.equal(after.connectionMode, before.connectionMode);
     assert.equal(after.tailscaleOwnership, undefined);
     assert.equal((await f.service.status()).running, false);
+  } finally { await f.cleanup(); }
+});
+
+test("a route-cleanup failure still disables fresh local access and restores its mode", async () => {
+  const f = await fixture({
+    tailscaleAssessment: { state: "unrelated_conflict" },
+    failTailscaleDisconnect: true,
+  });
+  try {
+    const before = await f.state.snapshot();
+    await assert.rejects(
+      f.service.setupPairing("tailscale", before),
+      /Local access was turned off, but the new Tailscale route could not be removed/u,
+    );
+    const after = await f.state.snapshot();
+    assert.equal(after.enabled, false);
+    assert.equal(after.connectionMode, before.connectionMode);
+    assert.ok(after.tailscaleOwnership);
+    assert.equal((await f.service.status()).running, false);
+    assert.equal(f.tailscale.disconnects, 1);
   } finally { await f.cleanup(); }
 });
 

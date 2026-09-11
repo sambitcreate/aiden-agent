@@ -1060,19 +1060,47 @@ export class AidenRemoteService {
           // Keep uncertain external results available for explicit reconciliation.
           // Roll back only the access introduced by this acknowledged attempt.
           if (!after.tailscalePendingOutcome) {
-            try {
-              if (!current.tailscaleOwnership && after.tailscaleOwnership) {
+            let routeCleanupFailed = false;
+            let localCleanupFailed = false;
+            if (!current.tailscaleOwnership && after.tailscaleOwnership) {
+              try {
                 await this.disconnectTailscaleInternal(after);
+              } catch {
+                routeCleanupFailed = true;
               }
-              if (!current.enabled) {
+            }
+            if (!current.enabled) {
+              try {
                 await this.stopListeners();
-                await this.options.state.setEnabled(false);
-                if (mode !== current.connectionMode) await this.options.state.setConnectionMode(current.connectionMode);
-              } else if (mode !== current.connectionMode) {
-                await this.setConnectionModeInternal(current.connectionMode);
+              } catch {
+                localCleanupFailed = true;
               }
-            } catch {
+              try {
+                await this.options.state.setEnabled(false);
+              } catch {
+                localCleanupFailed = true;
+              }
+              if (mode !== current.connectionMode) {
+                try {
+                  await this.options.state.setConnectionMode(current.connectionMode);
+                } catch {
+                  localCleanupFailed = true;
+                }
+              }
+            } else if (mode !== current.connectionMode) {
+              try {
+                await this.setConnectionModeInternal(current.connectionMode);
+              } catch {
+                localCleanupFailed = true;
+              }
+            }
+            if (localCleanupFailed) {
               throw new Error("Phone setup did not finish and cleanup could not be confirmed. Check Connection settings before trying again.");
+            }
+            if (routeCleanupFailed) {
+              throw new Error(current.enabled
+                ? "Phone setup did not finish, and the new Tailscale route could not be removed. Existing local access stayed on; check Connection settings before trying again."
+                : "Phone setup did not finish. Local access was turned off, but the new Tailscale route could not be removed. Check Connection settings before trying again.");
             }
           }
           throw error;
