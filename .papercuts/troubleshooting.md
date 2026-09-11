@@ -389,3 +389,4 @@ owns; reopen the terminal before judging the final live state.
 - Progressive disclosure made two inherited E2E locators inaccessible: tests must open the exact Remote or Telegram details before asserting the controls inside, rather than spending the full timeout waiting for hidden semantics.
 - A single rollback `try` coupled external Tailscale route cleanup to local listener/state cleanup; keep independently knowable cleanup steps best-effort and report external versus local uncertainty separately.
 - Distinct cleanup messages need branch-specific regressions: cover both newly enabled access being disabled and pre-existing access staying enabled when route removal fails.
+- Hosted Electron can leave a controlled scheduled-task search unchanged after Playwright `fill("")`; use the native value setter plus a bubbling input event for deterministic cleanup.
