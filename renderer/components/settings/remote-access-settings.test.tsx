@@ -103,7 +103,7 @@ test("paired endpoint collisions use typed remediation without exposing socket e
 
 
 test("guided setup confirms changed access and calls the main-owned coordinator", () => {
-  assert.match(source, /title="Aiden On The Go"/u);
+  assert.match(source, /title="Phone setup"/u);
   assert.match(source, /1. Connect your phone/u);
   assert.match(source, /2. Scan to finish/u);
   assert.match(source, /aidenRemoteApi.setupPairing/u);

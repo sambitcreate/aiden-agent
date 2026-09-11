@@ -363,14 +363,14 @@ export function TelegramSettings() {
           label="Connection"
           description="Keep Aiden running on this Mac. After connecting, send /start to your bot from your own Telegram account."
         >
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>
               Connect
             </Button>
             <Button size="medium" variant="muted" onClick={disconnect} disabled={!polling}>
               Disconnect
             </Button>
-            <span className="text-secondary text-regular">
+            <span className="min-w-0 break-words text-secondary text-regular">
               {lastError ? "Needs attention" : polling ? (allowedUserId !== undefined ? "● Connected" : "Pair your Telegram account") : "○ Disconnected"}
               {queuedCount > 0 ? ` · ${queuedCount} queued` : ""}
             </span>
@@ -401,7 +401,7 @@ export function TelegramSettings() {
       )}
 
     </FieldSet>
-    <details className="mb-6 rounded-card bg-well p-4">
+    <details className="settings-card mb-6 rounded-card bg-well p-4">
       <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Advanced Telegram settings</summary>
       <FieldSet title="Profiles and preferences">
       <Field
@@ -461,7 +461,12 @@ export function TelegramSettings() {
             : "Add a bot token below before enabling the bridge."
         }
       >
-        <Switch checked={enabled} onCheckedChange={(checked) => checked ? setConnectionReview(true) : void toggle(false)} disabled={!hasToken} />
+        <Switch
+          aria-label="Enable Telegram bridge"
+          checked={enabled}
+          onCheckedChange={(checked) => checked ? setConnectionReview(true) : void toggle(false)}
+          disabled={!hasToken}
+        />
       </Field>
 
       <Field

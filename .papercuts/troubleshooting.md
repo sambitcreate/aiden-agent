@@ -381,3 +381,8 @@ owns; reopen the terminal before judging the final live state.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
 - UX review (2026-09-05): the active Xcode installation rejects tools until its license is accepted. Git and desktop C helpers can use the separately installed Command Line Tools via `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; helper build scripts replace the child environment, so this run compiled their unchanged C sources with the same flags directly. iOS physical-device discovery/test remains blocked; do not claim it passed.
 - Electron E2E failure diagnostics called `app.process()` outside their try/catch; a closed Electron target hid the original launch error. Keep that call within the best-effort diagnostic block. The isolated E2E profile also cannot establish native Bot Keychain authority; the editor test injects a test-owned IPC catalog and captures the submitted access, while storage/authority tests run separately.
+
+## 2026-09-10 — PR96 readiness rebase
+
+- The branch predated the unified Settings work and conflicted in headings, accessible switch names, shared test fixtures, and the tracked-but-ignored papercut log. Resolve these contracts additively and use `git add -f` for the already tracked `.papercuts/troubleshooting.md`.
+- A parent save handler showed a toast but resolved its promise, making the editor's inline retry state unreachable. Propagate the rejection after the toast so the review dialog keeps the user's choices and exposes the error.

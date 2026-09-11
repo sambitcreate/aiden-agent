@@ -50,8 +50,12 @@ async function assertRenderedSettingsDestination(
       return;
     case "Aiden On The Go":
       await expect(
-        page.getByRole("heading", { level: 1, name: "Remote Access", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
+      const macSettings = page.getByText("This Mac settings", { exact: true });
+      await expect(macSettings).toBeVisible();
+      await macSettings.click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -61,8 +65,6 @@ async function assertRenderedSettingsDestination(
           .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
           .getByText("Off", { exact: true }),
       ).toBeVisible();
-      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
-      await expect(page.getByText(/This Mac settings/u)).toBeVisible();
       return;
     case "Scheduled tasks":
       await expect(

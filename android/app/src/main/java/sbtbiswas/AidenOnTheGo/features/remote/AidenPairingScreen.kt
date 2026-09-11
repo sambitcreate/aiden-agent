@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -204,7 +207,9 @@ fun AidenPairingScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(4.dp)
+                    modifier = Modifier
+                        .padding(4.dp)
+                        .selectableGroup()
                 ) {
                     // Tab 0: Scan QR
                     Surface(
@@ -212,7 +217,11 @@ fun AidenPairingScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .tactilePress { selectedTab = 0 }
+                            .selectable(
+                                selected = selectedTab == 0,
+                                role = Role.Tab,
+                                onClick = { selectedTab = 0 }
+                            )
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
@@ -233,7 +242,11 @@ fun AidenPairingScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .tactilePress { selectedTab = 1 }
+                            .selectable(
+                                selected = selectedTab == 1,
+                                role = Role.Tab,
+                                onClick = { selectedTab = 1 }
+                            )
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
