@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import type { Provider } from "./types.js";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
 
 function provider(overrides: Partial<Provider> = {}): Provider {
   return {
@@ -26,6 +28,22 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     ...overrides,
   };
 }
+
+test("mobile catalogs omit legacy Google models and recover stale defaults", async () => {
+  const google = builtinProviders().find((entry) => entry.id === "google");
+  assert.ok(google);
+  const models = withPiRemoteCatalog(google).getModels().map((model) => model.id);
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ id: "google", models, modelMetadata: {} })],
+    getSettings: async () => ({ lastProviderId: "google", lastModel: "gemini-2.5-flash" }),
+  });
+  const catalog = await service.list();
+  assert.ok(catalog.providers[0]?.models.length);
+  assert.ok(catalog.providers[0]?.models.every((model) => !/^gemini-(?:2\.5|2\.0|1\.5)(?:-|$)/u.test(model.id)));
+  assert.ok(catalog.defaults.modelId && models.includes(catalog.defaults.modelId));
+  await assert.rejects(service.resolve("google", "gemini-2.5-flash"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request");
+});
 
 test("model projection includes only configured chat models and no connection secrets", async () => {
   const service = new AidenRemoteModelService({
