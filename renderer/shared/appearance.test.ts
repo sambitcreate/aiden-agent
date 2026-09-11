@@ -357,7 +357,7 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
   );
   assert.match(
     ui,
-    /SwitchPrimitive\.Thumb className="[^"]*bg-white[^"]*data-\[state=checked\]:bg-accent-foreground[^"]*"/u,
+    /SwitchPrimitive\.Root[\s\S]*inline-flex h-6 w-10 shrink-0 items-center overflow-visible[\s\S]*SwitchPrimitive\.Thumb className="[^"]*pointer-events-none[^"]*bg-white[^"]*data-\[state=checked\]:bg-accent-foreground[^"]*"/u,
   );
   assert.match(assistantBubble, /bg-support-red[\s\S]*?text-support-red-foreground/u);
 });

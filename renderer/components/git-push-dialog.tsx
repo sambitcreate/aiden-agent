@@ -214,7 +214,7 @@ export function GitPushDialog({
               </div>
             </div>
 
-            <Label className="items-start justify-between rounded-control border border-field px-3 py-2.5">
+            <Label className="items-center justify-between rounded-control border border-field px-3 py-2.5">
               <span className="min-w-0 pr-3">
                 <span className="block text-regular text-primary">Remember as upstream</span>
                 <span className="mt-0.5 block text-small text-secondary">

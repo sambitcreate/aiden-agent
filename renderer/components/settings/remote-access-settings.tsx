@@ -526,7 +526,7 @@ export function RemoteAccessSettings() {
           )}
           description="Connect Aiden On The Go while Aiden is running."
         >
-          <div className="flex items-center justify-end gap-2 max-[540px]:justify-start">
+          <div className="flex items-center justify-end gap-2">
             {busy === "enabled" ? <Loader2 className="size-4 animate-spin text-secondary" /> : null}
             <Badge color={status.running ? "green" : status.error ? "red" : undefined}>{summary}</Badge>
             <Switch

@@ -42,6 +42,7 @@ import {
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
   writeModelPadLayout,
+  measureModelPadAvailableSize,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadDirection,
@@ -388,14 +389,19 @@ export function ModelPadSettings() {
     let frame = 0;
     const measure = () => {
       frame = 0;
+      const scrollportRect = scrollport?.getBoundingClientRect();
       const viewportBottom = Math.min(
         window.innerHeight,
-        scrollport?.getBoundingClientRect().bottom ?? window.innerHeight,
+        scrollportRect?.bottom ?? window.innerHeight,
       );
       // Compensate for page scrolling so scrolling down never grows the Pad.
       const canvasTop = canvas.getBoundingClientRect().top + (scrollport?.scrollTop ?? 0);
-      const labelsHeight = canvas.getBoundingClientRect().height - pad.getBoundingClientRect().height;
-      const size = Math.floor(Math.max(160, viewportBottom - canvasTop - labelsHeight - 24));
+      const size = measureModelPadAvailableSize({
+        viewportBottom,
+        canvasTop,
+        canvasWidth: canvas.clientWidth,
+        scrollportClientHeight: scrollport?.clientHeight ?? window.innerHeight,
+      });
       const value = `${size}px`;
       if (grid.style.getPropertyValue("--model-pad-available-size") !== value) {
         grid.style.setProperty("--model-pad-available-size", value);
@@ -405,12 +411,10 @@ export function ModelPadSettings() {
       if (!frame) frame = requestAnimationFrame(measure);
     };
     const observer = new ResizeObserver(schedule);
-    // Include ancestors to catch a title or toolbar wrapping after a font or
-    // window change, and labels to converge when a narrow legend wraps.
-    for (let element: HTMLElement | null = canvas; element; element = element.parentElement) {
-      observer.observe(element);
-      if (element === scrollport) break;
-    }
+    // Watch the grid and scrollport only. Observing the canvas height (labels +
+    // square) fed legend wrapping back into the square size and made the outline jump.
+    observer.observe(grid);
+    if (scrollport) observer.observe(scrollport);
     measure();
     window.addEventListener("resize", schedule);
     return () => {

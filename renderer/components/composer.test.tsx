@@ -312,7 +312,7 @@ test("model picker details sit beside the menu without overlapping the pad", () 
   );
   assert.match(
     modelPicker,
-    /className="pointer-events-none w-56 shrink-0 rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
+    /className="pointer-events-auto flex h-\[min\(22\.5rem,70vh\)\] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
   );
   assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
   assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);

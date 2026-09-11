@@ -8,6 +8,32 @@ export const BASE_MODEL_PAD_GRID_SIZE = 7;
 export const MODEL_PAD_GRID_DENSITY = 6;
 export const MODEL_PAD_INSET_PERCENT = 8;
 export const MODEL_PAD_RANGE_PERCENT = 100 - MODEL_PAD_INSET_PERCENT * 2;
+export const MODEL_PAD_MIN_SIZE_PX = 160;
+/** Gutter below the measured canvas so the square does not kiss the scrollport edge. */
+export const MODEL_PAD_VIEWPORT_GUTTER_PX = 24;
+/**
+ * Reserved height for the two axis captions and the legend. Using a fixed
+ * reservation keeps the square outline stable when legend copy wraps or
+ * marker labels appear; those must not feed back into `--model-pad-available-size`.
+ */
+export const MODEL_PAD_SETTINGS_CHROME_PX = 128;
+
+export function measureModelPadAvailableSize(input: {
+  viewportBottom: number;
+  canvasTop: number;
+  canvasWidth: number;
+  scrollportClientHeight: number;
+}): number {
+  const heightBudget =
+    input.viewportBottom -
+    input.canvasTop -
+    MODEL_PAD_SETTINGS_CHROME_PX -
+    MODEL_PAD_VIEWPORT_GUTTER_PX;
+  const preferred = Math.min(input.canvasWidth, heightBudget);
+  const scrollportCap = Math.max(0, input.scrollportClientHeight - 1);
+  const size = Math.min(scrollportCap, Math.max(MODEL_PAD_MIN_SIZE_PX, preferred));
+  return Math.floor(Math.max(0, size));
+}
 
 export type ModelPadPlacementSource = "user" | "benchmark" | "neutral";
 
