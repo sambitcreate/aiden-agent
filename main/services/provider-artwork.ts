@@ -10,7 +10,6 @@ import {
 } from "./provider-artwork-core.js";
 
 const TARGET_EDGE = 64;
-const PIXEL_SCALE = 1 as const;
 
 export function normalizeProviderArtworkInput(value: unknown): ProviderArtwork {
   const source = decodeProviderArtworkSource(value);
@@ -21,12 +20,12 @@ export function normalizeProviderArtworkInput(value: unknown): ProviderArtwork {
     throw new Error("Provider artwork dimensions are invalid.");
   }
   const image = source.kind === "png"
-    ? nativeImage.createFromBuffer(source.bytes, { scaleFactor: PIXEL_SCALE })
+    ? nativeImage.createFromBuffer(source.bytes, { scaleFactor: 1 })
     : nativeImage.createFromDataURL(
         `data:image/svg+xml;base64,${Buffer.from(source.safeSvg!, "utf8").toString("base64")}`,
       );
   if (image.isEmpty()) throw new Error("Aiden could not decode that provider icon.");
-  const size = image.getSize(PIXEL_SCALE);
+  const size = image.getSize();
   if (size.width <= 0 || size.height <= 0 || size.width > 8_192 || size.height > 8_192) {
     throw new Error("Provider artwork dimensions are invalid.");
   }
@@ -38,7 +37,7 @@ export function normalizeProviderArtworkInput(value: unknown): ProviderArtwork {
         quality: "best",
       })
     : image;
-  const png = normalized.toPNG({ scaleFactor: PIXEL_SCALE });
+  const png = normalized.toPNG();
   if (png.length === 0 || png.length > PROVIDER_ARTWORK_MAX_PNG_BYTES) {
     throw new Error("The normalized provider icon is too complex. Choose a simpler image.");
   }

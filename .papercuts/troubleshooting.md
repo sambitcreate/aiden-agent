@@ -382,7 +382,7 @@ owns; reopen the terminal before judging the final live state.
 
 ## 2026-09-10 — PR #102 readiness
 
-- Source-scanning and a stubbed PNG header did not exercise the Retina-specific Electron re-encode path. Use a valid oversized PNG through `providers:save`, relaunch, and verify the persisted, decodable 64px-or-smaller result.
+- The initial source-scanning theory incorrectly credited explicit 1x encode arguments that are already Electron's defaults. Exercise the actual fix with a valid oversized PNG through `providers:save`, relaunch, and verify the recovered, decodable 64px-or-smaller result.
 - Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
 - Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
 - The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.

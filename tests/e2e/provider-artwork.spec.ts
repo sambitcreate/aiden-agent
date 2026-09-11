@@ -67,7 +67,7 @@ function pngDimensions(dataBase64: string): { width: number; height: number; byt
 
 test.use({ portableConfigSeed: "empty" });
 
-test("oversized Retina provider artwork survives native normalization and relaunch", async ({ aiden }) => {
+test("oversized provider artwork survives save-time recovery and relaunch", async ({ aiden }) => {
   const source = colorPng(128, 128).toString("base64");
   const saved = await aiden.page.evaluate(
     async ({ providerId, dataBase64 }) => (window as unknown as ProviderArtworkBridge).aidenAPI.ipc.invoke<{
@@ -75,7 +75,7 @@ test("oversized Retina provider artwork survives native normalization and relaun
     }>("providers:save", {
       id: providerId,
       kind: "openai",
-      label: "Retina artwork test",
+      label: "Oversized artwork test",
       artwork: { mimeType: "image/png", dataBase64 },
       baseUrl: "http://127.0.0.1:1234/v1",
       models: ["e2e-artwork-model"],
