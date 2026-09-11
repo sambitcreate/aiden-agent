@@ -550,6 +550,7 @@ export class GhosttyTerminalSurface {
   readonly canvas: HTMLCanvasElement;
   readonly input: HTMLTextAreaElement;
   readonly scrollbar: HTMLDivElement;
+  readonly accessibleOutput: HTMLDivElement;
   cols = 1;
   rows = 1;
 
@@ -628,6 +629,7 @@ export class GhosttyTerminalSurface {
     input: HTMLTextAreaElement,
     scrollbar: HTMLDivElement,
     scrollbarThumb: HTMLDivElement,
+    accessibleOutput: HTMLDivElement,
     context: CanvasRenderingContext2D,
     core: GhosttyTerminalCore,
     metrics: GhosttyCellMetrics,
@@ -639,6 +641,7 @@ export class GhosttyTerminalSurface {
     this.input = input;
     this.scrollbar = scrollbar;
     this.scrollbarThumb = scrollbarThumb;
+    this.accessibleOutput = accessibleOutput;
     this.context = context;
     this.core = core;
     this.mouseAnyEventTracking = core.isMouseAnyEventTracking();
@@ -686,7 +689,14 @@ export class GhosttyTerminalSurface {
     scrollbarThumb.className =
       "absolute inset-x-px top-0 rounded-[3px] bg-current/40 text-primary transition-[background-color] duration-[120ms] ease-[ease-out] group-hover:bg-current/55 group-focus-visible:bg-current/55";
     scrollbar.append(scrollbarThumb);
-    mount.replaceChildren(canvas, input, scrollbar);
+    const accessibleOutput = document.createElement("div");
+    accessibleOutput.className = "sr-only";
+    accessibleOutput.setAttribute("role", "log");
+    accessibleOutput.setAttribute("aria-label", "Terminal output");
+    accessibleOutput.setAttribute("aria-live", "polite");
+    accessibleOutput.setAttribute("aria-atomic", "true");
+    accessibleOutput.tabIndex = 0;
+    mount.replaceChildren(canvas, input, scrollbar, accessibleOutput);
 
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("Canvas 2D is unavailable");
@@ -720,6 +730,7 @@ export class GhosttyTerminalSurface {
       input,
       scrollbar,
       scrollbarThumb,
+      accessibleOutput,
       context,
       core,
       metrics,
@@ -750,6 +761,17 @@ export class GhosttyTerminalSurface {
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
     this.cursorOn = true;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+  }
+
+  clear(): void {
+    if (this.disposed) return;
+    // ED3 removes saved scrollback; ED2 and CUP reset the visible page and cursor.
+    this.core.write("\x1b[3J\x1b[2J\x1b[H");
+    this.core.clearSelection();
+    this.core.scrollToBottom();
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();
@@ -999,6 +1021,7 @@ export class GhosttyTerminalSurface {
       this.canvas.remove();
       this.input.remove();
       this.scrollbar.remove();
+      this.accessibleOutput.remove();
     }
   }
 
@@ -1692,6 +1715,13 @@ export class GhosttyTerminalSurface {
       this.frame = 0;
     }
     this.snapshot = this.core.snapshot();
+    const accessibleText = this.snapshot.rowData
+      .map((row) => row.text)
+      .join("\n")
+      .trimEnd();
+    if (this.accessibleOutput.textContent !== accessibleText) {
+      this.accessibleOutput.textContent = accessibleText;
+    }
     // A cursor that is not blinking right now must be drawn, never caught in an
     // off phase left behind by a blink that has since been turned off.
     if (!this.blinkEnabled()) this.cursorOn = true;

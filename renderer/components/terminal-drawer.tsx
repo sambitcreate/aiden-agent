@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { browserApi, onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { browserLinkCommand } from "../lib/browser-links";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -311,7 +312,9 @@ function TerminalViewport({
   const surfaceRef = React.useRef<GhosttyTerminalSurface | null>(null);
   const resizeTerminalRef = React.useRef<(() => void) | null>(null);
   const onUnavailableRef = React.useRef(onUnavailable);
+  const activeRef = React.useRef(active);
   onUnavailableRef.current = onUnavailable;
+  activeRef.current = active;
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -327,81 +330,99 @@ function TerminalViewport({
       surface = null;
       resizeTerminalRef.current = null;
     };
-    void import("../lib/ghostty-terminal/surface").then(async ({ GhosttyTerminalSurface }) => {
-      if (cancelled || !hostRef.current) return;
-      const next = await GhosttyTerminalSurface.create(hostRef.current, {
-        theme: ghosttyThemeFromCss(terminalTheme()),
-        font: { family: terminalFontFamily(), size: terminalFontSize() },
-        onData: (data) => {
-          void terminalApi.write(session.id, data).catch(() => undefined);
-        },
-        onResize: (cols, rows) => {
-          void terminalApi.resize(session.id, cols, rows).catch(() => undefined);
-        },
-        onSelectionChange: () => undefined,
-        beforeKey: (event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
-          return true;
-        },
-        onLinkActivate: () => undefined,
-      });
-      const mount = hostRef.current;
-      if (cancelled || !mount) {
-        next.dispose();
-        return;
-      }
-      surface = next;
-      surfaceRef.current = next;
-      const resize = () => {
-        try {
-          next.fit();
-        } catch {
-          // The host can briefly have zero size during drawer animation.
+    void import("../lib/ghostty-terminal/surface")
+      .then(async ({ GhosttyTerminalSurface }) => {
+        if (cancelled || !hostRef.current) return;
+        const next = await GhosttyTerminalSurface.create(hostRef.current, {
+          theme: ghosttyThemeFromCss(terminalTheme()),
+          font: { family: terminalFontFamily(), size: terminalFontSize() },
+          onData: (data) => {
+            void terminalApi.write(session.id, data).catch(() => undefined);
+          },
+          onResize: (cols, rows) => {
+            void terminalApi.resize(session.id, cols, rows).catch(() => undefined);
+          },
+          onSelectionChange: () => undefined,
+          beforeKey: (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
+            return true;
+          },
+          onLinkActivate: (url, event) => {
+            const command = browserLinkCommand(url, event);
+            if (command) {
+              void browserApi
+                .command(session.workspaceId, command)
+                .catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Could not open this link."),
+                );
+            }
+          },
+        });
+        const mount = hostRef.current;
+        if (cancelled || !mount) {
+          next.dispose();
+          return;
         }
-      };
-      resizeTerminalRef.current = resize;
-      let hydrated = false;
-      let lastSequence = 0;
-      const queuedData: Array<{ sequence: number; data: string }> = [];
-      const writeData = (event: { sequence: number; data: string }) => {
-        if (event.sequence <= lastSequence) return;
-        lastSequence = event.sequence;
-        next.write(event.data);
-      };
-      cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
-        "terminal:data",
-        (event) => {
-          if (event.sessionId !== session.id) return;
-          if (!hydrated) queuedData.push(event);
-          else writeData(event);
-        },
-      );
-      if (cancelled) {
-        teardown();
-        return;
-      }
-      try {
-        const { buffer, sequence } = await terminalApi.snapshot(session.id);
+        surface = next;
+        surfaceRef.current = next;
+        if (activeRef.current) next.focus();
+        const resize = () => {
+          try {
+            next.fit();
+          } catch {
+            // The host can briefly have zero size during drawer animation.
+          }
+        };
+        resizeTerminalRef.current = resize;
+        let hydrated = false;
+        let lastSequence = 0;
+        const queuedData: Array<{ sequence: number; data: string }> = [];
+        const writeData = (event: { sequence: number; data: string }) => {
+          if (event.sequence <= lastSequence) return;
+          lastSequence = event.sequence;
+          next.write(event.data);
+        };
+        cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
+          "terminal:data",
+          (event) => {
+            if (event.sessionId !== session.id) return;
+            if (!hydrated) queuedData.push(event);
+            else writeData(event);
+          },
+        );
         if (cancelled) {
           teardown();
           return;
         }
-        if (buffer) next.resetAndWrite(buffer);
-        lastSequence = sequence;
-        hydrated = true;
-        for (const event of queuedData) writeData(event);
-        resize();
-      } catch {
+        try {
+          const { buffer, sequence } = await terminalApi.snapshot(session.id);
+          if (cancelled) {
+            teardown();
+            return;
+          }
+          if (buffer) next.resetAndWrite(buffer);
+          lastSequence = sequence;
+          hydrated = true;
+          for (const event of queuedData) writeData(event);
+          resize();
+        } catch {
+          teardown();
+          if (!cancelled) onUnavailableRef.current();
+          return;
+        }
+        if (cancelled) {
+          teardown();
+          return;
+        }
+        requestAnimationFrame(resize);
+      })
+      .catch(() => {
+        if (cancelled || hostRef.current !== host) return;
         teardown();
-        if (!cancelled) onUnavailableRef.current();
-        return;
-      }
-      if (cancelled) {
-        teardown();
-        return;
-      }
-      requestAnimationFrame(resize);
-    });
+        host.classList.remove("ghostty-screen");
+        host.replaceChildren();
+        onUnavailableRef.current();
+      });
     return () => {
       cancelled = true;
       teardown();
@@ -413,7 +434,7 @@ function TerminalViewport({
   }, [active]);
 
   React.useEffect(() => {
-    if (clearEpoch > 0) surfaceRef.current?.write("\x1b[2J\x1b[H");
+    if (clearEpoch > 0) surfaceRef.current?.clear();
   }, [clearEpoch]);
 
   React.useEffect(() => {
@@ -549,7 +570,7 @@ export function TerminalDrawer() {
                 <div
                   key={session.id}
                   className={cn(
-                    "group flex h-7 shrink-0 items-center gap-1 rounded-[9px] border px-1.5 text-small transition-colors",
+                    "group flex h-7 shrink-0 items-center gap-1 rounded-menu border px-1.5 text-small transition-colors",
                     selected
                       ? "border-field bg-control text-primary"
                       : "border-transparent text-secondary hover:border-field/70 hover:bg-list-hover hover:text-primary",
@@ -654,7 +675,7 @@ export function TerminalDrawer() {
                 key={session.id}
                 className={cn(
                   "min-h-0 min-w-0 bg-popover",
-                  activeId === session.id && "ring-1 ring-inset ring-accent/35",
+                  activeId === session.id && "bg-list-selection",
                 )}
               >
                 <TerminalViewport

@@ -16,10 +16,26 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   const wasmAssets = source("../lib/ghostty-terminal/wasm-assets.ts");
 
   assert.match(drawer, /GhosttyTerminalSurface\.create/u);
-  assert.match(source("../lib/ghostty-terminal/surface.ts"), /from "\.\/wasm-assets"|import "\.\/wasm-assets"/u);
+  assert.match(
+    source("../lib/ghostty-terminal/surface.ts"),
+    /from "\.\/wasm-assets"|import "\.\/wasm-assets"/u,
+  );
   assert.match(drawer, /data-command-scope="terminal"/u);
   assert.doesNotMatch(drawer, /@xterm\/xterm/u);
   assert.doesNotMatch(drawer, /from "@xterm\/addon-fit"/u);
+  assert.match(drawer, /browserLinkCommand\(url, event\)/u);
+  assert.match(
+    drawer,
+    /browserApi[\s\S]*\.command\(session\.workspaceId, command\)[\s\S]*Could not open this link/u,
+  );
+  assert.match(
+    drawer,
+    /\.catch\(\(\) => \{[\s\S]*host\.replaceChildren\(\);[\s\S]*onUnavailableRef\.current\(\)/u,
+  );
+  assert.match(drawer, /if \(activeRef\.current\) next\.focus\(\)/u);
+  assert.match(drawer, /surfaceRef\.current\?\.clear\(\)/u);
+  assert.match(source("../lib/ghostty-terminal/surface.ts"), /role", "log"/u);
+  assert.match(source("../lib/ghostty-terminal/surface.ts"), /\\x1b\[3J\\x1b\[2J\\x1b\[H/u);
   assert.match(styles, /\.ghostty-screen/u);
   assert.doesNotMatch(styles, /\.xterm-viewport/u);
   assert.match(csp, /wasm-unsafe-eval/u);

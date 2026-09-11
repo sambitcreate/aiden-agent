@@ -25,11 +25,57 @@ export function ghosttyThemeFromCss(theme: {
   background: string;
   cursor: string;
   selectionBackground: string;
+  black: string;
+  red: string;
+  green: string;
+  yellow: string;
+  blue: string;
+  magenta: string;
+  cyan: string;
+  white: string;
+  brightBlack: string;
+  brightRed: string;
+  brightGreen: string;
+  brightYellow: string;
+  brightBlue: string;
+  brightMagenta: string;
+  brightCyan: string;
+  brightWhite: string;
 }): GhosttyTheme {
+  const base = [
+    theme.black,
+    theme.red,
+    theme.green,
+    theme.yellow,
+    theme.blue,
+    theme.magenta,
+    theme.cyan,
+    theme.white,
+    theme.brightBlack,
+    theme.brightRed,
+    theme.brightGreen,
+    theme.brightYellow,
+    theme.brightBlue,
+    theme.brightMagenta,
+    theme.brightCyan,
+    theme.brightWhite,
+  ].map((value) => ghosttyColorFromCss(value, 0));
+  const cube = [0, 95, 135, 175, 215, 255];
+  const extended: GhosttyColor[] = [];
+  for (const r of cube) {
+    for (const g of cube) {
+      for (const b of cube) extended.push({ r, g, b });
+    }
+  }
+  for (let index = 0; index < 24; index += 1) {
+    const value = 8 + index * 10;
+    extended.push({ r: value, g: value, b: value });
+  }
   return {
     foreground: ghosttyColorFromCss(theme.foreground, 0xe6e9ee),
     background: ghosttyColorFromCss(theme.background, 0x1d232d),
     cursor: ghosttyColorFromCss(theme.cursor, 0x0a84ff),
+    palette: [...base, ...extended],
     selectionBackground: theme.selectionBackground,
   };
 }

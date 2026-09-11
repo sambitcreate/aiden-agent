@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ghosttyCellText } from "./core";
+import { GhosttyTerminalCore, ghosttyCellText, type GhosttyTheme } from "./core";
+
+const testTheme: GhosttyTheme = {
+  foreground: { r: 238, g: 238, b: 238 },
+  background: { r: 17, g: 17, b: 17 },
+  cursor: { r: 10, g: 132, b: 255 },
+  palette: Array.from({ length: 256 }, (_, value) => ({ r: value, g: value, b: value })),
+};
 
 function codepointView(codepoints: ReadonlyArray<number>): DataView {
   const view = new DataView(new ArrayBuffer(codepoints.length * 4));
@@ -28,4 +35,18 @@ test("ghosttyCellText converts small clusters including astral codepoints", () =
 
 test("ghosttyCellText returns an empty string for empty cells", () => {
   assert.equal(ghosttyCellText(codepointView([]), 0), "");
+});
+
+test("ED3 clears saved scrollback before the visible page is reset", async () => {
+  const core = await GhosttyTerminalCore.create(20, 4, 8, 16, testTheme, () => undefined);
+  try {
+    core.write(Array.from({ length: 12 }, (_, index) => `line ${index}\r\n`).join(""));
+    const before = core.scrollbarState();
+    assert.ok(before && before.total > before.len);
+    core.write("\x1b[3J\x1b[2J\x1b[H");
+    const after = core.scrollbarState();
+    assert.ok(after && after.total === after.len);
+  } finally {
+    core.dispose();
+  }
 });

@@ -379,3 +379,7 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+# PR #81 readiness rebase
+
+- The stale terminal migration conflicted with newer browser-link integration and expanded package scripts; preserve current `main` scripts and link routing, then layer the Ghostty-specific test/build hooks back in before regenerating the lockfile.
+- `npm ci` completed without Electron's macOS payload, and the first focused Playwright command omitted this repo's explicit config; install the payload with `node node_modules/electron/install.js` and pass `--config=playwright.config.ts`.

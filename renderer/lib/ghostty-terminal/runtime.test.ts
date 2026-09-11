@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { GhosttyRuntime } from "./runtime";
-import { parseCssColor } from "./theme";
+import { ghosttyThemeFromCss, parseCssColor } from "./theme";
 
 type WasmFunction = (...args: number[]) => number;
 
@@ -14,7 +14,8 @@ test("vendored libghostty-vt stays pinned and exposes the C ABI", async () => {
   const instantiated = await WebAssembly.instantiate(wasm, { env: { log: () => undefined } });
   const instance = instantiated.instance;
   const memory = instance.exports.memory as WebAssembly.Memory;
-  const call = (name: string, ...args: number[]) => (instance.exports[name] as WasmFunction)(...args);
+  const call = (name: string, ...args: number[]) =>
+    (instance.exports[name] as WasmFunction)(...args);
   const out = call("ghostty_wasm_alloc_u8_array", 8);
   assert.equal(call("ghostty_build_info", 10, out), 0);
   const view = new DataView(memory.buffer, out, 8);
@@ -49,4 +50,33 @@ test("theme color parsing accepts hex and rgb tokens", () => {
   assert.equal(parseCssColor("#0a84ff", 0), 0x0a84ff);
   assert.equal(parseCssColor("rgb(10, 132, 255)", 0), 0x0a84ff);
   assert.equal(parseCssColor("not-a-color", 0x112233), 0x112233);
+});
+
+test("theme conversion preserves the ANSI palette and fills all 256 entries", () => {
+  const theme = ghosttyThemeFromCss({
+    foreground: "#eeeeee",
+    background: "#111111",
+    cursor: "#abcdef",
+    selectionBackground: "rgb(10 20 30 / 0.3)",
+    black: "#010101",
+    red: "#020202",
+    green: "#030303",
+    yellow: "#040404",
+    blue: "#050505",
+    magenta: "#060606",
+    cyan: "#070707",
+    white: "#080808",
+    brightBlack: "#090909",
+    brightRed: "#0a0a0a",
+    brightGreen: "#0b0b0b",
+    brightYellow: "#0c0c0c",
+    brightBlue: "#0d0d0d",
+    brightMagenta: "#0e0e0e",
+    brightCyan: "#0f0f0f",
+    brightWhite: "#101010",
+  });
+  assert.equal(theme.palette.length, 256);
+  assert.deepEqual(theme.palette[1], { r: 2, g: 2, b: 2 });
+  assert.deepEqual(theme.palette[16], { r: 0, g: 0, b: 0 });
+  assert.deepEqual(theme.palette[255], { r: 238, g: 238, b: 238 });
 });
