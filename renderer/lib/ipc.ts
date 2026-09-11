@@ -23,6 +23,7 @@ import type {
   GitComparisonDiffInput,
   GitDiffInput,
   GitFileDiff,
+  GitHubPullRequestStatus,
   GitInfo,
   GitPushCapability,
   GitPushInput,
@@ -714,6 +715,8 @@ export const gitApi = {
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
+  pullRequestStatus: (workspaceId: string) =>
+    invoke<GitHubPullRequestStatus>("git:pullRequestStatus", workspaceId),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),

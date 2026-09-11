@@ -126,6 +126,53 @@ export interface Workspace {
   updatedAt: number;
 }
 
+/** GitHub pull request and check status reported for a workspace branch. */
+export type GitHubPullRequestCheckStatus =
+  | "pending"
+  | "action-required"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "neutral"
+  | "cancelled";
+
+export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
+
+export type GitHubPullRequestAvailability =
+  | "ready"
+  | "not-repo"
+  | "missing-tool"
+  | "unauthenticated"
+  | "no-pull-request"
+  | "not-github"
+  | "unsupported"
+  | "error";
+
+export interface GitHubPullRequestCheck {
+  name: string;
+  status: GitHubPullRequestCheckStatus;
+  description?: string;
+  url?: string;
+}
+
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  headBranch: string;
+  baseBranch: string;
+  checksState?: GitHubPullRequestChecksState | null;
+  checks: GitHubPullRequestCheck[];
+}
+
+export interface GitHubPullRequestStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequest?: GitHubPullRequestSummary;
+}
+
 /** Result of inspecting a folder for git status. */
 export interface GitInfo {
   isRepo: boolean;
