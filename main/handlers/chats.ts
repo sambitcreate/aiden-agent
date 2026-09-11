@@ -63,6 +63,8 @@ import { botApplicationService } from "../services/bot-application-service-main.
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
+import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
+import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -154,6 +156,8 @@ export function registerChatHistoryHandlers(): void {
     const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
     const { snapshot } = await loadDurableTodoSnapshot(chatId, opened.session);
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const diagnostic = todoSnapshotDiagnostic(snapshot);
+    if (diagnostic) writeDiagnosticEvent(diagnostic);
     return snapshot;
   });
 

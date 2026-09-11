@@ -314,6 +314,8 @@ import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-ques
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -1899,9 +1901,9 @@ export const llmClient = {
           generationExtensions.push(
             createTodoExtension(todoState, { onDurableSnapshot: publishTodo }),
           );
-        } else if (todo.snapshot.unavailableReason === "invalid_snapshot") {
-          logger.warn("pi", `Disabled todo for chat ${params.chatId}: invalid durable snapshot.`);
         }
+        const todoDiagnostic = todoSnapshotDiagnostic(todo.snapshot);
+        if (todoDiagnostic) writeDiagnosticEvent(todoDiagnostic);
         sendGeneration(streamId, "chat:todo", { streamId, snapshot: todo.snapshot });
       }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
@@ -3115,13 +3117,6 @@ export const llmClient = {
             : runtimeOutcome.kind === "host_failed"
               ? "The local agent runtime could not complete this response safely."
               : null);
-        if (runtimeOutcome.kind === "provider_failed") {
-          logger.warn("pi", `Provider generation failed for stream ${streamId}.`, {
-            category: runtimeOutcome.providerFailure?.category ?? "unknown",
-            attempts: runtimeOutcome.attempts,
-            retryExhausted: runtimeOutcome.providerFailure?.retryExhausted ?? false,
-          });
-        }
         if (finalError) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(

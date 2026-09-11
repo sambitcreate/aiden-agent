@@ -5,6 +5,7 @@ import {
   providerFailureFromTerminalOutcome,
   providerFailureFromLegacyPiMessage,
   providerFailureChatMetadata,
+  providerFailureDiagnosticFields,
   type ProviderFailureReason,
 } from "./provider-failure.js";
 import {
@@ -13,6 +14,25 @@ import {
 } from "../../renderer/shared/provider-failure.js";
 
 const PRIVATE_CANARY = "PRIVATE_PROVIDER_DETAIL_7dbfe9";
+
+test("main-only provider diagnostics distinguish model availability without persisting provider text", () => {
+  const outcome = { kind: "provider_failed" as const, reason: "request-failed" as const, attempts: 2,
+    finalMessage: { errorMessage: `404 model private-model not found ${PRIVATE_CANARY} Bearer private-auth https://private-endpoint prompt=private-task` } };
+  const fields = providerFailureDiagnosticFields(outcome);
+  assert.equal(fields.providerCategory, "model_unavailable");
+  assert.equal(fields.failurePhase, "provider-request");
+  assert.equal(fields.httpStatus, undefined);
+  assert.equal(providerFailureFromTerminalOutcome(outcome).category, "invalid_request");
+  assert.doesNotMatch(JSON.stringify(fields), /PRIVATE_PROVIDER|private-/);
+  const changedText = providerFailureDiagnosticFields({ ...outcome, finalMessage: { errorMessage: "model another-model not found" } });
+  assert.equal(changedText.fingerprint, fields.fingerprint);
+  const invalid = providerFailureDiagnosticFields({ ...outcome, finalMessage: { errorMessage: "400 invalid_request private" } });
+  assert.equal(invalid.providerCategory, "invalid_request");
+  assert.notEqual(invalid.fingerprint, fields.fingerprint);
+  assert.equal(providerFailureDiagnosticFields({ ...outcome, finalMessage: undefined }).providerCategory, "unknown");
+  assert.equal(providerFailureDiagnosticFields({ ...outcome, reason: "interrupted" }).providerCategory, "interrupted");
+  assert.equal(providerFailureDiagnosticFields({ ...outcome, reason: "compaction-failed" }).failurePhase, "provider-compaction");
+});
 
 function classify(
   reason: ProviderFailureReason,
