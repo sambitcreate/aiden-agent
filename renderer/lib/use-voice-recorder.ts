@@ -26,6 +26,11 @@ import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-r
 type RecorderOptions = TranscribeOptions;
 
 export function useVoiceRecorder(onTranscript: (text: string) => void, options: RecorderOptions) {
+  const [lastError, setLastError] = React.useState<string | null>(null);
+  const reportError = React.useCallback((message: string) => {
+    setLastError(message);
+    toast.error(message);
+  }, []);
   const [recording, setRecording] = React.useState(false);
   const [transcribing, setTranscribing] = React.useState(false);
   const [awaitingRecordedRetryConsent, setAwaitingRecordedRetryConsent] = React.useState(false);
@@ -74,6 +79,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     const token = operationGate.beginStart();
     if (token === null) return;
     pendingStopRef.current = false;
+    setLastError(null);
     try {
       // Native permission gate before capture.
       const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
@@ -81,7 +87,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       if (!operationGate.isCurrent(token)) return;
       if (!allowed) {
         operationGate.finishStart(token);
-        toast.error(
+        reportError(
           status === "not-determined"
             ? "Microphone permission was not granted. Enable it in System Settings, then restart Aiden."
             : MICROPHONE_PERMISSION_OFF_MESSAGE,
@@ -169,7 +175,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
             if (!approved || !operationGate.isCurrent(token)) return;
           }
           if (liveEnabled && !text && blob.size === 0) {
-            toast.error("No speech detected.");
+            reportError("No speech detected.");
             return;
           }
           if (!text) {
@@ -185,10 +191,10 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
           }
           if (!operationGate.isCurrent(token)) return;
           if (text) onTranscript(text);
-          else toast.error("No speech detected.");
+          else reportError("No speech detected.");
         } catch (error) {
           if (!operationGate.isCurrent(token)) return;
-          toast.error(voiceErrorMessage(error));
+          reportError(voiceErrorMessage(error));
         } finally {
           if (liveStartRef.current === liveStart) liveStartRef.current = null;
           if (batchOperationIdRef.current === operationId) batchOperationIdRef.current = null;
@@ -241,9 +247,9 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       operationGate.finishStart(token);
       recorderRef.current = null;
       stopTracks();
-      toast.error(microphoneCaptureErrorMessage(error));
+      reportError(microphoneCaptureErrorMessage(error));
     }
-  }, [onTranscript, operationGate, recordedRetryConsent, stopTracks]);
+  }, [onTranscript, operationGate, recordedRetryConsent, stopTracks, reportError]);
 
   const stop = React.useCallback(() => {
     pendingStopRef.current = true;
@@ -283,6 +289,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   );
 
   return {
+    lastError,
+    dismissError: () => setLastError(null),
     recording,
     transcribing,
     liveTranscript,

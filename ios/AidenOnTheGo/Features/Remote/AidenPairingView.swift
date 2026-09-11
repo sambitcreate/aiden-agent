@@ -9,7 +9,7 @@ struct AidenDiscoveredAgent: Identifiable, Equatable {
 
 enum AidenPairingAlertCopy {
     static let title = String(localized: "Aiden On The Go")
-    static let fallbackMessage = String(localized: "Try again from Aiden Agent Remote Access settings.")
+    static let fallbackMessage = String(localized: "Try again from Aiden Agent → Settings → Aiden On The Go.")
 }
 
 enum AidenDiscoveryIdentity {
@@ -574,18 +574,18 @@ struct AidenPairingView: View {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Prepare your Mac").font(.largeTitle.bold())
-                    Text("Aiden Agent remains the server and keeps provider credentials on your Mac.")
+                    Text("Your Mac does the work. Your AI account keys stay on your Mac.")
                         .foregroundStyle(palette.secondary)
                 }
 
-                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your Mac, go to Settings → Remote Access.")
-                pairingStep(number: 2, title: "Turn on Remote Access", detail: "Choose Local Network, Tailscale, or both. Tailscale is best when you are away from home.")
-                pairingStep(number: 3, title: "Create a pairing code", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
+                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your Mac, go to Settings → Aiden On The Go.")
+                pairingStep(number: 2, title: "Connect your phone", detail: "Choose where you’ll use Aiden, then select Connect a device. Review what Aiden will enable.")
+                pairingStep(number: 3, title: "Scan to finish", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Per-device credential", systemImage: "key.fill")
-                    Label("Pinned HTTPS identity", systemImage: "lock.shield.fill")
-                    Label("Revocable from your Mac", systemImage: "checkmark.shield")
+                    Label("Only devices you connect can access Aiden", systemImage: "key.fill")
+                    Label("Encrypted connection to your Mac", systemImage: "lock.shield.fill")
+                    Label("Remove access from your Mac at any time", systemImage: "checkmark.shield")
                 }
                 .font(.subheadline)
                 .foregroundStyle(palette.secondary)
@@ -599,7 +599,7 @@ struct AidenPairingView: View {
                 onIntroductionComplete?()
                 step = 2
             }) {
-                Text("Choose How to Connect")
+                Text("Scan the Code")
             }
             .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
         }
@@ -624,11 +624,12 @@ struct AidenPairingView: View {
     private var pairingPage: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Choose the connection shown in Aiden Agent’s Add Device window.")
+                Text("Scan the code in Settings → Aiden On The Go on your Mac.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                DisclosureGroup("Other ways to connect") {
                 Picker("Connection method", selection: $selectedPairingMethod) {
                     ForEach(AidenPairingMethod.primary) { method in
                         Text(method.tabTitle).tag(method)
@@ -636,6 +637,7 @@ struct AidenPairingView: View {
                 }
                 .pickerStyle(.segmented)
                 .accessibilityHint("Swipe the content below or choose a tab.")
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 12)

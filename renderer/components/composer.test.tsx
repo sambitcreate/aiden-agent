@@ -351,3 +351,14 @@ test("reopening a draft uses its shared pending state instead of fresh composer 
   assert.match(composer, /!firstMessageSaving &&/u);
   assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u);
 });
+
+test("voice recovery preserves the draft and offers a direct settings action", () => {
+  const composer = source("./composer.tsx");
+  const recorder = source("../lib/use-voice-recorder.ts");
+  assert.match(composer, /voice.lastError/u);
+  assert.match(composer, /Open voice settings/u);
+  assert.match(composer, /Your draft is still here/u);
+  assert.match(composer, /voice.dismissError/u);
+  assert.match(recorder, /setLastError\(message\)/u);
+  assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
+});

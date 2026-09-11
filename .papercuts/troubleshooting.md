@@ -382,6 +382,10 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+- UX review (2026-09-05): the active Xcode installation rejects tools until its license is accepted. Git and desktop C helpers can use the separately installed Command Line Tools via `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; helper build scripts replace the child environment, so this run compiled their unchanged C sources with the same flags directly. iOS physical-device discovery/test remains blocked; do not claim it passed.
+- Electron E2E failure diagnostics called `app.process()` outside their try/catch; a closed Electron target hid the original launch error. Keep that call within the best-effort diagnostic block. The isolated E2E profile also cannot establish native Bot Keychain authority; the editor test injects a test-owned IPC catalog and captures the submitted access, while storage/authority tests run separately.
+
+## 2026-09-10 — Google catalog PR validation
 
 The main checkout's shared node_modules matched Pi's pinned version but lacked
 postcss-value-parser and @xterm/addon-web-links required by this worktree. The
@@ -403,3 +407,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
 - The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.
 - On hosted Electron, Playwright `fill("")` can leave a controlled search unchanged; use the native value setter plus a bubbling input event for deterministic test cleanup.
+
+## 2026-09-10 — PR96 readiness rebase
+
+- The branch predated the unified Settings work and conflicted in headings, accessible switch names, shared test fixtures, and the tracked-but-ignored papercut log. Resolve these contracts additively and use `git add -f` for the already tracked `.papercuts/troubleshooting.md`.
+- A parent save handler showed a toast but resolved its promise, making the editor's inline retry state unreachable. Propagate the rejection after the toast so the review dialog keeps the user's choices and exposes the error.
+- Progressive disclosure made two inherited E2E locators inaccessible: tests must open the exact Remote or Telegram details before asserting the controls inside, rather than spending the full timeout waiting for hidden semantics.
+- A single rollback `try` coupled external Tailscale route cleanup to local listener/state cleanup; keep independently knowable cleanup steps best-effort and report external versus local uncertainty separately.
+- Distinct cleanup messages need branch-specific regressions: cover both newly enabled access being disabled and pre-existing access staying enabled when route removal fails.
+- Hosted Electron can leave a controlled scheduled-task search unchanged after Playwright `fill("")`; use the native value setter plus a bubbling input event for deterministic cleanup.

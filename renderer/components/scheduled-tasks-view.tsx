@@ -851,6 +851,7 @@ export function ScheduledTasksView() {
               toast.success(input.id ? "Scheduled task updated." : "Scheduled task created.");
             } catch (error) {
               toast.error(error instanceof Error ? error.message : "Couldn't save this task.");
+              throw error;
             } finally {
               setSaving(false);
             }
