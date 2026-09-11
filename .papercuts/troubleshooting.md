@@ -379,3 +379,9 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+
+## 2026-09-10 — PR #102 readiness
+
+- Source-scanning and a stubbed PNG header did not exercise the Retina-specific Electron re-encode path. Use a valid oversized PNG through `providers:save`, relaunch, and verify the persisted, decodable 64px-or-smaller result.
+- Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
+- Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.

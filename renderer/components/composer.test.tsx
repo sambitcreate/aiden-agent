@@ -1,10 +1,36 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderIcon } from "./provider-icon";
+import type { ProviderArtwork } from "../shared/provider-artwork";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
+
+const PROVIDER_ARTWORK: ProviderArtwork = {
+  mimeType: "image/png",
+  dataBase64:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+};
+
+test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {
+  const markup = renderToStaticMarkup(
+    <ProviderIcon
+      providerId="custom:color-logo"
+      providerLabel="Color logo"
+      artwork={PROVIDER_ARTWORK}
+      className="size-4"
+    />,
+  );
+
+  assert.match(markup, /^<img /u);
+  assert.match(markup, /data-provider-icon="custom"/u);
+  assert.match(markup, /src="data:image\/png;base64,/u);
+  assert.match(markup, /class="shrink-0 object-contain size-4"/u);
+  assert.doesNotMatch(markup, /mask-image|background-color/u);
+});
 
 test("workspace context collapses only after a persisted user message and retains portal controls", () => {
   const composer = source("./composer.tsx");
@@ -296,7 +322,10 @@ test("model picker details sit beside the menu without overlapping the pad", () 
   );
   assert.match(pad, /import \{ ProviderIcon \} from "\.\/provider-icon"/u);
   assert.match(pad, /artwork=\{puckPoint\.providerArtwork\}/u);
-  assert.match(styles, /\.model-pad-knob\s*\{[^}]*color: #111110/u);
+  assert.match(
+    styles,
+    /\.model-pad-knob\s*\{[^}]*color: var\(--model-pad-knob-foreground\)/u,
+  );
   assert.match(
     styles,
     /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--accent-foreground\)/u,

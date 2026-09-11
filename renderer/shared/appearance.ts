@@ -759,6 +759,7 @@ export function resolveThemeTokens(
     "--border-separator": alphaHex(foreground, 0.055 + contrast * 0.07),
     "--accent": variant.accent,
     "--accent-foreground": accentForeground,
+    "--model-pad-knob-foreground": foregroundForFill("#FFFFFF", scheme),
     "--accent-hover": accentHover,
     "--accent-active": accentActive,
     "--focus-ring": contrastCorrectColor(

@@ -225,7 +225,11 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
   assert.match(
     providerIconSource,
-    /if \(artwork\) \{\s*return \(\s*<ThemedProviderMark\s*iconUrl=\{providerArtworkDataUrl\(artwork\)\}\s*mark="custom"/u,
+    /if \(artwork\) \{\s*return \(\s*<img[\s\S]*data-provider-icon="custom"[\s\S]*src=\{providerArtworkDataUrl\(artwork\)\}/u,
+  );
+  assert.doesNotMatch(
+    providerIconSource,
+    /<ThemedProviderMark[\s\S]*mark="custom"/u,
   );
   assert.doesNotMatch(
     `${providersSettingsSource}\n${codexProviderSettingsSource}`,

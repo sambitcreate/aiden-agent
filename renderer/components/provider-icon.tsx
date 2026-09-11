@@ -126,10 +126,13 @@ export function ProviderIcon({
 }) {
   if (artwork) {
     return (
-      <ThemedProviderMark
-        iconUrl={providerArtworkDataUrl(artwork)}
-        mark="custom"
-        className={className}
+      <img
+        alt=""
+        aria-hidden="true"
+        data-provider-icon="custom"
+        draggable={false}
+        src={providerArtworkDataUrl(artwork)}
+        className={cn("shrink-0 object-contain", className)}
       />
     );
   }
