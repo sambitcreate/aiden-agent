@@ -53,9 +53,8 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
       await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
-      const macSettings = page.getByText("This Mac settings", { exact: true });
-      await expect(macSettings).toBeVisible();
-      await macSettings.click();
+      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
+      await page.getByText("This Mac settings", { exact: true }).click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
