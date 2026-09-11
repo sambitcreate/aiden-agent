@@ -106,6 +106,25 @@ test("startup rollback gate disables manual compaction before admission or journ
   assert.equal(admitted, false);
 });
 
+test("rollout-ineligible openSession closes compaction benignly without touching the journal", async () => {
+  let opened = false;
+  const { value, events } = deps({
+    openSession: async () => {
+      opened = true;
+      // The probe reports a rollout reason: no v4 journal, no v3 migration.
+      return null;
+    },
+  });
+  const result = await new ContextLifecycleService(value).compactChat(
+    baseChat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "operator",
+  );
+  assert.deepEqual(result, { compacted: false, reason: "already_compact" });
+  assert.equal(opened, true);
+  assert.deepEqual(events, ["settle", "release"]);
+});
+
 test("manual compaction resolves the exact provider and model saved on the chat", async () => {
   const resolved: string[] = [];
   const { value, events } = deps({

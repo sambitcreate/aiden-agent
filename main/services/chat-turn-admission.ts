@@ -26,8 +26,8 @@ export interface ChatTurnLease {
   reserveAppendPayload(bytes: number): void;
   reserveSkillPreparation(): void;
   prepareSkillInvocation(invocation: PreparedSkillInvocation): void;
-  /** Release payload accounting only after the append async frame settles. */
-  settleAsyncWork(): void;
+  /** Mark work ready for handoff; cached first-send receipts stay charged until release. */
+  settleAsyncWork(options?: { retainAppendPayloadUntilRelease?: boolean }): void;
   onReleased(cleanup: () => void): void;
   release(): void;
 }
@@ -187,11 +187,11 @@ export class ChatTurnAdmission {
         this.skillBytes -= record.skillBytes - invocationBytes;
         record.skillBytes = invocationBytes;
       },
-      settleAsyncWork: () => {
+      settleAsyncWork: (options) => {
         const record = this.turns.get(chatId);
         if (!record || record.lease !== lease || record.asyncSettled) return;
         record.asyncSettled = true;
-        if (record.appendSlotReserved) {
+        if (record.appendSlotReserved && !options?.retainAppendPayloadUntilRelease) {
           this.appendTurns -= 1;
           this.appendBytes -= record.appendBytes;
           record.appendSlotReserved = false;

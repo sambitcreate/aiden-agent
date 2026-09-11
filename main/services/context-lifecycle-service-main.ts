@@ -32,7 +32,10 @@ export const contextLifecycleService = new ContextLifecycleService({
   openSession: async (chatId) => {
     const chat = await chatStore.get(chatId);
     if (!chat) throw new Error("Chat is unavailable.");
-    return piCompactionSessionStore.openChat(chatId, chat);
+    const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+    // Rollout-ineligible chats (pre-activation or deferred v3 migration) resolve
+    // compaction benignly instead of throwing a fail-closed journal error.
+    return opened.session ?? null;
   },
   resolveRuntime: resolveModelRuntime,
   resolveLocalModel: resolveCompactionModelMetadata,

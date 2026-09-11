@@ -3,6 +3,10 @@ import test from "node:test";
 import {
   distributeCapabilityOnlyModelPadSuggestions,
   emptyModelPadLayout,
+  measureModelPadAvailableSize,
+  MODEL_PAD_MIN_SIZE_PX,
+  MODEL_PAD_SETTINGS_CHROME_PX,
+  MODEL_PAD_VIEWPORT_GUTTER_PX,
   modelPadGridSize,
   modelPadLayoutsEqual,
   modelPadPointKey,
@@ -213,6 +217,43 @@ test("capability-only distribution fails closed for invalid and duplicate sugges
 
   assert.deepEqual(Object.keys(placements), ["valid"]);
   assert.equal(placements.valid.y, 5 / 6);
+});
+
+test("Model Pad available size ignores label wrap and never exceeds the scrollport", () => {
+  const canvasTop = 120;
+  const viewportBottom = 600;
+  const canvasWidth = 480;
+  const scrollportClientHeight = 360;
+  const size = measureModelPadAvailableSize({
+    viewportBottom,
+    canvasTop,
+    canvasWidth,
+    scrollportClientHeight,
+  });
+  const heightBudget =
+    viewportBottom - canvasTop - MODEL_PAD_SETTINGS_CHROME_PX - MODEL_PAD_VIEWPORT_GUTTER_PX;
+  assert.equal(
+    size,
+    Math.floor(Math.min(scrollportClientHeight - 1, canvasWidth, heightBudget)),
+  );
+  assert.ok(size <= scrollportClientHeight);
+  assert.equal(
+    measureModelPadAvailableSize({
+      viewportBottom: 800,
+      canvasTop: 100,
+      canvasWidth: 500,
+      scrollportClientHeight: 140,
+    }),
+    139,
+  );
+  assert.ok(
+    measureModelPadAvailableSize({
+      viewportBottom: 400,
+      canvasTop: 280,
+      canvasWidth: 400,
+      scrollportClientHeight: 500,
+    }) >= MODEL_PAD_MIN_SIZE_PX,
+  );
 });
 
 test("keyboard movement advances by nodes and skips occupied points on its axis", () => {

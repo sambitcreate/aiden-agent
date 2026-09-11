@@ -119,7 +119,7 @@ test("preset badges distinguish configured, authenticated, and enabled states", 
     mcpPresetConnectionBadge(
       state(oauthPreset, { configured: true, ready: true }),
     ),
-    { label: "Ready", color: "green" },
+    { label: "Configured", color: "green" },
   );
 });
 

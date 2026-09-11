@@ -117,6 +117,7 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  readinessSettingsSection?: SettingsSection;
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
@@ -135,6 +136,10 @@ interface ComposerProps {
   canStopGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
+  /** New-agent drafts cannot accept edits while their first message commits. */
+  freezeWhileSending?: boolean;
+  /** Survives navigating away and reopening a draft whose commit is pending. */
+  firstMessageSaving?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
@@ -269,6 +274,7 @@ function composerDraftReducer(
 export function Composer({
   ready,
   readinessMessage,
+  readinessSettingsSection,
   hasMessages,
   chatId,
   onSend,
@@ -279,6 +285,8 @@ export function Composer({
   isGenerating,
   canStopGeneration = isGenerating,
   configurationBusy = false,
+  freezeWhileSending = false,
+  firstMessageSaving = false,
   inputRef,
   workspace,
   gitBranch,
@@ -329,6 +337,7 @@ export function Composer({
   React.useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+  const firstSendPendingRef = React.useRef(false);
   const slashActionPendingRef = React.useRef(false);
   const sessionCommandBusyRef = React.useRef(false);
   const slashPaletteBlockedRef = React.useRef(slashPaletteBlocked);
@@ -374,7 +383,7 @@ export function Composer({
       return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
     };
     const receive = (annotation: BrowserAnnotation) => {
-      if (!available()) return false;
+      if (firstSendPendingRef.current || !available()) return false;
       const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
@@ -398,6 +407,8 @@ export function Composer({
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
+  const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
+  firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
@@ -454,6 +465,7 @@ export function Composer({
       attaching,
     }) &&
     !configurationBusy &&
+    !firstMessageSaving &&
     !sessionCommandBusy;
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
@@ -481,7 +493,9 @@ export function Composer({
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
+    (transcript) => {
+      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    },
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
@@ -814,8 +828,9 @@ export function Composer({
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
-      if (sendPendingRef.current) return false;
+      if (sendPendingRef.current || firstSendPendingRef.current) return false;
       sendPendingRef.current = true;
+      firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
 
       setText("");
@@ -875,15 +890,17 @@ export function Composer({
         throw error;
       } finally {
         sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
         setSending(false);
       }
     },
-    [onSend, onQueue, isGenerating, hasQueuedMessages, setText, updateAttachments],
+    [onSend, onQueue, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
+        firstSendPendingRef.current ||
         slashActionPendingRef.current ||
         !slashSession ||
         result.kind !== slashSession.kind ||
@@ -1091,6 +1108,7 @@ export function Composer({
   }, [onRenameChat, renameTitle, renaming]);
 
   const beginAttachmentRead = (status: string): boolean => {
+    if (firstSendPendingRef.current) return false;
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
       return false;
@@ -1256,6 +1274,7 @@ export function Composer({
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (firstSendPendingRef.current) { event.preventDefault(); return; }
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1282,6 +1301,7 @@ export function Composer({
   };
 
   const removeAttachment = (id: string) => {
+    if (firstSendPendingRef.current) return;
     attachmentRevisionRef.current += 1;
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
@@ -1455,7 +1475,8 @@ export function Composer({
   return (
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        <div className="composer-responsive pointer-events-auto relative isolate">
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1699,9 +1720,10 @@ export function Composer({
             <Textarea
               ref={inputRef}
               value={text}
-              readOnly={sessionCommandBusy}
-              aria-busy={sessionCommandBusy || undefined}
+              readOnly={sessionCommandBusy || firstSendPending}
+              aria-busy={sessionCommandBusy || firstSendPending || undefined}
               onChange={(event) => {
+                if (firstSendPendingRef.current) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
@@ -1762,9 +1784,17 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {!ready && readinessMessage && text.trim().length > 0 ? (
+            {voice.lastError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
+                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
+                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+              </div>
+            ) : null}
+            {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
@@ -1845,7 +1875,7 @@ export function Composer({
                       Boolean(workspaceChangeBlockedReason) ||
                       undefined
                     }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
                   >
                     {PERMISSION_ORDER.map((value, index) => {
                       const meta = PERMISSION_META[value];

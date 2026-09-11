@@ -90,6 +90,26 @@ test("generation handoff remains closed until append async work has settled", ()
   assert.equal(admission.isAdmitted("chat-1"), false);
 });
 
+test("settled cached receipts remain byte-budgeted while allowing generation handoff", () => {
+  const admission = new ChatTurnAdmission({ maxAppendTurns: 2, maxAppendBytes: 100 });
+  const first = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  const second = admission.tryBegin("chat-2", "turn-2", "owner", false);
+  assert.ok(first && second);
+  first.reserveAppendPayload(100);
+  first.settleAsyncWork({ retainAppendPayloadUntilRelease: true });
+  assert.equal(admission.owns("chat-1", "turn-1", "owner"), true);
+  assert.throws(() => second.reserveAppendPayload(1), /Too many messages/u);
+  assert.equal(admission.handoff("chat-1", "turn-1", "owner", () => {}), true);
+  second.reserveAppendPayload(100);
+  second.settleAsyncWork({ retainAppendPayloadUntilRelease: true });
+  second.release();
+  const third = admission.tryBegin("chat-3", "turn-3", "owner", false);
+  assert.ok(third);
+  third.reserveAppendPayload(100);
+  third.release();
+  third.settleAsyncWork();
+});
+
 test("handed-off skill prompts remain globally charged until generation cleanup", () => {
   const admission = new ChatTurnAdmission({
     maxPreparedTurns: 1,

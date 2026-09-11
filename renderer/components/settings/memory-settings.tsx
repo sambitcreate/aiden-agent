@@ -124,11 +124,11 @@ export function MemorySettings() {
             aria-label="Use memory globally"
           />
         </Field>
-        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-          Turning memory off stops memory tools, prompt context, and new indexing. Existing approved
-          facts stay on this Mac and become available again if you turn it back on.
-        </Text>
       </FieldSet>
+      <Text as="p" variant="small" color="secondary" className="text-pretty">
+        Turning memory off stops memory tools, prompt context, and new indexing. Existing approved
+        facts stay on this Mac and become available again if you turn it back on.
+      </Text>
 
       <FieldSet title="Workspaces">
         {workspaces.isLoading ? (
@@ -159,11 +159,11 @@ export function MemorySettings() {
             No workspaces yet.
           </Text>
         )}
-        <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-          Workspace switches affect regular workspace chats. Bot memory has its own scope and
-          follows the global switch.
-        </Text>
       </FieldSet>
+      <Text as="p" variant="small" color="secondary" className="text-pretty">
+        Workspace switches affect regular workspace chats. Bot memory has its own scope and
+        follows the global switch.
+      </Text>
     </div>
   );
 }

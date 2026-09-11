@@ -305,7 +305,7 @@ export function FieldSet({
   return (
     <section className={cn("settings-group mb-7", className)}>
       {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
-      <div className="settings-group-card overflow-hidden rounded-card bg-well">{children}</div>
+      <div className="settings-group-card overflow-visible rounded-card bg-well">{children}</div>
     </section>
   );
 }
@@ -332,7 +332,7 @@ export function Field({
       className={cn(
         "settings-field relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
         orientation === "horizontal"
-          ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:gap-2"
+          ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 has-[[role=switch]]:grid-cols-[minmax(0,1fr)_auto] max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:has-[[role=switch]]:grid-cols-[minmax(0,1fr)_auto] max-[540px]:has-[[role=switch]]:items-center max-[540px]:gap-2"
           : "flex flex-col gap-3",
         className,
       )}
@@ -1423,12 +1423,12 @@ export const Switch = React.forwardRef<
     <SwitchPrimitive.Root
       ref={ref}
       className={cn(
-        "relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
+        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
     </SwitchPrimitive.Root>
   );
 });

@@ -321,6 +321,8 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
+  /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
+  firstMessageCommit?: { turnId: string; fingerprint: string };
   /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
   computerUseEnabled?: boolean;
   messages: ChatMessage[];

@@ -8,6 +8,7 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [react(), tailwindcss()],
     base: "./",
+    assetsInclude: ["**/*.wasm"],
     define: { __APP_DISPLAY_NAME__: JSON.stringify(appDisplayName) },
     resolve: {
       alias: {
@@ -19,6 +20,10 @@ export default defineConfig(({ command }) => {
       outDir: "build/renderer",
       emptyOutDir: true,
       sourcemap: true,
+      // The write-pty trampoline is 112 bytes. Vite's default 4kb inline
+      // limit would emit it as a data: URL; Chromium then fetches that URL
+      // under CSP connect-src 'self', which fails. Keep wasm as real files.
+      assetsInlineLimit: (filePath) => (filePath.endsWith(".wasm") ? false : undefined),
       rollupOptions: {
         input: {
           "main-window": resolve(import.meta.dirname, "main-window.html"),

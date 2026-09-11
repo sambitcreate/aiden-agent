@@ -6,7 +6,7 @@ const SETTINGS_SECTIONS = [
   "Skills",
   "Plugins",
   "Web Search",
-  "Remote Access",
+  "Aiden On The Go",
   "Scheduled tasks",
   "Aiden",
   "Computer Use",
@@ -48,10 +48,13 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
       ).toBeVisible();
       return;
-    case "Remote Access":
+    case "Aiden On The Go":
       await expect(
-        page.getByRole("heading", { level: 1, name: "Remote Access", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
+      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
+      await page.getByText("This Mac settings", { exact: true }).click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -77,7 +80,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Voice":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Voice Input", exact: true }),
+        page.getByRole("heading", { level: 2, name: "Use your voice", exact: true }),
       ).toBeVisible();
       return;
     case "Keyboard shortcuts":

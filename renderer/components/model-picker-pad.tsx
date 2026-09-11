@@ -14,6 +14,7 @@ import {
   modelPadTopPercent,
 } from "../lib/model-pad-layout";
 import { cn } from "../lib/ui-utils";
+import { ProviderIcon } from "./provider-icon";
 
 function pointFromPointer(event: React.PointerEvent<HTMLDivElement>, rect: DOMRect): ModelPoint {
   const inset = MODEL_PAD_INSET_PERCENT / 100;
@@ -284,12 +285,20 @@ export function ModelPickerPad({
           <span
             aria-hidden="true"
             data-confirmed={confirmedValue === puckPoint.value ? "true" : "false"}
-            className="model-pad-knob absolute z-10 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-popover ring-1 ring-black/20"
+            className="model-pad-knob absolute z-10 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-popover ring-1 ring-black/20"
             style={{
               left: `${modelPadLeftPercent(puckPoint.x)}%`,
               top: `${modelPadTopPercent(puckPoint.y)}%`,
             }}
-          />
+          >
+            <ProviderIcon
+              providerId={puckPoint.providerId}
+              providerLabel={puckPoint.providerLabel}
+              modelId={puckPoint.model}
+              artwork={puckPoint.providerArtwork}
+              className="size-3.5"
+            />
+          </span>
         ) : null}
       </div>
       <p id={helpId} className="sr-only">

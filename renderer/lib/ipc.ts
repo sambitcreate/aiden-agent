@@ -152,6 +152,8 @@ import {
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import type { PeerHostView } from "../shared/peer-host";
+import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -171,6 +173,15 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
+
+export const peerHostsApi = {
+  list: () => invoke<PeerHostView[]>("remote:peersList"),
+  pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
+  setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
+  remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  operation: (hostId: string, operation: PeerOperation) => invoke<unknown>("remote:peerOperation", hostId, operation),
+  onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+};
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
@@ -475,6 +486,9 @@ export const telegramApi = {
 };
 
 export const aidenRemoteApi = {
+  setupPairing: (transport: "lan" | "tailscale", expected: {
+    instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode;
+  }) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
@@ -778,6 +792,17 @@ export const chatsApi = {
     }),
   create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:create", input),
+  createWithFirstMessage: (input: {
+    draftId: string;
+    title?: string;
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+    computerUseEnabled?: boolean;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+  }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- `.papercuts/` is ignored even when its troubleshooting file is present in the PR branch, so persisting a required update needs an explicit `git add -f`.
+- Layout stabilization must race `animation.finished` against a short timeout because paused or infinite document animations never settle; keep geometry polling as the authoritative E2E readiness check.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.
 - `Session.getEntries()` includes abandoned branches. Synchronization markers must be read from `Session.getBranch()` or a rolled-back partial write can still look committed.
 - Child-runtime unit tests load outside Electron. Keep usage accounting behind an injected callback (with a production-only dynamic import) instead of statically importing the Electron-backed singleton into the reusable child registry.
@@ -28,6 +30,7 @@
 - An Electron E2E teardown deadline must exceed the app's sequential bounded shutdown phases. A 10-second fixture timeout can kill and report a healthy process while foreground, subagent, and packaged-soak drains are still inside their documented 6s + 5s + 5s ceilings.
 - Image generation can return a baked checkerboard or an opaque/RGB file even when asked for transparent onboarding art. Inspect the generated pixels, dimensions, and alpha channel before copying it into `renderer/assets/onboarding/`; extract the real background and resample only after visual inspection.
 - GitHub release create/edit requests can return HTTP 503 after committing server-side state. Publication must re-read the exact tag, target SHA, draft state, and asset set before retrying or reconciling; never treat an unavailable lookup as a missing release.
+- A main-process fallback that reads `settings.lastProviderId` as "the app's last provider" is reading a dead key: the UI persists its real selection in renderer localStorage (`aiden-agent.providerId`/`aiden-agent.model`) and only the Telegram flow ever wrote the settings key. Any main-process consumer (scheduler, tools) must either receive the selection explicitly or have attended chat starts seed the settings fallback.
 - A physical XCTest transport spike can keep secrets out of the project and scheme: use a private temporary Derived Data directory, create an injected `.xctestrun` copy beside its `Build/Products` payload, inject an ephemeral canonical pairing-bootstrap JSON into that copy, then use `test-without-building`. Xcode still requires the physical device to remain unlocked through preflight and launch.
 - A copied `.xctestrun` resolves `__TESTROOT__` relative to its own location. Keep the injected copy beside `Build/Products` (or deliberately rewrite every relative product path), and derive the advertised LAN address from the default-route interface instead of assuming Wi-Fi is `en0`; otherwise Xcode reports a missing test product or the phone silently times out against a link-local adapter.
 - Simulator networking does not prove iOS Local Network privacy readiness. A direct physical LAN request fails as `Local network prohibited` when the host app omits `NSLocalNetworkUsageDescription`; lock both that key and the canonical `NSBonjourServices` value with an XCTest that inspects the built application bundle.
@@ -379,6 +382,8 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+- UX review (2026-09-05): the active Xcode installation rejects tools until its license is accepted. Git and desktop C helpers can use the separately installed Command Line Tools via `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; helper build scripts replace the child environment, so this run compiled their unchanged C sources with the same flags directly. iOS physical-device discovery/test remains blocked; do not claim it passed.
+- Electron E2E failure diagnostics called `app.process()` outside their try/catch; a closed Electron target hid the original launch error. Keep that call within the best-effort diagnostic block. The isolated E2E profile also cannot establish native Bot Keychain authority; the editor test injects a test-owned IPC catalog and captures the submitted access, while storage/authority tests run separately.
 
 ## 2026-09-10 — Google catalog PR validation
 
@@ -386,3 +391,41 @@ The main checkout's shared node_modules matched Pi's pinned version but lacked
 postcss-value-parser and @xterm/addon-web-links required by this worktree. The
 resulting type errors disappeared after replacing the temporary dependency
 symlink with this checkout's own npm ci. Full type-check and lint then passed.
+
+## 2026-09-09 — Draft chat planning
+
+- The checkout has no `.memory/` directory despite AGENTS.md referencing it; used current source and the plan index for project context.
+- Native verification: no physical iOS device is online and local Java/Android SDK tools are unavailable. Run generic iOS build-for-testing and shared Remote contract suites; device XCTest and Android runtime acceptance remain unavailable locally.
+- Draft lifecycle regression tests intercepted `chats:appendMessage` for first-send failures; updated that fault injection to the new atomic `chats:createWithFirstMessage` boundary.
+- Empty-chat migration must distinguish header-only Pi journals (created by the old Todo snapshot read even before Send) from real private records; preserving every journal would leave ordinary abandoned chats behind.
+- Completed Pi v3-to-v4 promotion adds lane/navigation records even for a header-only source. Empty cleanup must validate the real receipt, backup digest, and exact migration scaffolding rather than treating all promoted records as user history.
+
+## 2026-09-10 — PR #102 readiness
+
+- The initial source-scanning theory incorrectly credited explicit 1x encode arguments that are already Electron's defaults. Exercise the actual fix with a valid oversized PNG through `providers:save`, relaunch, and verify the recovered, decodable 64px-or-smaller result.
+- Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
+- Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
+- The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.
+- On hosted Electron, Playwright `fill("")` can leave a controlled search unchanged; use the native value setter plus a bubbling input event for deterministic test cleanup.
+
+## 2026-09-10 — PR96 readiness rebase
+
+- The branch predated the unified Settings work and conflicted in headings, accessible switch names, shared test fixtures, and the tracked-but-ignored papercut log. Resolve these contracts additively and use `git add -f` for the already tracked `.papercuts/troubleshooting.md`.
+- A parent save handler showed a toast but resolved its promise, making the editor's inline retry state unreachable. Propagate the rejection after the toast so the review dialog keeps the user's choices and exposes the error.
+- Progressive disclosure made two inherited E2E locators inaccessible: tests must open the exact Remote or Telegram details before asserting the controls inside, rather than spending the full timeout waiting for hidden semantics.
+- A single rollback `try` coupled external Tailscale route cleanup to local listener/state cleanup; keep independently knowable cleanup steps best-effort and report external versus local uncertainty separately.
+- Distinct cleanup messages need branch-specific regressions: cover both newly enabled access being disabled and pre-existing access staying enabled when route removal fails.
+- Hosted Electron can leave a controlled scheduled-task search unchanged after Playwright `fill("")`; use the native value setter plus a bubbling input event for deterministic cleanup.
+
+## 2026-09-10 — PR #81 readiness rebase
+
+- The stale terminal migration conflicted with newer browser-link integration and expanded package scripts; preserve current `main` scripts and link routing, then layer the Ghostty-specific test/build hooks back in before regenerating the lockfile.
+- `npm ci` completed without Electron's macOS payload, and the first focused Playwright command omitted this repo's explicit config; install the payload with `node node_modules/electron/install.js` and pass `--config=playwright.config.ts`.
+- Canvas terminal link detection and host navigation policy had separate truth sources, so unsupported file-like text gained a dead click affordance. Pass the host policy into the surface and filter hover and activation together.
+- Ghostty correctly encodes modified keys, but Meta chords belong to the host; suppress unhandled Meta press/release pairs after terminal copy and paste handling. Do not key this off `navigator.platform`: Chromium may reduce it even in a macOS Electron renderer.
+- The terminal Playwright fixture launches compiled renderer output; rebuild before interpreting a focused E2E failure after source edits, or the test exercises the previous bundle.
+
+## 2026-09-11 — 0.40.0 integration
+
+- E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
+- `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.

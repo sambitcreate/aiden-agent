@@ -15,7 +15,7 @@ The `.settings-responsive` container defines `--settings-card-radius`, `--settin
 
 Rows respond to their allocated content width, not the whole window. Below 540px complex controls stack under descriptions, while switches remain on the right. Grid groups must use `minmax(0, 1fr)` / `grid-cols-1` so long provider names or endpoints cannot force horizontal overflow. Controls and text must stay reachable without horizontal page scrolling.
 
-Model Pad measures the actual scrollport, wrapped toolbar, labels, and legend. Its square is constrained by both remaining height and column width. On very short or highly zoomed windows, it retains a usable 160px square and the Settings page scrolls; the Pad and its labels remain reachable. Ordinary window allocations show the full canvas and legend together. Opening model or benchmark panels uses the same measurement.
+Model Pad measures the actual scrollport and remaining column. Axis captions and the legend use a reserved height so the square outline stays put while surrounding copy, marker labels, and catalog text change. The square is constrained by remaining height, column width, and the visible scrollport. On very short or highly zoomed windows, it keeps a usable canvas (160px when the scrollport allows) and the Settings page scrolls; the Pad and its labels remain reachable. Ordinary window allocations show the full canvas and legend together. Opening model or benchmark panels uses the same measurement.
 
 ## Workspace labels
 

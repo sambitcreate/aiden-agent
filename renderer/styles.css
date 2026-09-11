@@ -230,6 +230,7 @@
   --border-separator: rgb(61 63 65 / 0.087);
   --accent: #006ad6;
   --accent-foreground: #ffffff;
+  --model-pad-knob-foreground: #000000;
   --accent-hover: #0063c7;
   --accent-active: #005bb8;
   --focus-ring: var(--text-primary);
@@ -302,6 +303,7 @@
   --border-separator: rgb(209 212 218 / 0.097);
   --accent: #3e97f6;
   --accent-foreground: #000000;
+  --model-pad-knob-foreground: #000000;
   --accent-hover: #59a6f7;
   --accent-active: #68aef8;
   --focus-ring: var(--text-primary);
@@ -777,6 +779,10 @@ textarea {
 
 .model-pad {
   width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  min-width: 0;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  align-self: start;
   margin-inline: auto;
   cursor: crosshair;
   contain: layout paint;
@@ -947,6 +953,10 @@ textarea {
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
   .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
+}
+
+.model-pad-legend {
+  min-height: 2.5rem;
 }
 
 .model-pad-legend-marker {
@@ -1120,13 +1130,16 @@ textarea {
 }
 
 .model-pad-knob {
+  color: var(--model-pad-knob-foreground);
   transition:
     background-color 250ms cubic-bezier(0.25, 1, 0.5, 1),
-    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1);
+    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1),
+    color 250ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .model-pad-knob[data-confirmed="true"] {
   background: var(--accent);
+  color: var(--accent-foreground);
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
     var(--elevation-control-hover);
@@ -1204,15 +1217,19 @@ textarea {
   max-width: 100%;
 }
 
-/* Compact controls stay at the trailing edge, even when the row wraps. */
-.settings-page .settings-field-control > button,
-.settings-page .settings-field-control > [role="switch"] {
+/* Trailing compact controls, including switches wrapped in status/action clusters. */
+.settings-page .settings-field-horizontal > .settings-field-control {
   display: flex;
-  margin-left: auto;
+  align-items: center;
+  justify-content: flex-end;
 }
 
+.settings-page .settings-field-control [role="switch"] {
+  flex: 0 0 auto;
+  max-width: none;
+}
 
-.settings-page .settings-field-horizontal:has(> .settings-field-control > [role="switch"]) {
+.settings-page .settings-field-horizontal:has(.settings-field-control [role="switch"]) {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
@@ -1238,6 +1255,11 @@ textarea {
   .settings-page .settings-field-horizontal {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .settings-page .settings-field-horizontal:has(.settings-field-control [role="switch"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
   .settings-page-heading.flex {
@@ -1438,12 +1460,14 @@ textarea {
   transition: none;
 }
 
-.terminal-drawer .xterm {
+.terminal-drawer .ghostty-screen {
+  position: relative;
   height: 100%;
 }
 
-.terminal-drawer .xterm-viewport {
-  background-color: transparent !important;
+.terminal-drawer .ghostty-screen canvas {
+  height: 100%;
+  width: 100%;
 }
 
 @keyframes aiden-terminal-drawer-in {
@@ -2094,7 +2118,7 @@ textarea {
 
 .appearance-editor-card,
 .appearance-preferences-card {
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--border-separator);
   border-radius: var(--settings-card-radius, 16px);
   background: var(--settings-card-fill, color-mix(in srgb, var(--surface-popover) 72%, transparent));
@@ -2444,9 +2468,18 @@ textarea {
     gap: 7px;
     padding-block: 12px;
   }
+  .appearance-editor-row:has([role="switch"]),
+  .appearance-preference-row:has([role="switch"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
   .appearance-editor-row > div,
   .appearance-preference-control {
     justify-content: flex-start;
+  }
+  .appearance-editor-row:has([role="switch"]) > div,
+  .appearance-preference-row:has([role="switch"]) .appearance-preference-control {
+    justify-content: flex-end;
   }
   .appearance-value-select,
   .appearance-range-control {

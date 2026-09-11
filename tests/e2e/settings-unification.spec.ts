@@ -133,6 +133,9 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
     await expect(page.getByRole("heading", { name: destination.trim(), exact: true })).toHaveCount(
       1,
     );
+    if (destination.trim() === "Telegram") {
+      await page.getByText("Advanced Telegram settings", { exact: true }).click();
+    }
     for (const width of [1280, 600, 390]) {
       await app.evaluate(
         ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 650),

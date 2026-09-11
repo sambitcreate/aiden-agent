@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+function source(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
+
+test("the Ghostty surface sizes its backing store from the canvas box", () => {
+  const surface = source("../lib/ghostty-terminal/surface.ts");
+  assert.match(surface, /terminalGridSize\(canvas\.clientWidth, canvas\.clientHeight/u);
+  assert.match(surface, /const width = this\.canvas\.clientWidth/u);
+  assert.match(surface, /const height = this\.canvas\.clientHeight/u);
+  assert.doesNotMatch(surface, /this\.mount\.clientWidth/u);
+  assert.match(surface, /this\.canvas\.offsetLeft \+ CONTENT_PADDING/u);
+  assert.match(surface, /this\.canvas\.offsetTop \+ this\.originY/u);
+});
+
+test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
+  const drawer = source("./terminal-drawer.tsx");
+  const styles = source("../styles.css");
+  const csp = source("../../main-window.html");
+  const commands = source("../lib/command-system.tsx");
+  const packageJson = source("../../package.json");
+  const runtime = source("../lib/ghostty-terminal/runtime.ts");
+  const wasmAssets = source("../lib/ghostty-terminal/wasm-assets.ts");
+
+  assert.match(drawer, /GhosttyTerminalSurface\.create/u);
+  assert.match(
+    source("../lib/ghostty-terminal/surface.ts"),
+    /from "\.\/wasm-assets"|import "\.\/wasm-assets"/u,
+  );
+  assert.match(drawer, /data-command-scope="terminal"/u);
+  assert.doesNotMatch(drawer, /@xterm\/xterm/u);
+  assert.doesNotMatch(drawer, /from "@xterm\/addon-fit"/u);
+  assert.match(drawer, /browserLinkCommand\(url, event\)/u);
+  assert.match(
+    drawer,
+    /canActivateLink:[\s\S]*browserLinkCommand\(url, \{ metaKey: false, ctrlKey: false \}\) !== null/u,
+  );
+  assert.match(
+    drawer,
+    /browserApi[\s\S]*\.command\(session\.workspaceId, command\)[\s\S]*Could not open this link/u,
+  );
+  assert.match(
+    drawer,
+    /\.catch\(\(\) => \{[\s\S]*host\.replaceChildren\(\);[\s\S]*onUnavailableRef\.current\(\)/u,
+  );
+  assert.match(drawer, /if \(activeRef\.current\) next\.focus\(\)/u);
+  assert.match(drawer, /surfaceRef\.current\?\.clear\(\)/u);
+  assert.match(source("../lib/ghostty-terminal/surface.ts"), /role", "log"/u);
+  assert.match(source("../lib/ghostty-terminal/surface.ts"), /\\x1b\[3J\\x1b\[2J\\x1b\[H/u);
+  assert.match(styles, /\.ghostty-screen/u);
+  assert.doesNotMatch(styles, /\.xterm-viewport/u);
+  assert.match(csp, /wasm-unsafe-eval/u);
+  assert.match(commands, /\.ghostty-screen/u);
+  assert.match(runtime, /import\("\.\/wasm-assets"\)/u);
+  assert.match(runtime, /`\.\/vendor\/\$\{filename\}`/u);
+  assert.doesNotMatch(runtime, /new URL\("\.\/vendor\/ghostty-vt\.wasm"/u);
+  assert.doesNotMatch(runtime, /new URL\("\.", import\.meta\.url\)/u);
+  assert.match(wasmAssets, /new URL\("\.\/vendor\/ghostty-vt\.wasm", import\.meta\.url\)/u);
+  assert.match(wasmAssets, /new URL\("\.\/vendor\/ghostty-write-pty\.wasm", import\.meta\.url\)/u);
+  assert.match(source("../../vite.config.ts"), /assetsInlineLimit/u);
+  assert.doesNotMatch(packageJson, /"@xterm\/xterm"/u);
+  assert.doesNotMatch(packageJson, /"@xterm\/addon-fit"/u);
+});

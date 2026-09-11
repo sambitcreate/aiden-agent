@@ -1,10 +1,36 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderIcon } from "./provider-icon";
+import type { ProviderArtwork } from "../shared/provider-artwork";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
+
+const PROVIDER_ARTWORK: ProviderArtwork = {
+  mimeType: "image/png",
+  dataBase64:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+};
+
+test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {
+  const markup = renderToStaticMarkup(
+    <ProviderIcon
+      providerId="custom:color-logo"
+      providerLabel="Color logo"
+      artwork={PROVIDER_ARTWORK}
+      className="size-4"
+    />,
+  );
+
+  assert.match(markup, /^<img /u);
+  assert.match(markup, /data-provider-icon="custom"/u);
+  assert.match(markup, /src="data:image\/png;base64,/u);
+  assert.match(markup, /class="shrink-0 object-contain size-4"/u);
+  assert.doesNotMatch(markup, /mask-image|background-color/u);
+});
 
 test("workspace context collapses only after a persisted user message and retains portal controls", () => {
   const composer = source("./composer.tsx");
@@ -57,7 +83,8 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.match(composer, /aria-controls=\{permissionOptionsId\}/u);
   assert.doesNotMatch(composer, /aria-haspopup=\{true\}/u);
   assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
-  assert.match(composer, /bg-control\/80/u);
+  assert.match(composer, /rounded-dialog bg-popover p-1/u);
+  assert.doesNotMatch(composer, /bg-control\/80/u);
   assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
   assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
   assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);
@@ -185,7 +212,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   const optimisticClear = composer.indexOf('setText("");');
   const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
-  assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
@@ -216,7 +243,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{sessionCommandBusy\}/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /chatsApi\.copyVisibleHistory\([\s\S]{0,100}throughAssistantMessageId/u);
@@ -285,7 +312,7 @@ test("model picker details sit beside the menu without overlapping the pad", () 
   );
   assert.match(
     modelPicker,
-    /className="pointer-events-none w-56 shrink-0 rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
+    /className="pointer-events-auto flex h-\[min\(22\.5rem,70vh\)\] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
   );
   assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
   assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);
@@ -294,4 +321,44 @@ test("model picker details sit beside the menu without overlapping the pad", () 
     styles,
     /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
   );
+  assert.match(pad, /import \{ ProviderIcon \} from "\.\/provider-icon"/u);
+  assert.match(pad, /artwork=\{puckPoint\.providerArtwork\}/u);
+  assert.match(
+    styles,
+    /\.model-pad-knob\s*\{[^}]*color: var\(--model-pad-knob-foreground\)/u,
+  );
+  assert.match(
+    styles,
+    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--accent-foreground\)/u,
+  );
+});
+
+test("first-send draft freeze blocks edits and browser annotation delivery until commit", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
+  assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
+  assert.match(composer, /if \(firstSendPendingRef\.current \|\| !available\(\)\) return false/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
+  assert.match(composer, /role="status"[^\n]*Sending…/u);
+});
+
+
+test("reopening a draft uses its shared pending state instead of fresh composer state", () => {
+  const composer = source("./composer.tsx");
+  const pane = source("../main/chat-pane.tsx");
+  assert.match(pane, /firstMessageSaving=\{draft\?\.sending === true\}/u);
+  assert.match(composer, /const firstSendPending = firstMessageSaving \|\| \(freezeWhileSending && sending\)/u);
+  assert.match(composer, /!firstMessageSaving &&/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u);
+});
+
+test("voice recovery preserves the draft and offers a direct settings action", () => {
+  const composer = source("./composer.tsx");
+  const recorder = source("../lib/use-voice-recorder.ts");
+  assert.match(composer, /voice.lastError/u);
+  assert.match(composer, /Open voice settings/u);
+  assert.match(composer, /Your draft is still here/u);
+  assert.match(composer, /voice.dismissError/u);
+  assert.match(recorder, /setLastError\(message\)/u);
+  assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
 });

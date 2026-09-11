@@ -29,8 +29,14 @@ test("every settings destination uses the shared page and grouped row system", (
   assert.match(css, /--settings-card-fill:/u);
   assert.match(
     css,
-    /settings-field-horizontal:has\(> \.settings-field-control > \[role="switch"\]\)/u,
+    /settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u,
   );
+  assert.doesNotMatch(
+    css,
+    /settings-field-control > \[role="switch"\][\s\S]{0,80}display:\s*flex/u,
+  );
+  assert.match(css, /@container settings-content \(max-width: 540px\)[\s\S]*settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u);
+  assert.match(ui, /settings-group-card overflow-visible/u);
   assert.match(css, /outline: 2px solid var\(--focus-ring\)/u);
 });
 
