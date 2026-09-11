@@ -18,6 +18,10 @@ type PadReachability = {
 test("Model Pad fits resized settings and keeps models usable at native zoom", async ({
   aiden,
 }) => {
+  // A cold hosted Electron run can spend more than the suite's 90-second
+  // default traversing all 24 size, zoom, and panel combinations. Preserve the
+  // full matrix and its per-state polling while bounding the whole case.
+  test.setTimeout(180_000);
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
