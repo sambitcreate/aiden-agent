@@ -6,6 +6,16 @@ function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
+test("the Ghostty surface sizes its backing store from the canvas box", () => {
+  const surface = source("../lib/ghostty-terminal/surface.ts");
+  assert.match(surface, /terminalGridSize\(canvas\.clientWidth, canvas\.clientHeight/u);
+  assert.match(surface, /const width = this\.canvas\.clientWidth/u);
+  assert.match(surface, /const height = this\.canvas\.clientHeight/u);
+  assert.doesNotMatch(surface, /this\.mount\.clientWidth/u);
+  assert.match(surface, /this\.canvas\.offsetLeft \+ CONTENT_PADDING/u);
+  assert.match(surface, /this\.canvas\.offsetTop \+ this\.originY/u);
+});
+
 test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   const drawer = source("./terminal-drawer.tsx");
   const styles = source("../styles.css");

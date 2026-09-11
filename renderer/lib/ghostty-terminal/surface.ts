@@ -735,7 +735,7 @@ export class GhosttyTerminalSurface {
     }
     const fontFamily = await loadTerminalFontFamily(options.font?.family, fontSize);
     const metrics = measureGhosttyCell(context, fontSize, fontFamily);
-    const grid = terminalGridSize(mount.clientWidth, mount.clientHeight, metrics, CONTENT_PADDING);
+    const grid = terminalGridSize(canvas.clientWidth, canvas.clientHeight, metrics, CONTENT_PADDING);
     const core = await GhosttyTerminalCore.create(
       grid.cols,
       grid.rows,
@@ -869,8 +869,11 @@ export class GhosttyTerminalSurface {
 
   fit(): boolean {
     if (this.disposed) return false;
-    const width = this.mount.clientWidth;
-    const height = this.mount.clientHeight;
+    // The backing store must match the canvas's own CSS box. Sizing from the
+    // mount's padding box would leave the browser downscaling the bitmap into
+    // the smaller content box and offset every pointer-mapped cell.
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
     if (width <= 0 || height <= 0) return false;
     const ratio = window.devicePixelRatio || 1;
     const pixelWidth = Math.max(1, Math.round(width * ratio));
@@ -1826,8 +1829,8 @@ export class GhosttyTerminalSurface {
     }
     // The IME candidate window anchors to the textarea, so it must follow the
     // terminal cursor for composition to appear where the user is typing.
-    const left = CONTENT_PADDING + snapshot.cursorX * this.metrics.width;
-    const top = this.originY + snapshot.cursorY * this.metrics.height;
+    const left = this.canvas.offsetLeft + CONTENT_PADDING + snapshot.cursorX * this.metrics.width;
+    const top = this.canvas.offsetTop + this.originY + snapshot.cursorY * this.metrics.height;
     if (left === this.inputLeft && top === this.inputTop) return;
     this.inputLeft = left;
     this.inputTop = top;
