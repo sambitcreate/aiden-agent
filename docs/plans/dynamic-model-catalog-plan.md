@@ -13,6 +13,31 @@ Aiden users should get newly published hosted models (for example Opus 5) **with
 
 ## Implementation record (2026-08-22)
 
+### Google legacy catalog override (2026-09-10)
+
+Aiden excludes `gemini-2.5-*`, `gemini-2.0-*`, and `gemini-1.5-*` from the
+Google chat inventory, including dated variants. The policy applies after merging
+the bundled and remote catalogs, so offline hydration and refresh cannot restore
+them. Native connection discovery applies the same policy. Pi model lookup and
+the Mac/iOS/Android catalog projections use the filtered inventory; stale remote
+defaults fall back to an available model and explicit removed selections fail.
+Historical preset helpers retain their original model lists and metadata for
+exact configuration-migration matching. Custom connections and voice inventory
+are outside this Google chat override.
+
+Research: Google's [Interactions overview](https://ai.google.dev/gemini-api/docs/interactions-overview)
+still lists Gemini 2.5 and says `generateContent` remains supported. This exclusion
+is Aiden's requested product policy, not a claim that every Google endpoint has
+retired 2.5. The existing Pi `google-generative-ai` transport stays in place;
+adopting Interactions would separately require streaming/tool/caching and storage
+semantics work (its default is `store=true`).
+
+Focused catalog, discovery, migration, remote projection, and selection tests
+cover the override. Both native pickers render the host-provided model list;
+there is no wire-schema or native UI change.
+
+### Original implementation
+
 - Option A is accepted: Aiden reads full executable model records only from the fixed
   `https://pi.dev` provider endpoint. Requests carry a static versioned Aiden/Pi
   User-Agent and never provider credentials, chat content, install IDs, or models.dev data.
