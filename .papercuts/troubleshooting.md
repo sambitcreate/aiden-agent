@@ -386,3 +386,4 @@ owns; reopen the terminal before judging the final live state.
 
 - The branch predated the unified Settings work and conflicted in headings, accessible switch names, shared test fixtures, and the tracked-but-ignored papercut log. Resolve these contracts additively and use `git add -f` for the already tracked `.papercuts/troubleshooting.md`.
 - A parent save handler showed a toast but resolved its promise, making the editor's inline retry state unreachable. Propagate the rejection after the toast so the review dialog keeps the user's choices and exposes the error.
+- Progressive disclosure made two inherited E2E locators inaccessible: tests must open the exact Remote or Telegram details before asserting the controls inside, rather than spending the full timeout waiting for hidden semantics.
