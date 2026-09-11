@@ -62,11 +62,7 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
-import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
-import {
-  todoSnapshotForRenderer,
-  unavailableTodoSnapshot,
-} from "../../renderer/shared/todo.js";
+import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -156,20 +152,9 @@ export function registerChatHistoryHandlers(): void {
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
-    if (!opened.session) {
-      // Rollout-ineligible chats have no durable journal to replay, so todo is
-      // unavailable exactly like a corrupt journal. Never mint a journal here.
-      return unavailableTodoSnapshot(chatId);
-    }
-    try {
-      const snapshot = todoSnapshotForRenderer(chatId, await replayTodoState(opened.session));
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      return snapshot;
-    } catch (error) {
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      if (!isTodoSnapshotFailure(error)) throw error;
-      return unavailableTodoSnapshot(chatId);
-    }
+    const { snapshot } = await loadDurableTodoSnapshot(chatId, opened.session);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return snapshot;
   });
 
   ipcMain.handle("chats:waitUntilIdle", async (_event, id: unknown) =>

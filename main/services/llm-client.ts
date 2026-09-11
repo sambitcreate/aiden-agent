@@ -313,8 +313,8 @@ import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
-import { isTodoSnapshotFailure, replayTodoState } from "./rpiv-todo/replay.js";
-import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
+import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
+import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -1884,8 +1884,12 @@ export const llmClient = {
           excluded: options.excludeToolNames?.has(TODO_TOOL_NAME) ?? false,
         })
       ) {
-        try {
-          const todoState = await replayTodoState(piSession);
+        const todo = await loadDurableTodoSnapshot(
+          params.chatId,
+          piJournalless ? undefined : piSession,
+        );
+        if (todo.state) {
+          const todoState = todo.state;
           const publishTodo = (state: typeof todoState) => {
             sendGeneration(streamId, "chat:todo", {
               streamId,
@@ -1895,18 +1899,10 @@ export const llmClient = {
           generationExtensions.push(
             createTodoExtension(todoState, { onDurableSnapshot: publishTodo }),
           );
-          publishTodo(todoState);
-        } catch (error) {
-          if (!isTodoSnapshotFailure(error)) throw error;
-          // Never log task content or fall back past a corrupt newer snapshot.
-          // The ordinary chat remains usable, but todo stays unavailable until
-          // its private journal is repaired or the chat is deleted.
-          sendGeneration(streamId, "chat:todo", {
-            streamId,
-            snapshot: unavailableTodoSnapshot(params.chatId),
-          });
+        } else if (todo.snapshot.unavailableReason === "invalid_snapshot") {
           logger.warn("pi", `Disabled todo for chat ${params.chatId}: invalid durable snapshot.`);
         }
+        sendGeneration(streamId, "chat:todo", { streamId, snapshot: todo.snapshot });
       }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
       // Runtime extensions are not yet represented in the exact Bot catalog.

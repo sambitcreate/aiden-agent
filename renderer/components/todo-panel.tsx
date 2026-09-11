@@ -1,4 +1,4 @@
-import { Check, Circle, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
+import { Check, Circle, Info, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
 import type { TodoSnapshotViewV1, TodoTaskViewV1 } from "../shared/todo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
@@ -51,27 +51,35 @@ function floatingAnchor(children: React.ReactNode) {
 export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null }) {
   if (!snapshot) return null;
   if (snapshot.availability === "unavailable") {
+    const storageNotEnabled = snapshot.unavailableReason === "storage_not_enabled";
+    const title = storageNotEnabled ? "Task tracking not enabled" : "Task tracking unavailable";
+    const explanation = storageNotEnabled
+      ? "Saved task tracking is not enabled for this chat on this Mac. You can continue chatting, but Aiden cannot save or update a task list here."
+      : "Aiden could not verify this chat’s private task state, so it will not display or update an older snapshot.";
     return floatingAnchor(
       <>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          Task tracking unavailable. Aiden could not verify this chat’s private task state.
+          {title}. {explanation}
         </p>
         <HoverCard openDelay={180} closeDelay={100}>
           <HoverCardTrigger asChild>
             <button
               type="button"
               className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover motion-reduce:transition-none"
-              aria-label="Task tracking unavailable. Focus or hover for details."
+              aria-label={`${title}. Focus or hover for details.`}
             >
-              <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
-              <span className="truncate">Tasks unavailable</span>
+              {storageNotEnabled ? (
+                <Info className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
+              ) : (
+                <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
+              )}
+              <span className="truncate">{storageNotEnabled ? "Task tracking not enabled" : "Tasks unavailable"}</span>
             </button>
           </HoverCardTrigger>
           <HoverCardContent align="center" side="top" className="w-[min(28rem,calc(100vw-2rem))]">
-            <p className="text-small-strong text-primary">Task tracking unavailable</p>
+            <p className="text-small-strong text-primary">{title}</p>
             <p className="mt-1 text-small leading-relaxed text-secondary">
-              Aiden could not verify this chat’s private task state, so it will not display or
-              update an older snapshot.
+              {explanation}
             </p>
           </HoverCardContent>
         </HoverCard>

@@ -11,6 +11,7 @@ import {
   TODO_EXTENSION_ID,
   TODO_TOOL_NAME,
   cloneTodoState,
+  parseTodoToolDetails,
   type TodoParams,
   type TodoState,
   type TodoToolDetailsV1,
@@ -104,8 +105,10 @@ export function createTodoExtensionRuntime(
       ): Promise<AgentToolResult<TodoToolDetailsV1>> => {
         if (signal?.aborted) throw new Error("Todo operation was cancelled.");
         const result = applyTodo(state, parameters as TodoParams);
+        // Enforce the reader contract before state changes or a successful result is journaled.
+        const details = parseTodoToolDetails(result.details);
         state = result.state;
-        return { content: [{ type: "text", text: result.content }], details: result.details };
+        return { content: [{ type: "text", text: result.content }], details };
       },
     },
     // State exists only inside this generation until the result is journaled.
