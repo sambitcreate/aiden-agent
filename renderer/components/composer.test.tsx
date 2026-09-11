@@ -57,7 +57,8 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.match(composer, /aria-controls=\{permissionOptionsId\}/u);
   assert.doesNotMatch(composer, /aria-haspopup=\{true\}/u);
   assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
-  assert.match(composer, /bg-control\/80/u);
+  assert.match(composer, /rounded-dialog bg-popover p-1/u);
+  assert.doesNotMatch(composer, /bg-control\/80/u);
   assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
   assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
   assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);

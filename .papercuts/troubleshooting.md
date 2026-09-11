@@ -380,6 +380,10 @@ owns; reopen the terminal before judging the final live state.
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
 
+- 2026-09-09: Fresh selector-fix worktree lacks `.memory/` and dependencies; use current design docs and install locked dependencies before validation.
+- 2026-09-09: `npm ci` omitted Electron.app in this worktree; ran `node node_modules/electron/install.js` before Electron tests.
+- 2026-09-09: Playwright JSX transform serializes imported TSX into component objects; render the thinking CSS fixture in a tsx subprocess before mounting its markup in Electron.
+
 ## 2026-09-10 — Google catalog PR validation
 
 The main checkout's shared node_modules matched Pi's pinned version but lacked
