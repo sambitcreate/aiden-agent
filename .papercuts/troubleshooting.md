@@ -424,3 +424,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Canvas terminal link detection and host navigation policy had separate truth sources, so unsupported file-like text gained a dead click affordance. Pass the host policy into the surface and filter hover and activation together.
 - Ghostty correctly encodes modified keys, but Meta chords belong to the host; suppress unhandled Meta press/release pairs after terminal copy and paste handling. Do not key this off `navigator.platform`: Chromium may reduce it even in a macOS Electron renderer.
 - The terminal Playwright fixture launches compiled renderer output; rebuild before interpreting a focused E2E failure after source edits, or the test exercises the previous bundle.
+
+## 2026-09-11 — 0.40.0 integration
+
+- E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
+- `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
