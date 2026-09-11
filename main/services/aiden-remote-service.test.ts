@@ -1706,6 +1706,28 @@ test("a route-cleanup failure still disables fresh local access and restores its
   } finally { await f.cleanup(); }
 });
 
+test("a route-cleanup failure preserves existing local access and reports that outcome", async () => {
+  const f = await fixture({
+    mode: "both",
+    tailscaleAssessment: { state: "unrelated_conflict" },
+    failTailscaleDisconnect: true,
+  });
+  try {
+    await f.service.setEnabled(true);
+    const before = await f.state.snapshot();
+    await assert.rejects(
+      f.service.setupPairing("tailscale", before),
+      /Existing local access stayed on/u,
+    );
+    const after = await f.state.snapshot();
+    assert.equal(after.enabled, true);
+    assert.equal(after.connectionMode, "both");
+    assert.ok(after.tailscaleOwnership);
+    assert.equal((await f.service.status()).running, true);
+    assert.equal(f.tailscale.disconnects, 1);
+  } finally { await f.cleanup(); }
+});
+
 test("simultaneous guided setup cannot issue competing pairing sessions", async () => {
   let release!: () => void;
   let bound!: () => void;
