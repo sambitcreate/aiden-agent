@@ -379,3 +379,10 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+
+## 2026-09-10 — Google catalog PR validation
+
+The main checkout's shared node_modules matched Pi's pinned version but lacked
+postcss-value-parser and @xterm/addon-web-links required by this worktree. The
+resulting type errors disappeared after replacing the temporary dependency
+symlink with this checkout's own npm ci. Full type-check and lint then passed.
