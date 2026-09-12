@@ -66,3 +66,16 @@ test("benign authentication design briefs pass while credential assignments rema
   for(const brief of ["Design password reset","Improve API key management"]){const base={...withoutDigest(packet),reviewedScope:{...packet.reviewedScope,brief}};assert.equal(parseDesignHandoffPacket({...base,reviewDigest:designHandoffReviewDigest(base)}).version,2);}
   for(const brief of ["password: actual-secret","API key = secret-value"]){const base={...withoutDigest(packet),reviewedScope:{...packet.reviewedScope,brief}};assert.throws(()=>designHandoffReviewDigest(base),/unsafe/u);}
 });
+
+test("reviewed language overhead participates in the same preflight byte budget",async()=>{
+  const {serializeDesignHandoffContext}=await import("./design-handoff-packet-authority.js");
+  const {normalizeDesignLanguageDocument,designLanguageContentHash}=await import("./design-language-core.js");
+  const {packet}=fixture();const html="x".repeat(510*1024);const sha256=createHash("sha256").update(html).digest("hex");
+  const screen={...packet.reviewedScope.screens[0]!,sha256,byteSize:Buffer.byteLength(html)};
+  const base={...withoutDigest(packet),source:{...packet.source,...screen},reviewedScope:{...packet.reviewedScope,screens:[screen]}};
+  const sources=[{revisionId:screen.revisionId,html}];
+  serializeDesignHandoffContext({...base,reviewDigest:designHandoffReviewDigest(base)},sources);
+  const language=normalizeDesignLanguageDocument({version:1,name:"Reviewed",guidance:"x".repeat(4000),tokens:{colors:{},spacing:{},typography:{},radii:{}}});
+  const withLanguage={...base,reviewedScope:{...base.reviewedScope,designLanguageHash:designLanguageContentHash(language)}};
+  assert.throws(()=>serializeDesignHandoffContext({...withLanguage,reviewDigest:designHandoffReviewDigest(withLanguage)},sources,language),/byte limit/u);
+});

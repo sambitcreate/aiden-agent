@@ -595,6 +595,12 @@ export function createDesignHandoffApplicationService(options: {
     async begin(input: BeginDesignHandoffInput): Promise<DesignHandoffRunResult> {
       const packet = parseDesignHandoffPacket(input.packet);
       const target = parseDesignHandoffTarget(input.target);
+      const prior = await options.journal.get(input.operationId);
+      if (prior?.stage === "published") {
+        // Exact completed retries remain idempotent; the coordinator still
+        // compares the full packet and target before returning prior success.
+        return coordinator.begin({ operationId: input.operationId, packet, target });
+      }
       // Admission must reject an oversized or stale context before creating a
       // workspace, chat, journal entry, or any other handoff effect.
       await dependencies.verifyPacket(packet);

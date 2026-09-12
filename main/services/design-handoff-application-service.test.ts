@@ -346,3 +346,11 @@ test("invalid complete context is rejected before any handoff effects are create
   await assert.rejects(app.service.begin({operationId:"handoff:too-large",packet:packet(),target:{kind:"managed-worktree",source:preview.source,previewDigest:preview.previewDigest,expectedCommittedHead:preview.expectedCommittedHead,dirtyCheckout:preview.dirtyCheckout,dirtyCheckoutAcknowledgement:DESIGN_HANDOFF_DIRTY_CHECKOUT_ACKNOWLEDGEMENT}}),/byte limit/u);
   assert.deepEqual(app.calls,[]);assert.equal(await app.effects.get("handoff:too-large"),null);assert.equal(app.chats.size,0);
 });
+
+test("completed exact handoff replay stays idempotent after source admission changes",async(t)=>{
+  let reject=false;const app=await fixture({verifyPacket:async()=>{if(reject)throw new Error("source changed");}});t.after(app.cleanup);
+  const preview=await app.service.previewManagedTarget("workspace:source");
+  const input={operationId:"handoff:idempotent",packet:packet(),target:{kind:"managed-worktree" as const,source:preview.source,previewDigest:preview.previewDigest,expectedCommittedHead:preview.expectedCommittedHead,dirtyCheckout:preview.dirtyCheckout,dirtyCheckoutAcknowledgement:DESIGN_HANDOFF_DIRTY_CHECKOUT_ACKNOWLEDGEMENT}};
+  const first=await app.service.begin(input);assert.equal(first.status,"published");reject=true;
+  assert.deepEqual(await app.service.begin(input),first);
+});
