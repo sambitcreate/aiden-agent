@@ -48,7 +48,7 @@ maintenance patch. Existing package-lock pins are unchanged.
 | Check | Result |
 | --- | --- |
 | `npm ci` | Completed using the existing lockfile |
-| `npm run test:mcp` | 53 passed; registered in pretest and preflight |
+| `npm run test:mcp` | 55 passed; registered after the required native-remover build in pretest, and in preflight |
 | `npm run test:config-recovery` | 55 passed |
 | Scoped supervisor, child-runtime, request-capability, generation-context, timeline, and Remote protocol tests | 118 passed |
 | `npm run test:preflight` | Passed (MCP plus 65 Artificial Analysis, 61 Model Pad, and 230 preflight tests); run before final focused review regressions |
@@ -86,6 +86,16 @@ remaining actionable findings. The reviewer independently reran all 53 MCP
 tests successfully. This approval includes the final SDK metadata deadline
 correction and supersedes the earlier review. It does not claim packaged or
 live-provider acceptance.
+
+Pullfrog subsequently identified that the pinned SSE transport sends its first
+`initialize` JSON-RPC POST before it has a protocol-version header. Request
+classification now recognizes a valid JSON-RPC envelope as MCP traffic, while
+same-origin OAuth registration JSON retains the authorization deadline. Two
+focused regressions cover both sides of that distinction, bringing the MCP suite
+to 55 tests. The initial PR CI run also caught that `test:mcp` had been placed
+before the native worktree-remover build required by the main test lifecycle;
+the suite now runs immediately after that build, and the 33-test native-remover
+suite passes locally.
 
 ## Native client inspection and existing failures
 

@@ -4,6 +4,18 @@ export const MCP_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const OVERSIZED = "MCP response exceeded the transport limit.";
 const TIMED_OUT = "MCP authorization request timed out. Try connecting again.";
 
+function isJsonRpcBody(body: BodyInit | null | undefined): boolean {
+  if (typeof body !== "string") return false;
+  try {
+    const value: unknown = JSON.parse(body);
+    const isMessage = (entry: unknown) => entry !== null && typeof entry === "object" &&
+      (entry as { jsonrpc?: unknown }).jsonrpc === "2.0";
+    return Array.isArray(value) ? value.length > 0 && value.every(isMessage) : isMessage(value);
+  } catch {
+    return false;
+  }
+}
+
 /** Count SSE frames, not the lifetime of an intentionally long-lived stream. */
 function frameCounter(maximumBytes: number) {
   let frameBytes = 0;
@@ -64,10 +76,11 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     const acceptsSse = (requestHeaders.get("accept") ?? "").includes("text/event-stream");
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const contentType = (requestHeaders.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
-    // Metadata GETs also carry MCP-Protocol-Version. Registration is JSON but
-    // has no protocol header; token requests are form POSTs, even on /mcp.
+    // Metadata GETs also carry MCP-Protocol-Version. SSE initialize sends a
+    // JSON-RPC body before that header is available, while OAuth registration
+    // is JSON without a JSON-RPC envelope and token requests are form POSTs.
     const mcpRequest = acceptsSse || (method === "POST" && contentType === "application/json" &&
-      requestHeaders.has("mcp-protocol-version"));
+      (requestHeaders.has("mcp-protocol-version") || isJsonRpcBody(init?.body)));
     const controller = new AbortController();
     const signal = AbortSignal.any([
       controller.signal,

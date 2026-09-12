@@ -231,6 +231,25 @@ test("MCP RPC retains its SDK deadline instead of the shorter OAuth timeout", as
   assert.deepEqual(await response.json(), { ok: true });
 });
 
+test("SSE initialize JSON-RPC without a protocol header retains the SDK deadline", async () => {
+  const fetch = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
+    fetch: async () => { await delay(25); return Response.json({ jsonrpc: "2.0", id: 1, result: {} }); } });
+  const response = await fetch(serviceUrl, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+  });
+  assert.equal(response.status, 200);
+});
+
+test("same-origin OAuth registration JSON still receives the authorization deadline", async () => {
+  const fetch = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
+    fetch: async (_url, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+    }) });
+  await assert.rejects(fetch(serviceUrl, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["http://127.0.0.1/callback"] }),
+  }), /authorization request timed out/);
+});
+
 test("real SDK authorization metadata body cannot stall after headers arrive", async () => {
   const fetchFn = createMcpFetchPolicy({ serviceUrl, oauthTimeoutMs: 10,
     fetch: async () => new Response(new ReadableStream(), { headers: { "content-type": "application/json" } }) });
