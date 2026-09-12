@@ -413,7 +413,8 @@ discoverable, and Fedora diagnostic journal windows are timezone-independent.
 Focused shortcut, portal, native runner and Electron-role tests pass. Linux
 contracts pass 152 tests with two expected platform skips, lint, type checking,
 branding/release tests and the complete repository test suite pass. A root-run
-regression on the Fedora 44 SELinux Enforcing VM confirms that a non-default
-security label fails closed, preserves the original bytes and retains the
-original label. Hosted exact-head validation and automated-review thread closure
-remain the final pull-request delivery gate.
+regression on the Fedora 44 SELinux Enforcing VM confirms that a matching-owner
+helper preserves a non-default label. A separate denied file-capability case
+returns an I/O failure while preserving the original bytes and capability.
+Hosted exact-head validation and automated-review thread closure remain the
+final pull-request delivery gate.

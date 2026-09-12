@@ -81,7 +81,14 @@ async function rootIdentity(root) {
   return { device: identity.dev.toString(), inode: identity.ino.toString() };
 }
 
-function startHelper(t, root, executable = productionBinary, environment = {}, uid) {
+function startHelper(
+  t,
+  root,
+  executable = productionBinary,
+  environment = {},
+  uid,
+  gid,
+) {
   let child;
   let output = "";
   const lines = [];
@@ -96,6 +103,7 @@ function startHelper(t, root, executable = productionBinary, environment = {}, u
       ["serve", "--root", root, "--device", device, "--inode", inode],
       {
         ...(uid === undefined ? {} : { uid }),
+        ...(gid === undefined ? {} : { gid }),
         env: {
           PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
           LANG: "C",
@@ -895,7 +903,7 @@ test("Linux metadata policy preserves user xattrs and rejects xattr drift", asyn
   await driftHelper.close();
 });
 
-test("enforcing SELinux rejects unprivileged security-label copying without changing the original", async (t) => {
+test("enforcing SELinux preserves a non-default label when ownership matches", async (t) => {
   if (process.platform !== "linux" || process.getuid?.() !== 0) {
     t.skip("Root on an enforcing SELinux host is required.");
     return;
@@ -917,15 +925,60 @@ test("enforcing SELinux rejects unprivileged security-label copying without chan
   await execFileAsync("/bin/chown", ["-R", "65534:65534", root]);
   await execFileAsync("/bin/chmod", ["700", root]);
   await execFileAsync("/usr/bin/chcon", ["-t", "bin_t", ordinary]);
-  const helper = startHelper(t, root, testingBinary, {}, 65534);
+  const helper = startHelper(t, root, testingBinary, {}, 65534, 65534);
   assert.match(
     await helper.request(prepareCommand("selinux-label", sha256("original\n"), "labelled.txt", "replacement\n")),
     /^prepared selinux-label /u,
   );
-  assert.equal(await helper.request("commit selinux-label"), "error conflict");
-  assert.equal(await readFile(ordinary, "utf8"), "original\n");
+  assert.match(
+    await helper.request("commit selinux-label"),
+    /^committed selinux-label /u,
+  );
+  assert.equal(await readFile(ordinary, "utf8"), "replacement\n");
   const { stdout: label } = await execFileAsync("/usr/bin/ls", ["-Z", ordinary]);
   assert.match(label, /:bin_t:/u);
+  assert.equal(
+    await helper.request("finalize selinux-label"),
+    "finalized selinux-label",
+  );
+  await helper.close();
+});
+
+test("Linux denied capability copying fails closed without changing the original", async (t) => {
+  if (process.platform !== "linux" || process.getuid?.() !== 0) {
+    t.skip("Root on a Linux host with file capabilities is required.");
+    return;
+  }
+  const root = await fixture(t, "aiden-file-mutator-capability-metadata-");
+  const ordinary = path.join(root, "capability.txt");
+  await writeFile(ordinary, "original\n");
+  await execFileAsync("/bin/chown", ["-R", "65534:65534", root]);
+  await execFileAsync("/bin/chmod", ["700", root]);
+  try {
+    await execFileAsync("/usr/sbin/setcap", [
+      "cap_net_bind_service=ep",
+      ordinary,
+    ]);
+  } catch {
+    t.skip("Linux file capabilities are unavailable on this filesystem.");
+    return;
+  }
+  const helper = startHelper(t, root, testingBinary, {}, 65534, 65534);
+  assert.match(
+    await helper.request(
+      prepareCommand(
+        "linux-capability",
+        sha256("original\n"),
+        "capability.txt",
+        "replacement\n",
+      ),
+    ),
+    /^prepared linux-capability /u,
+  );
+  assert.equal(await helper.request("commit linux-capability"), "error io_failed");
+  assert.equal(await readFile(ordinary, "utf8"), "original\n");
+  const { stdout: capability } = await execFileAsync("/usr/sbin/getcap", [ordinary]);
+  assert.match(capability, /cap_net_bind_service=ep/u);
   await helper.close();
 });
 

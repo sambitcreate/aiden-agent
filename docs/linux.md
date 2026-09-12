@@ -151,12 +151,13 @@ SHA-512 digest in the architecture-specific GitHub release feed. Updates retain
 the current AppImage filename. Unlike macOS releases, this does not provide Apple
 code-signing verification.
 
-Native subagent file replacement preserves metadata or fails closed. On
-SELinux hosts, a file with a non-default `security.selinux` label or Linux file
-capabilities may require privileges the user-owned helper does not have; Aiden
-leaves the original file unchanged and reports the mutation as unavailable.
-Restore a normal workspace label or apply that privileged metadata outside the
-subagent transaction before retrying.
+Native subagent file replacement preserves metadata or fails closed. On an
+SELinux host, Aiden preserves a non-default `security.selinux` label when the
+active policy permits the user-owned helper to copy it. If the kernel denies
+copying that label or Linux file capabilities, Aiden leaves the original file
+unchanged and reports the mutation as unavailable. Restore a normal workspace
+label or apply denied privileged metadata outside the subagent transaction
+before retrying.
 
 Install the newer `.deb` or `.rpm` through the package manager that owns the
 installation. Read-only AppImages and extraction-mode launches also use manual

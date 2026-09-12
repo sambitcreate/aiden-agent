@@ -546,3 +546,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Closing a fixture PATH also hides the shell executable from Node's process launcher. Invoke the known `/bin/sh` directly while keeping commands inside the test process constrained to the fixture tools.
 - 2026-09-12: Green Pullfrog status can coexist with newly posted or older unresolved review threads. Query GraphQL `reviewThreads` at the exact head and triage every unresolved comment before closure.
 - 2026-09-12: A minimal native-helper transfer to the Fedora fixture must include `native/shared/aiden-platform.h`; the source-relative include is not supplied by the JavaScript build wrapper.
+- 2026-09-12: The first SELinux metadata regression changed only UID, so a GID mismatch produced the expected conflict before label copying. Matching both identities showed Fedora permits `bin_t` preservation; use a denied file capability to exercise the fail-closed copy path.
