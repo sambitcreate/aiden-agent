@@ -78,6 +78,55 @@ authority. Ordinary model reads and application startup remain offline.
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
 
+## Linux package provenance
+
+The Linux release matrix attests its verified AppImage, DEB, RPM and update-feed
+bytes using the pinned official [`actions/attest`](https://github.com/actions/attest)
+action. Attestation runs only for a new declared release from `refs/heads/main`,
+after package and GUI checks, and before staging. The Linux job is skipped for
+manual dispatches from other refs; its dependent publication job cannot publish
+a release through that path. The action generates SLSA build
+provenance using GitHub's OIDC identity and uploads it to the repository's
+attestation API. This adds no separately managed signing key.
+
+For a future release produced by this workflow, independently select the approved
+40-character source commit from the reviewed release record. Verify each downloaded
+file with a trusted, current GitHub CLI. Use an absolute artifact path and substitute
+the approved commit for the placeholder; do not take the expected commit from the
+unverified bundle or package:
+
+```sh
+approved_commit=REPLACE_WITH_APPROVED_40_CHARACTER_COMMIT
+artifact=/absolute/path/to/downloaded-package.rpm
+gh attestation verify "$artifact" \
+  --hostname github.com \
+  --repo sambitcreate/aiden-agent \
+  --signer-repo sambitcreate/aiden-agent \
+  --signer-workflow sambitcreate/aiden-agent/.github/workflows/release.yml \
+  --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/release.yml@refs/heads/main \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com \
+  --source-ref refs/heads/main \
+  --source-digest "$approved_commit" \
+  --signer-digest "$approved_commit" \
+  --deny-self-hosted-runners \
+  --predicate-type https://slsa.dev/provenance/v1 \
+  --format json
+```
+
+Require successful verification before trusting the downloaded bytes. A checksum
+alone is not publisher authentication. Existing releases without these attestations
+will not pass this policy. Verification may access GitHub and Sigstore trust data;
+this is an explicit operator action, not app startup or background traffic. See
+[GitHub CLI verification policy](https://cli.github.com/manual/gh_attestation_verify).
+
+This authenticates a build's artifact digest and workflow identity. It does not
+establish a root-managed immutable installation, authenticate a live process, prevent
+rollback to an otherwise approved old build, or enable Linux Computer Use. Positive
+release acceptance still requires a future approved main release: verify the exact
+packages and feeds, then confirm that modified bytes, a wrong source commit, and
+an attestation from a different workflow or ref are rejected. Local workflow tests
+cannot substitute for that hosted signing acceptance.
+
 ## Physical Mac acceptance on a personal Mac Studio
 
 A spare Mac is not required. For now, keep pull-request CI, release builds, signing,
@@ -125,8 +174,9 @@ its history scan, before changing visibility.
 
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses
-   its scoped `GITHUB_TOKEN` with `contents: write`; no separate release-repository token exists.
-5. Trigger `Release macOS` manually for the first release or push a reviewed commit to `main`.
+   its scoped `GITHUB_TOKEN`; publication has `contents: write`, while the Linux build job
+   overrides that with read access plus attestation permissions. No separate release-repository token exists.
+5. Trigger `Release desktop` manually from `main` for the first release or push a reviewed commit to `main`.
 6. Install the published DMG, then publish one higher version and verify the installed app
    downloads it, reports it ready, and installs it through the in-app Update and Restart action.
    For the 0.27 recovery release, repeat this from an installed 0.27.0 build because older

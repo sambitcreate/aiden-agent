@@ -309,3 +309,18 @@ release packages, with a pinned official action and focused workflow contracts.
 Verification guidance must bind the expected source commit and main ref. This
 prepares future releases; it neither publishes a release now nor authenticates
 an installed process or enables Computer Use.
+
+Phase 15 implementation passed both Astra medium reviews. The Linux job is
+main-only, uses a pinned official action, grants only read access plus OIDC and
+attestation writes, and attests every staged package/feed class after verification.
+Seventy-two branding/release tests, YAML parsing, scoped lint and diff checks
+passed. No release was triggered. Hosted signing and positive/negative package
+verification remain acceptance gates for a future approved main release.
+
+## Phase 16: Packaged Linux payload inventory
+
+Next: bind the complete packaged application tree to a deterministic inventory
+inside the attested package, and verify missing, extra and changed entries during
+packaging. This is a reusable input to future root-managed installation; neither
+a self-contained inventory nor root ownership alone authenticates a running
+process. Production Computer Use remains disabled.

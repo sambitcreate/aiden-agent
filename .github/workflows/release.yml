@@ -159,7 +159,12 @@ jobs:
           retention-days: 2
 
   linux-release:
-    if: vars.RELEASES_ENABLED == 'true'
+    # Manual dispatches from other refs must not publish unattested Linux assets.
+    if: ${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     name: Linux ${{ matrix.arch }} release
     strategy:
       fail-fast: false
@@ -257,6 +262,18 @@ jobs:
             cat "$smoke_root/output.log"
             exit 1
           fi
+
+      - name: Attest verified Linux packages and update feeds
+        if: ${{ github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/linux-distribution/*.AppImage
+            release/linux-distribution/*.deb
+            release/linux-distribution/*.rpm
+            release/linux-distribution/latest-linux*.yml
+          create-storage-record: false
+          push-to-registry: false
 
       - name: Stage verified Linux release assets
         if: ${{ steps.version.outputs.publish == 'true' }}

@@ -138,3 +138,82 @@ test("coverage collection is enabled before positional test paths", async () => 
   const firstTest = command.findIndex((argument) => /\.test\.[cm]?[jt]sx?$/u.test(argument));
   assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
 });
+
+function assertLinuxReleaseProvenance(workflow) {
+  const linuxJob = workflow.match(/^ {2}linux-release:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  assert.ok(linuxJob, "Linux release job is missing");
+  assert.match(linuxJob,
+    /^ {4}if: \$\{\{ vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main' \}\}$/mu,
+    "Non-main dispatches must not bypass provenance by skipping attestation");
+  const permissions = linuxJob.match(/^ {4}permissions:\n((?: {6}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(permissions, "Linux release must override inherited write permissions");
+  assert.deepEqual(permissions.trim().split("\n").map(line => line.trim()).sort(),
+    ["attestations: write", "contents: read", "id-token: write"]);
+
+  const name = "Attest verified Linux packages and update feeds";
+  const attestation = workflowStep(linuxJob, name);
+  assert.match(attestation,
+    /^ {8}uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6(?: # v4\.2\.2)?$/mu);
+  assert.match(attestation,
+    /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.match(attestation, /^ {10}create-storage-record: false$/mu);
+  assert.match(attestation, /^ {10}push-to-registry: false$/mu);
+  assert.doesNotMatch(attestation, /(?:predicate(?:-type|-path)?|sbom-path|subject-digest|subject-checksums):/u,
+    "Automatic SLSA provenance must hash the verified files, not accept supplied predicates or digests");
+  assert.doesNotMatch(attestation, /continue-on-error:/u);
+
+  const expectedSubjects = [
+    "release/linux-distribution/*.AppImage",
+    "release/linux-distribution/*.deb",
+    "release/linux-distribution/*.rpm",
+    "release/linux-distribution/latest-linux*.yml",
+  ];
+  const subjects = attestation.match(/^ {10}subject-path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(subjects, "Explicit attestation subjects are required");
+  assert.deepEqual(subjects.trim().split("\n").map(line => line.trim()), expectedSubjects);
+  const staging = workflowStep(linuxJob, "Stage verified Linux release assets");
+  const staged = staging.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(staged);
+  assert.deepEqual(staged.trim().split("\n").map(line => line.trim()), expectedSubjects,
+    "Staged Linux assets must exactly match the attested subject classes");
+  const attestationPosition = linuxJob.indexOf(`- name: ${name}`);
+  for (const predecessor of [
+    "Verify Linux contracts, diagnostics, and native helpers",
+    "Build and verify Linux distributions",
+    "Smoke the exact release GUI without a keyring session",
+  ]) {
+    const position = linuxJob.indexOf(`- name: ${predecessor}`);
+    assert.ok(position >= 0 && position < attestationPosition, `${predecessor} must precede attestation`);
+  }
+  assert.ok(linuxJob.indexOf("- name: Stage verified Linux release assets") > attestationPosition);
+  assert.match(staging, /^ {8}if: \$\{\{ steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.doesNotMatch(staging, /continue-on-error:|always\(\)/u);
+}
+
+test("Linux release attestations cover verified packages and feeds with scoped main-only permissions", async () => {
+  assertLinuxReleaseProvenance(await readFile(releaseWorkflowUrl, "utf8"));
+});
+
+test("Linux provenance policy rejects bypasses, incomplete subjects, and custom claims", async () => {
+  const workflow = await readFile(releaseWorkflowUrl, "utf8");
+  for (const [name, mutate] of [
+    ["moving action ref", source => source.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4")],
+    ["branch dispatch bypass", source => source.replace("vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main'", "vars.RELEASES_ENABLED == 'true'")],
+    ["missing publish gate", source => source.replace("github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'", "github.ref == 'refs/heads/main'")],
+    ["unnecessary content writes", source => source.replace("      contents: read", "      contents: write")],
+    ["extra metadata permission", source => source.replace("      attestations: write", "      attestations: write\n      artifact-metadata: write")],
+    ["missing RPM subject", source => source.replace("            release/linux-distribution/*.rpm\n", "")],
+    ["broad subject wildcard", source => source.replace("            release/linux-distribution/*.AppImage", "            release/linux-distribution/*")],
+    ["custom predicate", source => source.replace("          create-storage-record: false", "          predicate-type: https://example.invalid/custom\n          predicate: '{}'\n          create-storage-record: false")],
+    ["registry publication", source => source.replace("          push-to-registry: false", "          push-to-registry: true")],
+    ["ignored attestation failure", source => source.replace("        uses: actions/attest@", "        continue-on-error: true\n        uses: actions/attest@")],
+    ["missing smoke gate", source => source.replace("      - name: Smoke the exact release GUI without a keyring session", "      - name: Removed smoke")],
+    ["attestation before smoke", source => {
+      const step = workflowStep(source, "Attest verified Linux packages and update feeds");
+      return source.replace(step, "").replace(
+        "      - name: Smoke the exact release GUI without a keyring session",
+        `${step}      - name: Smoke the exact release GUI without a keyring session`,
+      );
+    }],
+  ]) assert.throws(() => assertLinuxReleaseProvenance(mutate(workflow)), undefined, name);
+});
