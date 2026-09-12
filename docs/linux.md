@@ -90,7 +90,16 @@ native subagents use the same contracts as macOS. Linux-specific integrations in
 - bundled Node mDNS publication for nearby Aiden On The Go discovery, without
   requiring Apple's `dns-sd` utility.
 
-Computer Use, Apple Foundation Models, and Bots are not included in the Linux
+Bots use the same roster, definitions, access controls, conversations, schedules,
+and Telegram bindings as macOS. Their native authority helper requires an
+unlocked Secret Service collection (for example GNOME Keyring, or a KDE Wallet
+that exposes the Secret Service API). KWallet support for Electron credentials
+alone does not establish this requirement. Bot authority and rollback anchors
+never fall back to files or plaintext. If the helper or keyring is unavailable,
+Bot operations fail closed while ordinary workspace chat remains available;
+unlock or configure the keyring and restart Aiden to restore Bot access.
+
+Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the

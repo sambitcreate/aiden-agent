@@ -189,7 +189,11 @@ test("Telegram authority reduction stays independent from Bot mutation health", 
     new URL("../services/telegram/telegram-bot-bindings.ts", import.meta.url),
     "utf8",
   );
-  assert.match(bindings, /authority:\s*\{[\s\S]*createTelegramBotBindingKeychainAnchor/u);
+  assert.match(bindings, /createBotAuthorities\(\{ account \}\)/u);
+  assert.match(bindings, /authority:\s*\{\s*head: authorities!\.telegramAnchor,\s*bootstrap: authorities!\.telegramBootstrapMarker/u);
+  const authorityFactory = readFileSync(new URL("../services/bot-capability-authority.ts", import.meta.url), "utf8");
+  assert.match(authorityFactory, /platform === "darwin"[\s\S]*telegramAnchor: keychain\.createTelegramBotBindingKeychainAnchor/u);
+  assert.match(authorityFactory, /platform === "linux"[\s\S]*telegramAnchor: secretService\.createTelegramBotBindingSecretServiceAnchor/u);
   assert.match(bindings, /createTelegramBotBindingAuthorityNarrower\(telegramBotBindings\)/u);
   assert.match(handlers, /bots:unbindTelegram[\s\S]*telegramBotBindingAuthority\.disableBot/u);
   assert.match(botMain, /disableBinding: \(botId\)[\s\S]*telegramBotBindingAuthority\.disableBot/u);

@@ -36,7 +36,7 @@ After every phase, two independent GPT-6 Astra reviewers at medium effort review
 
 | Capability | Current Linux implementation | Next acceptance |
 | --- | --- | --- |
-| Bots and Bot Telegram routes | Gated off; helper portable, rollback/bootstrap authority still macOS Keychain | Linux secure external authority, crash/rollback/restart tests, real keyring acceptance |
+| Bots and Bot Telegram routes | Linux Secret Service authority implemented; two source reviews cleared | Native keyring, ARM64 packaging and Linux Settings acceptance passed; hosted multi-distro gates remain |
 | Dictation capture/transcription | Available; toggle shortcut and clipboard delivery | Desktop-owned release events and safe paste when available, X11/Wayland acceptance |
 | Computer Use | Gated off; broker and process trust require macOS | Linux capture/input/accessibility backend and equivalent lifecycle/security boundary |
 | Updates | Package replacement / release link | Respect DEB/RPM ownership; define supported AppImage/update delivery |
@@ -47,3 +47,15 @@ Full parity is not claimed by the shared-feature merge. Native implementation an
 - Phase 2 merge gate complete: both required reviewers cleared integration findings. Linux x64 type-check/contracts/native helpers/build passed under local emulation. ARM64 AppImage/DEB/RPM built and hardened package verifier passed; DEB install reported 0.40.0 and survived a bounded Xvfb GUI smoke. Native recording and detached capture remain phase 3 scope.
 
 - Final phase 2 reviews cleared imported on-device title preference correction and Linux hidden-view capture fix. Expanded ARM64 browser annotation/inactive screenshot test passed; original recording test passed on x64. ARM64 Chromium recording crashes remain a phase 3 runtime investigation; failed experiments were reverted.
+
+## Phase 3a: Linux Bots authority
+
+- Added native Secret Service helper and platform authority factories, preserving macOS Keychain namespaces and bootstrap semantics. No plaintext/file authority fallback or interactive keyring prompt.
+- Reused existing Bots settings/navigation and onboarding artwork on Linux; startup failures remain isolated from workspace chat.
+- Two Astra medium source reviews cleared after repairing test coverage registration. Bots coverage suite passed 445/445 after accounting for Node’s coverage instrumentation in the helper environment fixture; type-check and Linux contracts passed.
+- Private GNOME Keyring tests cover four authority namespaces, reads/writes across helper processes and daemon replacement, locked collection failure, session-only storage rejection, real duplicates, and missing default collection. CI runs this isolated Linux acceptance command.
+- Native ARM64 AppImage/DEB/RPM built and hardened package verification passed. Linux Settings Electron acceptance passed, including all Settings destinations and Bots navigation; corrected imported Mac-only Voice label. Both Astra medium reviewers cleared the final changes. Phase 3a complete.
+
+### ARM64 recording diagnosis
+
+A minimal visible-canvas Electron reproduction crashes at the ARM SVE instruction `cntd` on this OrbStack host (SME present, SVE absent). This matches upstream libyuv [fab11704](https://chromium.googlesource.com/libyuv/libyuv/+/fab11704cda62ff2d6b5e308b741e759ae816035). Chromium ignores libyuv environment-disable variables. No Aiden recorder change is justified by current evidence; acceptance needs an Electron build containing the upstream fix. This is specific to the tested CPU feature combination, not evidence that all ARM64 recording fails.

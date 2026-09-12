@@ -465,3 +465,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Linux ARM64 Xvfb exposed hidden browser annotation-preview and recording startup timeouts despite macOS Electron passing; keep real target-platform interaction tests as an integration gate.
 
 - Current main AGENTS file still carried the older release-only models.dev wording. Reconciled it to the root user-provided manual-action policy alongside the source restoration; cache reads remain offline and runtime limits stay bundled.
+
+- 2026-09-12: libsecret low-level D-Bus encoding/path declarations require SECRET_API_SUBJECT_TO_CHANGE; strict native compilation caught the missing declaration before runtime verification.
+
+- 2026-09-12: Real Linux Settings acceptance exposed a stale “This Mac settings” test assertion; use the existing platform label. Node coverage injects NODE_V8_COVERAGE into fake helpers despite explicit spawn env, so assert and account for the instrumentation field.
+- 2026-09-12: Reusing a container snapshot with Xvfb state stalled xvfb-run readiness; a fresh explicit display restored the bounded Electron test.
+
+- 2026-09-12: ARM64 OrbStack recording reproduces outside Aiden; renderer SIGILL at cntd matches libyuv fab11704 (SME without SVE on Apple ARM). Environment disable flags are excluded from Chromium builds; requires an upstream-fixed Electron binary. Debugger used an isolated SYS_PTRACE container.

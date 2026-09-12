@@ -53,8 +53,8 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
       await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
-      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
-      await page.getByText("This Mac settings", { exact: true }).click();
+      await expect(page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true })).toBeVisible();
+      await page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true }).click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -105,6 +105,10 @@ test("every Settings destination renders and a one-model local inventory stays u
 }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+
+  if (process.platform === "linux") {
+    await expect(page.getByRole("button", { name: "Bots", exact: true })).toBeVisible();
+  }
 
   const modelTrigger = page.getByRole("button", { name: /^Selected model:/u });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -208,7 +212,7 @@ test("every Settings destination renders and a one-model local inventory stays u
     await settingsNavigation.getByRole("button", { name: "Voice", exact: true }).click();
     await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
     await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "On-device (Parakeet)", exact: true }).click();
+    await page.getByRole("option", { name: "On this device · Private", exact: true }).click();
     await expect(
       page.getByText(
         "Completed transcripts are copied to the clipboard so you can paste them into any app.",

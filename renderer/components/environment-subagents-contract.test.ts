@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
 import { DISABLED_APP_CAPABILITIES, parseAppCapabilities } from "../lib/app-capabilities.js";
 import {
   availableEnvironmentPanelTabs,
@@ -626,4 +627,12 @@ test("dictation settings match host support even with a saved hold preference", 
   assert.match(source, /dictationHoldToTalk: capabilities\.dictationHoldToTalk && value === "hold"/u);
   assert.match(source, /value=\{holdToTalk \? "hold" : "toggle"\}/u);
   assert.match(source, /Press the global dictation shortcut once to start and again to stop\./u);
+});
+
+test("Linux main capabilities enable existing Bot surfaces without enabling Apple integrations", () => {
+  const capabilities = parseAppCapabilities(hostPlatformCapabilities("linux"));
+  assert.equal(capabilities.bots, true);
+  assert.equal(capabilities.computerUse, false);
+  assert.equal(capabilities.dictationHoldToTalk, false);
+  assert.equal(capabilities.appleFoundationModels, false);
 });

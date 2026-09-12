@@ -30,3 +30,9 @@ test("ordinary chat paths cannot activate Bot services on unsupported hosts", ()
     /if \(chat\.botId && !hostPlatformCapabilities\(\)\.bots\) \{\s+throw new Error\("Bot chats are not available on this platform\."\)/u,
   );
 });
+
+test("Bot keyring initialization failure leaves ordinary application startup available", () => {
+  const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(hostPlatformCapabilities\(\)\.bots\) \{\s+try \{\s+await initializeBotApplicationService\(\);\s+\} catch \(error\)/u);
+  assert.match(source, /Bot storage could not be restored safely; the rest of Aiden will remain available for repair\./u);
+});

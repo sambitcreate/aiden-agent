@@ -203,7 +203,7 @@ jobs:
 
       - name: Install Linux package dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
-        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev
 
       - name: Install locked dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}

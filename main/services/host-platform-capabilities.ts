@@ -19,7 +19,7 @@ export function hostPlatformCapabilities(
   return {
     platform:
       platform === "darwin" || platform === "linux" ? platform : "other",
-    bots: darwin,
+    bots: darwin || platform === "linux",
     computerUse: darwin,
     appleFoundationModels: darwin,
     accessibilityPaste: darwin,

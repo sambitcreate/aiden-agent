@@ -15,10 +15,10 @@ test("Darwin exposes Apple-owned host integrations", () => {
     nativeShare: true,
   });
 });
-test("Linux fails closed for Apple-owned host integrations", () => {
+test("Linux exposes Bots while keeping Apple-owned host integrations disabled", () => {
   assert.deepEqual(hostPlatformCapabilities("linux"), {
     platform: "linux",
-    bots: false,
+    bots: true,
     computerUse: false,
     appleFoundationModels: false,
     accessibilityPaste: false,
@@ -26,4 +26,12 @@ test("Linux fails closed for Apple-owned host integrations", () => {
     dockIcon: false,
     nativeShare: false,
   });
+});
+
+test("unsupported hosts cannot widen native capabilities", () => {
+  const capabilities = hostPlatformCapabilities("win32");
+  assert.equal(capabilities.platform, "other");
+  assert.equal(capabilities.bots, false);
+  assert.equal(capabilities.computerUse, false);
+  assert.equal(capabilities.dictationHoldToTalk, false);
 });

@@ -20,6 +20,7 @@ const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
 const execFileAsync = promisify(execFile);
 const MAXIMUM_GLIBC_VERSION = Object.freeze([2, 34]);
 const REQUIRED_HELPERS = Object.freeze([
+  "aiden-secret-service-authority",
   "aiden-worktree-remover",
   "aiden-bot-inbox-writer",
   "aiden-subagent-run-store",
