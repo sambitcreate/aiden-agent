@@ -496,3 +496,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Fedora stock dontaudit suppresses unconfined reads of domain-labeled /proc files. SELinux probe now records this explicit evidence limit, requires exact-PID enforcing AVCs for file/socket, and avoids global -DB. Appended audit-byte capture avoids ausearch recent-window ambiguity.
 
 - 2026-09-12: GNOME 50.4 delivered Ctrl+D activation without release when Control was released first; plain F8 delivered both. Portal results expose only a human-readable description, so safe binding detection cannot use the requested accelerator. Keep GNOME hold unavailable until reliable release behavior can be established.
+
+- 2026-09-12: SELinux delegation probe could not use systemd-run --pipe because dbus-broker rejected forwarding SSH-origin descriptors. Dedicated synthetic report files avoid that unrelated path. An outgoing exec also hit fd/use denial on its executable before main; record this as a launch-policy limitation, and test fork/domain-change inheritance separately rather than count a failed launch as isolation.

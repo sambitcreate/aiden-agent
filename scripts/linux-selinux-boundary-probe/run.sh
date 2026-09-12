@@ -31,8 +31,9 @@ cat /proc/sys/kernel/yama/ptrace_scope >"$evidence/yama.txt"
 sha256sum /sys/fs/selinux/policy >"$evidence/policy-original.sha256"
 audit_inode="$(stat -c %i /var/log/audit/audit.log)"
 audit_offset="$(stat -c %s /var/log/audit/audit.log)"
-cp -- "$source_dir"/fixture.c "$source_dir"/aiden_boundary_probe.te "$work/"
+cp -- "$source_dir"/delegation.c "$source_dir"/fixture.c "$source_dir"/aiden_boundary_probe.te "$work/"
 gcc -std=c17 -Wall -Wextra -Werror -O2 "$work/fixture.c" -o "$work/fixture"
+gcc -std=c17 -Wall -Wextra -Werror -O2 "$work/delegation.c" -o "$work/delegation"
 make -C "$work" -f /usr/share/selinux/devel/Makefile aiden_boundary_probe.pp >"$evidence/build.log" 2>&1
 semodule -i "$work/aiden_boundary_probe.pp" >"$evidence/install-base.log" 2>&1
 base_installed=true
@@ -43,6 +44,10 @@ install -o root -g root -m 755 "$work/fixture" "$installation/holder"
 install -o root -g root -m 755 "$work/fixture" "$installation/attacker"
 chcon -t aiden_boundary_probe_exec_t "$installation/holder"
 chcon -t bin_t "$installation/attacker"
+install -m 755 "$work/delegation" "$installation/delegation-sender"
+install -m 755 "$work/delegation" "$installation/delegation-receiver"
+chcon -t aiden_boundary_probe_exec_t "$installation/delegation-sender"
+chcon -t bin_t "$installation/delegation-receiver"
 install -d -o "$user" -g "$user" -m 755 "$runtime"
 printf 'synthetic-probe-data\n' >"$runtime/private.txt"
 chown "$user:$user" "$runtime/private.txt"
@@ -84,11 +89,32 @@ run_probe() {
   local phase="$1" operation="$2" status
   shift 2
   set +e
-  runuser -u "$user" -- "$installation/attacker" "$operation" "$@" >"$evidence/$phase-$operation.json" 2>"$evidence/$phase-$operation.stderr"
+  runuser -u "$user" -- timeout --kill-after=1 4 "$installation/attacker" "$operation" "$@" >"$evidence/$phase-$operation.json" 2>"$evidence/$phase-$operation.stderr"
   status=$?
   set -e
   [[ "$status" -eq 0 || "$status" -eq 1 ]]
   [[ ! -s "$evidence/$phase-$operation.stderr" ]]
+}
+run_delegation() {
+  local phase="$1"
+  rm -f "$runtime/delegation.sock"
+  runuser -u "$user" -- timeout --kill-after=1 8 "$installation/delegation-receiver" scm-receiver >"$evidence/$phase-scm.json" &
+  receiver_pid=$!
+  for ((attempt=0; attempt<40; attempt++)); do
+    [[ -S "$runtime/delegation.sock" ]] && break
+    sleep 0.1
+  done
+  [[ -S "$runtime/delegation.sock" ]]
+  delegation_unit="aiden-boundary-delegation-$$-$phase-scm.service"
+  timeout --kill-after=2 12 systemd-run --unit="$delegation_unit" --quiet --wait --collect --uid="$user" --property=RuntimeMaxSec=8 --property=TimeoutStartSec=3 --property=TimeoutStopSec=2 --property=StandardInput=null --property=StandardOutput=null "$installation/delegation-sender" scm-sender
+  delegation_unit=
+  wait "$receiver_pid"
+  receiver_pid=
+  : >"$evidence/$phase-inherited.json"
+  chcon -t aiden_boundary_probe_report_t "$evidence/$phase-inherited.json"
+  delegation_unit="aiden-boundary-delegation-$$-$phase-inherited.service"
+  timeout --kill-after=2 12 systemd-run --unit="$delegation_unit" --quiet --wait --collect --uid="$user" --property=RuntimeMaxSec=8 --property=TimeoutStartSec=3 --property=TimeoutStopSec=2 --property=StandardInput=null --property="StandardOutput=file:$evidence/$phase-inherited.json" "$installation/delegation-sender" inherited-sender
+  delegation_unit=
 }
 query_policy() {
   local phase="$1"
@@ -100,6 +126,7 @@ query_policy() {
   sesearch -A -t aiden_boundary_probe_t -c process -p transition "$evidence/$phase.policy" >"$evidence/$phase-transition-allow.txt"
   sesearch -A -t aiden_boundary_probe_t -c process -p dyntransition "$evidence/$phase.policy" >"$evidence/$phase-dyntransition-allow.txt"
   sesearch -A -s unconfined_t -t aiden_boundary_probe_t -c process -p ptrace "$evidence/$phase.policy" >"$evidence/$phase-ptrace-allow.txt"
+  sesearch -A -s unconfined_t -t aiden_boundary_probe_t -c fd -p use "$evidence/$phase.policy" >"$evidence/$phase-fd-allow.txt"
   sesearch --dontaudit -s unconfined_t -t aiden_boundary_probe_t -c file -p read "$evidence/$phase.policy" >"$evidence/$phase-proc-dontaudit.txt"
 }
 start_holder
@@ -109,11 +136,13 @@ cat "/proc/$pid/attr/current" >"$evidence/holder-context.txt"
 id "$user" >"$evidence/attacker-identity.txt"
 ls -ldZ "$installation" "$installation/holder" "$runtime" "$runtime/private.txt" >"$evidence/ownership.txt"
 query_policy before
+run_delegation before
 for operation in file socket; do run_probe before "$operation"; done
 for operation in proc proc-fd ptrace pidfd; do run_probe before "$operation" "$pid"; done
 semodule -i "$source_dir/aiden_boundary_probe_deny.cil" >"$evidence/install-deny.log" 2>&1
 deny_installed=true
 query_policy after
+run_delegation after
 for operation in file socket; do run_probe after "$operation"; done
 for operation in proc proc-fd ptrace pidfd; do run_probe after "$operation" "$pid"; done
 set +e
@@ -142,6 +171,7 @@ node "$source_dir/verify.mjs" "$evidence" >"$evidence/result.json"
 semodule -r aiden_boundary_probe_deny
 deny_installed=false
 cat "/proc/$pid/attr/current" >"$evidence/restored-holder-context.txt"
+run_delegation restored
 for operation in file socket; do run_probe restored "$operation"; done
 run_probe restored proc "$pid"
 node "$source_dir/verify.mjs" "$evidence" --restored >"$evidence/restored-result.json"

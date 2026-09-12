@@ -170,3 +170,36 @@ or a claim that Fedora Computer Use currently works.
 - The runner bounds unauthorized launch attempts and always attempts every cleanup step. Host-independent regression tests cover verifier rejection and cleanup faults. The sixth real enforcing-VM run passed and removed its fixture service, modules, user and files. This proves synthetic prerequisites only: authenticated releases, Electron role separation, endpoint delegation and complete revocation remain unimplemented. Computer Use remains disabled on Linux.
 
 - Mitigation: GNOME sessions now reject hold setup before portal activation and retain toggle dictation; the gate does not guess from localized descriptions or requested keys. The final helper returned unavailable on the real GNOME host. The native private D-Bus suite passes 13 cases, and Linux contracts pass 151 tests with one platform skip. Both independent Astra medium reviewers cleared the probe and portal changes.
+
+## Phase 11: Descriptor delegation and upstream compatibility
+
+Active: extend the synthetic policy experiment to transferred and inherited file
+descriptors, requiring a working baseline, verified receiver domain, exact-run
+audit evidence, and effective policy checks. A failed child launch must not be
+counted as successful descriptor isolation.
+
+A separate minimal Electron 43.1.1 ARM64 run on the enforcing GNOME Wayland host
+successfully launched a sandboxed renderer and Node utility process. Browser,
+GPU, renderer, network utility and Node utility metrics all used the same
+Electron executable and `unconfined_t` context. The renderer reported seccomp
+mode 2 and no-new-privileges. This is an observational prerequisite, not an
+identity boundary or a complete process inventory: zygotes are not included in
+`app.getAppMetrics()`. A filename or argv role check would not distinguish these
+processes. A future source-domain transition experiment must cover both direct
+utility execs and zygote descendants before any main-process authority is granted.
+
+The [pinned driver gap audit](linux-cua-driver-gap-audit.md) records the additional GNOME extension compatibility and authority boundary, native Wayland opt-in, and action matrix needed before Linux driver admission.
+
+Phase 11 complete within its prerequisite scope: both descriptor baselines read
+the full synthetic token. The enforcing overlay caused SCM_RIGHTS to omit the
+file descriptor and denied an inherited file read after fork plus an explicit
+outgoing domain change. Exact receiver/private-file AVCs and loaded policy
+subtraction are required. The exec path failed before receiver main and is
+explicitly not counted. Restoration and cleanup passed on run 11. Both Astra
+medium reviewers independently cleared the final source and evidence; 22 focused
+probe tests and 156 Linux contract tests passed (one platform skip).
+
+Next: isolate Electron main and child roles in a separate disposable fixture.
+This must preserve a working sandboxed renderer and utilities while distinguishing
+source-domain transitions, without treating argv, filenames or the stock
+sandbox as authenticated process identity. Production Computer Use stays disabled.

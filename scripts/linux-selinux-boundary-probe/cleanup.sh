@@ -4,6 +4,9 @@ cleanup() {
   local result=$?
   trap - EXIT
   set +e
+  if [[ -n "${delegation_unit:-}" ]]; then systemctl stop "$delegation_unit" >>"$evidence/cleanup.log" 2>&1 || result=1; fi
+  # Native receiver has its own six-second alarm; reap it before deleting UID.
+  if [[ -n "${receiver_pid:-}" ]]; then wait "$receiver_pid" || result=1; fi
   systemctl stop "$unit" >>"$evidence/cleanup.log" 2>&1 || result=1
   rm -f -- "/etc/systemd/system/$unit" >>"$evidence/cleanup.log" 2>&1 || result=1
   systemctl daemon-reload >>"$evidence/cleanup.log" 2>&1 || result=1

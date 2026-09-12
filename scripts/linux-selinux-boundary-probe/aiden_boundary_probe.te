@@ -25,3 +25,19 @@ dev_rw_null(aiden_boundary_probe_t)
 # The root-installed executable is an entrypoint only for this fixture domain.
 # Extra access is intentionally not granted to unconfined domains here: the
 # baseline measures Fedora's existing attribute-derived permissions.
+
+# Synthetic outgoing delegation only: trusted fixture forks with a private FD,
+# then deliberately changes the child to unconfined_t without executing code.
+gen_require(`
+  type unconfined_t;
+  type init_t;
+')
+role system_r types unconfined_t;
+allow aiden_boundary_probe_t self:process { fork setcurrent };
+allow aiden_boundary_probe_t self:file write;
+allow aiden_boundary_probe_t unconfined_t:process dyntransition;
+type aiden_boundary_probe_report_t;
+files_pid_file(aiden_boundary_probe_report_t)
+allow init_t aiden_boundary_probe_report_t:file { getattr open write };
+allow aiden_boundary_probe_t aiden_boundary_probe_report_t:file { getattr write };
+allow aiden_boundary_probe_t unconfined_t:unix_stream_socket connectto;

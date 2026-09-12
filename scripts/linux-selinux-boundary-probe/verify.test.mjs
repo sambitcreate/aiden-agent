@@ -22,6 +22,15 @@ function fixture() {
     files[`after-${operation}-allow.txt`] = "";
     avcs.push(`type=AVC avc: denied { ${operation === "socket" ? "connectto" : "read"} } for pid=${200 + i} comm="attacker" scontext=unconfined_u:unconfined_r:unconfined_t:s0 tcontext=system_u:object_r:${operation === "file" ? "aiden_boundary_probe_data_t" : "aiden_boundary_probe_t"}:s0 tclass=${operation === "socket" ? "unix_stream_socket" : "file"} permissive=0`);
   }
+  files["before-fd-allow.txt"] = "allow unconfined_domain_type domain:fd use;";
+  files["after-fd-allow.txt"] = "";
+  for (const [i, operation] of ["scm", "inherited"].entries()) {
+    const context = operation === "scm" ? "unconfined_u:unconfined_r:unconfined_t:s0" : "system_u:system_r:unconfined_t:s0";
+    files[`before-${operation}.json`] = JSON.stringify({ operation, success: true, stage: "read", truncated: false, uid: 981, pid: 300+i, errno: 0, context });
+    files[`restored-${operation}.json`] = files[`before-${operation}.json`];
+    files[`after-${operation}.json`] = JSON.stringify({ operation, success: false, stage: operation === "scm" ? "receive-no-fd" : "read", truncated: operation === "scm", uid: 981, pid: 400+i, errno: operation === "scm" ? 0 : 13, context });
+    avcs.push(`type=AVC avc: denied { use } for pid=${400+i} path="/run/aiden-selinux-boundary-probe/private.txt" scontext=${context} tcontext=system_u:system_r:aiden_boundary_probe_t:s0 tclass=fd permissive=0`);
+  }
   files["avc.txt"] = avcs.join("\n");
   for (const operation of ["proc-fd", "ptrace", "pidfd"]) {
     for (const phase of ["before", "after"]) files[`${phase}-${operation}.json`] = JSON.stringify({ success: false, errno: 1, uid: 981 });
@@ -76,4 +85,22 @@ test("root or a different UID cannot substitute for same-UID negative evidence",
     const files = fixture(); files["after-file.json"] = JSON.stringify({ success: false, uid, errno: 13, pid: 200 });
     assert.throws(() => verifyEvidence(reader(files)));
   }
+});
+
+test("delegation needs successful baseline, actual unconfined child, and valid syscall outcome", () => {
+  for (const [operation, change] of [["scm", {success: true}], ["scm", {truncated: false}], ["inherited", {context: "system_u:system_r:aiden_boundary_probe_t:s0"}], ["inherited", {errno: 9}], ["inherited", {uid: 0}]]) {
+    const files = fixture(), name = `after-${operation}.json`;
+    files[name] = JSON.stringify({...JSON.parse(files[name]), ...change});
+    assert.throws(() => verifyEvidence(reader(files)));
+  }
+  const files = fixture(); files["before-inherited.json"] = JSON.stringify({...JSON.parse(files["before-inherited.json"]), success: false});
+  assert.throws(() => verifyEvidence(reader(files)), /token-read baseline/u);
+});
+test("delegation requires exact receiver, private file, source context and effective fd subtraction", () => {
+  for (const [oldText, newText] of [["pid=400 ", "pid=999 "], ['path="/run/aiden-selinux-boundary-probe/private.txt"', 'path="/other"'], ["scontext=system_u:system_r:unconfined_t:s0", "scontext=system_u:system_r:other_t:s0"]]) {
+    const files = fixture(); files["avc.txt"] = files["avc.txt"].replaceAll(oldText, newText);
+    assert.throws(() => verifyEvidence(reader(files)), /exact receiver private-FD use AVC/u);
+  }
+  const files = fixture(); files["after-fd-allow.txt"] = "allow domain domain:fd use;";
+  assert.throws(() => verifyEvidence(reader(files)), /fd use allow survived/u);
 });

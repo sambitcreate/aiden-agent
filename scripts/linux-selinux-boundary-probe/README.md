@@ -44,8 +44,9 @@ user `aiden-boundary-probe`, modules `aiden_boundary_probe_deny` and
 ## What is measured
 
 1. Install a small base module defining a daemon domain and synthetic data type.
-   Do not grant unconfined access in this module: observe Fedora's existing
-   attribute-derived access instead. Check the holder domain and same UID.
+   Preserve stock unconfined access to private objects: observe Fedora's
+   existing attribute-derived access instead. The delegation fixture additionally
+   authorizes only its outgoing transition and dedicated report output. Check the holder domain and same UID.
 2. Verify file read, `/proc/PID/comm` read, and private Unix socket connection
    succeed before installing the deny overlay. Also record proc-fd, ptrace, and
    pidfd_getfd behavior. Holder is deliberately dumpable; no Yama setting changes.
@@ -63,7 +64,22 @@ user `aiden-boundary-probe`, modules `aiden_boundary_probe_deny` and
    Native holder code verifies its own SELinux context and non-root UID before
    creating its ready socket, because the overlay also blocks unconfined root's
    `/proc` reads. Root is the trusted provisioner, not the attacker model.
-6. Remove the overlay and require the original file/proc/socket operations to
+6. Intentionally delegate a read-only synthetic file descriptor from a trusted
+   service to the same-UID unconfined receiver. SCM_RIGHTS uses an outward
+   connection to the receiver's socket, avoiding the denied inbound connection.
+   The baseline must read the exact token; under the overlay `recvmsg` succeeds
+   with `MSG_CTRUNC` and no descriptor. A second service forks with descriptor10,
+   explicitly changes only the child to `system_u:system_r:unconfined_t:s0`,
+   verifies that context, then reads the inherited descriptor. Baseline token
+   reads must become EACCES/EPERM under the overlay. Both cases require an exact
+   receiver PID/context, private-file path, enforcing `fd { use }` AVC, and the
+   loaded stock `unconfined_t -> aiden_boundary_probe_t:fd use` allow disappearing.
+   Native alarm limits are six seconds (four in the fork child); the receiver
+   wrapper allows eight seconds with one-second kill escalation. Socket readiness
+   allows four seconds. Transient services have start/run/stop limits of 3/8/2
+   seconds, with a 12-second wrapper and two-second kill escalation. Cleanup
+   stops any outstanding delegation unit and reaps the receiver before UID removal.
+7. Remove the overlay and require the original file/proc/socket and descriptor operations to
    succeed again. Then cleanup removes the base fixture too.
 
 Fedora's stock `dontaudit unconfined_usertype domain:file { ... open read ... }`
@@ -76,9 +92,18 @@ failure in the baseline is reported as not proven, never as a policy success.
 
 ## Evidence limits
 
-This does not test SCM_RIGHTS, inherited descriptors, dynamic setcon, executable
-relabeling, all possible source domains, release signatures, immutable payloads,
+Descriptor evidence covers a read-only regular file transferred through
+SCM_RIGHTS or inherited across fork followed by a fixture-authorized outgoing
+setcon. It does not cover inherited descriptors across exec, arbitrary dynamic
+setcon, stolen socket/pipe endpoint operations, executable relabeling, all possible source domains, release signatures, immutable payloads,
 Electron role separation, process lifetime binding, or compositor capture/input.
+An initial outgoing exec experiment on Fedora44 reached the target domain but
+then failed before receiver main: the coarse creator-domain `fd/use` deny also
+blocked use of the receiver executable opened during exec, causing SIGSEGV.
+That failure is not counted as descriptor protection evidence. This tradeoff
+means these results do not establish a usable Electron child/loader policy;
+protected channel object permissions require separate experiments.
+
 The policy is intentionally a small test, not a security policy suitable for
 Aiden. A successful result always reports `releaseIdentityEstablished: false`
 and `computerUseEnabled: false`.

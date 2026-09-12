@@ -8,7 +8,7 @@ export function verifyEvidence(read, restored = false) {
   const json = (name) => JSON.parse(read(`${name}.json`));
   const operations = ["file", "proc", "socket"];
   if (restored) {
-    for (const operation of operations) assert.equal(json(`restored-${operation}`).success, true);
+    for (const operation of [...operations, "scm", "inherited"]) assert.equal(json(`restored-${operation}`).success, true);
     return { scope: "synthetic-selinux-prerequisite", restored: true, computerUseEnabled: false };
   }
   assert.equal(read("enforcement.txt").trim(), "Enforcing");
@@ -37,6 +37,33 @@ export function verifyEvidence(read, restored = false) {
     else assert.ok(matchingAvc, `${operation} needs matching fixture AVC`);
     results.push({ operation, baseline: "allowed", hardened: "denied", effectiveAllowRemoved: true, audit: matchingAvc ? "matching-enforcing-AVC" : "not-observed-stock-dontaudit-applies" });
   }
+  assert.ok(read("before-fd-allow.txt").trim(), "descriptor tests need a stock fd use allow");
+  assert.equal(read("after-fd-allow.txt").trim(), "", "effective fd use allow survived");
+  const delegation = ["scm", "inherited"].map(operation => {
+    const before = json(`before-${operation}`), after = json(`after-${operation}`);
+    for (const receipt of [before, after]) {
+      assert.equal(receipt.operation, operation);
+      assert.equal(receipt.uid, uid);
+      assert.ok(Number.isInteger(receipt.pid) && receipt.pid > 1);
+      assert.match(receipt.context, operation === "scm" ? /^unconfined_u:unconfined_r:unconfined_t:/u : /^system_u:system_r:unconfined_t:s0$/u);
+    }
+    assert.equal(before.success, true, `${operation} requires successful token-read baseline`);
+    assert.equal(before.stage, "read");
+    assert.equal(before.errno, 0);
+    assert.equal(before.truncated, false);
+    assert.equal(after.success, false, `${operation} leaked token`);
+    if (operation === "scm") {
+      assert.equal(after.stage, "receive-no-fd");
+      assert.equal(after.truncated, true);
+      assert.equal(after.errno, 0); // recvmsg succeeded but kernel omitted unauthorized FD
+    } else {
+      assert.equal(after.stage, "read");
+      assert.equal(after.truncated, false);
+      assert.ok([1, 13].includes(after.errno), "inherited descriptor read needs EPERM/EACCES");
+    }
+    assert.ok(avc.split("\n").some(line => /denied\s+\{\s*use\s*\}/u.test(line) && line.includes(` pid=${after.pid} `) && line.includes(`scontext=${after.context} `) && line.includes("tcontext=system_u:system_r:aiden_boundary_probe_t:s0 ") && line.includes('path="/run/aiden-selinux-boundary-probe/private.txt"') && line.includes("tclass=fd ") && line.includes("permissive=0")), `${operation} requires exact receiver private-FD use AVC`);
+    return { operation, baseline: "token-read", hardened: operation === "scm" ? "SCM_RIGHTS-FD-omitted" : "inherited-FD-read-denied-after-fork-and-setcon", effectiveAllowRemoved: true, audit: "matching-enforcing-private-FD-use-AVC" };
+  });
   const entries = json("entry-attempts");
   for (const status of [entries.direct, entries.runcon]) assert.equal(status, 126, "Entry test must reach execution and fail with GNU cannot-invoke status");
   const transition = read("after-transition-allow.txt").trim().split("\n").filter(Boolean);
@@ -51,7 +78,7 @@ export function verifyEvidence(read, restored = false) {
     const established = before.success && after.success === false && [1, 13].includes(after.errno) && matchingAvc && read("before-ptrace-allow.txt").trim() && !read("after-ptrace-allow.txt").trim();
     return { operation, before, after, conclusion: established ? "matching-enforcing-AVC-and-effective-allow-removed" : before.success ? "not-proven-no-complete-audit-evidence" : "not-proven-baseline-denied" };
   });
-  return { scope: "synthetic-selinux-prerequisite", results, entryAttemptsRejected: true, systemServiceRestartedInDomain: true, ancillary, releaseIdentityEstablished: false, computerUseEnabled: false };
+  return { scope: "synthetic-selinux-prerequisite", results, delegation, entryAttemptsRejected: true, systemServiceRestartedInDomain: true, ancillary, releaseIdentityEstablished: false, computerUseEnabled: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
