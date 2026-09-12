@@ -82,12 +82,16 @@ export function mergeDiscoveredModelMetadata<
 /** Enforced in the shared generation path, including native-client requests. */
 export function assertCustomModelImageLimit(
   options: CustomModelOptions | undefined,
-  messages: ReadonlyArray<{ attachments?: ReadonlyArray<{ kind: string }> }>,
+  messages: ReadonlyArray<{
+    role: string;
+    attachments?: ReadonlyArray<{ kind: string }>;
+  }>,
 ): void {
   if (options?.maxImages === undefined) return;
   if (
     messages.some(
       (message) =>
+        message.role === "user" &&
         (message.attachments?.filter((item) => item.kind === "image").length ??
           0) > options.maxImages!,
     )
@@ -96,4 +100,20 @@ export function assertCustomModelImageLimit(
       `This model supports at most ${options.maxImages} images per message. Remove images or choose another model.`,
     );
   }
+}
+
+/** Filter the final composed snapshot, including tools contributed by extensions. */
+export function applyCustomModelToolPolicy<
+  T extends { tools: readonly unknown[] },
+>(snapshot: T, options: CustomModelOptions | undefined): T {
+  return options?.toolCall === false ? { ...snapshot, tools: [] } : snapshot;
+}
+
+/** Deferred discovery must respect the same policy as the initial tool snapshot. */
+export async function prepareCustomModelToolContext<T>(
+  context: T,
+  prepare: ((context: T) => Promise<T>) | undefined,
+  options: CustomModelOptions | undefined,
+): Promise<T> {
+  return options?.toolCall === false || !prepare ? context : prepare(context);
 }

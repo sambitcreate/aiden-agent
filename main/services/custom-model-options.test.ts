@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseCustomModelOptions,
+  prepareCustomModelToolContext,
   mergeDiscoveredModelMetadata,
   assertCustomModelImageLimit,
 } from "../../renderer/shared/custom-model-options.js";
@@ -139,7 +140,9 @@ test("native clients receive overridden image support and existing visibility po
 });
 
 test("image count enforcement accepts the limit and rejects excess for native and desktop requests", () => {
-  const messages = [{ attachments: [{ kind: "image" }, { kind: "text" }] }];
+  const messages = [
+    { role: "user", attachments: [{ kind: "image" }, { kind: "text" }] },
+  ];
   assert.doesNotThrow(() =>
     assertCustomModelImageLimit({ maxImages: 1 }, messages),
   );
@@ -242,4 +245,28 @@ test("portable intent clears cached overrides and handles prototype-shaped IDs a
   );
   assert.equal(manual.modelMetadata?.["__proto__"].overrides?.vision, true);
   assert.ok(manual.models.includes("__proto__"));
+});
+
+test("generated assistant images are not counted as model inputs", () => {
+  assert.doesNotThrow(() =>
+    assertCustomModelImageLimit({ maxImages: 1 }, [
+      {
+        role: "assistant",
+        attachments: [{ kind: "image" }, { kind: "image" }],
+      },
+      { role: "user", attachments: [{ kind: "image" }] },
+    ]),
+  );
+});
+
+
+test("disabled tools skip deferred browser discovery without altering context", async () => {
+  let calls = 0;
+  const context = { tools: [] as string[] };
+  const prepare = async () => { calls += 1; return { tools: ["browser"] }; };
+  assert.equal(await prepareCustomModelToolContext(context, prepare, { toolCall: false }), context);
+  assert.equal(calls, 0);
+  assert.deepEqual(await prepareCustomModelToolContext(context, prepare, { toolCall: true }), { tools: ["browser"] });
+  assert.equal(calls, 1);
+  assert.equal(await prepareCustomModelToolContext(context, undefined, undefined), context);
 });

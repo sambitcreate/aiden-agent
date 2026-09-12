@@ -113,15 +113,12 @@ export function CustomModelOptionsEditor({
                     disabled={disabled}
                     value={overrides[key] ?? ""}
                     placeholder={effective[key]?.toString() ?? "Automatic"}
-                    onChange={(event) =>
-                      onChange(id, {
-                        ...overrides,
-                        [key]:
-                          event.target.value === ""
-                            ? undefined
-                            : Number(event.target.value),
-                      })
-                    }
+                    onChange={(event) => {
+                      const next = { ...overrides };
+                      if (event.target.value === "") delete next[key];
+                      else next[key] = Number(event.target.value);
+                      onChange(id, next);
+                    }}
                   />
                 </Field>
               ))}

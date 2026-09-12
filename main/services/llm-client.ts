@@ -1,4 +1,4 @@
-import { assertCustomModelImageLimit } from "../../renderer/shared/custom-model-options.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -2065,10 +2065,9 @@ export const llmClient = {
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
-      const customToolsDisabled = runtime.provider.modelMetadata?.[model.id]?.overrides?.toolCall === false;
-      const runtimeContributions = customToolsDisabled
-        ? { ...resolvedContributions, tools: [] }
-        : resolvedContributions;
+      const runtimeContributions = applyCustomModelToolPolicy(
+        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+      );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
         contextWindow: model.contextWindow, systemPrompt, tools: runtimeTools,
@@ -2289,7 +2288,7 @@ export const llmClient = {
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = browserDiscovery && !customToolsDisabled ? await browserDiscovery.prepare(context) : context;
+          let nextContext = await prepareCustomModelToolContext(context, browserDiscovery?.prepare.bind(browserDiscovery), runtime.provider.modelMetadata?.[model.id]?.overrides);
           let changed = nextContext !== context;
           if (changed) {
             assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });

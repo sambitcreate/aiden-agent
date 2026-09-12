@@ -76,6 +76,12 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     dialog.getByRole("button", { name: "Discover models", exact: true }),
   ).toBeEnabled();
   await expect(vision).toHaveAttribute("data-state", "unchecked");
+  const contextInput = dialog.getByRole("spinbutton", {
+    name: `${E2E_MODEL_ID}: Context length (tokens)`,
+    exact: true,
+  });
+  await contextInput.fill("");
+  await expect(contextInput).toHaveAttribute("placeholder", "32768");
   await dialog
     .getByRole("button", { name: "Use detected capabilities", exact: true })
     .click();
@@ -90,6 +96,16 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     .getByRole("textbox", { name: "Model ID", exact: true })
     .fill("manual-private-model");
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await dialog
+    .locator("summary")
+    .filter({ hasText: "manual-private-model" })
+    .click();
+  await dialog
+    .getByRole("spinbutton", {
+      name: "manual-private-model: Context length (tokens)",
+      exact: true,
+    })
+    .fill("7777");
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
@@ -129,4 +145,21 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
+  await configure.click();
+  await dialog
+    .getByRole("button", { name: "More options", exact: true })
+    .click();
+  await expect(
+    dialog.locator("summary").filter({ hasText: "manual-without-discovery" }),
+  ).toBeVisible();
+  await dialog
+    .locator("summary")
+    .filter({ hasText: "manual-private-model" })
+    .click();
+  await expect(
+    dialog.getByRole("spinbutton", {
+      name: "manual-private-model: Context length (tokens)",
+      exact: true,
+    }),
+  ).toHaveValue("7777");
 });

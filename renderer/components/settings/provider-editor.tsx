@@ -669,16 +669,22 @@ export function ProviderEditor({
             modelsStale={modelsStale}
             onAdd={(id) => {
               if (modelsStale) {
-                setModels([id]);
-                setManualModels([id]);
-                setModelMetadata({
-                  [id]: {
-                    ...modelMetadata[id],
-                    source: modelMetadata[id]?.source ?? "provider",
-                    manuallyAdded: true,
-                  },
-                });
-                setDefaultModel(id);
+                const retained = [...new Set([...manualModels, id])];
+                setModels(retained);
+                setManualModels(retained);
+                setModelMetadata(
+                  Object.fromEntries(
+                    retained.map((modelId) => [
+                      modelId,
+                      {
+                        ...modelMetadata[modelId],
+                        source: modelMetadata[modelId]?.source ?? "provider",
+                        manuallyAdded: true,
+                      },
+                    ]),
+                  ),
+                );
+                if (!retained.includes(defaultModel)) setDefaultModel(id);
                 setModelsStale(false);
                 setConnectionNotice(null);
                 return;

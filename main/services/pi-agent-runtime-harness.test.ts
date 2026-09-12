@@ -1,3 +1,4 @@
+import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -2716,4 +2717,28 @@ test("disclosed browser tools remain executable and budgeted after managed provi
   assert.match(projection.systemPrompt, /untrusted website content/);
   const journal = await session.buildContext();
   assert.equal(journal.messages.filter((message) => message.role === "toolResult" && message.toolName === "browser_status").length, 2);
+});
+
+
+test("custom tool disabling removes base and extension tools from a frozen runtime snapshot", async () => {
+  const tool: AgentTool = {
+    name: "base-tool", label: "Base", description: "Base", parameters: Type.Object({}),
+    execute: async () => { throw new Error("Disabled tool must never execute"); },
+  };
+  const snapshot = resolvePiAgentRuntimeContributionSnapshot("base", [tool], {}, [{ id: "extension", tools: [{ ...tool, name: "extension-tool" }] }]);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(snapshot.tools.length, 2);
+  for (const setting of [undefined, { toolCall: true }]) {
+    const { harness } = testHarness([fauxAssistantMessage("ok")], { contributions: applyCustomModelToolPolicy(snapshot, setting) });
+    assert.equal(harness.state.tools.length, 2);
+  }
+  const { harness } = testHarness([fauxAssistantMessage("ok")], {
+    contributions: applyCustomModelToolPolicy(snapshot, { toolCall: false }),
+    // The final contribution policy must win over the unfiltered initial tools.
+    initialState: { tools: [tool] },
+  });
+  assert.deepEqual(harness.state.tools, []);
+  await harness.prompt("Respond without tools");
+  assert.deepEqual(harness.state.tools, []);
+  assert.equal(snapshot.tools.length, 2, "the shared frozen snapshot stays intact");
 });
