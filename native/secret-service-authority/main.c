@@ -72,7 +72,10 @@ int main(int argc, char **argv) {
   g_free(session_path);
   if (secret_collection_get_locked(collection)) { status = LOCKED; goto done; }
   attributes = secret_attributes_build(&schema, "service", argv[2], "account", argv[3], NULL);
-  items = secret_service_search_sync(service, &schema, attributes,
+  /* Read and duplicate-check inside the same collection this helper writes to.
+   * A stray matching item in another collection must never be served as the
+   * authority, nor become a service-wide duplicate after a store. */
+  items = secret_collection_search_sync(collection, &schema, attributes,
     SECRET_SEARCH_ALL | SECRET_SEARCH_LOAD_SECRETS, NULL, &error);
   if (error) goto done;
   if (g_list_length(items) > 1) { status = DUPLICATE; goto done; }
