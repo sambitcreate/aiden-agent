@@ -242,3 +242,30 @@ reviews cleared the candidate; 25 focused tests and 181 Linux contract tests
 passed, with one platform skip. Final lint-only imports/comments also pass lint
 and the focused suite. Immutable payload, pre-exec fork identity, JIT and protected
 channel authority remain unproved; Linux Computer Use remains disabled.
+
+## Phase 13: Protected IPC object permissions
+
+Active: preserve a working generic socket roundtrip while rejecting transfer or
+use of a separately labeled protected socket. Both descriptors must have the
+same trusted creator domain, and receiver `fd/use` must remain allowed, so a
+coarse creator-domain denial cannot explain the protected result. Require exact
+synthetic token/ACK baselines, a working generic channel under enforcement,
+matching protected-socket AVCs, effective policy checks and restoration.
+
+A separate live socketpair/fork observation on the same Fedora host confirmed
+that SO_PEERCRED and SO_PEERPIDFD identify the socketpair creator even while its
+child holds the other endpoint. The receipt records creator PID 19085 and holder
+PID 19113. These APIs must not be interpreted as authenticating the current
+holder after inheritance or delegation. Native launch ownership and enforced
+endpoint access remain separate requirements; no production broker admission
+has been implemented from this observation.
+
+Phase 13 passed its scoped experiment. With creator fd/use still allowed, the
+generic socket completed token read and ACK write under the overlay. The
+protected endpoint was omitted with MSG_CTRUNC; exact receiver socket-object
+AVCs and effective read/write removal are required. Restoration and cleanup
+passed. Both Astra medium reviewers independently cleared source and live
+receipts. Thirteen focused tests, 194 Linux contract tests (one platform skip),
+and scoped lint passed; both new suites are registered in package.json.
+Inherited endpoints, pipes, Electron integration and current-holder authentication
+remain separate work; no Computer Use admission was enabled.

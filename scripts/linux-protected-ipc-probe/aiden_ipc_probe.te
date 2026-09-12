@@ -1,0 +1,29 @@
+policy_module(aiden_ipc_probe, 1.0)
+type aiden_ipc_sender_t;
+type aiden_ipc_sender_exec_t;
+init_daemon_domain(aiden_ipc_sender_t, aiden_ipc_sender_exec_t)
+type aiden_ipc_runtime_t;
+files_pid_file(aiden_ipc_runtime_t)
+type aiden_ipc_report_t;
+files_pid_file(aiden_ipc_report_t)
+type aiden_ipc_protected_socket_t;
+gen_require(`
+  type unconfined_t;
+  type init_t;
+')
+allow aiden_ipc_sender_t self:file { getattr open read write };
+allow aiden_ipc_sender_t self:process setsockcreate;
+allow aiden_ipc_sender_t self:unix_stream_socket create_stream_socket_perms;
+allow aiden_ipc_sender_t aiden_ipc_protected_socket_t:unix_stream_socket create_stream_socket_perms;
+allow aiden_ipc_sender_t unconfined_t:unix_stream_socket connectto;
+manage_sock_files_pattern(aiden_ipc_sender_t, aiden_ipc_runtime_t, aiden_ipc_runtime_t)
+files_search_pids(aiden_ipc_sender_t)
+libs_use_ld_so(aiden_ipc_sender_t)
+libs_use_shared_libs(aiden_ipc_sender_t)
+dev_rw_null(aiden_ipc_sender_t)
+allow init_t aiden_ipc_report_t:file { getattr open write };
+allow aiden_ipc_sender_t aiden_ipc_report_t:file { getattr write };
+# Deliberate, retained grants: file creator SID cannot explain selective denial.
+allow unconfined_t aiden_ipc_sender_t:fd use;
+allow unconfined_t aiden_ipc_sender_t:unix_stream_socket { read write };
+allow unconfined_t aiden_ipc_protected_socket_t:unix_stream_socket { read write };
