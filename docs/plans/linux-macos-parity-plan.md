@@ -77,6 +77,18 @@ A minimal visible-canvas Electron reproduction crashes at the ARM SVE instructio
 - Nine native private-D-Bus cases, 87 voice tests, onboarding, Linux Settings Electron, TypeScript, full lint, ARM64 package build/verifier passed. Full desktop command passed 5,946 tests, 3 skipped, zero failures.
 - Real GNOME/KDE shortcut assignment and physical press/release acceptance remain external to the mock and Xvfb tests. Linux transcript delivery remains clipboard-only.
 
-## Phase 4: Hosted acceptance repair (active)
+## Phase 4: Hosted acceptance repair (implementation complete; CI pending)
 
 Hosted CI at cedcc841 passed shared verification, macOS Electron, Android, and Linux ARM64. Linux x64 passed packaging/keyring but failed three Electron cases: legacy empty-chat migration, unsupported Computer Use setup expectation, and Model Pad minimum-height fit with Linux window chrome. Repair and rerun before final acceptance; Fedora RPM job depends on x64 success.
+
+## Computer Use admission work remaining
+
+The pinned upstream Cua 0.8.3 release has Linux x64/arm64 artifacts, but the Aiden broker deliberately requires macOS live code-signing/audit-token authentication. A same-UID socket, PID, executable pathname, hash check, or bearer secret cannot substitute for that existing contract.
+
+A Linux implementation needs a root-managed verified release payload and an enforced execution domain covering Aiden main, broker, and driver. Exact-build identity, constrained loaders/children, protection against process-memory and descriptor access, and admission before driver execution must survive the complete launch chain. A dedicated broker UID by itself is insufficient. Portable AppImage support would also require separate trusted provisioning.
+
+Next implementation target is a distro-specific policy prototype (Fedora/SELinux or Ubuntu/AppArmor), with reviewed negative tests for tampered executable/ASAR/libraries, unauthorized clients, transferred descriptors, reused PIDs, and peer-loss revocation. Graphical acceptance must additionally verify capture, AT-SPI, and permitted foreground/background actions per compositor. The upstream KDE/background-action matrix has gaps; upstream fixture claims are not Aiden acceptance.
+
+Current Linux Computer Use gate stays disabled until this boundary is implemented and validated. Real compositor hold-shortcut acceptance, focused-element-safe dictation paste, and an Electron release carrying libyuv fab11704 also remain before a full parity claim.
+
+- Phase4 fixes: shared subagent generation validation now accepts exactly Linux7-field and macOS9-field identities; migration safety remains unchanged. Linux draft suite5/5 passed. Compact ModelPad layout passes all24native Linux geometry states with160px minimum retained. Guidedsetup now asserts unsupportedComputerUse absence onLinux (3tests passed). Mac focused Electron9/9 passed; lint/typecheck/build and36focused store tests passed. Both Astra medium reviewers cleared final changes.

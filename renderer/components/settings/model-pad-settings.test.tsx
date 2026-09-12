@@ -150,3 +150,9 @@ test("legacy direct Artificial Analysis settings are retired", () => {
   assert.doesNotMatch(modelDataSource, /Legacy direct benchmark source/u);
   assert.doesNotMatch(source, /useArtificialAnalysisStatus/u);
 });
+
+test("short Model Pad windows share toolbar wrapping without reducing controls or square size", () => {
+  assert.match(source, /model-pad-toolbar-actions flex flex-wrap justify-end gap-2/u);
+  assert.match(styles, /@media \(max-height: 640px\)\s*\{\s*\.model-pad-toolbar-actions\s*\{\s*display: contents;/u);
+  assert.match(styles, /@media \(max-height: 640px\)[\s\S]*?\.settings-model-pad-grid\s*\{\s*margin-top: 0\.75rem;/u);
+});

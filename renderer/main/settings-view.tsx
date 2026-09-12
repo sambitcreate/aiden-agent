@@ -123,7 +123,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
-  modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
+  modelData: "Arrange your models by capability and pace. Your map stays on this device.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",

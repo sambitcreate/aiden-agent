@@ -476,3 +476,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: electron-updater quitAndInstall swallows installer failures; Linux handoff must track actual install result so protected shutdown still quits on failure. Real AppImage mount acceptance required fuse3 plus /dev/fuse and SYS_ADMIN in an isolated container.
 
 - 2026-09-12: Portal hold review caught ordinary shortcut reconciliation reclaiming its chord and async Settings writes lacking commit-time revision fencing. Fixed both with regression tests. Hosted x64 revealed native chrome leaves573px content in600px window, exposing ModelPad minimum-size overflow.
+
+- 2026-09-12: Linux empty-chat migration correctly preserved candidates because V2 subagent storage rejected native seven-field generations. Shared strict seven/nine-field validation fixes deletion/restart without weakening evidence requirements.

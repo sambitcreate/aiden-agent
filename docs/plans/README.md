@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
-- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; phased integration with two independent reviews per phase.
+- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; shared integration, Linux Bots, AppImage updates and portal hold dictation implemented/reviewed; hosted acceptance repair and Computer Use admission remain.
 
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

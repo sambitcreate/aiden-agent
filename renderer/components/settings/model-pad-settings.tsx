@@ -714,7 +714,7 @@ export function ModelPadSettings() {
               </Badge>
             ) : null}
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="model-pad-toolbar-actions flex flex-wrap justify-end gap-2">
             <Button
               size="small"
               variant={activePanel === "models" ? "filled" : "transparent"}

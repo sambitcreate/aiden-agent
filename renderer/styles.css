@@ -1312,6 +1312,19 @@ textarea {
   }
 }
 
+/* Short windows share one wrapping row flow for Pad counts and actions. This
+ * avoids an otherwise nearly empty counts row pushing the minimum-size Pad
+ * and its legend below the Linux content viewport. Keep control sizes intact. */
+@media (max-height: 640px) {
+  .model-pad-toolbar-actions {
+    display: contents;
+  }
+
+  .settings-model-pad-grid {
+    margin-top: 0.75rem;
+  }
+}
+
 @container settings-content (max-width: 620px) {
   .settings-model-pad-grid {
     grid-template-columns: minmax(0, 1fr);

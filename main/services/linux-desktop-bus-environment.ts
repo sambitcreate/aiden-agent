@@ -17,4 +17,3 @@ export function linuxDesktopBusEnvironment(source: NodeJS.ProcessEnv = process.e
   }
   return env;
 }
-
