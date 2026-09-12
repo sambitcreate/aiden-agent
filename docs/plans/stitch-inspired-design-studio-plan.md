@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–3 complete; Phase 4 implementation in progress
+Status: Active — Phases 1–4 complete; Phase 5 implementation in progress
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -21,7 +21,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 - [x] Phase 1 — coherent selection, canvas recovery, inspector layout, terminology, and responsive workbench
 - [x] Phase 2 — Project V2, title policy, per-screen surface semantics, and migration
 - [x] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
-- [ ] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
+- [x] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
 - [ ] Phase 5 — bounded prototype graph and host verification
 - [ ] Phase 6 — project export and handoff V2
 - [ ] Final — combined review, full CI, packaged acceptance, and PR delivery
@@ -40,6 +40,12 @@ Each phase requires focused implementation tests, two independent GPT-6 Astra re
 - Both GPT-6 Astra medium reviewers identified missing-count retry and orphan-intent append failures. Both fixes passed independent re-review.
 - Main now resolves retry count from saved membership, and confirmed absent user turns are reconciled under the project lifecycle lane. Uncertain writes and published provenance are retained.
 - Tests: 408 Generative UI/service/component tests, 42 recovery tests, 12 V2 policy tests, nine browser scenarios, 51 chat/composer integration tests, and 51 onboarding tests passed. Final type-check, lint, build, and rebuilt Electron acceptance passed.
+
+### Phase 4 review and verification
+
+- Immutable project-local language snapshots, strict canonical DESIGN.md, static derivation, workspace freshness, explicit reviewed apply/merge, and exact generation binding are implemented.
+- Both GPT-6 Astra medium reviews passed after correcting duplication to retain workspace freshness provenance and remap derived source identities. Missing derived sources roll back duplication.
+- 423 Generative UI/service/component tests, 42 recovery tests, 12 V2 policy tests, nine browser scenarios, onboarding tests, type-check, lint, build, and Electron describe/review/save/apply/detach acceptance passed.
 
 ## Product and vocabulary contract
 

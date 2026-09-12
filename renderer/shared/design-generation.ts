@@ -1,10 +1,11 @@
+import { parseDesignLanguageBindingV1, type DesignLanguageBindingV1 } from "./design-language.js";
 /** Explicit, durable generation intent. IDs are resolved and authorized in main. */
 export interface DesignGenerationMemberV1 { lineageId: string; mediaId: string }
 export type DesignGenerationAspectV1 = "layout" | "color" | "typography" | "content";
 export type DesignGenerationRequestV1 =
   | { version: 1; operation: "explore"; count: 2 | 3 | 4; creativeRange: "close" | "balanced" | "bold"; aspects: DesignGenerationAspectV1[]; base?: DesignGenerationMemberV1; retryDirectionSetId?: string }
   | { version: 1; operation: "refine"; base: DesignGenerationMemberV1 };
-export interface DesignGenerationIntentV1 { id: string; turnId: string; request: DesignGenerationRequestV1; createdAt: number; published?: boolean; expectedCurrentMediaId?: string; directionSetId?: string }
+export interface DesignGenerationIntentV1 { id: string; turnId: string; request: DesignGenerationRequestV1; createdAt: number; published?: boolean; designLanguage?: DesignLanguageBindingV1; expectedCurrentMediaId?: string; directionSetId?: string }
 export interface DesignDirectionSetV1 { id: string; sourceIntentId: string; requestedCount: 2 | 3 | 4; actualCount: number; members: DesignGenerationMemberV1[]; chosen?: DesignGenerationMemberV1; archived: boolean; status: "partial" | "complete" }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const identity = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9._:@+-]{1,256}$/.test(v);
@@ -24,7 +25,8 @@ export function parseDesignGenerationRecordsV1(intents: unknown, sets: unknown):
   if (!Array.isArray(intents) || !Array.isArray(sets) || intents.length > 256 || sets.length > 256) return undefined;
   const generationIntents: DesignGenerationIntentV1[] = [];
   for (const v of intents) {
-    if (!record(v) || !keys(v,["id","turnId","request","createdAt","directionSetId","expectedCurrentMediaId","published"]) || !identity(v.id) || !identity(v.turnId) || !Number.isSafeInteger(v.createdAt) || (v.createdAt as number)<0 || (v.directionSetId !== undefined && !identity(v.directionSetId))) return undefined;
+    if (!record(v) || !keys(v,["id","turnId","request","createdAt","directionSetId","expectedCurrentMediaId","published","designLanguage"]) || !identity(v.id) || !identity(v.turnId) || !Number.isSafeInteger(v.createdAt) || (v.createdAt as number)<0 || (v.directionSetId !== undefined && !identity(v.directionSetId))) return undefined;
+    if (v.designLanguage !== undefined && !parseDesignLanguageBindingV1(v.designLanguage)) return undefined;
     if (v.published !== undefined && typeof v.published !== "boolean") return undefined;
     if (v.expectedCurrentMediaId !== undefined && (!identity(v.expectedCurrentMediaId) || !v.expectedCurrentMediaId.startsWith("design:"))) return undefined;
     const request = parseDesignGenerationRequestV1(v.request);

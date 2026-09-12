@@ -1,3 +1,4 @@
+import { currentDesignLanguageModelContext } from "./design-language-service.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -1516,6 +1517,7 @@ async function prepareGeneration(
         }
       }
     }
+    const designLanguageContext = designProject ? await currentDesignLanguageModelContext(designProject, folderPath, designIntent) : undefined;
     let designSystemContext: Awaited<ReturnType<typeof currentDesignSystemModelContext>>;
     if (designWorkspace) {
       if (designProject?.designSystemBinding) {
@@ -1538,7 +1540,13 @@ async function prepareGeneration(
       designOutputCount,
       priorDesigns,
       designSystemContext,
+      designLanguageContext,
       onArtifact: async (artifact, html) => {
+        if (designProject) {
+          const current = await designProjectStore.get(designProject.id);
+          if (!current) throw new Error("The Design Project is unavailable.");
+          await currentDesignLanguageModelContext(current, folderPath, designIntent);
+        }
         if (designIntent && !displayedHtmlArtifacts.some((item) => item.mediaId === artifact.mediaId)) {
           const limit = designOutputCount!;
           if (displayedHtmlArtifacts.length >= limit) throw new Error("This Design generation has reached its requested output count.");

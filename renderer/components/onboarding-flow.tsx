@@ -199,7 +199,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Design Workspace",
     description:
-      "Explore 2–4 directions in durable named projects stored locally on this Mac, choose an alternative, and refine one exact Screen revision. Keep partial drafts, inspect Preview, Code, and History, then Continue in workspace with every source change reviewed.",
+      "Explore 2–4 directions in durable named projects stored locally on this Mac, choose an alternative, and refine one exact Screen revision. Apply a project Design Language, keep partial drafts, inspect Preview, Code, and History, then Continue in workspace with every source change reviewed.",
     icon: PanelsTopLeft,
     imageUrl: FEATURE_ILLUSTRATIONS.designWorkspace,
     size: "tall",

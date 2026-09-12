@@ -1,3 +1,5 @@
+import { normalizeDesignLanguageDocument, normalizeDesignLanguageProvenance, designLanguageContentHash, MAX_DESIGN_LANGUAGE_HISTORY } from "./design-language-core.js";
+import type { DesignLanguageDocumentV1, DesignLanguageProvenanceV1 } from "../../renderer/shared/design-language.js";
 import { parseDesignGenerationRequestV1, parseDesignGenerationMemberV1, type DesignGenerationRequestV1, type DesignGenerationMemberV1, type DesignGenerationIntentV1, type DesignDirectionSetV1 } from "../../renderer/shared/design-generation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -1133,6 +1135,52 @@ export class DesignProjectStore {
     });
   }
 
+  async saveDesignLanguage(input: {
+    projectId: string; expectedRevision: number;
+    document: DesignLanguageDocumentV1; provenance: DesignLanguageProvenanceV1;
+  }): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const document = normalizeDesignLanguageDocument(input.document);
+    const provenance = normalizeDesignLanguageProvenance(input.provenance);
+    const contentHash = designLanguageContentHash(document);
+    return this.data.update(database => {
+      const {index, project} = requireCurrent(database, projectId, expectedRevision);
+      const languages = project.designLanguages ?? [];
+      if (languages.length >= MAX_DESIGN_LANGUAGE_HISTORY) throw new DesignProjectConflictError("Design Language history is full.");
+      if (provenance.kind === "derived" && !project.canvas.nodes.some(node => node.kind === "artboard" && node.lineageId === provenance.lineageId && node.artifactMediaIds.includes(provenance.mediaId))) throw new DesignProjectConflictError("Design Language source is not owned by this project.");
+      if (provenance.kind === "workspace-snapshot" && (project.designSystemBinding?.id !== provenance.id || project.designSystemBinding.revision !== provenance.revision)) throw new DesignProjectConflictError("Design Language workspace snapshot changed.");
+      const language = {id:randomUUID(), revision:1, contentHash, document, provenance, createdAt:monotonicTimestamp(this.now)};
+      const updated = requireSnapshot({...project, designLanguages:[...languages, language], revision:project.revision+1, updatedAt:monotonicTimestamp(this.now, project.updatedAt)});
+      database.projects[index]=updated; database.revision+=1; return clone(updated);
+    });
+  }
+
+  async applyDesignLanguage(input: {projectId: string; expectedRevision: number; languageId: string}): Promise<DesignProjectSnapshotV2> {
+    return this.changeDesignLanguage(input, requireIdentity(input.languageId, "Design Language identity"));
+  }
+
+  async detachDesignLanguage(input: {projectId: string; expectedRevision: number}): Promise<DesignProjectSnapshotV2> {
+    return this.changeDesignLanguage(input);
+  }
+
+  private async changeDesignLanguage(input: {projectId: string; expectedRevision: number}, languageId?: string): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    return this.data.update(database => {
+      const {index, project} = requireCurrent(database, projectId, expectedRevision);
+      const language = languageId ? project.designLanguages?.find(candidate => candidate.id === languageId) : undefined;
+      if (languageId && !language) throw new DesignProjectConflictError("Design Language was not found.");
+      const binding = language ? {id:language.id, revision:language.revision, contentHash:language.contentHash} : undefined;
+      if (isDeepStrictEqual(binding, project.activeDesignLanguage)) return clone(project);
+      const {activeDesignLanguage: _previous, ...withoutBinding} = project;
+      const updated = requireSnapshot({...withoutBinding, ...(binding ? {activeDesignLanguage:binding} : {}), revision:project.revision+1, updatedAt:monotonicTimestamp(this.now,project.updatedAt)});
+      database.projects[index]=updated; database.revision+=1; return clone(updated);
+    });
+  }
+
   async beginGeneration(input: { projectId: string; expectedRevision: number; turnId: string; request: DesignGenerationRequestV1 }): Promise<DesignProjectSnapshotV2> {
     this.requireAvailable();
     const projectId = requireIdentity(input.projectId, "identity");
@@ -1148,7 +1196,7 @@ export class DesignProjectStore {
         return clone(project);
       }
       if (request.base && !project.canvas.nodes.some(n => n.kind === "artboard" && n.lineageId === request.base!.lineageId && n.artifactMediaIds.includes(request.base!.mediaId))) throw new DesignProjectRevisionConflictError(project.revision);
-      const intent: DesignGenerationIntentV1 = {id: randomUUID(), turnId, request, published: false, createdAt: monotonicTimestamp(this.now), ...(request.base ? {expectedCurrentMediaId: project.canvas.nodes.find(n=>n.kind === "artboard" && n.lineageId===request.base!.lineageId)!.activeMediaId} : {})};
+      const intent: DesignGenerationIntentV1 = {id: randomUUID(), turnId, request, published: false, ...(project.activeDesignLanguage ? {designLanguage: clone(project.activeDesignLanguage)} : {}), createdAt: monotonicTimestamp(this.now), ...(request.base ? {expectedCurrentMediaId: project.canvas.nodes.find(n=>n.kind === "artboard" && n.lineageId===request.base!.lineageId)!.activeMediaId} : {})};
       const directionSets = clone(project.directionSets ?? []);
       if (request.operation === "explore") {
         if (request.retryDirectionSetId) {
@@ -1325,6 +1373,10 @@ export class DesignProjectStore {
         if (!intentId) continue;
         const intent = generationIntents.find(i => i.id === intentId);
         if (!intent) throw new DesignProjectConflictError("Generation intent was not found.");
+        const previouslyPublished = project.canvas.nodes.some(node => node.kind === "artboard" && node.lineageId === revision.ownership.lineageId && node.artifactMediaIds.includes(revision.mediaId));
+        if (!previouslyPublished && !isDeepStrictEqual(intent.designLanguage, project.activeDesignLanguage)) {
+          throw new DesignProjectConflictError("Design Language changed during generation.");
+        }
         intent.published = true;
         if (intent.request.operation === "refine") {
           if (revision.ownership.kind !== "revision" || revision.ownership.lineageId !== intent.request.base.lineageId || revision.ownership.baseMediaId !== intent.request.base.mediaId) throw new DesignProjectConflictError("Revision does not match refinement intent.");
@@ -1521,11 +1573,31 @@ export class DesignProjectStore {
       const artifactMap = mappingMap(prepared.artifactMediaIds, artifactSources, "artifact", false);
       const assetMap = mappingMap(prepared.referenceAssetIds, assetSources, "asset", true);
       const timestamp = monotonicTimestamp(this.now);
+      const copiedLanguages = (source.designLanguages ?? []).map(language => {
+        const copy = {...clone(language), id:randomUUID()};
+        if (language.provenance.kind === "derived") {
+          const provenance = language.provenance;
+          const sourceNode = source.canvas.nodes.find(node => node.kind === "artboard" &&
+            node.lineageId === provenance.lineageId && node.artifactMediaIds.includes(provenance.mediaId));
+          const mediaId = artifactMap.get(provenance.mediaId);
+          if (!sourceNode || !mediaId) {
+            throw new DesignProjectConflictError("Cannot duplicate Design Language with an unavailable derived source.");
+          }
+          copy.provenance = {...provenance, lineageId:remappedLineageId(targetProjectId, provenance.lineageId), mediaId};
+        }
+        // Workspace provenance and the inherited designSystemBinding remain
+        // exact, so copying never turns stale source guidance into local truth.
+        return copy;
+      });
+      const activeLanguageIndex = source.designLanguages?.findIndex(language => language.id === source.activeDesignLanguage?.id) ?? -1;
+      const copiedActiveLanguage = copiedLanguages[activeLanguageIndex];
       const duplicate = requireSnapshot({
         ...source,
         id: targetProjectId,
         generationIntents: [],
         directionSets: [],
+        designLanguages: copiedLanguages,
+        activeDesignLanguage: copiedActiveLanguage ? {id:copiedActiveLanguage.id, revision:copiedActiveLanguage.revision, contentHash:copiedActiveLanguage.contentHash} : undefined,
         revision: 1,
         title: targetTitle,
         titlePolicy: { state: "manual" },

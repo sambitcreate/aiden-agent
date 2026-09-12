@@ -24,7 +24,7 @@ function reviewedSources(
 }
 
 /** Prove freshness and project only the normalized data that a Design turn may send. */
-export async function currentDesignSystemModelContext(
+export async function currentDesignSystemSnapshot(
   project: DesignProjectSnapshotV1,
   workspaceRoot: string,
 ) {
@@ -48,7 +48,12 @@ export async function currentDesignSystemModelContext(
   if (projection.freshness !== "current" || !projection.snapshot) {
     throw new Error("Refresh the attached design system before starting this Design turn.");
   }
-  const snapshot = projection.snapshot;
+  return projection.snapshot;
+}
+
+export async function currentDesignSystemModelContext(project: DesignProjectSnapshotV1, workspaceRoot: string) {
+  const snapshot = await currentDesignSystemSnapshot(project, workspaceRoot);
+  if (!snapshot) return undefined;
   const values = (items: readonly { name: string; value: string }[]) =>
     items.map(({ name, value }) => ({ name, value }));
   return {

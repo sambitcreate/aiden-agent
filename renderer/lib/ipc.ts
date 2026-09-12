@@ -1,3 +1,4 @@
+import type { DesignLanguageProposalInput, DesignLanguageProposal } from "../shared/design-language-proposals";
 import type { DesignGenerationRequestV1, DesignGenerationIntentV1 } from "../shared/design-generation";
 import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
@@ -777,6 +778,11 @@ export const designerApi = {
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
     invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  previewDesignLanguage: (input: DesignLanguageProposalInput) => invoke<DesignLanguageProposal>("designer:previewDesignLanguage", input),
+  saveDesignLanguage: (input: {proposal:DesignLanguageProposalInput;expectedRevision:number;expectedHash:string}) => invoke<DesignProjectSnapshotV1>("designer:saveDesignLanguage", input),
+  applyDesignLanguage: (input: {projectId:string;expectedRevision:number;languageId:string}) => invoke<DesignProjectSnapshotV1>("designer:applyDesignLanguage", input),
+  detachDesignLanguage: (input: {projectId:string;expectedRevision:number}) => invoke<DesignProjectSnapshotV1>("designer:detachDesignLanguage", input),
+  exportDesignLanguage: (input: {projectId:string;languageId:string}) => invoke<{status:"saved"|"cancelled"}>("designer:exportDesignLanguage", input),
   generationProvenance: (input: { projectId: string; mediaId: string }) => invoke<DesignGenerationIntentV1 | null>("designer:generationProvenance", input),
   chooseDirection: (input: { projectId: string; expectedRevision: number; directionSetId: string; member: { lineageId: string; mediaId: string } }) =>
     invoke<DesignProjectMutationResultV1>("designer:chooseDirection", input),

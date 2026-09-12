@@ -39,6 +39,18 @@ test("Design Studio exposes a coherent keyboard-accessible blank workbench", asy
   await generation.getByLabel("Number of directions").selectOption("4");
   await generation.getByLabel("Creative range").selectOption("bold");
   await expect(generation.getByLabel("Number of directions")).toHaveValue("4");
+  const language = page.locator('details[aria-label="Project Design Language"]');
+  await language.locator("summary").first().click();
+  await language.getByLabel("Design Language name", { exact: true }).fill("Calm interface");
+  await language.getByLabel("Design Language description", { exact: true }).fill("Use generous spacing and clear labels.");
+  await language.getByRole("button", { name: "Preview description", exact: true }).click();
+  await expect(language.getByRole("region", { name: "Review Design Language" })).toBeVisible();
+  await language.getByRole("button", { name: "Save reviewed language", exact: true }).click();
+  await expect(language.getByRole("button", { name: "Apply selected", exact: true })).toBeEnabled();
+  await language.getByRole("button", { name: "Apply selected", exact: true }).click();
+  await expect(language.locator("summary").first()).toHaveText("Design Language · Calm interface");
+  await language.getByRole("button", { name: "Detach", exact: true }).click();
+  await expect(language.locator("summary").first()).toHaveText("Design Language · None applied");
   await page.getByRole("complementary", { name: "Design Project conversation" }).getByRole("button", { name: "Hide", exact: true }).click();
 
   await page.getByLabel("Add reference images to canvas").setInputFiles({

@@ -785,14 +785,21 @@ test("duplicate remaps complete artifact history, assets, nodes, and lineage", a
     duplicatePort,
   });
   await store.initialize();
-  const source = await store.create({
+  let source = await store.create({
     chatId: "chat:source",
     title: "Checkout",
     connectionState: "prototype-only",
     canvas: canvas(),
     referenceAssetIds: ["asset:reference-a"],
   });
-  const copy = await store.duplicate({ id: source.id, expectedRevision: 1 });
+  source = await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document:{version:1,name:"Copied language",guidance:"",tokens:{colors:{},spacing:{},typography:{},radii:{}}},provenance:{kind:"derived",lineageId:"lineage:checkout",mediaId:"design:checkout-b",contentHash:"a".repeat(64)}});
+  source = await store.applyDesignLanguage({projectId:source.id,expectedRevision:source.revision,languageId:source.designLanguages![0]!.id});
+  const copy = await store.duplicate({ id: source.id, expectedRevision: source.revision });
+  assert.equal(copy.designLanguages!.length,1);
+  assert.notEqual(copy.designLanguages![0]!.id,source.designLanguages![0]!.id);
+  assert.equal(copy.designLanguages![0]!.contentHash,source.designLanguages![0]!.contentHash);
+  assert.deepEqual(copy.designLanguages![0]!.provenance,{kind:"derived",lineageId:copy.canvas.nodes[0]!.lineageId,mediaId:"design:copy-b",contentHash:"a".repeat(64)});
+  assert.equal(copy.activeDesignLanguage!.id,copy.designLanguages![0]!.id);
   assert.equal(copy.title, "Checkout Copy");
   assert.equal(copy.chatId, "chat:copy");
   assert.notEqual(copy.id, source.id);
@@ -1583,4 +1590,78 @@ test("generation reconciliation retains legacy publication uncertainty", async t
   assert.equal(retained.generationIntents!.length, 1);
   assert.equal(retained.directionSets!.length, 1);
   assert.equal(retained.revision, project.revision);
+});
+
+test("Design Language history is immutable and exact binding fences publication", async t => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({ root: () => root }); await store.initialize();
+  let project = await store.create({chatId:"chat:language",title:"Language",connectionState:"prototype-only"});
+  const document = {version:1 as const,name:"Language",guidance:"Use clear hierarchy.",tokens:{colors:{text:"#000000"},spacing:{},typography:{},radii:{}}};
+  project = await store.saveDesignLanguage({projectId:project.id,expectedRevision:project.revision,document,provenance:{kind:"authored"}});
+  const original = structuredClone(project.designLanguages![0]!);
+  assert.equal(project.activeDesignLanguage,undefined);
+  project = await store.applyDesignLanguage({projectId:project.id,expectedRevision:project.revision,languageId:original.id});
+  project = await store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:language",request:{version:1,operation:"explore",count:2,creativeRange:"close",aspects:[]}});
+  const intent=project.generationIntents![0]!;
+  assert.deepEqual(intent.designLanguage,project.activeDesignLanguage);
+  project=await store.saveDesignLanguage({projectId:project.id,expectedRevision:project.revision,document:{...document,name:"Next",tokens:{...document.tokens,colors:{text:"#ffffff"}}},provenance:{kind:"authored"}});
+  assert.deepEqual(project.designLanguages![0],original);
+  assert.equal(project.activeDesignLanguage!.id,original.id);
+  project=await store.applyDesignLanguage({projectId:project.id,expectedRevision:project.revision,languageId:project.designLanguages![1]!.id});
+  const revisions=[{mediaId:"design:language",ownership:{version:1 as const,kind:"new-artboard" as const,projectId:project.id,lineageId:"lineage:language",generationIntentId:intent.id}}];
+  await assert.rejects(store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions}),/Design Language changed/);
+  assert.equal((await store.get(project.id))!.canvas.nodes.length,0);
+  project=await store.applyDesignLanguage({projectId:project.id,expectedRevision:project.revision,languageId:original.id});
+  project=await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions});
+  project=await store.detachDesignLanguage({projectId:project.id,expectedRevision:project.revision});
+  assert.equal(project.activeDesignLanguage,undefined);
+  assert.equal((await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions})).revision,project.revision);
+  assert.deepEqual(project.designLanguages![0],original);
+  await assert.rejects(store.applyDesignLanguage({projectId:project.id,expectedRevision:project.revision-1,languageId:original.id}),DesignProjectRevisionConflictError);
+  const restarted=new DesignProjectStore({root:()=>root});await restarted.initialize();assert.deepEqual(await restarted.get(project.id),project);
+});
+
+
+test("duplicate retains stale workspace Design Language provenance after workspace refresh", async t => {
+  const root = await temporaryRoot(t);
+  let sequence = 0;
+  const store = new DesignProjectStore({root:()=>root,mintProjectId:()=>`project:workspace-copy-${++sequence}`,duplicatePort:{
+    async prepareDuplicate() { return {targetChatId:"chat:workspace-copy",artifactMediaIds:[],referenceAssetIds:[],async rollback(){assert.fail("successful duplicate should not roll back");}}; },
+  }});
+  await store.initialize();
+  let source = await store.create({chatId:"chat:workspace-source",title:"Workspace",connectionState:"connected",workspaceId:"workspace:one",designSystemBinding:{id:"snapshot:one",revision:1}});
+  const document = {version:1 as const,name:"Workspace language",guidance:"Use clear hierarchy.",tokens:{colors:{},spacing:{},typography:{},radii:{}}};
+  const provenance = {kind:"workspace-snapshot" as const,id:"snapshot:one",revision:1,contentHash:"a".repeat(64)};
+  source = await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document,provenance});
+  const workspaceLanguageId = source.designLanguages![0]!.id;
+  source = await store.applyDesignLanguage({projectId:source.id,expectedRevision:source.revision,languageId:workspaceLanguageId});
+  source = await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document:{...document,name:"Authored"},provenance:{kind:"authored"}});
+  source = await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document:{...document,name:"Imported"},provenance:{kind:"imported"}});
+  source = await store.setDesignSystemBinding({id:source.id,expectedRevision:source.revision,binding:{id:"snapshot:one",revision:2}});
+  const copy = await store.duplicate({id:source.id,expectedRevision:source.revision});
+  assert.deepEqual(copy.designSystemBinding,{id:"snapshot:one",revision:2});
+  assert.deepEqual(copy.designLanguages!.map(language=>language.provenance),[provenance,{kind:"authored"},{kind:"imported"}]);
+  assert.equal(copy.activeDesignLanguage!.id,copy.designLanguages![0]!.id);
+  assert.notEqual(copy.activeDesignLanguage!.id,workspaceLanguageId);
+  const {currentDesignLanguageModelContext} = await import("./design-language-service.js");
+  const current = {id:"snapshot:one",revision:2,contentHash:"b".repeat(64)} as import("./design-system-snapshot-core.js").DesignSystemSnapshotV1;
+  await assert.rejects(currentDesignLanguageModelContext(copy,"/workspace",undefined,{currentWorkspaceSnapshot:async()=>current}),/stale workspace/);
+});
+
+test("duplicate fails closed when a derived language source cannot be remapped", async t => {
+  const root = await temporaryRoot(t);
+  let sequence = 0;
+  let rolledBack = false;
+  const store = new DesignProjectStore({root:()=>root,mintProjectId:()=>`project:missing-copy-${++sequence}`,duplicatePort:{
+    async prepareDuplicate() {return {targetChatId:"chat:missing-copy",artifactMediaIds:[{from:"design:checkout-b",to:"design:copy-b"}],referenceAssetIds:[{from:"asset:reference-a",to:"asset:copy-a"}],async rollback(){rolledBack=true;}};},
+  }});
+  await store.initialize();
+  let source=await store.create({chatId:"chat:missing-source",title:"Missing",connectionState:"prototype-only",canvas:canvas(),referenceAssetIds:["asset:reference-a"]});
+  const provenance={kind:"derived" as const,lineageId:"lineage:checkout",mediaId:"design:checkout-a",contentHash:"a".repeat(64)};
+  source=await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document:{version:1,name:"Derived",guidance:"",tokens:{colors:{},spacing:{},typography:{},radii:{}}},provenance});
+  source=await store.removeMissingGeneratedRevision({projectId:source.id,expectedRevision:source.revision,lineageId:"lineage:checkout",missingMediaId:"design:checkout-a",expectedActiveMediaId:"design:checkout-b"});
+  await assert.rejects(store.duplicate({id:source.id,expectedRevision:source.revision}),/unavailable derived source/);
+  assert.equal(rolledBack,true);
+  assert.deepEqual((await store.get(source.id))!.designLanguages![0]!.provenance,provenance);
+  assert.equal(await store.getByChatId("chat:missing-copy"),undefined);
 });

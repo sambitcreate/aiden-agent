@@ -1,3 +1,7 @@
+import { prepareDesignLanguageProposal } from "../services/design-language-proposal-service.js";
+import { deriveDesignLanguageFromScreen, importWorkspaceDesignLanguage, currentDesignLanguageModelContext } from "../services/design-language-service.js";
+import { exportDesignLanguageMarkdown } from "../services/design-language-core.js";
+import type { DesignLanguageProposalInput } from "../../renderer/shared/design-language-proposals.js";
 import { parseDesignGenerationMemberV1 } from "../../renderer/shared/design-generation.js";
 import { BrowserWindow, dialog, ipcMain, logger, shell } from "../platform.js";
 import { createHash } from "node:crypto";
@@ -709,6 +713,70 @@ export function registerDesignerHandlers(): void {
       if (!current) throw error;
       return { status: "conflict" as const, current };
     }
+  });
+
+  const languageProposal = async (owner: ReturnType<typeof ownerFor>, inputValue: unknown) => {
+    const input = exactRecord(inputValue, new Set(["projectId", "mode", "document", "text", "mediaId", "baseLanguageId"]), new Set(["projectId", "mode"]));
+    const project = await designProjectStore.get(projectId(input.projectId));
+    if (!project) throw new Error("This Design Project is unavailable.");
+    const proposal = await prepareDesignLanguageProposal(project, input as unknown as DesignLanguageProposalInput, {
+      derive: (mediaId) => deriveDesignLanguageFromScreen(project, mediaId),
+      workspace: () => {
+        if (!project.workspaceId) throw new Error("Connect an app and attach its design system first.");
+        return workspaceEnvironmentApplicationService.run(owner, project.workspaceId, (resolved) => importWorkspaceDesignLanguage(project, resolved.folderPath));
+      },
+    });
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return {project, proposal};
+  };
+  ipcMain.handle("designer:previewDesignLanguage", async (event, inputValue: unknown) => {
+    return (await languageProposal(ownerFor(event), inputValue)).proposal;
+  });
+  ipcMain.handle("designer:saveDesignLanguage", async (event, inputValue: unknown) => {
+    const owner = ownerFor(event);
+    const input = exactRecord(inputValue, new Set(["proposal", "expectedRevision", "expectedHash"]));
+    const {project, proposal} = await languageProposal(owner, input.proposal);
+    if (proposal.reviewHash !== input.expectedHash) throw new Error("The language source changed. Preview it again before saving.");
+    return designProjectLifecycle.runProjectMutation(() => {
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      return designProjectStore.saveDesignLanguage({projectId:project.id, expectedRevision:projectRevision(input.expectedRevision),document:proposal.document,provenance:proposal.provenance});
+    });
+  });
+  for (const operation of ["applyDesignLanguage", "detachDesignLanguage"] as const) {
+    ipcMain.handle(`designer:${operation}`, async (event, inputValue: unknown) => {
+      const owner = ownerFor(event);
+      const input = exactRecord(inputValue, new Set(["projectId", "expectedRevision", ...(operation === "applyDesignLanguage" ? ["languageId"] : [])]));
+      const common = {projectId:projectId(input.projectId), expectedRevision:projectRevision(input.expectedRevision)};
+      if (operation === "applyDesignLanguage") {
+        const current = await designProjectStore.get(common.projectId);
+        const selected = current?.designLanguages?.find(item => item.id === input.languageId);
+        if (!current || !selected) throw new Error("This Design Language is unavailable.");
+        const proposed = {...current,activeDesignLanguage:{id:selected.id,revision:selected.revision,contentHash:selected.contentHash}};
+        if (selected.provenance.kind === "workspace-snapshot") {
+          if (!current.workspaceId) throw new Error("The Design Language workspace is unavailable.");
+          await workspaceEnvironmentApplicationService.run(owner,current.workspaceId,resolved=>currentDesignLanguageModelContext(proposed,resolved.folderPath));
+        } else await currentDesignLanguageModelContext(proposed);
+      }
+      return designProjectLifecycle.runProjectMutation(() => {
+        if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+        return operation === "applyDesignLanguage" ? designProjectStore.applyDesignLanguage({...common,languageId:projectId(input.languageId)}) : designProjectStore.detachDesignLanguage(common);
+      });
+    });
+  }
+  ipcMain.handle("designer:exportDesignLanguage", async (event, inputValue: unknown) => {
+    const owner = ownerFor(event);
+    const input = exactRecord(inputValue,new Set(["projectId","languageId"]));
+    const project = await designProjectStore.get(projectId(input.projectId));
+    const language = project?.designLanguages?.find(item=>item.id===projectId(input.languageId));
+    if (!language) throw new Error("This Design Language is unavailable.");
+    const markdown = exportDesignLanguageMarkdown(language.document);
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) throw new Error("The export window is unavailable.");
+    const result = await dialog.showSaveDialog(parent,{title:"Export Design Language",defaultPath:"DESIGN.md",filters:[{name:"Markdown",extensions:["md"]}],properties:["createDirectory","showOverwriteConfirmation"]});
+    if (result.canceled || !result.filePath) return {status:"cancelled" as const};
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    await writeDesignProjectExport(result.filePath,Buffer.from(markdown,"utf8"));
+    return {status:"saved" as const};
   });
 
   ipcMain.handle("designer:generationProvenance", async (event, inputValue: unknown) => {

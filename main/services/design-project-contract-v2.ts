@@ -1,3 +1,5 @@
+import { parseDesignLanguageSnapshots, MAX_DESIGN_LANGUAGE_BYTES, MAX_DESIGN_LANGUAGE_HISTORY } from "./design-language-core.js";
+import { parseDesignLanguageBindingV1 } from "../../renderer/shared/design-language.js";
 import { parseDesignGenerationRecordsV1 } from "../../renderer/shared/design-generation.js";
 import type {
   DesignProjectCanvas,
@@ -33,14 +35,15 @@ export const DESIGN_PROJECT_SNAPSHOT_VERSION_V2 = 2 as const;
 export const DESIGN_PROJECT_DATABASE_VERSION_V2 = 2 as const;
 const V2_METADATA_HEADROOM_PER_NODE = 128;
 const V2_METADATA_HEADROOM_PER_PROJECT =
-  MAX_DESIGN_PROJECT_NODES * V2_METADATA_HEADROOM_PER_NODE + 1_024;
+  MAX_DESIGN_PROJECT_NODES * V2_METADATA_HEADROOM_PER_NODE + 1_024 +
+  MAX_DESIGN_LANGUAGE_BYTES * MAX_DESIGN_LANGUAGE_HISTORY;
 export const MAX_DESIGN_PROJECT_SNAPSHOT_BYTES_V2 =
   MAX_DESIGN_PROJECT_SNAPSHOT_BYTES + V2_METADATA_HEADROOM_PER_PROJECT;
 export const MAX_DESIGN_PROJECT_STORE_BYTES_V2 =
   MAX_DESIGN_PROJECT_STORE_BYTES + MAX_DESIGN_PROJECTS * V2_METADATA_HEADROOM_PER_PROJECT;
 
 const SNAPSHOT_V2_KEYS = new Set([
-  "generationIntents", "directionSets",
+  "generationIntents", "directionSets", "designLanguages", "activeDesignLanguage",
   "version",
   "id",
   "revision",
@@ -106,7 +109,7 @@ function legacySnapshot(value: Record<string, unknown>): Record<string, unknown>
   }
   const canvas = value.canvas as Record<string, unknown>;
   if (!exactKeys(canvas, CANVAS_KEYS) || !Array.isArray(canvas.nodes)) return undefined;
-  const { titlePolicy: _titlePolicy, generationIntents: _intents, directionSets: _sets, ...legacyValue } = value;
+  const { titlePolicy: _titlePolicy, generationIntents: _intents, directionSets: _sets, designLanguages: _languages, activeDesignLanguage: _languageBinding, ...legacyValue } = value;
   return {
     ...legacyValue,
     version: 1,
@@ -183,7 +186,14 @@ export function parseDesignProjectSnapshotV2(value: unknown): DesignProjectSnaps
   if (!parsedCanvas) return undefined;
   const generations = parseDesignGenerationRecordsV1(snapshot.generationIntents === undefined ? [] : snapshot.generationIntents, snapshot.directionSets === undefined ? [] : snapshot.directionSets);
   if (!generations) return undefined;
+  const designLanguages = parseDesignLanguageSnapshots(snapshot.designLanguages === undefined ? [] : snapshot.designLanguages);
+  if (!designLanguages) return undefined;
+  const activeDesignLanguage = snapshot.activeDesignLanguage === undefined ? undefined : parseDesignLanguageBindingV1(snapshot.activeDesignLanguage);
+  if (snapshot.activeDesignLanguage !== undefined && (!activeDesignLanguage || !designLanguages.some(language => language.id === activeDesignLanguage.id && language.revision === activeDesignLanguage.revision && language.contentHash === activeDesignLanguage.contentHash))) return undefined;
+  if (generations.generationIntents.some(intent => intent.designLanguage && !designLanguages.some(language => language.id === intent.designLanguage!.id && language.revision === intent.designLanguage!.revision && language.contentHash === intent.designLanguage!.contentHash))) return undefined;
   const parsed: DesignProjectSnapshotV2 = {
+    ...(snapshot.designLanguages !== undefined ? {designLanguages} : {}),
+    ...(activeDesignLanguage ? {activeDesignLanguage} : {}),
     ...(snapshot.generationIntents !== undefined || snapshot.directionSets !== undefined ? generations : {}),
     ...common,
     version: DESIGN_PROJECT_SNAPSHOT_VERSION_V2,

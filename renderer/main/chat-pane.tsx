@@ -1,3 +1,4 @@
+import { DesignLanguagePanel } from "../components/design-language-panel";
 import { DesignGenerationControls, DEFAULT_DESIGN_EXPLORE } from "../components/design-generation-controls";
 import type { DesignGenerationRequestV1 } from "../shared/design-generation";
 import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
@@ -2916,6 +2917,18 @@ export function ChatPane({
                 const result = await designerApi.archiveDirectionSet({ projectId: snapshot.project.id, expectedRevision: snapshot.project.revision, directionSetId, archived });
                 updateDesignProject(result.status === "updated" ? result.project : result.current);
                 if (result.status !== "updated") throw new Error("This project changed. Review the refreshed directions and try again.");
+              }}
+            /> : null}
+            {presentation === "design" && currentDesignProject ? <DesignLanguagePanel
+              key={`language:${chatId}`}
+              project={currentDesignProject}
+              disabled={isGenerating || isStartingGeneration || detachedGenerationDraining || Boolean(designProjectReconciliation)}
+              selectedMediaId={designTargets.length === 1 ? designTargets[0]?.mediaId : undefined}
+              onProjectChange={updateDesignProject}
+              prepareProject={async () => {
+                const snapshot = await designPersistenceBarrierRef.current?.();
+                if (!snapshot) throw new Error("Wait for the Design canvas to finish saving.");
+                return snapshot.project;
               }}
             /> : null}
             {questionnaire ? (
