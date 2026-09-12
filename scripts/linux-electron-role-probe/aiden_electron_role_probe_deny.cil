@@ -1,0 +1,11 @@
+(typeattribute aiden_electron_role_probe_non_init)
+(typeattributeset aiden_electron_role_probe_non_init (and (domain) (not (init_t))))
+(deny aiden_electron_role_probe_non_init aiden_electron_role_probe_main_t (process (transition)))
+(deny domain aiden_electron_role_probe_main_t (process (dyntransition)))
+(typeattribute aiden_electron_role_probe_outsider)
+(typeattributeset aiden_electron_role_probe_outsider (and (domain) (not (init_t aiden_electron_role_probe_main_t aiden_electron_role_probe_child_t))))
+(deny aiden_electron_role_probe_outsider aiden_electron_role_probe_exec_t (file (execute execute_no_trans entrypoint)))
+; No arbitrary exec may silently retain main. Fork before exec remains out of scope.
+(typeattribute aiden_electron_role_probe_all_types)
+(typeattributeset aiden_electron_role_probe_all_types (all))
+(deny aiden_electron_role_probe_main_t aiden_electron_role_probe_all_types (file (execute_no_trans)))

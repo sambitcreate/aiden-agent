@@ -203,3 +203,42 @@ Next: isolate Electron main and child roles in a separate disposable fixture.
 This must preserve a working sandboxed renderer and utilities while distinguishing
 source-domain transitions, without treating argv, filenames or the stock
 sandbox as authenticated process identity. Production Computer Use stays disabled.
+
+## Phase 12: Electron process-role transition experiment
+
+Active, separate disposable fixture. The candidate launches a root-owned copy
+from a fixed system unit into a main domain, then transitions its Electron execs
+into a child domain. Acceptance must also cover a command launched by main:
+Aiden's scheduled scripts use `child_process.spawn` and its Linux terminal uses
+node-pty's `forkpty` followed by `execvp`. A policy covering only Electron's own
+executable could leave a shell in the main domain.
+
+[SELinux fork/exec semantics](https://github.com/SELinuxProject/selinux-notebook/blob/main/src/computing_security_contexts.md)
+state that fork inherits the parent's context; exec transitions are distinct.
+Therefore a post-launch domain snapshot cannot prove every child was isolated
+from its first instruction. Trusted pre-exec native paths, anonymous channel
+ownership, interpreted payloads, loader inputs and JIT need separate review.
+The role fixture may retain broad permissions to measure feasibility, but it
+must not advertise those permissions as the production security policy.
+
+Hosted CI at phase-11 commit `23917870` passed every lane (run `34699940335`),
+including Fedora RPM, both Linux architectures, macOS Electron, shared
+verification and Android.
+
+Phase 12 candidate experiment passed on the enforcing host. Main plus ten
+observed descendants were collected, including zygotes, renderer, GPU, network,
+Node utility and GTK image-loader helpers. Renderer computation, loopback
+network, utility computation, shell and command checks passed; renderer seccomp
+and NoNewPrivs remained enabled. Both unauthorized entry attempts returned
+exactly 126. The main-to-child NNP transition permission is required to avoid
+silently retaining main's context.
+
+The main and Node utility actually moved to a GNOME application scope while
+other descendants remained in the original system service. The fixture uses
+bounded, domain-scoped pidfd cleanup, opening handles before identity reads;
+this is experimental cleanup, not production containment. Final cleanup restored
+the module inventory and kept SELinux enforcing. Both independent Astra medium
+reviews cleared the candidate; 25 focused tests and 181 Linux contract tests
+passed, with one platform skip. Final lint-only imports/comments also pass lint
+and the focused suite. Immutable payload, pre-exec fork identity, JIT and protected
+channel authority remain unproved; Linux Computer Use remains disabled.

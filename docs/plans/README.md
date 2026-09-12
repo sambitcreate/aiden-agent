@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
-- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; prior integration passes all hosted lanes. Enforcing Fedora GNOME VM validated; SELinux file-descriptor prerequisite probes passed with two reviews; Electron role isolation is next. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. The Computer Use launch boundary remains in progress.
+- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; prior integration passes all hosted lanes. Enforcing Fedora GNOME VM validated; SELinux file-descriptor prerequisite probes passed with two reviews; Electron role-transition candidate passed; protected IPC and production admission remain. Real portal testing exposed modifier-release loss; GNOME safely retains toggle dictation. The Computer Use launch boundary remains in progress.
 
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
