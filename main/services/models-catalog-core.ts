@@ -463,10 +463,11 @@ function discoveredRuntimeMetadata(
   const metadata = provider.modelMetadata?.[modelId];
   if (!metadata) return undefined;
   return {
-    contextWindow: metadata.contextLength,
-    reasoning: metadata.reasoning,
+    contextWindow: metadata.overrides?.contextLength ?? metadata.contextLength,
+    maxTokens: metadata.overrides?.outputLimit,
+    reasoning: metadata.overrides?.reasoning ?? metadata.reasoning,
     input:
-      metadata.vision === undefined ? undefined : metadata.vision ? ["text", "image"] : ["text"],
+      (metadata.overrides?.vision ?? metadata.vision) === undefined ? undefined : (metadata.overrides?.vision ?? metadata.vision) ? ["text", "image"] : ["text"],
   };
 }
 
@@ -501,12 +502,15 @@ export function resolveProviderRuntimeLimits(
 ): RuntimeModelLimits {
   const runtimeSlug = catalogProviderSlug(provider.id);
   const discovered = discoveredRuntimeMetadata(provider, modelId);
-  return resolveRuntimeLimits(
+  const limits = resolveRuntimeLimits(
     catalog,
     runtimeSlug ? provider.id : "",
     modelId,
     runtimeSlug ? mergeRuntimeMetadata(discovered, piExact) : discovered,
   );
+  if (provider.modelMetadata?.[modelId]?.overrides?.maxImages === 0) limits.input = ["text"];
+  if (provider.modelMetadata?.[modelId]?.overrides) limits.maxTokens = Math.min(limits.maxTokens, limits.contextWindow);
+  return limits;
 }
 
 function isLocalProvider(provider: ModelCatalogProvider): boolean {

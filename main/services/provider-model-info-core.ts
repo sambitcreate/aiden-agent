@@ -42,7 +42,15 @@ function withProviderFallback(
   catalog: ModelInfo,
   metadata: ProviderModelMetadata | undefined,
 ): ModelInfo {
-  return catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  const info = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  if (!metadata?.overrides) return info;
+  const overrides = metadata.overrides;
+  const vision = overrides.maxImages === 0 ? false : overrides.vision ?? info.vision;
+  const modalities = new Set(info.inputModalities ?? ["text"]);
+  if (vision) modalities.add("image"); else modalities.delete("image");
+  if (overrides.video === true) modalities.add("video");
+  if (overrides.video === false) modalities.delete("video");
+  return { ...info, ...overrides, detectedCapabilities: { vision: info.vision, reasoning: info.reasoning, toolCall: info.toolCall, openWeights: info.openWeights, contextLength: info.contextLength, outputLimit: info.outputLimit, video: info.inputModalities?.includes("video") }, vision, inputModalities: [...modalities], metadataSource: "provider", matched: true };
 }
 
 const CODEX_CATALOG_PROVIDER: ModelCatalogProvider = {

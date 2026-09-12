@@ -681,7 +681,13 @@ export function createConfigStore(
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
-        if (idx >= 0) config.providers[idx] = { ...config.providers[idx], ...intent };
+        if (idx >= 0) {
+          config.providers[idx] = { ...config.providers[idx], ...intent };
+          // An explicit metadata save replaces user overrides, including reset.
+          if (provider.modelMetadata !== undefined && intent.customModelOptions === undefined) {
+            delete config.providers[idx].customModelOptions;
+          }
+        }
         else config.providers.push(intent);
         return structuredClone(config.providers.find((p) => p.id === intent.id)!);
       }, isCurrent);

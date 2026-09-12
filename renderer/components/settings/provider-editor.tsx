@@ -1,3 +1,8 @@
+import { CustomModelOptionsEditor } from "./custom-model-options";
+import {
+  mergeDiscoveredModelMetadata,
+  parseCustomModelOptions,
+} from "../../shared/custom-model-options";
 // Dialog to configure a custom provider: base URL, API key, connection test,
 // model discovery, and default model. Pi built-ins use a separate setup view.
 
@@ -79,14 +84,16 @@ export function ProviderEditor({
   );
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
-  const [modelMetadata, setModelMetadata] = React.useState<Record<string, ProviderModelMetadata>>(
-    provider.modelMetadata ?? {},
-  );
+  const [modelMetadata, setModelMetadata] = React.useState<
+    Record<string, ProviderModelMetadata>
+  >(provider.modelMetadata ?? {});
   const [defaultModel, setDefaultModel] = React.useState(
     provider.defaultModel ?? provider.models[0] ?? "",
   );
   const [artwork, setArtwork] = React.useState(provider.artwork);
   const [artworkBusy, setArtworkBusy] = React.useState(false);
+  const [moreOptions, setMoreOptions] = React.useState(false);
+  const [manualModels, setManualModels] = React.useState<string[]>([]);
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [modelsStale, setModelsStale] = React.useState(false);
@@ -99,16 +106,25 @@ export function ProviderEditor({
   const visibleDefaultModels = settings.data
     ? models.filter(
         (modelId) =>
-          !isModelHidden(settings.data?.hiddenModelsByProvider, provider.id, modelId),
+          !isModelHidden(
+            settings.data?.hiddenModelsByProvider,
+            provider.id,
+            modelId,
+          ),
       )
     : [];
   const defaultModelIsHidden = Boolean(
     settings.data &&
     defaultModel &&
-    isModelHidden(settings.data.hiddenModelsByProvider, provider.id, defaultModel),
+    isModelHidden(
+      settings.data.hiddenModelsByProvider,
+      provider.id,
+      defaultModel,
+    ),
   );
   const usesArtificialAnalysis = models.some(
-    (modelId) => modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
+    (modelId) =>
+      modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
   );
 
   // Reset drafts whenever a different provider is opened.
@@ -121,6 +137,12 @@ export function ProviderEditor({
       setDeployment(resolveProviderDeployment(provider));
       setKeyDraft("");
       setModels(provider.models);
+      setMoreOptions(false);
+      setManualModels(
+        provider.models.filter(
+          (id) => provider.modelMetadata?.[id]?.manuallyAdded,
+        ),
+      );
       setModelMetadata(provider.modelMetadata ?? {});
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
       setArtwork(provider.artwork);
@@ -159,13 +181,20 @@ export function ProviderEditor({
           typeof reader.result === "string"
             ? resolve(reader.result)
             : reject(new Error("Aiden could not read that image."));
-        reader.onerror = () => reject(reader.error ?? new Error("Aiden could not read that image."));
+        reader.onerror = () =>
+          reject(reader.error ?? new Error("Aiden could not read that image."));
         reader.readAsDataURL(file);
       });
       const dataBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-      setArtwork(await providersApi.normalizeArtwork({ name: file.name, dataBase64 }));
+      setArtwork(
+        await providersApi.normalizeArtwork({ name: file.name, dataBase64 }),
+      );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not use that provider icon.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Aiden could not use that provider icon.",
+      );
     } finally {
       artworkBusyRef.current = false;
       setArtworkBusy(false);
@@ -178,8 +207,22 @@ export function ProviderEditor({
     metadata: Record<string, ProviderModelMetadata>,
     recommendedModel?: string,
   ) => {
+    list = [...new Set([...list, ...manualModels])];
     setModels(list);
-    setModelMetadata(metadata);
+    setModelMetadata((current) =>
+      mergeDiscoveredModelMetadata(
+        {
+          ...Object.fromEntries(
+            manualModels.map((id) => [
+              id,
+              current[id] ?? { source: "provider" as const },
+            ]),
+          ),
+          ...metadata,
+        },
+        current,
+      ),
+    );
     setDefaultModel((current) =>
       list.includes(current)
         ? current
@@ -193,7 +236,8 @@ export function ProviderEditor({
   const markDiscoveryStale = () => {
     setModelsStale(true);
     setConnectionNotice({
-      message: "Connection settings changed. Discover models again before saving.",
+      message:
+        "Connection settings changed. Discover models again before saving.",
       error: true,
     });
   };
@@ -201,8 +245,15 @@ export function ProviderEditor({
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
-      applyDiscoveredModels(result.models, result.modelMetadata, result.recommendedModel);
+      const result = await providersApi.test(
+        buildDraft(),
+        keyDraft.trim() || undefined,
+      );
+      applyDiscoveredModels(
+        result.models,
+        result.modelMetadata,
+        result.recommendedModel,
+      );
       if (result.models.length > 0) {
         setConnectionNotice({
           message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
@@ -228,20 +279,35 @@ export function ProviderEditor({
 
   const handleSave = async () => {
     if (modelsStale) {
-      const message = "Connection settings changed. Discover models again before saving.";
+      const message =
+        "Connection settings changed. Discover models again before saving.";
       setConnectionNotice({ message, error: true });
       toast.error(message);
       return;
     }
-    if (requireReady && (models.length === 0 || !defaultModel || !models.includes(defaultModel) || defaultModelIsHidden)) {
-      setConnectionNotice({ message: "Discover models and choose an available default before continuing.", error: true });
+    if (
+      requireReady &&
+      (models.length === 0 ||
+        !defaultModel ||
+        !models.includes(defaultModel) ||
+        defaultModelIsHidden)
+    ) {
+      setConnectionNotice({
+        message:
+          "Discover models and choose an available default before continuing.",
+        error: true,
+      });
       return;
     }
     setSaving(true);
     try {
+      for (const metadata of Object.values(modelMetadata))
+        parseCustomModelOptions(metadata.overrides);
       await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
       if (models.length === 0) {
-        toast.info("Saved without models. Discover models before sending a chat.");
+        toast.info(
+          "Saved without models. Discover models before sending a chat.",
+        );
       }
       await onSaved();
       onOpenChange(false);
@@ -302,7 +368,11 @@ export function ProviderEditor({
               disabled={artworkBusy}
               onClick={() => artworkInputRef.current?.click()}
             >
-              {artworkBusy ? "Normalizing…" : artwork ? "Replace" : "Choose image"}
+              {artworkBusy
+                ? "Normalizing…"
+                : artwork
+                  ? "Replace"
+                  : "Choose image"}
             </Button>
             {artwork ? (
               <Button
@@ -426,7 +496,9 @@ export function ProviderEditor({
                 setKeyDraft(e.target.value);
                 markDiscoveryStale();
               }}
-              placeholder={provider.hasKey ? "••••••••••••" : "Paste your API key"}
+              placeholder={
+                provider.hasKey ? "••••••••••••" : "Paste your API key"
+              }
             />
           </Field>
         ) : null}
@@ -471,12 +543,15 @@ export function ProviderEditor({
                 <SelectContent>
                   {defaultModelIsHidden ? (
                     <SelectItem value={defaultModel} disabled>
-                      {resolveModelDisplay(
-                        defaultModel,
-                        modelMetadata[defaultModel]?.name
-                          ? { name: modelMetadata[defaultModel].name }
-                          : modelInfo.data?.[defaultModel],
-                      ).label} <InlineMetadata>· Hidden</InlineMetadata>
+                      {
+                        resolveModelDisplay(
+                          defaultModel,
+                          modelMetadata[defaultModel]?.name
+                            ? { name: modelMetadata[defaultModel].name }
+                            : modelInfo.data?.[defaultModel],
+                        ).label
+                      }{" "}
+                      <InlineMetadata>· Hidden</InlineMetadata>
                     </SelectItem>
                   ) : null}
                   {visibleDefaultModels.map((m) => (
@@ -518,12 +593,18 @@ export function ProviderEditor({
             Model capabilities
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Capability hints bundled with this release. Check provider documentation for exact
-            support.
+            Detected capabilities with your custom overrides. Check provider
+            documentation for exact support.
           </Text>
           <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
             {models.map((m, i) => {
-              const info = modelInfo.data?.[m];
+              const info = {
+                ...modelInfo.data?.[m],
+                ...modelInfo.data?.[m]?.detectedCapabilities,
+                ...modelMetadata[m]?.overrides,
+              };
+              if (modelMetadata[m]?.overrides?.maxImages === 0)
+                info.vision = false;
               const display = resolveModelDisplay(m, info);
               const ctx = formatContext(info?.contextLength);
               return (
@@ -531,19 +612,34 @@ export function ProviderEditor({
                   key={m}
                   className={`flex items-center gap-2 px-3 py-2 ${i > 0 ? "border-t border-separator" : ""}`}
                 >
-                  <Text variant="small" truncate className="min-w-0 flex-1" title={m}>
+                  <Text
+                    variant="small"
+                    truncate
+                    className="min-w-0 flex-1"
+                    title={m}
+                  >
                     {display.label}
                   </Text>
                   {info?.matched ? (
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
                       {info.vision ? <Badge color="blue">Vision</Badge> : null}
-                      {info.toolCall ? <Badge color="green">Tools</Badge> : null}
-                      {info.reasoning ? <Badge color="purple">Reasoning</Badge> : null}
-                      {info.openWeights ? <Badge color="secondary">Open</Badge> : null}
+                      {info.toolCall ? (
+                        <Badge color="green">Tools</Badge>
+                      ) : null}
+                      {info.reasoning ? (
+                        <Badge color="purple">Reasoning</Badge>
+                      ) : null}
+                      {info.openWeights ? (
+                        <Badge color="secondary">Open</Badge>
+                      ) : null}
                       {ctx ? <Badge color="secondary">{ctx}</Badge> : null}
                     </div>
                   ) : (
-                    <Text variant="small" color="quaternary" className="shrink-0">
+                    <Text
+                      variant="small"
+                      color="quaternary"
+                      className="shrink-0"
+                    >
                       {modelInfo.isLoading ? "…" : "Unlisted"}
                     </Text>
                   )}
@@ -553,7 +649,64 @@ export function ProviderEditor({
           </div>
         </div>
       ) : null}
-      <ProviderModelVisibility provider={{ ...provider, models, modelMetadata }} />
+      <Button
+        className="mt-4"
+        variant="transparent"
+        size="small"
+        aria-expanded={moreOptions}
+        aria-controls="custom-model-options"
+        onClick={() => setMoreOptions((value) => !value)}
+      >
+        More options
+      </Button>
+      {moreOptions ? (
+        <section id="custom-model-options" className="mt-3">
+          <CustomModelOptionsEditor
+            models={models}
+            metadata={modelMetadata}
+            info={modelInfo.data}
+            disabled={saving || testing}
+            modelsStale={modelsStale}
+            onAdd={(id) => {
+              if (modelsStale) {
+                setModels([id]);
+                setManualModels([id]);
+                setModelMetadata({
+                  [id]: {
+                    ...modelMetadata[id],
+                    source: modelMetadata[id]?.source ?? "provider",
+                    manuallyAdded: true,
+                  },
+                });
+                setDefaultModel(id);
+                setModelsStale(false);
+                setConnectionNotice(null);
+                return;
+              }
+              setModels((current) => [...current, id]);
+              setManualModels((current) => [...current, id]);
+              setModelMetadata((current) => ({
+                ...current,
+                [id]: { source: "provider", manuallyAdded: true },
+              }));
+              if (!defaultModel) setDefaultModel(id);
+            }}
+            onChange={(id, overrides) =>
+              setModelMetadata((current) => ({
+                ...current,
+                [id]: {
+                  ...current[id],
+                  source: current[id]?.source ?? "provider",
+                  overrides,
+                },
+              }))
+            }
+          />
+          <ProviderModelVisibility
+            provider={{ ...provider, models, modelMetadata }}
+          />
+        </section>
+      ) : null}
     </Dialog>
   );
 }

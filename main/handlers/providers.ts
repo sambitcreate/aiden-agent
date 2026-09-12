@@ -1,3 +1,4 @@
+import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
@@ -114,6 +115,8 @@ function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadat
       modelId,
       {
         source,
+        overrides: parseCustomModelOptions(metadata.overrides),
+        manuallyAdded: metadata.manuallyAdded === true ? true : undefined,
         name: typeof metadata.name === "string" && metadata.name ? metadata.name : undefined,
         type: optionalModelType(metadata.type),
         vision: typeof metadata.vision === "boolean" ? metadata.vision : undefined,

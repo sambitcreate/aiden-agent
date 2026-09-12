@@ -463,6 +463,15 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(catalog.visibleProviders.first?.models.map(\.id), ["gemini-flash"])
     }
 
+    func testCustomModelOverridesPreserveImageAndVisibilityFlags() throws {
+        let catalog = try JSONDecoder().decode(AidenModelCatalog.self, from: Data(
+            #"{"providers":[{"id":"custom:tailnet","label":"Private","models":[{"id":"text","label":"Text","supportsImages":false},{"id":"vision","label":"Vision","supportsImages":true,"hidden":true}]}],"defaults":{}}"#.utf8
+        ))
+        XCTAssertFalse(try XCTUnwrap(catalog.providers.first?.models.first).acceptsImageInput)
+        XCTAssertTrue(try XCTUnwrap(catalog.providers.first?.models.last).acceptsImageInput)
+        XCTAssertEqual(catalog.visibleProviders.first?.models.map(\.id), ["text"])
+    }
+
     func testModelCatalogPreservesThinkingDefaultAndRequiredThinkingPresentation() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,

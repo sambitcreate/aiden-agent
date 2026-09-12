@@ -1,3 +1,4 @@
+import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
@@ -368,6 +369,16 @@ function hasSensitiveProviderUrl(value: unknown): boolean {
 export function isPortableProvider(value: unknown): value is PortableProvider {
   if (!isRecord(value)) return false;
   const provider = value as Partial<PortableProvider>;
+  if (provider.customModelOptions !== undefined) {
+    if (!isRecord(provider.customModelOptions)) return false;
+    try {
+      for (const [id, options] of Object.entries(provider.customModelOptions)) {
+        if (!id.trim() || id.length > MAX_CONFIG_ID_LENGTH || !isRecord(options)) return false;
+        if (options.manuallyAdded !== undefined && typeof options.manuallyAdded !== "boolean") return false;
+        parseCustomModelOptions(options);
+      }
+    } catch { return false; }
+  }
   return (
     typeof provider.id === "string" &&
     provider.id.trim().length > 0 &&
@@ -394,9 +405,11 @@ export function isPortableProviderList(value: unknown): value is PortableProvide
 }
 
 function isProviderModelMetadata(value: unknown): value is ProviderModelMetadata {
+  try { if (isRecord(value)) parseCustomModelOptions(value.overrides); } catch { return false; }
   if (!isRecord(value)) return false;
   return (
     (value.source === "lmstudio" || value.source === "ollama" || value.source === "provider") &&
+    (value.manuallyAdded === undefined || typeof value.manuallyAdded === "boolean") &&
     (value.name === undefined || typeof value.name === "string") &&
     (value.type === undefined ||
       value.type === "llm" ||
@@ -915,6 +928,13 @@ export function splitStoredProvider(provider: StoredProvider): {
   cache: ProviderModelCacheEntry;
 } {
   const { models, modelMetadata, ...intent } = provider;
+  if (modelMetadata !== undefined) {
+    const custom = Object.fromEntries(Object.entries(modelMetadata)
+      .filter(([, metadata]) => metadata.overrides !== undefined || metadata.manuallyAdded)
+      .map(([id, metadata]) => [id, { ...metadata.overrides, ...(metadata.manuallyAdded ? { manuallyAdded: true } : {}) }]));
+    if (Object.keys(custom).length) intent.customModelOptions = custom;
+    else delete intent.customModelOptions;
+  }
   const cache: ProviderModelCacheEntry = {};
   if ("models" in provider) cache.models = models;
   if ("modelMetadata" in provider) cache.modelMetadata = modelMetadata;
@@ -934,7 +954,19 @@ export function composeStoredProvider(
     ...safeIntent
   } = intent as PortableProvider & Partial<StoredProvider>;
   const composed: StoredProvider = { ...safeIntent, models: cache?.models ?? [] };
-  if (cache?.modelMetadata) composed.modelMetadata = cache.modelMetadata;
+  if (cache?.modelMetadata) composed.modelMetadata = Object.fromEntries(
+    Object.entries(cache.modelMetadata).map(([id, metadata]) => {
+      const { overrides: _overrides, manuallyAdded: _manual, ...detected } = metadata;
+      return [id, detected];
+    }),
+  );
+  for (const [id, options] of Object.entries(safeIntent.customModelOptions ?? {})) {
+    const { manuallyAdded, ...overrides } = options;
+    composed.modelMetadata ??= {};
+    const detected = Object.prototype.hasOwnProperty.call(composed.modelMetadata, id) ? composed.modelMetadata[id] : undefined;
+    composed.modelMetadata = { ...composed.modelMetadata, [id]: { source: "provider", ...detected, ...(Object.keys(overrides).length ? { overrides } : {}), ...(manuallyAdded ? { manuallyAdded: true } : {}) } };
+    if (manuallyAdded && !composed.models.includes(id)) composed.models = [...composed.models, id];
+  }
   return composed;
 }
 

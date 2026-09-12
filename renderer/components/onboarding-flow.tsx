@@ -152,12 +152,12 @@ const providerChoices: Array<{
   {
     id: "custom",
     title: "Other Custom Provider",
-    description: "Connect your own model server or endpoint.",
+    description: "Connect your endpoint, choose models, and customize their capabilities.",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect to a private model on your tailnet.",
+    description: "Connect a private server and choose models and capabilities in More options.",
   },
 ];
 
@@ -269,7 +269,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or local endpoints.",
+    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
