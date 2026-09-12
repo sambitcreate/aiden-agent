@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
-- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; shared integration, Linux Bots, AppImage updates and portal hold dictation implemented/reviewed; hosted acceptance repair and Computer Use admission remain.
+- [Linux macOS parity reconciliation](linux-macos-parity-plan.md) — Active; shared integration, Linux Bots, AppImage updates and portal hold dictation implemented/reviewed; hosted validation running; Fedora GNOME SELinux selected for Computer Use admission, host prerequisites in progress.
 
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

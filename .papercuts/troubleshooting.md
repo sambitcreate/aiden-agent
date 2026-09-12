@@ -478,3 +478,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Portal hold review caught ordinary shortcut reconciliation reclaiming its chord and async Settings writes lacking commit-time revision fencing. Fixed both with regression tests. Hosted x64 revealed native chrome leaves573px content in600px window, exposing ModelPad minimum-size overflow.
 
 - 2026-09-12: Linux empty-chat migration correctly preserved candidates because V2 subagent storage rejected native seven-field generations. Shared strict seven/nine-field validation fixes deletion/restart without weakening evidence requirements.
+
+- 2026-09-12: OrbStack kernel exposes capability,landlock,yama,bpf without SELinux. Fedora userspace in this host cannot validate enforcing SELinux admission; require a separately booted SELinux-capable kernel.

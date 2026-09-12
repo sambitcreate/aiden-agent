@@ -1,6 +1,6 @@
 # Linux macOS parity reconciliation
 
-Status: Active — phases 1–2 complete; phase 3 in progress, 2026-09-12.
+Status: Active — phases 1–3c implemented and reviewed; phase 4 hosted validation running; Fedora Computer Use prerequisites in progress, 2026-09-12.
 
 Baseline: Linux `6a397578` (0.36.1), macOS main `a4c85c6d` (0.40.0).
 
@@ -92,3 +92,54 @@ Next implementation target is a distro-specific policy prototype (Fedora/SELinux
 Current Linux Computer Use gate stays disabled until this boundary is implemented and validated. Real compositor hold-shortcut acceptance, focused-element-safe dictation paste, and an Electron release carrying libyuv fab11704 also remain before a full parity claim.
 
 - Phase4 fixes: shared subagent generation validation now accepts exactly Linux7-field and macOS9-field identities; migration safety remains unchanged. Linux draft suite5/5 passed. Compact ModelPad layout passes all24native Linux geometry states with160px minimum retained. Guidedsetup now asserts unsupportedComputerUse absence onLinux (3tests passed). Mac focused Electron9/9 passed; lint/typecheck/build and36focused store tests passed. Both Astra medium reviewers cleared final changes.
+
+
+## Phase 5: Fedora GNOME Computer Use admission prerequisites
+
+The user selected Fedora GNOME with SELinux as the first implementation target.
+OrbStack's tested kernel (`7.0.14-orbstack-00380-ga7e0a2dc9535`) reports only
+`capability,landlock,yama,bpf` in `/sys/kernel/security/lsm`. Installing Fedora
+userspace there cannot validate SELinux enforcement. A separately booted Fedora
+GNOME host with enforcing SELinux is required for native acceptance.
+
+Run `npm run computer-use:linux-host-preflight` on the target desktop.
+The host preflight command is a read-only prerequisite diagnostic. Even a
+successful result does not authenticate a release, prove installed policy, or
+enable Computer Use. The existing Linux capability gate remains disabled.
+
+### Required launch-boundary prototype
+
+1. Root-managed provisioning verifies release provenance and the full immutable
+   payload: Electron, ASAR, snapshots, native addons, broker, driver and admitted
+   libraries. [fs-verity](https://www.kernel.org/doc/html/latest/filesystems/fsverity.html)
+   can protect file contents but does not itself enforce executable admission.
+2. A native launcher accepts fixed arguments, sanitizes environment and inherited
+   descriptors, and enters an exact-release main domain. Distinct broker, driver
+   and Electron child domains must prevent renderer/utility/zygote processes
+   acquiring main authority. Source-domain/executable-label transitions require
+   actual Electron fork/exec validation; an argv role claim is insufficient.
+3. Audit the effective policy against hostile unconfined processes. Fedora's
+   [targeted policy](https://github.com/fedora-selinux/selinux-policy/blob/rawhide/policy/modules/kernel/domain.te)
+   grants broad access from unconfined domains, so an additive module alone does
+   not establish isolation. Verify installed toolchain support before relying on
+   [CIL deny rules](https://github.com/SELinuxProject/selinux/blob/main/secilc/docs/cil_access_vector_rules.md);
+   neverallow is a compile-time assertion, not permission subtraction.
+4. Enforce entrypoint and executable mapping restrictions before execution,
+   protect runtime code sources and constrain the main process's required JIT.
+   Linux lacks Electron's macOS/Windows
+   [embedded ASAR integrity implementation](https://www.electronjs.org/docs/latest/tutorial/fuses).
+   Authenticating the interpreter alone does not authenticate writable scripts.
+5. Bind private channels to live process incarnations and contain all descendants
+   through a trusted supervisor. Kernel credentials alone do not prevent endpoint
+   delegation: negative tests must cover inherited/transferred descriptors,
+   `/proc/PID/fd`, ptrace, `pidfd_getfd`, PID reuse and peer-loss revocation.
+
+Acceptance requires tampered executable/ASAR/snapshot/library/driver rejection,
+unauthorized same-UID clients, Electron role confusion, and complete revocation
+under failure. Record the exact kernel, loaded policy, toolchain and release.
+After these pass, validate GNOME capture, AT-SPI, portal permission and supported
+foreground/background actions. These are requirements, not implemented controls
+or a claim that Fedora Computer Use currently works.
+
+- Phase 5 prerequisite diagnostic: 29 tests passed; both GPT-6 Astra medium reviewers cleared. Local OrbStack container correctly reports missing SELinux/session prerequisites. This completes the diagnostic subphase only; enforced launch-boundary implementation is still pending.
+- Hosted phase 4 run 34675055415: shared verification, macOS Electron and Linux ARM64 passed. Linux x64 now reaches 52 passing tests but Providers overflows by 17px at 390px; empty-chat migration passed on retry. Android emulator package installation failed with a broken pipe. Fedora RPM remains gated on x64.
