@@ -89,6 +89,12 @@ a release through that path. The action generates SLSA build
 provenance using GitHub's OIDC identity and uploads it to the repository's
 attestation API. This adds no separately managed signing key.
 
+The publisher also includes the reviewed repository-root `install.sh` in the
+release and in `SHA256SUMS`. The script selects exact versioned artifacts; it
+does not install Actions artifacts from the standalone manual Linux-installer
+workflow. That manual workflow is for downloading and testing unpromoted builds
+and has no release-publication permission.
+
 For a future release produced by this workflow, independently select the approved
 40-character source commit from the reviewed release record. Verify each downloaded
 file with a trusted, current GitHub CLI. Use an absolute artifact path and substitute

@@ -154,6 +154,7 @@ test("reconciles transient lookup, create, and publish failures without replacin
       "Aiden-Agent-0.30.1-x86_64-linux.rpm",
       "Aiden-Agent-0.30.1-aarch64-linux.rpm",
       "SHA256SUMS",
+      "install.sh",
       "latest-mac.yml",
       "latest-linux.yml",
       "latest-linux-arm64.yml",

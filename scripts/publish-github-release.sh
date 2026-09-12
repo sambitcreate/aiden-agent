@@ -5,6 +5,7 @@ set -euo pipefail
 distribution_dir="${1:-release/distribution}"
 retry_attempts="${AIDEN_RELEASE_RETRY_ATTEMPTS:-4}"
 retry_base_seconds="${AIDEN_RELEASE_RETRY_BASE_SECONDS:-2}"
+installer_source="$(cd "$(dirname "$0")/.." && pwd)/install.sh"
 
 if [[ ! "$retry_attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "Release retry attempts must be a positive integer." >&2
@@ -119,6 +120,12 @@ for update_arch in x64 arm64; do
   node "$(dirname "$0")/prepare-linux-update-feed.mjs" "$distribution_dir" "$update_arch" "$RELEASE_VERSION" --verify
 done
 
+if [[ ! -f "$installer_source" || ! -x "$installer_source" ]]; then
+  echo "Expected an executable checked-in install.sh before publishing." >&2
+  exit 1
+fi
+install -m 0755 -- "$installer_source" "$distribution_dir/install.sh"
+
 cd "$distribution_dir"
 shopt -s nullglob
 dmg_assets=( *.dmg )
@@ -179,7 +186,7 @@ shasum -a 256 -- \
   "${appimage_assets[@]}" \
   "${deb_assets[@]}" \
   "${rpm_assets[@]}" \
-  latest-mac.yml latest-linux.yml latest-linux-arm64.yml > SHA256SUMS
+  latest-mac.yml latest-linux.yml latest-linux-arm64.yml install.sh > SHA256SUMS
 website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
 printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
 
@@ -192,6 +199,7 @@ release_assets=(
   latest-mac.yml
   latest-linux.yml
   latest-linux-arm64.yml
+  install.sh
   SHA256SUMS
   "$website_dmg"
 )
@@ -204,6 +212,7 @@ expected_asset_names=(
   latest-mac.yml
   latest-linux.yml
   latest-linux-arm64.yml
+  install.sh
   SHA256SUMS
   "$(basename "$website_dmg")"
 )

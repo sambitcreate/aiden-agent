@@ -9,12 +9,21 @@
 </p>
 
 ```sh
-brew install --cask sambitcreate/tap/aiden-agent
+curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | sh
 ```
 
-Linux x64 and arm64 downloads are available as AppImage, `.deb`, and `.rpm`
-packages from [GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases).
-See the [Linux install and compatibility guide](docs/linux.md).
+The installer selects the native package for macOS or a supported Linux family,
+verifies the published checksum, authenticates Linux build provenance with the
+GitHub CLI, and verifies Apple signing plus Gatekeeper acceptance on macOS.
+Homebrew remains available with `brew install --cask sambitcreate/tap/aiden-agent`.
+Intel Mac installation will become available when a signed x64 DMG is published;
+the installer currently fails rather than selecting the incompatible arm64 DMG.
+
+The release pipeline now produces Linux x64 and arm64 AppImage, `.deb`, and
+`.rpm` packages. The current public `v0.40.0` release predates that pipeline and
+contains only the arm64 Mac build; Linux packages and the installer become
+available with the next accepted release. See the
+[Linux install and compatibility guide](docs/linux.md).
 
 ![Aiden Agent showing a workspace chat and Personal Model Pad](docs/assets/aiden-agent-app.png)
 
@@ -131,7 +140,13 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 ## Project status
 
-Aiden Agent is a beta desktop release for macOS and Linux. Signed macOS DMG/ZIP builds and Linux AppImage/DEB/RPM builds for x64 and arm64 are published with checksums through [GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases). The release workflow verifies both platform sets before publication. macOS keeps automatic updates; Linux uses explicit package replacement. See [the macOS release guide](docs/releasing.md) and [Linux guide](docs/linux.md).
+Aiden Agent is a beta desktop release for macOS, with the reviewed Linux release
+pipeline prepared for the next release. Signed macOS DMG/ZIP builds and verified
+Linux AppImage/DEB/RPM builds for x64 and arm64 are published together with
+checksums once that release is accepted. A separate manual workflow builds
+non-release Linux installers for testing. macOS keeps automatic updates; Linux
+uses explicit package replacement. See [the macOS release guide](docs/releasing.md)
+and [Linux guide](docs/linux.md).
 
 The canonical website download is the stable
 [`Aiden-Agent-Beta-arm64.dmg`](https://github.com/sambitcreate/aiden-agent/releases/latest/download/Aiden-Agent-Beta-arm64.dmg)

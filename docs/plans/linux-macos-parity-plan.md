@@ -375,3 +375,28 @@ generation, make payload bytes kernel-immutable, constrain JIT or host-library
 loading, authenticate live process incarnations, or implement the GNOME capture
 and input driver. Its receipt records those limits as false. Production Linux
 Computer Use remains disabled.
+
+## Phase 18: Cross-platform installer delivery
+
+Complete after two independent GPT-6 Astra medium reviews: a standalone manual
+workflow produces verified Linux x64 and arm64 AppImage, DEB and RPM artifacts
+without publishing a release. A POSIX installer selects the exact package for
+macOS or Linux, verifies the release checksum, requires GitHub build-provenance
+verification before Linux installation, and verifies Apple identity plus
+Gatekeeper acceptance before macOS installation. DEB/RPM preserve
+package-manager ownership and a user-owned writable AppImage is the portable
+fallback.
+
+The installer uses private, exclusive staging on both platforms. macOS app
+replacement preserves the prior app until the promoted copy passes signature,
+Gatekeeper, bundle, version, signing-team and architecture checks; rollback
+state is armed before filesystem moves, and a failed restore retains the
+transaction directory for recovery. Focused checksum, provenance, hostile-path,
+rollback-failure and signal-interruption regressions pass. The repository's
+branding/release and Linux contract suites also pass.
+
+The current public release contains only the arm64 Mac artifacts. Intel macOS
+selection must fail until the release pipeline publishes and validates a signed
+x64 DMG; it must never substitute the arm64 DMG. The standalone Linux workflow
+does not publish releases, and its Actions artifacts are not accepted by the
+release installer. Linux Computer Use production admission remains separate.

@@ -1,14 +1,39 @@
 # Linux desktop support
 
-Aiden Agent ships native x64 and arm64 Linux builds as AppImage, Debian, and
-RPM packages. The `.deb` and `.rpm` formats are recommended because the distro
-package manager installs Electron's runtime libraries and owns replacement or
-removal. AppImage is the portable fallback.
+Aiden Agent's release pipeline produces native x64 and arm64 Linux builds as
+AppImage, Debian, and RPM packages. The current public `v0.40.0` release predates
+that pipeline and contains only the arm64 Mac build; Linux installation becomes
+available with the next accepted release. The `.deb` and `.rpm` formats are
+recommended because the distro package manager installs Electron's runtime
+libraries and owns replacement or removal. AppImage is the portable fallback.
 
 ## Install
 
-Download the package for your architecture from
-[GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases).
+The cross-platform installer detects macOS or Linux, the native architecture,
+and common Debian or RPM distribution families:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | sh
+```
+
+Linux installation requires a current trusted GitHub CLI so the selected package
+can be checked against Aiden's main-branch release-workflow attestation. Pass an
+independently reviewed release commit for the strictest path:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | \
+  sh -s -- --expected-commit REPLACE_WITH_APPROVED_40_CHARACTER_COMMIT
+```
+
+Without that option, the installer pins verification to the exact commit in the
+GitHub release record and says so. This is convenient release authentication,
+not approval for the separate Computer Use runtime boundary. Use `--user` for a
+writable AppImage under `~/.local/share/aiden-agent`, or `--download-only DIR`
+to retain the verified package without installing it. `--plan --version X.Y.Z`
+prints the platform decision without network access.
+
+You can also download the package for your architecture manually from
+[GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases):
 
 Debian, Ubuntu, Linux Mint, Pop!_OS, and related distributions:
 
