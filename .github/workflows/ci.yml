@@ -252,7 +252,7 @@ jobs:
           cache: npm
 
       - name: Install Linux test dependencies
-        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev gnome-keyring dbus-x11
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
 
       - name: Install locked dependencies
         run: npm ci
@@ -360,7 +360,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Install Fedora build prerequisites
-        run: dnf install --assumeyes git gcc gcc-c++ make python3 pkgconf-pkg-config libsecret-devel dbus-daemon
+        run: dnf install --assumeyes git gcc gcc-c++ make python3 pkgconf-pkg-config libsecret-devel libselinux-devel cargo rust dbus-daemon
 
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803

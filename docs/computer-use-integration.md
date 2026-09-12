@@ -260,11 +260,36 @@ an expected inventory from an installation whose integrity is in doubt: that wou
 accept its modified files. A matching attacker-supplied inventory proves nothing
 about release identity. See [Linux package provenance](releasing.md#linux-package-provenance).
 
-This is a build/operator utility, not a privileged installer, immutable storage
+The inventory utility itself is not a privileged installer, immutable storage
 mechanism, atomic filesystem security boundary, or live-process authenticator.
 It does not inventory host libraries outside the supplied tree or constrain JIT.
-Ownership, ACLs, extended attributes and SELinux labels are separate installation
-policy checks; this inventory compares paths, types, modes, sizes and file bytes.
 Electron Builder adds files after afterPack, and package installation can alter
 sandbox permissions, so the final intended generation must be inventoried rather
 than assuming an earlier packaging-hook snapshot is complete.
+
+`native/linux-managed-payload` supplies the next local-only preparation step. A
+trusted operator can stage an already approved inventory into a private
+root-managed store on an SELinux-enforcing host:
+
+```sh
+sudo aiden-managed-payload stage \
+  --store /var/lib/aiden-managed-payload/store \
+  --source /absolute/trusted/extracted-payload \
+  --inventory /absolute/protected/inventory.json \
+  --approval /absolute/protected/local-staging-approval.json
+```
+
+The approval must use schema version 1 and kind `local-staging-only`, and bind
+the exact inventory-file SHA-256. The stager validates protected ancestry and
+metadata, copies into fresh root-owned inodes through descriptor-relative paths,
+sets the store's exact SELinux creation context, verifies every copied entry,
+restores the process creation context, and publishes the inventory-digest-named
+generation without replacement. Its receipt deliberately records
+`releaseAuthenticated`, `runtimeAdmission`, and `kernelImmutable` as false.
+
+This command neither authenticates release attestations nor activates, launches,
+or confines the generation. Do not treat a locally staged generation as
+production Computer Use admission. Production still needs authenticated release
+acceptance, root-managed active-generation selection, exact-generation launch,
+complete process and loader confinement, live process-incarnation supervision,
+and an accepted GNOME capture/input driver.

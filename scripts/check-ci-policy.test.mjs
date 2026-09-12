@@ -46,6 +46,23 @@ test("both Linux package gates exercise the desktop Pi extensions", async () => 
   assert.equal(workflow.match(/npm run test:pi-extensions/gu)?.length, 2);
 });
 
+test("Linux managed-payload contracts install the native SELinux build dependencies", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const releaseWorkflow = await readFile(releaseWorkflowUrl, "utf8");
+  const linuxJob = workflow.match(/^ {2}linux:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  const rpmJob = workflow.match(/^ {2}linux-rpm:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  const releaseJob = releaseWorkflow.match(
+    /^ {2}linux-release:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu,
+  )?.[0];
+
+  assert.ok(linuxJob && rpmJob && releaseJob);
+  assert.match(linuxJob, /apt-get install --yes[^\n]*\blibselinux1-dev\b/u);
+  assert.match(releaseJob, /apt-get install --yes[^\n]*\blibselinux1-dev\b/u);
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\blibselinux-devel\b/u);
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\bcargo\b/u);
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\brust\b/u);
+});
+
 test("Fedora installs the baseline-verified RPM instead of rebuilding native modules", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   const linuxJob = workflow.match(/^ {2}linux:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];

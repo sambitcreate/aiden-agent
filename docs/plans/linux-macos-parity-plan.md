@@ -319,7 +319,7 @@ verification remain acceptance gates for a future approved main release.
 
 ## Phase 16: Packaged Linux payload inventory
 
-Active: compute and verify a deterministic external inventory of a finalized,
+Complete: compute and verify a deterministic external inventory of a finalized,
 trusted, quiescent Linux payload tree. Include every file and directory, modes,
 sizes and content hashes; reject links and special files. Keep the inventory
 strictly outside the tree, with no excluded payload entries. The future managed
@@ -343,8 +343,35 @@ from an earlier build, not an authenticated release or current app acceptance.
 
 ## Phase 17: Native managed-generation staging
 
-Next: copy a supplied finalized payload into fresh root-managed inodes using
-fd-relative traversal, validate the copied bytes against the complete inventory,
-and publish a new generation atomically without replacement. No active pointer
-or execution is part of this phase. Release authentication remains a separate
-mandatory prerequisite for future production admission.
+Complete within its local-staging scope: copy a supplied finalized payload into
+fresh root-managed inodes using fd-relative traversal, validate the copied bytes
+against the complete inventory, and publish a new generation atomically without
+replacement. No active pointer or execution is part of this phase. Release
+authentication remains a separate mandatory prerequisite for future production
+admission.
+
+The native Rust stager accepts only a protected `local-staging-only` approval,
+requires host root and SELinux enforcing, pins trusted paths with `openat2`, and
+rejects links, hardlinks, special files, unsafe ownership or modes, ACLs,
+capabilities and unsupported extended attributes. It copies bytes into fresh
+root-owned inodes under the store's exact SELinux creation context, rechecks the
+complete inventory and metadata, writes an honest receipt, restores the process
+creation context, and publishes by no-replace rename plus parent fsync. Failures
+remove only the private temporary generation through retained descriptors;
+rollback is armed immediately after the initial `mkdirat`.
+
+Both independent Astra medium reviews cleared the final patch after finding and
+verifying the initial-directory rollback fix. Seven Rust tests, the release
+build, and the ignored root integration passed on Fedora 44 with SELinux
+enforcing. The root suite covers mutable-source races, path replacement, device
+nodes without payload reads, links, ACLs, capabilities, ownership and mode
+violations, overlapping paths, publication collisions, injected failures and
+SELinux filename transitions. No temporary staging directory remained. The
+stager also reproduced the 316-entry Phase 16 RPM payload in a preserved
+generation and an independent inventory verification matched every byte.
+
+This phase does not authenticate a release, select or launch an active
+generation, make payload bytes kernel-immutable, constrain JIT or host-library
+loading, authenticate live process incarnations, or implement the GNOME capture
+and input driver. Its receipt records those limits as false. Production Linux
+Computer Use remains disabled.

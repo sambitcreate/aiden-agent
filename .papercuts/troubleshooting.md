@@ -518,3 +518,18 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Fedora SSH became unavailable between phases; UTM reported the dedicated VM stopped. Restarted the existing VM before new acceptance and will recheck enforcing/session prerequisites. Earlier receipts remain scoped to their recorded runs.
 
 - 2026-09-12: UTM restart via its saved shortcut stalled before QEMU launch and timed out. Reopened the existing VM bundle with the verified mounted UTM app through Finder, then started it normally. SSH returned; SELinux is enforcing and GNOME session 3 resumed.
+
+- 2026-09-12: Broad runtime import searches matched generated browser scripts with extremely long lines. Subsequent source inspection excludes generated/injected files and caps line width to keep evidence readable.
+
+- 2026-09-12: Native staging cleanup initially combined O_PATH with the shared O_NONBLOCK flag. Unlike older open calls, openat2 rejects that combination; kernel 6.19 source confirms EINVAL. Separate metadata-open flags and cover failure cleanup before acceptance.
+
+- 2026-09-12: The real RPM contains a directory named `shared` that Fedora labels `container_ro_file_t` through a filename transition even beneath a `var_lib_t` staging store. Synthetic trees missed this. The stager must set and restore an exact creation context around fresh destination objects instead of accepting arbitrary transitioned labels or globally relabeling the host.
+
+- 2026-09-12: Native managed-payload tests link libselinux and are registered in Linux contracts. Ubuntu CI/release therefore need `libselinux1-dev`; the Fedora contract container needs `libselinux-devel` plus its Rust toolchain explicitly rather than relying on runner state.
+
+- 2026-09-12: Both phase-17 reviewers found that temporary-generation `mkdirat` happened just before a fallible descriptor reopen and before cleanup was armed. A reopen failure could leave a private `.staging-*` directory. Make creation transactional and inject the post-mkdir/pre-open failure in the root suite.
+
+- 2026-09-12: Fedora native staging tests required cargo/rust/rust-std-static 1.98.1, acl 2.4.0 (libacl upgraded from 2.3.2), libgit2 1.9.7, libssh2 1.11.1 and llhttp 9.3.1. Transaction retained in /tmp/aiden-phase17-dnf.log; SELinux remains enforcing.
+- 2026-09-12: The disposable Fedora UTM bundle lost its application association after suspension, so opening it stalled until Finder explicitly selected the verified mounted UTM 4.7.5 app and resumed the suspended VM. Confirm SSH and `getenforce` before rerunning root acceptance.
+
+- 2026-09-12: Opening an untrusted source pathname for reading before fstat could touch a raced device. The stager now classifies through O_PATH first, then reopens only its own pinned regular-file descriptor through fixed procfs, with identity checks. Strict caller-path resolution remains separate from that intentional self-descriptor operation.
