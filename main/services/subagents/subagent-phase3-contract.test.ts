@@ -648,7 +648,7 @@ test("every workspace path capability is renderer-document owned and mutation ad
       `${channel} must use workspace operation admission`,
     );
   }
-  for (const channel of ["workspaces:gitInfo", "git:branches"]) {
+  for (const channel of ["workspaces:gitInfo", "git:branches", "git:pullRequestStatus"]) {
     assert.match(
       ipcHandlerSource(workspaces, channel),
       /withOptionalWorkspaceOperation\(\s*event,\s*workspaceId,/u,
@@ -658,6 +658,7 @@ test("every workspace path capability is renderer-document owned and mutation ad
 
   assert.match(ipcHandlerSource(workspaces, "workspaces:gitInfo"), /gitInfo\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:branches"), /gitBranches\(.+signal\)/u);
+  assert.match(ipcHandlerSource(workspaces, "git:pullRequestStatus"), /githubCurrentPullRequest\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:worktrees"), /gitWorktrees\(.+signal\)/u);
   assert.match(git, /async info\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async branches\(cwd: string, signal\?: AbortSignal\)/u);

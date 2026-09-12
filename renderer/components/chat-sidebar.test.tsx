@@ -157,6 +157,33 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
   assert.doesNotMatch(pane, /\bnewChat\b/u);
 });
 
+test("workspace pull request badges surface checks without owning GitHub secrets", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const queries = source("../lib/queries.ts");
+  const ipc = source("../lib/ipc.ts");
+
+  assert.match(sidebar, /function WorkspacePullRequestBadge/u);
+  assert.match(sidebar, /useGitPullRequestStatus\(workspace\.id, enabled\)/u);
+  assert.match(sidebar, /workspace\.folderPath && workspace\.permission !== "none"/u);
+  assert.match(sidebar, /Some checks were not successful/u);
+  assert.match(sidebar, /Some checks haven’t completed yet/u);
+  assert.match(sidebar, /All checks have passed/u);
+  assert.match(sidebar, /Checks did not run/u);
+  assert.match(sidebar, /GitHub status unavailable/u);
+  assert.match(sidebar, /availability === "not-github"/u);
+  assert.match(sidebar, /Merged/u);
+  assert.match(sidebar, /Closed/u);
+  assert.match(sidebar, /Draft/u);
+  assert.match(sidebar, /PopoverContent className="w-80 p-3"/u);
+  assert.match(sidebar, /aria-label=\{`Pull request #\$\{pullRequest\.number\} checks`\}/u);
+  assert.match(sidebar, /window\.open\(url, "_blank", "noopener,noreferrer"\)/u);
+  assert.match(sidebar, /const explicitlyExpanded = expandedWorkspaceIds\.has\(group\.workspace\.id\)/u);
+  assert.match(sidebar, /<WorkspacePullRequestBadge\s+workspace=\{group\.workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}\s+\/>/u);
+  assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
+  assert.match(queries, /refetchInterval: enabled \? 30_000 : false/u);
+  assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
+});
+
 test("workspace outline and recent view are alternate projections, not duplicate lists", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
@@ -208,7 +235,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   const overflowMenu = between(
     sidebar,
     "function SidebarOverflowMenu",
-    "\n}\n\nfunction updateRestartError",
+    "\n}\n\nfunction pullRequestChecksLabel",
   );
 
   assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);

@@ -21,6 +21,7 @@ import {
   type GitDiffInput,
   type GitPushInput,
 } from "../services/git.js";
+import { githubCurrentPullRequest } from "../services/github-pull-request.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {
   listWorkspaceFiles,
@@ -175,6 +176,20 @@ export function registerWorkspaceHandlers(): void {
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) =>
       resolved ? gitInfo(resolved.folderPath, signal) : { isRepo: false },
     ),
+  );
+
+  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>
+    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+      if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
+      const info = await gitInfo(resolved.folderPath, signal);
+      if (!info.isRepo) {
+        return { availability: "not-repo" as const, message: "This workspace is not a Git repository." };
+      }
+      if (!info.hasRemote) {
+        return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
+      }
+      return githubCurrentPullRequest(resolved.folderPath, signal);
+    }),
   );
 
   // ── Environment panel: Files + Review ────────────────────────────────
