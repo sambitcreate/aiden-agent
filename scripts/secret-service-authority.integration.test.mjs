@@ -59,18 +59,19 @@ test("private Linux keyring preserves four authority namespaces across helper pr
   for (const [index, service] of services.entries()) {
     assert.deepEqual(await run("lookup", service), { code: 0, stdout: `updated-${index}`, stderr: "" });
   }
-  // A small libsecret fixture deliberately creates a second matching item with
-  // replacement disabled. Separate gdbus CLI calls cannot share a secret session.
+  // A small libsecret fixture plants a matching item in the named collection
+  // with replacement disabled. Separate gdbus CLI calls cannot share a secret
+  // session.
   const fixtureSource = `${root}/duplicate.c`;
   const fixture = `${root}/duplicate`;
   await writeFile(fixtureSource, `#include <libsecret/secret.h>
 int main(int argc, char **argv) {
-  if (argc != 3) return 1;
+  if (argc != 4) return 1;
   GError *error = NULL;
   const SecretSchema schema = { .name = "com.aiden.bot-authority.v1", .flags = SECRET_SCHEMA_NONE, .attributes = {{"service", SECRET_SCHEMA_ATTRIBUTE_STRING}, {"account", SECRET_SCHEMA_ATTRIBUTE_STRING}, {NULL, 0}} };
   SecretService *service = secret_service_get_sync(SECRET_SERVICE_OPEN_SESSION, NULL, &error);
   if (!service || error) return 2;
-  SecretCollection *collection = secret_collection_for_alias_sync(service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_NONE, NULL, &error);
+  SecretCollection *collection = secret_collection_for_alias_sync(service, argv[3], SECRET_COLLECTION_NONE, NULL, &error);
   if (!collection || error) return 3;
   GHashTable *attrs = secret_attributes_build(&schema, "service", argv[1], "account", argv[2], NULL);
   SecretValue *value = secret_value_new("duplicate", -1, "text/plain");
@@ -82,10 +83,17 @@ int main(int argc, char **argv) {
   assert.equal(flags.code, 0, flags.stderr);
   const compiled = await execute("/usr/bin/cc", [fixtureSource, "-o", fixture, ...flags.stdout.trim().split(/\s+/u)]);
   assert.equal(compiled.code, 0, compiled.stderr);
-  const duplicate = await execute(fixture, [services[0], account]);
+  const duplicate = await execute(fixture, [services[0], account, "default"]);
   assert.equal(duplicate.code, 0, duplicate.stderr);
   assert.deepEqual(await run("lookup", services[0]), { code: 5, stdout: "", stderr: "" });
   assert.deepEqual(await run("store", services[0], "must-not-repair-duplicates"), { code: 5, stdout: "", stderr: "" });
+  // An item in another collection must neither satisfy a lookup nor turn a
+  // later default-collection store into a service-wide duplicate.
+  const stray = await execute(fixture, [services[1], account, "session"]);
+  assert.equal(stray.code, 0, stray.stderr);
+  assert.deepEqual(await run("lookup", services[1]), { code: 0, stdout: "updated-1", stderr: "" });
+  assert.deepEqual(await run("store", services[1], "scoped-write"), { code: 0, stdout: "", stderr: "" });
+  assert.deepEqual(await run("lookup", services[1]), { code: 0, stdout: "scoped-write", stderr: "" });
   const locked = await execute("/usr/bin/gdbus", ["call", "--session", "--dest", "org.freedesktop.secrets", "--object-path", "/org/freedesktop/secrets", "--method", "org.freedesktop.Secret.Service.Lock", "['/org/freedesktop/secrets/collection/login']"]);
   assert.equal(locked.code, 0, locked.stderr);
   assert.match(locked.stdout, /collection\/login/u);
