@@ -429,3 +429,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+- Production provider 400s are untriageable from `logs/aiden.log` alone: the real error text survives only in `userData/pi-compaction-sessions/*.jsonl` (per-message `errorMessage`), because the diagnostic journal strips provider messages outside the development profile. Check the journals before assuming a classification.
+- `@earendil-works/pi-ai` transports merge `model.headers` into every outgoing request and merge `options.headers` last — a per-conversation header can be attached once at runtime-model resolution instead of threading it through each call site.
+- `subagent-artifacts/*_output.md` under `~/.pi/agent/sessions/<repo>/` holds full subagent reports when workflow returns arrive truncated in the completion notification.

@@ -46,7 +46,10 @@ export async function generateBotAvatarSuggestion(
   try {
     controller.signal.throwIfAborted();
     const runtime = await waitForBotAvatarBoundary(
-      resolveModelRuntime(input.providerId, input.model, controller.signal),
+      // One-shot generation has no conversation; the request id doubles as the
+      // gateway's per-request attribution id. Kept on one line: the source
+      // contract test asserts this call's shape.
+      resolveModelRuntime(input.providerId, input.model, controller.signal, input.requestId),
       controller.signal,
     );
     controller.signal.throwIfAborted();

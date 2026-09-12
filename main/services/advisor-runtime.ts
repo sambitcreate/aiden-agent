@@ -165,6 +165,7 @@ export interface AdvisorRuntimeDependencies {
     providerId: string,
     modelId: string,
     signal?: AbortSignal,
+    conversationId?: string,
   ): Promise<ResolvedModelRuntime>;
   recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime): Promise<void>;
   recordUnreportedUsage(
@@ -541,6 +542,9 @@ export class AdvisorRuntime {
               selection.providerId,
               selection.modelId,
               signal,
+              // Advisor dispatch is a one-shot call; a fresh id still satisfies
+              // gateway per-request attribution.
+              randomUUID(),
             );
             assertAdvisorRuntimeSelection(selection, runtime);
             await preflightAdvisorRuntimeAuth(runtime, signal);
