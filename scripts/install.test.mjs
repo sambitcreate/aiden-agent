@@ -21,6 +21,7 @@ import test from "node:test";
 
 const execFileAsync = promisify(execFile);
 const installer = fileURLToPath(new URL("../install.sh", import.meta.url));
+const shell = "/bin/sh";
 
 async function installerFunctionHarness(body) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-install-functions-"));
@@ -45,7 +46,7 @@ async function plan({ system, machine, format = "auto", translated = "0", user =
   await Promise.all([chmod(uname, 0o755), chmod(curl, 0o755), chmod(sysctl, 0o755)]);
   const args = [installer, "--plan", "--version", "1.2.3", "--format", format];
   if (user) args.push("--user");
-  const { stdout } = await execFileAsync("sh", args, {
+  const { stdout } = await execFileAsync(shell, args, {
     env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
   });
   return Object.fromEntries(
@@ -80,14 +81,14 @@ test("rejects unsupported options, versions, systems, architectures, and formats
     ["--plan", "--version", "1.2.3", "--format", "pkg"],
   ];
   for (const args of cases) {
-    await assert.rejects(execFileAsync("sh", [installer, ...args]), /Aiden installer:/u);
+    await assert.rejects(execFileAsync(shell, [installer, ...args]), /Aiden installer:/u);
   }
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-install-reject-"));
   await writeFile(path.join(root, "uname"), "#!/bin/sh\n[ \"$1\" = -s ] && echo FreeBSD || echo sparc\n");
   await writeFile(path.join(root, "curl"), "#!/bin/sh\nexit 99\n");
   await Promise.all([chmod(path.join(root, "uname"), 0o755), chmod(path.join(root, "curl"), 0o755)]);
   await assert.rejects(
-    execFileAsync("sh", [installer, "--plan", "--version", "1.2.3"], {
+    execFileAsync(shell, [installer, "--plan", "--version", "1.2.3"], {
       env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
     }),
     /unsupported operating system/u,
@@ -109,6 +110,17 @@ async function linuxDownloadFixture({
   const packagePath = path.join(root, asset);
   const checksumPath = path.join(root, "SHA256SUMS");
   const ghLog = path.join(root, "gh.log");
+  const requiredTools = [
+    "awk",
+    "cat",
+    "chmod",
+    "cp",
+    "grep",
+    "mkdir",
+    "mktemp",
+    "rm",
+    "rmdir",
+  ];
   await Promise.all([
     writeFile(packagePath, payload),
     writeFile(checksumPath, `${checksum === "valid" ? digest : "0".repeat(64)}  ${asset}\n`),
@@ -145,6 +157,22 @@ fi
 `,
     );
   }
+  for (const name of requiredTools) {
+    const { stdout } = await execFileAsync(shell, ["-c", 'command -v "$1"', "sh", name]);
+    await symlink(stdout.trim(), path.join(bin, name));
+  }
+  let checksumTool;
+  for (const name of ["sha256sum", "shasum"]) {
+    try {
+      const { stdout } = await execFileAsync(shell, ["-c", 'command -v "$1"', "sh", name]);
+      checksumTool = { name, target: stdout.trim() };
+      break;
+    } catch {
+      // Try the installer's native macOS fallback.
+    }
+  }
+  assert.ok(checksumTool, "sha256sum or shasum is required by the fixture");
+  await symlink(checksumTool.target, path.join(bin, checksumTool.name));
   const executables = ["uname", "curl", "mv", "ln", ...(includeGh ? ["gh"] : [])];
   await Promise.all(executables.map((name) => chmod(path.join(bin, name), 0o755)));
   return {
@@ -154,7 +182,7 @@ fi
     env: {
       ...process.env,
       HOME: home,
-      PATH: `${bin}:/usr/bin:/bin`,
+      PATH: bin,
       FIXTURE_PACKAGE: packagePath,
       FIXTURE_CHECKSUMS: checksumPath,
       FIXTURE_GH_LOG: ghLog,
@@ -165,7 +193,7 @@ fi
 test("downloads one fixed Linux asset and requires its pinned release attestation", async () => {
   const fixture = await linuxDownloadFixture();
   await execFileAsync(
-    "sh",
+    shell,
     [installer, "--version", "1.2.3", "--format", "deb", "--download-only", fixture.output],
     { env: fixture.env },
   );
@@ -180,7 +208,7 @@ test("rejects a bad checksum and the absence of GitHub provenance verification",
   const badChecksum = await linuxDownloadFixture({ checksum: "bad" });
   await assert.rejects(
     execFileAsync(
-      "sh",
+      shell,
       [installer, "--version", "1.2.3", "--format", "deb", "--download-only", badChecksum.output],
       { env: badChecksum.env },
     ),
@@ -190,7 +218,7 @@ test("rejects a bad checksum and the absence of GitHub provenance verification",
   const noGh = await linuxDownloadFixture({ includeGh: false });
   await assert.rejects(
     execFileAsync(
-      "sh",
+      shell,
       [installer, "--version", "1.2.3", "--format", "deb", "--download-only", noGh.output],
       { env: noGh.env },
     ),
@@ -201,7 +229,7 @@ test("rejects a bad checksum and the absence of GitHub provenance verification",
 test("AppImage install uses private staging and produces one regular payload plus launcher", async () => {
   const asset = "Aiden-Agent-1.2.3-x86_64-linux.AppImage";
   const fixture = await linuxDownloadFixture({ asset });
-  await execFileAsync("sh", [installer, "--version", "1.2.3", "--format", "appimage"], {
+  await execFileAsync(shell, [installer, "--version", "1.2.3", "--format", "appimage"], {
     env: fixture.env,
   });
   const installed = path.join(fixture.env.HOME, ".local/share/aiden-agent/Aiden-Agent.AppImage");
@@ -221,7 +249,7 @@ test("AppImage install rejects symlink and directory destinations without changi
   await writeFile(unrelated, "keep");
   await symlink(unrelated, path.join(linkedDir, "Aiden-Agent.AppImage"));
   await assert.rejects(
-    execFileAsync("sh", [installer, "--version", "1.2.3", "--format", "appimage"], {
+    execFileAsync(shell, [installer, "--version", "1.2.3", "--format", "appimage"], {
       env: linked.env,
     }),
     /destination is not a regular file/u,
@@ -235,7 +263,7 @@ test("AppImage install rejects symlink and directory destinations without changi
   );
   await mkdir(destination, { recursive: true });
   await assert.rejects(
-    execFileAsync("sh", [installer, "--version", "1.2.3", "--format", "appimage"], {
+    execFileAsync(shell, [installer, "--version", "1.2.3", "--format", "appimage"], {
       env: directory.env,
     }),
     /destination is not a regular file/u,
@@ -260,7 +288,7 @@ privilege() {
 }
 cleanup
 `);
-  const result = await execFileAsync("sh", [harness], {
+  const result = await execFileAsync(shell, [harness], {
     env: { ...process.env, HARNESS_ROOT: root },
   });
   assert.match(result.stderr, /rollback failed; preserved recovery files at/u);
@@ -286,7 +314,7 @@ privilege() {
 backup_existing_macos_app
 `);
   await assert.rejects(
-    execFileAsync("sh", [harness], { env: { ...process.env, HARNESS_ROOT: root } }),
+    execFileAsync(shell, [harness], { env: { ...process.env, HARNESS_ROOT: root } }),
   );
   assert.equal(await readFile(path.join(root, "Aiden Agent.app/version"), "utf8"), "old");
   await assert.rejects(lstat(path.join(root, "transaction")));
@@ -311,7 +339,7 @@ privilege() {
 promote_macos_app
 `);
   await assert.rejects(
-    execFileAsync("sh", [harness], { env: { ...process.env, HARNESS_ROOT: root } }),
+    execFileAsync(shell, [harness], { env: { ...process.env, HARNESS_ROOT: root } }),
   );
   await assert.rejects(lstat(path.join(root, "Aiden Agent.app")));
   await assert.rejects(lstat(path.join(root, "transaction")));
