@@ -1562,6 +1562,45 @@ test("child runner returns only the terminal assistant answer", async () => {
   assert.doesNotMatch(result.summary, /INTERMEDIATE-NARRATION/u);
 });
 
+test("child workspace-read prompt follows assembled tools even when the V2 grant permits more", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-prompt-tools-"));
+  t.after(() => fs.rm(workspaceRoot, { recursive: true, force: true }));
+  for (const inheritedCeiling of [[], ["read_file"]] as const) {
+    const authority = phase6Authority({ runId: "prompt-tools", contextRevision: "d".repeat(64), delegate: false });
+    assert.equal(authority.capabilities.workspaceRead, true);
+    let prompt = "";
+    const control = fakeChild(async ({ emit }) => {
+      const message = assistant("Analyzed the supplied task.");
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+    });
+    const result = await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY, context: TEST_CHILD_CONTEXT,
+      v2Authority: authority, currentV2Authority: () => authority,
+      groupId: "prompt-tools", runtime: runtime(), thinkingLevel: "high",
+      workspaceRoot, permission: "ask", inheritedCeiling,
+      request: { role: "reviewer", label: "Analyze", task: "Analyze the supplied evidence." },
+      dependencies: {
+        // This is the production workspace capability intersection, not an
+        // invented empty tool builder. V2 authority must never override it.
+        buildTools: async (input) => buildSubagentCapabilityTools({
+          workspaceRoot: input.workspaceRoot, permission: input.permission,
+          capabilityProfile: { kind: "subagent", role: input.role, inheritedCeiling: input.inheritedCeiling },
+        }).tools,
+        createChild: (spec) => { prompt = spec.systemPrompt; return control.child; },
+        recordUsage: async () => {},
+      },
+    });
+    assert.equal(result.status, "completed", "intentionally tool-free analysis remains valid");
+    if (inheritedCeiling.length) assert.match(prompt, /You have read-only workspace tools/);
+    else {
+      assert.match(prompt, /You have no workspace read or mutation tools/);
+      assert.doesNotMatch(prompt, /You have read-only workspace tools/);
+    }
+    assert.equal(authority.capabilities.workspaceRead, true, "prompt correction cannot rewrite authority");
+  }
+});
+
 test("child runner rejects protocol-less and empty assistant completions", async () => {
   for (const control of [
     fakeChild(async () => {}),

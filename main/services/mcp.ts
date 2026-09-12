@@ -4,8 +4,6 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
@@ -13,7 +11,6 @@ import { oauthProviderFor } from "./mcp-oauth.js";
 import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import {
   assertMcpPresetServer,
-  createNoRedirectFetch,
   presetSecretId,
 } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
@@ -52,6 +49,8 @@ import type {
   SubagentMcpRemoteTool,
 } from "./subagents/subagent-mcp-read.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
+import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
+import { MAX_MCP_RESPONSE_BYTES } from "./mcp-fetch-policy.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -105,6 +104,7 @@ function makeTransport(
       throw new Error("This MCP server needs a command to run.");
     return new StdioClientTransport({
       command: server.command,
+      maxBufferSize: MAX_MCP_RESPONSE_BYTES,
       args: server.args ?? [],
       env: {
         ...(process.env as Record<string, string>),
@@ -113,14 +113,10 @@ function makeTransport(
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
-  const preset = assertMcpPresetServer(server);
-  const url = new URL(server.url);
-  const requestInit = server.headers ? { headers: server.headers } : undefined;
+  assertMcpPresetServer(server);
   const guardedFetch = options.forceNoRedirect
     ? createBoundedSubagentMcpFetch()
-    : preset?.auth.kind === "apiKey"
-      ? createNoRedirectFetch()
-      : undefined;
+    : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const observeOAuthTokens = options.registerCredentialRedactor
@@ -133,15 +129,11 @@ function makeTransport(
         ),
       )
     : undefined;
-  if (server.transport === "sse") {
-    return new SSEClientTransport(url, {
-      requestInit,
-      authProvider,
-      fetch: guardedFetch,
-    });
-  }
-  return new StreamableHTTPClientTransport(url, {
-    requestInit,
+  return createMcpRemoteTransport({
+    transport: server.transport,
+    serviceUrl: server.url,
+    serviceHeaders: server.headers,
+    isCurrent,
     authProvider,
     fetch: guardedFetch,
   });
