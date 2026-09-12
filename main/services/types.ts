@@ -1,3 +1,4 @@
+import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
@@ -25,6 +26,8 @@ export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "au
 
 /** Metadata reported by the configured provider during explicit model discovery. */
 export interface ProviderModelMetadata {
+  overrides?: CustomModelOptions;
+  manuallyAdded?: boolean;
   source: "lmstudio" | "ollama" | "provider";
   name?: string;
   type?: ProviderModelType;
@@ -53,6 +56,8 @@ export interface StoredProvider {
   models: string[];
   /** Provider-reported metadata captured alongside the last explicit discovery. */
   modelMetadata?: Record<string, ProviderModelMetadata>;
+  /** User-authored model intent, portable independently of discovery cache. */
+  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
   defaultModel?: string;
   /** Whether this provider requires an API key (local backends often don't). */
   needsKey: boolean;
@@ -250,6 +255,9 @@ export type ModelMetadataSource =
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
+  detectedCapabilities?: CustomModelOptions;
+  maxImages?: number;
+  video?: boolean;
   id: string;
   name?: string;
   /** Accepts image input (vision). */

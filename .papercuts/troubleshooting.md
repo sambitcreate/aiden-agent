@@ -429,3 +429,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+# Custom model options
+
+- Fresh worktree has no `.memory/` or dependencies; inspected existing implementation and installed dependencies before validation.
+- Video input is not supported by Aiden's chat attachment transport. The capability option must describe server support without advertising video uploads.
+- Review found capability consumers outside the desktop/native picker (Bot inventory and Telegram) and assistant artifact images in raw history; added projection and role-aware image-limit regressions.
+- Frozen runtime contribution snapshots require a copied tool policy; added a real harness test covering base and extension tools.
+- Hosted verify hit a pre-existing Git cancellation fixture race: a short marker poll expired while push was still running, then cleanup removed its wrapper. Replaced delay/count coordination with a bounded marker handshake and awaited cancellation cleanup.

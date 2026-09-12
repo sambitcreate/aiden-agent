@@ -1,3 +1,4 @@
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -716,6 +717,8 @@ async function prepareGeneration(
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
+  assertCustomModelImageLimit(runtime.provider.modelMetadata?.[model.id]?.overrides,
+    runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1));
   if (assistantAutomationMode || params.mode === "assistant-unattended") {
     assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
   }
@@ -2055,12 +2058,15 @@ export const llmClient = {
               throw new Error("Bot runtime authority was not prepared.");
             })()
         : baseSystemPrompt;
-      const runtimeContributions = resolvePiAgentRuntimeContributionSnapshot(
+      const resolvedContributions = resolvePiAgentRuntimeContributionSnapshot(
         botSystemPrompt,
         tools,
         piResourcesForSkillSnapshot(skillSnapshot),
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
+      );
+      const runtimeContributions = applyCustomModelToolPolicy(
+        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
       );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
@@ -2282,7 +2288,7 @@ export const llmClient = {
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = browserDiscovery ? await browserDiscovery.prepare(context) : context;
+          let nextContext = await prepareCustomModelToolContext(context, browserDiscovery?.prepare.bind(browserDiscovery), runtime.provider.modelMetadata?.[model.id]?.overrides);
           let changed = nextContext !== context;
           if (changed) {
             assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });

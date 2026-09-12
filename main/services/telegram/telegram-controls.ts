@@ -1,3 +1,4 @@
+import type { Provider } from "../types.js";
 // Telegram-native operator controls.
 //
 // Owns the stable command catalog and pure inline-keyboard renderers. Runtime
@@ -37,6 +38,18 @@ export interface TelegramModelChoice {
   modelLabel?: string;
   reasoning: boolean;
   thinkingLevels?: readonly GenerationThinkingLevel[];
+}
+
+export function telegramModelChoice(provider: Provider, model: string): TelegramModelChoice {
+  const metadata = provider.modelMetadata?.[model];
+  return {
+    providerId: provider.id,
+    providerLabel: provider.label,
+    model,
+    modelLabel: metadata?.name,
+    reasoning: metadata?.overrides?.reasoning ?? metadata?.reasoning ?? false,
+    thinkingLevels: metadata?.thinkingLevels,
+  };
 }
 
 export function visibleTelegramModelChoices(
