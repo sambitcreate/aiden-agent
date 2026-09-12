@@ -27,6 +27,8 @@ export interface AskUserQuestionPromptV1 {
   promptId: string;
   streamId: string;
   toolCallId: string;
+  /** Main-owned terminal decision; cannot be supplied by the model tool. */
+  kind?: "design-cancel-draft";
   questions: AskUserQuestionV1[];
 }
 
@@ -40,6 +42,19 @@ export interface AskUserQuestionResponseV1 {
   promptId: string;
   cancelled: boolean;
   answers: AskUserQuestionAnswerV1[];
+}
+
+export function discardsCancelledDesignDraft(
+  prompt: AskUserQuestionPromptV1,
+  response: AskUserQuestionResponseV1,
+): boolean {
+  return (
+    prompt.kind === "design-cancel-draft" &&
+    !response.cancelled &&
+    response.answers.length === 1 &&
+    response.answers[0]?.kind === "option" &&
+    response.answers[0].answer === "Discard"
+  );
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -124,11 +139,23 @@ export function parseAskUserQuestionPrompt(value: unknown): AskUserQuestionPromp
   }
   const questions = parseAskUserQuestions(input.questions);
   if (!questions) return undefined;
+  const kind = input.kind === "design-cancel-draft" ? input.kind : undefined;
+  if (
+    kind &&
+    (questions.length !== 1 ||
+      questions[0]!.multiSelect ||
+      questions[0]!.options.length !== 2 ||
+      questions[0]!.options[0]!.label !== "Keep draft" ||
+      questions[0]!.options[1]!.label !== "Discard")
+  ) {
+    return undefined;
+  }
   return {
     version: ASK_USER_QUESTION_VERSION,
     promptId: input.promptId,
     streamId: input.streamId,
     toolCallId: input.toolCallId,
+    ...(kind ? { kind } : {}),
     questions,
   };
 }
@@ -181,6 +208,13 @@ export function parseAskUserQuestionResponse(
       answers.push({ questionIndex, kind: "multi", selected });
       continue;
     }
+    return undefined;
+  }
+  if (
+    prompt.kind === "design-cancel-draft" &&
+    !input.cancelled &&
+    (answers.length !== 1 || answers[0]?.kind !== "option")
+  ) {
     return undefined;
   }
   return {

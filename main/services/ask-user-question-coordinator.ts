@@ -23,6 +23,7 @@ export class AskUserQuestionCoordinator {
     descriptor: {
       streamId: string;
       toolCallId: string;
+      kind?: AskUserQuestionPromptV1["kind"];
       questions: AskUserQuestionV1[];
     },
     ownerDocumentId: string,

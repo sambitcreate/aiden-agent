@@ -1573,7 +1573,7 @@ test("GitService preserves an unknown push outcome when remote verification fail
       "if (args[0] === 'ls-remote' && existsSync(marker)) process.exit(1);",
       "const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
       "if (result.error) throw result.error;",
-      "if (args[0] === 'push' && result.status === 0) { writeFileSync(marker, 'pushed\\n'); setTimeout(() => process.exit(0), 2000); }",
+      "if (args[0] === 'push' && result.status === 0) { writeFileSync(marker, 'pushed\\n'); setInterval(() => {}, 1000); }",
       "else process.exit(result.status ?? 1);",
       "",
     ].join("\n"),
@@ -1582,27 +1582,39 @@ test("GitService preserves an unknown push outcome when remote verification fail
   const service = new GitService({
     cacheTtlMs: 0,
     gitBinary: wrapper,
-    pushTimeoutMs: 500,
+    pushTimeoutMs: 30_000,
   });
   const capability = await service.pushCapability(repository);
-  await assert.rejects(
-    service.push(repository, {
+  const controller = new AbortController();
+  const operation = service.push(
+    repository,
+    {
       destinationBranch: "main",
       expectedBranch: capability.branch!,
       expectedHead: capability.expectedHead!,
       expectedRemoteIdentity: capability.remoteIdentities.origin!,
       remote: "origin",
       setUpstream: false,
-    }),
-    (error) => {
+    },
+    controller.signal,
+  );
+  await Promise.all([
+    assert.rejects(operation, (error) => {
       assert.equal(error instanceof GitServiceError, true);
+      assert.equal((error as GitServiceError).code, "aborted");
       assert.match(
         (error as Error).message,
         /could not determine whether the remote branch was updated/i,
       );
       return true;
-    },
-  );
+    }),
+    (async () => {
+      // Observe the actual remote write before interrupting the wrapper. A
+      // short push deadline can expire before Git pushes under parallel load.
+      try { await waitForFile(marker, 15_000); }
+      finally { controller.abort(); }
+    })(),
+  ]);
   assert.equal(await git(remote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
 });
 

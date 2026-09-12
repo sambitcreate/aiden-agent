@@ -40,18 +40,30 @@ function taskStatusText(task: TodoTaskViewV1, dependencyIds: readonly number[]):
   return "Pending.";
 }
 
-function floatingAnchor(children: React.ReactNode) {
+function progressAnchor(children: React.ReactNode, placement: "chat" | "design-conversation") {
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 flex justify-center px-[var(--aiden-dock-gutter)]">
+    <div
+      className={
+        placement === "design-conversation"
+          ? "pointer-events-none relative z-20 flex justify-center px-3 py-2"
+          : "pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 flex justify-center px-[var(--aiden-dock-gutter)]"
+      }
+    >
       {children}
     </div>
   );
 }
 
-export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null }) {
+export function TodoPanel({
+  snapshot,
+  placement = "chat",
+}: {
+  snapshot: TodoSnapshotViewV1 | null;
+  placement?: "chat" | "design-conversation";
+}) {
   if (!snapshot) return null;
   if (snapshot.availability === "unavailable") {
-    return floatingAnchor(
+    return progressAnchor(
       <>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           Task tracking unavailable. Aiden could not verify this chat’s private task state.
@@ -76,6 +88,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
           </HoverCardContent>
         </HoverCard>
       </>,
+      placement,
     );
   }
   const tasks = snapshot.tasks.filter((task) => task.status !== "deleted");
@@ -103,7 +116,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
   const chipDetail =
     current?.activeForm || current?.subject || `${tasks.length - completed} remaining`;
 
-  return floatingAnchor(
+  return progressAnchor(
     <>
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {progressAnnouncement}
@@ -188,5 +201,6 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
         </HoverCardContent>
       </HoverCard>
     </>,
+    placement,
   );
 }

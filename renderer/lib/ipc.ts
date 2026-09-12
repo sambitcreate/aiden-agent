@@ -1,3 +1,7 @@
+import type { DesignStudioExportRequest, DesignStudioExportPreview } from "../shared/design-studio-export";
+import type { DesignPrototypeEdgeV1 } from "../shared/design-prototype";
+import type { DesignLanguageProposalInput, DesignLanguageProposal } from "../shared/design-language-proposals";
+import type { DesignGenerationRequestV1, DesignGenerationIntentV1 } from "../shared/design-generation";
 import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
@@ -71,6 +75,26 @@ import type {
   WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
+import type {
+  DesignProjectCanvasV1,
+  DesignProjectDeletePlanV1,
+  DesignDirectEditV1,
+  DesignProjectGenerationPreflightV1,
+  DesignProjectMutationResultV1,
+  DesignProjectOpenResultV1,
+  DesignProjectRecordSummaryV1,
+  DesignArtifactRecoveryPlanV1,
+  DesignArtifactRecoveryResultV1,
+  DesignProjectSnapshot as DesignProjectSnapshotV1,
+  DesignScreenPresentationV2,
+  DesignProjectSourceDocument,
+  DesignSystemProjectionV1,
+  ManagedDesignHandoffPreviewV1,
+  ExistingDesignHandoffPreviewV1,
+  DesignHandoffRunResultV1,
+  DesignHandoffRecoveryViewV1,
+} from "../shared/design-projects";
+import type { DesignElementSelectionV1 } from "../shared/design-workspace";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import {
   parseAskUserQuestionPrompt,
@@ -105,6 +129,10 @@ export interface BotAccessState {
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
 }
+
+export type ChatDeleteResult =
+  | { status: "deleted"; kind: "ordinary-chat" | "design-project" | "bot-chat" }
+  | { status: "confirmation-required"; plan: DesignProjectDeletePlanV1 };
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -148,8 +176,22 @@ import {
   parseChatArtifactEventV1,
   type ChatArtifactEventV1,
   type ChatArtifactV1,
+  type ChatHtmlArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
+import type {
+  DesignerActionV1,
+  SourceDesignerMultifileActionViewV1,
+  SourceElementDescriptorV1,
+  SourcePreviewStateV1,
+  SourceSelectionBindingV1,
+} from "../shared/source-designer";
+import type { DesignReferenceAssetV1 } from "../shared/design-reference-assets";
+import {
+  parseDesignCommentProjectView,
+  type DesignCommentProjectViewV1,
+  type DesignCommentTargetV1,
+} from "../shared/design-comments";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import type { PeerHostView } from "../shared/peer-host";
@@ -664,6 +706,320 @@ export const workspacesApi = {
     ),
 };
 
+export const designerApi = {
+  connectedCommentTarget: (projectId: string, selectionId: string) =>
+    invoke<DesignCommentTargetV1>("designer:connectedCommentTarget", projectId, selectionId),
+  listComments: async (projectId: string): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:listComments", projectId),
+      projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment list.");
+    return view;
+  },
+  createComment: async (input: {
+    expectedDatabaseRevision: number;
+    target: DesignCommentTargetV1;
+    body: string;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:createComment", input),
+      input.target.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  reconcileCommentTarget: async (input: {
+    expectedDatabaseRevision: number;
+    current: DesignCommentTargetV1;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:reconcileCommentTarget", input),
+      input.current.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  resolveComment: async (input: {
+    projectId: string;
+    id: string;
+    expectedRevision: number;
+    expectedDatabaseRevision: number;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:resolveComment", input),
+      input.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  reopenComment: async (input: {
+    projectId: string;
+    id: string;
+    expectedRevision: number;
+    expectedDatabaseRevision: number;
+  }): Promise<DesignCommentProjectViewV1> => {
+    const view = parseDesignCommentProjectView(
+      await invoke<unknown>("designer:reopenComment", input),
+      input.projectId,
+    );
+    if (!view) throw new Error("Aiden returned an invalid Design comment update.");
+    return view;
+  },
+  listProjects: () => invoke<DesignProjectRecordSummaryV1[]>("designer:listProjects"),
+  openProject: (projectOrLegacyChatId: string) =>
+    invoke<DesignProjectOpenResultV1 | undefined>("designer:openProject", projectOrLegacyChatId),
+  inspectArtifactRecovery: (projectId: string) =>
+    invoke<DesignArtifactRecoveryPlanV1>("designer:inspectArtifactRecovery", projectId),
+  recoverArtifact: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<DesignArtifactRecoveryResultV1>("designer:recoverArtifact", input),
+  createProject: () => invoke<DesignProjectSnapshotV1>("designer:createProject", {}),
+  connectProject: (input: { projectId: string; expectedRevision: number; workspaceId: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:connectProject", input),
+  preflightGeneration: (input: { projectId: string }) =>
+    invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
+  updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
+    invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  previewStudioExport:(request:DesignStudioExportRequest)=>invoke<DesignStudioExportPreview>("designer:previewStudioExport",request),
+  exportStudioBundle:(input:{request:DesignStudioExportRequest;reviewDigest:string})=>invoke<{status:"saved"|"cancelled";fileName?:string}>("designer:exportStudioBundle",input),
+  beginStudioHandoff:(input:{request:DesignStudioExportRequest;reviewDigest:string;sourceWorkspaceId:string;targetDigest:string;kind:"managed-worktree"|"existing-workspace";acknowledged:boolean;operationId:string})=>invoke<DesignHandoffRunResultV1>("designer:beginStudioHandoff",input),
+  savePrototype: (input:{projectId:string;expectedRevision:number;entryMediaId:string;mediaIds:string[];edges:DesignPrototypeEdgeV1[]}) => invoke<DesignProjectSnapshotV1>("designer:savePrototype",input),
+  verifyPrototype: (input:{projectId:string;expectedRevision:number}) => invoke<{project:DesignProjectSnapshotV1;error?:string}>("designer:verifyPrototype",input),
+  playPrototype: (input:{projectId:string}) => invoke<{windowId:number}>("designer:playPrototype",input),
+  previewDesignLanguage: (input: DesignLanguageProposalInput) => invoke<DesignLanguageProposal>("designer:previewDesignLanguage", input),
+  saveDesignLanguage: (input: {proposal:DesignLanguageProposalInput;expectedRevision:number;expectedHash:string}) => invoke<DesignProjectSnapshotV1>("designer:saveDesignLanguage", input),
+  applyDesignLanguage: (input: {projectId:string;expectedRevision:number;languageId:string}) => invoke<DesignProjectSnapshotV1>("designer:applyDesignLanguage", input),
+  detachDesignLanguage: (input: {projectId:string;expectedRevision:number}) => invoke<DesignProjectSnapshotV1>("designer:detachDesignLanguage", input),
+  exportDesignLanguage: (input: {projectId:string;languageId:string}) => invoke<{status:"saved"|"cancelled"}>("designer:exportDesignLanguage", input),
+  generationProvenance: (input: { projectId: string; mediaId: string }) => invoke<DesignGenerationIntentV1 | null>("designer:generationProvenance", input),
+  chooseDirection: (input: { projectId: string; expectedRevision: number; directionSetId: string; member: { lineageId: string; mediaId: string } }) =>
+    invoke<DesignProjectMutationResultV1>("designer:chooseDirection", input),
+  archiveDirectionSet: (input: { projectId: string; expectedRevision: number; directionSetId: string; archived: boolean }) =>
+    invoke<DesignProjectMutationResultV1>("designer:archiveDirectionSet", input),
+  setActiveRevision: (input: {
+    id: string;
+    expectedRevision: number;
+    lineageId: string;
+    mediaId: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:setActiveRevision", input),
+  setScreenPresentation: (input: {
+    id: string;
+    expectedRevision: number;
+    lineageId: string;
+    presentation: DesignScreenPresentationV2;
+  }) => invoke<DesignProjectMutationResultV1>("designer:setScreenPresentation", input),
+  setPreviewScript: (input: { id: string; expectedRevision: number; previewScriptId: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:setPreviewScript", input),
+  renameProject: (input: { id: string; expectedRevision: number; title: string }) =>
+    invoke<DesignProjectMutationResultV1>("designer:renameProject", input),
+  duplicateProject: (input: { id: string; expectedRevision: number; title?: string }) =>
+    invoke<DesignProjectSnapshotV1>("designer:duplicateProject", input),
+  previewDeleteProject: (input: { id: string; expectedRevision: number }) =>
+    invoke<DesignProjectDeletePlanV1>("designer:previewDeleteProject", input),
+  deleteProject: (input: { id: string; expectedRevision: number }) =>
+    invoke<{ status: "deleted" }>("designer:deleteProject", input),
+  applyPrototypeDirectEdit: (input: {
+    operationId: string;
+    projectId: string;
+    lineageId: string;
+    mediaId: string;
+    selection: DesignElementSelectionV1;
+    edit: DesignDirectEditV1;
+  }) =>
+    invoke<{
+      kind: "prototype-revision";
+      proposalId: string;
+      undoId: string;
+      artifact: ChatHtmlArtifactV1;
+      project: DesignProjectSnapshotV1;
+    }>("designer:applyPrototypeDirectEdit", input),
+  undoPrototypeDirectEdit: (input: {
+    projectId: string;
+    lineageId: string;
+    editedMediaId: string;
+    revertMediaId: string;
+    undoId: string;
+  }) =>
+    invoke<{
+      kind: "prototype-revision";
+      proposalId: string;
+      undoId: string;
+      artifact: ChatHtmlArtifactV1;
+      project: DesignProjectSnapshotV1;
+    }>("designer:undoPrototypeDirectEdit", input),
+  applyConnectedDirectEdit: (input: {
+    operationId: string;
+    projectId: string;
+    sourceSelectionId: string;
+    edit: DesignDirectEditV1;
+  }) =>
+    invoke<{
+      kind: "durable-designer-action";
+      proposalId: string;
+      action: SourceDesignerMultifileActionViewV1;
+    }>("designer:applyConnectedDirectEdit", input),
+  attachDesignSystem: (input: {
+    projectId: string;
+    expectedRevision: number;
+    name: string;
+    packageRoot: string;
+    routeScope: string;
+    sources: Array<{
+      workspaceRelativePath: string;
+      kind: "tokens-v1" | "catalog-v1";
+    }>;
+  }) =>
+    invoke<{
+      project: DesignProjectSnapshotV1;
+      projection: DesignSystemProjectionV1;
+    }>("designer:attachDesignSystem", input),
+  designSystemProjection: (projectId: string) =>
+    invoke<DesignSystemProjectionV1 | undefined>("designer:designSystemProjection", projectId),
+  designSystemModelContext: (projectId: string) =>
+    invoke<unknown>("designer:designSystemModelContext", projectId),
+  refreshDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<{
+      project: DesignProjectSnapshotV1;
+      projection: DesignSystemProjectionV1;
+    }>("designer:refreshDesignSystem", input),
+  detachDesignSystem: (input: { projectId: string; expectedRevision: number }) =>
+    invoke<DesignProjectSnapshotV1>("designer:detachDesignSystem", input),
+  previewManagedHandoff: (projectId: string, sourceWorkspaceId?: string) =>
+    invoke<ManagedDesignHandoffPreviewV1>(
+      "designer:previewManagedHandoff",
+      projectId,
+      sourceWorkspaceId,
+    ),
+  previewExistingHandoff: (projectId: string, sourceWorkspaceId?: string) =>
+    invoke<ExistingDesignHandoffPreviewV1>(
+      "designer:previewExistingHandoff",
+      projectId,
+      sourceWorkspaceId,
+    ),
+  beginManagedHandoff: (input: {
+    projectId: string;
+    expectedRevision: number;
+    lineageId: string;
+    mediaId: string;
+    previewDigest: string;
+    dirtyCheckoutAcknowledged: boolean;
+    sourceWorkspaceId?: string;
+    operationId: string;
+  }) => invoke<DesignHandoffRunResultV1>("designer:beginManagedHandoff", input),
+  beginExistingHandoff: (input: {
+    projectId: string;
+    expectedRevision: number;
+    lineageId: string;
+    mediaId: string;
+    previewDigest: string;
+    sourceWorkspaceId?: string;
+    strongWarningAcknowledged: boolean;
+    operationId: string;
+  }) => invoke<DesignHandoffRunResultV1>("designer:beginExistingHandoff", input),
+  cancelHandoff: (operationId: string) =>
+    invoke<DesignHandoffRunResultV1>("designer:cancelHandoff", operationId),
+  resumeHandoff: (operationId: string) =>
+    invoke<DesignHandoffRunResultV1>("designer:resumeHandoff", operationId),
+  projectHandoffLinks: (projectId: string) =>
+    invoke<
+      Array<{
+        projectId: string;
+        workspaceId: string;
+        chatId: string;
+        taskId: string;
+        branchLabel: string;
+      }>
+    >("designer:projectHandoffLinks", projectId),
+  projectHandoffRecoveries: (projectId: string) =>
+    invoke<DesignHandoffRecoveryViewV1[]>("designer:projectHandoffRecoveries", projectId),
+  readGeneratedSource: (projectId: string, lineageId: string, mediaId: string) =>
+    invoke<
+      DesignProjectSourceDocument & {
+        revisionId: string;
+        lineageId: string;
+        createdAt: number;
+        model?: string;
+      }
+    >("designer:readGeneratedSource", projectId, lineageId, mediaId),
+  readConnectedSource: (projectId: string, selectionId: string) =>
+    invoke<DesignProjectSourceDocument>("designer:readConnectedSource", projectId, selectionId),
+  exportProjectBundle: (projectId: string, lineageId: string, mediaId: string) =>
+    invoke<{ status: "cancelled" } | { status: "saved"; exportId?: string; fileName?: string }>(
+      "designer:exportProjectBundle",
+      projectId,
+      lineageId,
+      mediaId,
+    ),
+  latestProjectExport: (projectId: string) =>
+    invoke<{ id: string; fileName: string } | undefined>("designer:latestProjectExport", projectId),
+  revealProjectExport: (projectId: string, exportId: string) =>
+    invoke<boolean>("designer:revealProjectExport", projectId, exportId),
+  putReferenceAsset: (input: { name: string; mimeType: string; data: string }) =>
+    invoke<DesignReferenceAssetV1>("designer:putReferenceAsset", input),
+  attachReferenceAsset: (input: {
+    projectId: string;
+    expectedRevision: number;
+    nodeId: string;
+    assetId: string;
+    x: number;
+    y: number;
+  }) => invoke<DesignProjectMutationResultV1>("designer:attachReferenceAsset", input),
+  readReferenceAsset: (assetId: string) =>
+    invoke<{ asset: DesignReferenceAssetV1; data: string } | undefined>(
+      "designer:readReferenceAsset",
+      assetId,
+    ),
+  removeMissingReferenceAsset: (input: {
+    projectId: string;
+    expectedRevision: number;
+    assetId: string;
+  }) => invoke<DesignProjectMutationResultV1>("designer:removeMissingReferenceAsset", input),
+  previewState: (input: { projectId: string }) =>
+    invoke<SourcePreviewStateV1>("designer:previewState", input),
+  startPreview: (input: { projectId: string; scriptId: string }) =>
+    invoke<SourcePreviewStateV1>("designer:startPreview", input),
+  stopPreview: (input: { projectId: string }) => invoke<void>("designer:stopPreview", input),
+  bindSelection: (input: {
+    projectId: string;
+    sessionId: string;
+    descriptor: SourceElementDescriptorV1;
+  }) => invoke<SourceSelectionBindingV1>("designer:bindSelection", input),
+  listActions: (input: { projectId: string }) =>
+    invoke<DesignerActionV1[]>("designer:listActions", input),
+  listMultifileActions: (projectId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1[]>("designer:listMultifileActions", projectId),
+  applyMultifileAction: (projectId: string, actionId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1>(
+      "designer:applyMultifileAction",
+      projectId,
+      actionId,
+    ),
+  undoMultifileAction: (projectId: string, actionId: string) =>
+    invoke<SourceDesignerMultifileActionViewV1>(
+      "designer:undoMultifileAction",
+      projectId,
+      actionId,
+    ),
+  applyAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:applyAction", input),
+  rejectAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:rejectAction", input),
+  undoAction: (input: { projectId: string; actionId: string }) =>
+    invoke<DesignerActionV1>("designer:undoAction", input),
+  onPreviewChanged: (
+    handler: (payload: {
+      projectId: string;
+      workspaceId: string;
+      state: SourcePreviewStateV1;
+    }) => void,
+  ) => onNotification("designer:preview-changed", handler),
+  onActionChanged: (handler: (payload: { action: DesignerActionV1 }) => void) =>
+    onNotification("designer:action-changed", handler),
+  onMultifileActionChanged: (
+    handler: (payload: { action: SourceDesignerMultifileActionViewV1 }) => void,
+  ) => onNotification("designer:multifile-action-changed", handler),
+};
+
 // ── Interactive terminal ─────────────────────────────────────────────
 export interface TerminalSession {
   id: string;
@@ -818,7 +1174,8 @@ export const chatsApi = {
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
-  remove: (id: string) => invoke<void>("chats:remove", id),
+  remove: (id: string, confirmation?: { projectId: string; expectedRevision: number }) =>
+    invoke<ChatDeleteResult>("chats:remove", id, confirmation),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
     chatId: string,
@@ -830,12 +1187,23 @@ export const chatsApi = {
       secondary?: string;
       accent?: string;
     },
+    designStudio = false,
+    liveDesignCandidateGenerationId?: string,
   ) =>
-    invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
-      chatId,
-      mediaId,
-      theme,
-    }),
+    invoke<{ title: string; src: string; designCapability?: string } | undefined>(
+      "chats:htmlArtifactSrcdoc",
+      {
+        chatId,
+        mediaId,
+        theme,
+        ...(designStudio ? { designStudio: true } : {}),
+        ...(liveDesignCandidateGenerationId ? { liveDesignCandidateGenerationId } : {}),
+      },
+    ),
+  resumeDetachedDesignPreview: (streamId: string, chatId: string) =>
+    invoke<boolean>("chats:resumeDetachedDesignPreview", streamId, chatId),
+  suspendDetachedDesignPreview: (streamId: string) =>
+    invoke<boolean>("chats:suspendDetachedDesignPreview", streamId),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,
@@ -855,6 +1223,8 @@ export const chatsApi = {
       autoTitle?: boolean;
       turnId: string;
       skillInvocation?: SkillInvocationV1;
+      designPreflight?: DesignProjectGenerationPreflightV1;
+      designGeneration?: DesignGenerationRequestV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
@@ -986,6 +1356,7 @@ interface ChatError {
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
+  designPublication?: "retryable" | "suppressed";
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -1053,6 +1424,7 @@ export interface StreamCallbacks {
     timeline?: GenerationTimeline,
     chat?: Chat,
     reasoning?: string,
+    designPublication?: "retryable" | "suppressed",
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
   onArtifactEvent?: (event: ChatArtifactEventV1) => void;
@@ -1132,7 +1504,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
+      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning, p.designPublication);
       dispose();
     }),
   );

@@ -25,6 +25,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  Image as ImageIcon,
   ListPlus,
   Loader2,
   Lock,
@@ -113,6 +114,8 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
 
 interface ComposerProps {
+  /** Optional surface-specific prompt shown when the composer is ready. */
+  placeholder?: string;
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
@@ -141,6 +144,10 @@ interface ComposerProps {
   /** Survives navigating away and reopening a draft whose commit is pending. */
   firstMessageSaving?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /** Places the same composer state inside the compact Design conversation rail. */
+  placement?: "chat" | "design-conversation";
+  /** Keeps a containing surface visible while private or asynchronous controls need attention. */
+  onVisibilityRequirementChange?: (required: boolean) => void;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
@@ -160,6 +167,13 @@ interface ComposerProps {
   gitMutationBlockedReason?: string;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
+  /** Ephemeral canvas selections attached to the next Design turn. */
+  designContextItems?: readonly {
+    id: string;
+    label: string;
+    kind: "design" | "element" | "image";
+  }[];
+  onRemoveDesignContextItem?: (id: string) => void;
   /** The model picker element, rendered in the input row. */
   modelPicker?: React.ReactNode;
   /** Native model reasoning effort control, rendered only for supported models. */
@@ -272,6 +286,7 @@ function composerDraftReducer(
 }
 
 export function Composer({
+  placeholder,
   ready,
   readinessMessage,
   readinessSettingsSection,
@@ -288,6 +303,8 @@ export function Composer({
   freezeWhileSending = false,
   firstMessageSaving = false,
   inputRef,
+  placement = "chat",
+  onVisibilityRequirementChange,
   workspace,
   gitBranch,
   gitDetached,
@@ -305,6 +322,8 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
+  designContextItems = [],
+  onRemoveDesignContextItem,
   computerUse,
   onChangeComputerUse,
   modelPicker,
@@ -501,6 +520,17 @@ export function Composer({
       localModel: settings.data?.localVoiceModel,
       model: settings.data?.voiceModel,
     },
+  );
+  const requiresVisibleComposer =
+    voice.recording || voice.transcribing || attaching || sending || sessionCommandBusy;
+
+  React.useEffect(() => {
+    onVisibilityRequirementChange?.(requiresVisibleComposer);
+  }, [onVisibilityRequirementChange, requiresVisibleComposer]);
+
+  React.useEffect(
+    () => () => onVisibilityRequirementChange?.(false),
+    [onVisibilityRequirementChange],
   );
 
   React.useLayoutEffect(() => {
@@ -1474,7 +1504,15 @@ export function Composer({
 
   return (
     <>
-      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+      <div
+        data-browser-composer-inset={placement === "chat" ? "true" : undefined}
+        className={cn(
+          "pointer-events-none",
+          placement === "design-conversation"
+            ? "w-full px-3 pb-3 pt-2"
+            : "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5",
+        )}
+      >
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
         <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
@@ -1546,84 +1584,87 @@ export function Composer({
             </aside>
           ) : null}
           {queuedMessages}
-          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
-          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
-              <WorkspacePicker
-                key={workspaceChangeBlockedReason ? "blocked" : "available"}
-                workspaces={workspaces}
-                activeWorkspaceId={workspace?.id}
-                onSelectWorkspace={onSelectWorkspace}
-                onCreateScratchWorkspace={onCreateScratchWorkspace}
-                blockedReason={workspaceChangeBlockedReason}
-                trigger={
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason)
-                    }
-                    aria-label={
-                      workspaceChangeBlockedReason
-                        ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : "Choose a workspace"
-                    }
-                  >
-                    <Folder className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-                  </Button>
-                }
-              />
-            ) : (
-              <Button
-                variant="transparent"
-                size="small"
-                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                onClick={onOpenFolder}
-                disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+          {/* Design Projects are local-first; workspace connection remains a later project action. */}
+          {placement === "chat" ? (
+            <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
+            <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+              {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+                <WorkspacePicker
+                  key={workspaceChangeBlockedReason ? "blocked" : "available"}
+                  workspaces={workspaces}
+                  activeWorkspaceId={workspace?.id}
+                  onSelectWorkspace={onSelectWorkspace}
+                  onCreateScratchWorkspace={onCreateScratchWorkspace}
+                  blockedReason={workspaceChangeBlockedReason}
+                  trigger={
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                      disabled={
+                        isGenerating ||
+                        sending ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
+                      aria-label={
+                        workspaceChangeBlockedReason
+                          ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
+                          : "Choose a workspace"
+                      }
+                    >
+                      <Folder className="size-4 shrink-0" />
+                      <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                    </Button>
+                  }
+                />
+              ) : (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                  onClick={onOpenFolder}
+                  disabled={!workspace?.folderPath}
+                  aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+                >
+                  <Folder className="size-4 shrink-0" />
+                  <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                </Button>
+              )}
+              {/* Execution location — Pi runs locally on this Mac. */}
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this Mac"
               >
-                <Folder className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-              </Button>
-            )}
-            {/* Execution location — Pi runs locally on this Mac. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this Mac"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
-            {gitBranch && workspace?.folderPath ? (
-              <GitBranchPicker
-                key={`git-branch-picker-${worktreeRequest}`}
-                workspaceId={workspace.id}
-                branch={gitBranch}
-                detached={gitDetached}
-                unborn={gitUnborn}
-                disabled={
-                  isGenerating ||
-                  sending ||
-                  attaching ||
-                  permissionSaving ||
-                  Boolean(gitMutationBlockedReason)
-                }
-                disabledReason={gitMutationBlockedReason}
-                onCreateWorktree={onCreateGitWorktree}
-                onBusyChange={onGitOperationBusyChange}
-                worktreeDescription={gitWorktreeDescription}
-                openWorktreeOnMount={worktreeRequest > 0}
-                programmaticReturnFocusRef={inputRef}
-              />
-            ) : null}
-          </div>
-          </ComposerContextBar>
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+              {gitBranch && workspace?.folderPath ? (
+                <GitBranchPicker
+                  key={`git-branch-picker-${worktreeRequest}`}
+                  workspaceId={workspace.id}
+                  branch={gitBranch}
+                  detached={gitDetached}
+                  unborn={gitUnborn}
+                  disabled={
+                    isGenerating ||
+                    sending ||
+                    attaching ||
+                    permissionSaving ||
+                    Boolean(gitMutationBlockedReason)
+                  }
+                  disabledReason={gitMutationBlockedReason}
+                  onCreateWorktree={onCreateGitWorktree}
+                  onBusyChange={onGitOperationBusyChange}
+                  worktreeDescription={gitWorktreeDescription}
+                  openWorktreeOnMount={worktreeRequest > 0}
+                  programmaticReturnFocusRef={inputRef}
+                />
+              ) : null}
+            </div>
+            </ComposerContextBar>
+          ) : null}
+
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
@@ -1687,8 +1728,44 @@ export function Composer({
                 </span>
               </div>
             ) : null}
+            {designContextItems.length > 0 ? (
+              <div
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-1.5 px-1.5",
+                  placement === "design-conversation" && "max-h-16 overflow-y-auto",
+                )}
+                aria-label="Canvas context for next message"
+              >
+                {designContextItems.map((item) => {
+                  const ContextIcon = item.kind === "image" ? ImageIcon : MousePointer2;
+                  return (
+                    <div
+                      key={item.id}
+                      className="group relative flex h-7 max-w-[14rem] items-center gap-1.5 rounded-control bg-list-selection py-1 pl-2 pr-6 text-accent"
+                    >
+                      <ContextIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                      <span className="truncate text-small-strong">{item.label}</span>
+                      <button
+                        type="button"
+                        disabled={sessionCommandBusy}
+                        onClick={() => onRemoveDesignContextItem?.(item.id)}
+                        aria-label={`Remove ${item.label} from canvas context`}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-accent outline-none transition-colors hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+                      >
+                        <X className="size-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             {attachments.length > 0 ? (
-              <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
+              <div
+                className={cn(
+                  "mb-1.5 flex flex-wrap gap-2 px-1.5",
+                  placement === "design-conversation" && "max-h-20 overflow-y-auto",
+                )}
+              >
                 {attachments.map((a) => (
                   <div
                     key={a.id}
@@ -1718,6 +1795,7 @@ export function Composer({
               </div>
             ) : null}
             <Textarea
+              data-chat-composer
               ref={inputRef}
               value={text}
               readOnly={sessionCommandBusy || firstSendPending}
@@ -1758,12 +1836,16 @@ export function Composer({
               aria-describedby={attachmentDescriptionId}
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
-              placeholder={composerPlaceholder({
-                ready,
-                readinessMessage,
-                hasMessages,
-                chatId,
-              })}
+              placeholder={
+                ready && placeholder
+                  ? placeholder
+                  : composerPlaceholder({
+                      ready,
+                      readinessMessage,
+                      hasMessages,
+                      chatId,
+                    })
+              }
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
@@ -1818,6 +1900,7 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
+                {placement === "chat" ? (
                 <div
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
                   data-open={permissionMenuOpen || undefined}
@@ -1951,6 +2034,7 @@ export function Composer({
                     })}
                   </div>
                 </div>
+                ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}

@@ -42,7 +42,7 @@ Thumbs.db
 tmp/*
 
 # Local agent troubleshooting notes
-.papercuts/
+**/.papercuts/
 
 # Local git worktrees
 .worktrees/

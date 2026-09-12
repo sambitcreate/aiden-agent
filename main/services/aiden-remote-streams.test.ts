@@ -165,6 +165,30 @@ test("provider errors expose only fixed product-owned copy", () => {
   });
 });
 
+test("remote Design publication failures preserve terminal versus retryable truth", () => {
+  const terminal = fixture();
+  terminal.service.create("device-1", "stream-terminal", "chat-1", "turn-terminal").owner.send("chat:error", {
+    designPublication: "suppressed",
+    message: "renderer copy is not authoritative",
+  });
+  const terminalEvents = terminal.service.snapshot().streams[0]?.events ?? [];
+  assert.deepEqual(terminalEvents[terminalEvents.length - 1]?.payload, {
+    code: "internal_error",
+    message: "The response was saved, but its Design revision conflicted with newer project history and was not added. The existing canvas was preserved; generate again from the latest project state.",
+  });
+
+  const retryable = fixture();
+  retryable.service.create("device-1", "stream-retryable", "chat-1", "turn-retryable").owner.send("chat:error", {
+    designPublication: "retryable",
+    message: "renderer copy is not authoritative",
+  });
+  const retryableEvents = retryable.service.snapshot().streams[0]?.events ?? [];
+  assert.deepEqual(retryableEvents[retryableEvents.length - 1]?.payload, {
+    code: "internal_error",
+    message: "The response was saved, but its Design revision could not be added to the canvas. Refresh or reopen the project to retry recovery before sending another prompt.",
+  });
+});
+
 test("subscriber disconnect does not cancel work and reconnect replays completion", () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

@@ -67,6 +67,27 @@ test("bounds the polite progress announcement even for maximum-length task copy"
   assert.match(announcement, /…$/u);
 });
 
+test("renders Design progress inside the conversation footer instead of behind the rail", () => {
+  const html = renderToStaticMarkup(
+    <TodoPanel
+      placement="design-conversation"
+      snapshot={{
+        version: 1,
+        chatId: "chat-1",
+        availability: "ready",
+        tasks: [{ id: 1, subject: "Review", status: "in_progress" }],
+      }}
+    />,
+  );
+
+  assert.match(html, /relative z-20/u);
+  assert.doesNotMatch(html, /bottom-full/u);
+  assert.match(
+    chatPaneSource,
+    /<TodoPanel[\s\S]{0,180}placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u,
+  );
+});
+
 test("hides empty and fully completed plans while preserving completion announcement", () => {
   assert.equal(
     renderToStaticMarkup(

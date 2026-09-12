@@ -11,10 +11,12 @@ import {
 export function AskUserQuestionComposer({
   prompt,
   submitting = false,
+  placement = "chat",
   onRespond,
 }: {
   prompt: AskUserQuestionPromptV1;
   submitting?: boolean;
+  placement?: "chat" | "design-conversation";
   onRespond(response: AskUserQuestionResponseV1): void | Promise<void>;
 }) {
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -28,6 +30,7 @@ export function AskUserQuestionComposer({
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
   const customRef = React.useRef<HTMLTextAreaElement | null>(null);
   const question = prompt.questions[activeIndex]!;
+  const isDesignDraftDecision = prompt.kind === "design-cancel-draft";
   const answer = answers.get(activeIndex);
   const customDraft = customDrafts.get(activeIndex) ?? "";
 
@@ -120,9 +123,21 @@ export function AskUserQuestionComposer({
   };
 
   return (
-    <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column">
+    <div
+      data-browser-composer-inset={placement === "chat" ? "true" : undefined}
+      className={cn(
+        placement === "design-conversation"
+          ? "w-full px-3 pb-3 pt-2"
+          : "aiden-dock-inset chat-content-column",
+      )}
+    >
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className={cn(
+          "ask-user-question-shell overflow-hidden rounded-sheet bg-popover shadow-composer outline outline-1 outline-field/80",
+          placement === "design-conversation"
+            ? "max-h-[min(70vh,36rem)] overflow-y-auto px-3 py-3"
+            : "min-h-76 px-5 py-4 sm:px-6 sm:py-5",
+        )}
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}
@@ -137,6 +152,7 @@ export function AskUserQuestionComposer({
           <div
             className="flex shrink-0 items-center gap-1 text-secondary"
             aria-label="Question navigation"
+            hidden={isDesignDraftDecision}
           >
             <button
               type="button"
@@ -214,7 +230,7 @@ export function AskUserQuestionComposer({
           })}
         </div>
 
-        <div className="mt-3 flex min-h-12 items-end gap-3">
+        <div className="mt-3 flex min-h-12 items-end gap-3" hidden={isDesignDraftDecision}>
           <div className="min-w-0 flex-1">
             {customOpen ? (
               <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">

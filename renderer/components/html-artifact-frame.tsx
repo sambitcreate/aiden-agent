@@ -5,9 +5,16 @@ import {
   GENERATIVE_UI_ESCAPE_MESSAGE,
   GENERATIVE_UI_IFRAME_SANDBOX,
 } from "../shared/generative-ui";
+import {
+  DESIGN_PICKER_COMMAND,
+  DESIGN_PICKER_SELECTION,
+  parseDesignElementSelection,
+  type DesignElementSelectionV1,
+} from "../shared/design-workspace";
 import { chatsApi } from "../lib/ipc";
 import { Button, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
+import { htmlArtifactThemeTokensFromDocument } from "../lib/html-artifact-preview";
 
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
@@ -52,53 +59,60 @@ function isolateExpandedArtifact(section: HTMLElement): () => void {
   };
 }
 
-function themeTokensFromDocument(): {
-  colorScheme: "light" | "dark";
-  canvas: string;
-  foreground: string;
-  secondary: string;
-  accent: string;
-} {
-  const root = document.documentElement;
-  const styles = getComputedStyle(root);
-  const hex = (name: string, fallback: string): string => {
-    const value = styles.getPropertyValue(name).trim();
-    return /^#[0-9a-f]{6}$/iu.test(value) ? value.toLowerCase() : fallback;
-  };
-  return {
-    colorScheme: root.classList.contains("dark") ? "dark" : "light",
-    canvas: hex("--surface-popover", "#f6f7f9"),
-    foreground: hex("--text-primary", "#3d3f41"),
-    secondary: hex("--text-secondary", "#6b6b68"),
-    accent: hex("--accent", "#006ad6"),
-  };
-}
-
-function HtmlArtifactIframe({
+export function HtmlArtifactIframe({
   src,
   title,
   className,
   onEscape,
+  designPicker,
 }: {
   src: string;
   title: string;
   className?: string;
   onEscape?: () => void;
+  designPicker?: {
+    capability: string;
+    enabled: boolean;
+    selectedSelector?: string;
+    onSelect: (selection: DesignElementSelectionV1, additive: boolean) => void;
+  };
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
   React.useEffect(() => {
-    if (!onEscape) return;
+    if (!onEscape && !designPicker) return;
     const receiveMessage = (event: MessageEvent) => {
-      if (
-        event.source === frameRef.current?.contentWindow &&
-        event.data === GENERATIVE_UI_ESCAPE_MESSAGE
-      ) {
-        onEscape();
+      if (event.source !== frameRef.current?.contentWindow) return;
+      if (event.data === GENERATIVE_UI_ESCAPE_MESSAGE) {
+        onEscape?.();
+        return;
       }
+      if (
+        !designPicker ||
+        !event.data ||
+        typeof event.data !== "object" ||
+        event.data.type !== DESIGN_PICKER_SELECTION ||
+        event.data.capability !== designPicker.capability
+      )
+        return;
+      const selection = parseDesignElementSelection(event.data.selection);
+      if (selection) designPicker.onSelect(selection, event.data.additive === true);
     };
     window.addEventListener("message", receiveMessage);
     return () => window.removeEventListener("message", receiveMessage);
-  }, [onEscape]);
+  }, [designPicker, onEscape]);
+  const syncDesignPicker = React.useCallback(() => {
+    if (!designPicker) return;
+    frameRef.current?.contentWindow?.postMessage(
+      {
+        type: DESIGN_PICKER_COMMAND,
+        capability: designPicker.capability,
+        enabled: designPicker.enabled,
+        selectedSelector: designPicker.selectedSelector ?? "",
+      },
+      "*",
+    );
+  }, [designPicker]);
+  React.useEffect(syncDesignPicker, [syncDesignPicker]);
   return (
     <iframe
       ref={frameRef}
@@ -107,6 +121,7 @@ function HtmlArtifactIframe({
       src={src}
       referrerPolicy="no-referrer"
       className={cn("block h-full w-full border-0 bg-control", className)}
+      onLoad={syncDesignPicker}
     />
   );
 }
@@ -139,7 +154,7 @@ function HtmlArtifactFrameImpl({
   React.useEffect(() => {
     let cancelled = false;
     void chatsApi
-      .htmlArtifactSrcdoc(chatId, artifact.mediaId, themeTokensFromDocument())
+      .htmlArtifactSrcdoc(chatId, artifact.mediaId, htmlArtifactThemeTokensFromDocument())
       .then((result) => {
         if (cancelled) return;
         if (!result?.src) {
@@ -231,10 +246,7 @@ function HtmlArtifactFrameImpl({
     >
       {expanded ? (
         <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
-          <h2
-            id={expandedTitleId}
-            className="min-w-0 flex-1 truncate text-heading2 font-semibold"
-          >
+          <h2 id={expandedTitleId} className="min-w-0 flex-1 truncate text-heading2 font-semibold">
             {artifact.title}
           </h2>
           <Button

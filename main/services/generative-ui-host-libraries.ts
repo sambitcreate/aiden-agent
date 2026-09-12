@@ -8,6 +8,7 @@ const FILE_NAMES: Record<(typeof GENERATIVE_UI_HOST_LIBS)[number], string> = {
   "plotly.js": "plotly.min.js",
   "katex.js": "katex.min.js",
   "katex.css": "katex.min.css",
+  "react-grab-primitives.js": "react-grab-primitives.js",
 };
 
 function isPackagedElectron(): boolean {
@@ -57,7 +58,9 @@ export async function readGenerativeUiHostLibrary(
     const bytes = await fs.readFile(generativeUiLibraryPath(allowed));
     return {
       bytes,
-      mimeType: allowed.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+      mimeType: allowed.endsWith(".css")
+        ? "text/css; charset=utf-8"
+        : "text/javascript; charset=utf-8",
     };
   } catch {
     return undefined;

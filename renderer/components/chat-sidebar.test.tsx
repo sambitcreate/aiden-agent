@@ -14,19 +14,23 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places primary actions above the unified workspace outline", () => {
+test("Agent mode keeps primary destinations above workspaces without a nested Design row", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
+  const botsIndex = sidebarBody.indexOf('title="Bots"');
   const workspaceIndex = sidebarBody.indexOf("Workspaces");
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
+  assert.notEqual(botsIndex, -1);
   assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
+  assert.ok(scheduledIndex < botsIndex, "Bots should follow Scheduled");
+  assert.doesNotMatch(sidebarBody, /title="Design"/u);
   assert.ok(
-    scheduledIndex < workspaceIndex,
-    "Scheduled should stay above the unified workspace and chat list",
+    botsIndex < workspaceIndex,
+    "primary destinations should stay above the unified workspace and chat list",
   );
 });
 
@@ -35,7 +39,29 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
   assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
   assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
+  assert.match(section, /<SidebarListItem[\s\S]*title="Bots"/u);
   assert.doesNotMatch(section, /variant="accent"/u);
+});
+
+test("Agent and Design are peer workspace modes above the mode-specific search", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const switcher = source("./workspace-mode-switcher.tsx");
+  const ui = source("./ui.tsx");
+  assert.match(sidebar, /header=\{<WorkspaceModeSwitcher mode=\{mode\}/u);
+  assert.match(
+    switcher,
+    /\{ id: "agent", label: "Agent", description: "Build, debug, and ship" \}/u,
+  );
+  assert.match(
+    switcher,
+    /\{ id: "design", label: "Design", description: "Create, iterate, and explore" \}/u,
+  );
+  assert.match(
+    switcher,
+    /const selectMode[\s\S]*if \(onModeChange\(nextMode\)\) closeIfCompact\(\)/u,
+  );
+  assert.match(switcher, /onSelect=\{\(\) => selectMode\(item\.id\)\}/u);
+  assert.ok(ui.indexOf("{header ?") < ui.indexOf("{searchable ?"));
 });
 
 test("newAgent opens a transient draft in the active workspace", () => {
@@ -248,11 +274,13 @@ test("sidebar organizer icons retain contrast on the highlighted accent surface"
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const deletion = between(sidebar, "const commitDelete = async () => {", "\n  };");
-  const remove = deletion.indexOf("await chatsApi.remove(deleting.id)");
+  const remove = deletion.indexOf("const result = await chatsApi.remove(");
+  const confirmation = deletion.indexOf('result.status === "confirmation-required"');
   const purge = deletion.indexOf("await removeDeletedChatFromCache(qc, deleting.id)");
   const refresh = deletion.indexOf("await qc.invalidateQueries({ queryKey: queryKeys.chats })");
 
   assert.ok(remove >= 0);
+  assert.ok(confirmation > remove);
   assert.ok(purge > remove);
   assert.ok(refresh > purge);
 });

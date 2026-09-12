@@ -28,6 +28,7 @@ import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { registerDesignerHandlers } from "./designer.js";
 import { registerBtwHandlers } from "./btw.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 
@@ -68,6 +69,7 @@ export function registerHandlers(): void {
   registerPeerHostHandlers();
   registerBotHandlers();
   registerBtwHandlers();
+  registerDesignerHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
 import { router, queryClient } from "./router";
+import "@xyflow/react/dist/base.css";
 import "../styles.css";
 import "katex/dist/katex.min.css";
 import { QueryClientProvider } from "@tanstack/react-query";

@@ -1,0 +1,300 @@
+.design-comments-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(360px, 100%);
+  min-width: 0;
+  height: 100%;
+  color: var(--text-primary);
+  background: var(--surface-popover);
+  border-left: 1px solid var(--border-separator);
+}
+
+.design-comments-panel[data-layout="drawer"] {
+  width: min(420px, 100vw);
+  max-width: 100vw;
+  box-shadow: var(--elevation-dialog);
+}
+
+.design-comments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px 9px;
+  border-bottom: 1px solid var(--border-separator);
+}
+
+.design-comments-header h2,
+.design-comments-header p,
+.design-comments-composer p,
+.design-comments-card p,
+.design-comments-state p {
+  margin: 0;
+}
+
+.design-comments-header h2 {
+  font-size: var(--text-strong);
+  line-height: var(--text-strong--line-height);
+  font-weight: 650;
+}
+
+.design-comments-header p,
+.design-comments-composer-footer p,
+.design-comments-target,
+.design-comments-state span {
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+}
+
+.design-comments-icon-button,
+.design-comments-primary-button,
+.design-comments-secondary-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font: inherit;
+  cursor: default;
+}
+
+.design-comments-icon-button {
+  width: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.design-comments-primary-button {
+  padding: 5px 10px;
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-size: var(--text-small-strong);
+  line-height: var(--text-small-strong--line-height);
+}
+
+.design-comments-secondary-button {
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  background: var(--surface-control);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+}
+
+.design-comments-icon-button:hover,
+.design-comments-secondary-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-control-hover);
+}
+
+.design-comments-primary-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.design-comments-icon-button:active,
+.design-comments-secondary-button:active {
+  background: var(--surface-control-active);
+}
+
+.design-comments-primary-button:active:not(:disabled) {
+  background: var(--accent-active);
+}
+
+.design-comments-icon-button:focus-visible,
+.design-comments-primary-button:focus-visible,
+.design-comments-secondary-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.design-comments-primary-button:disabled,
+.design-comments-secondary-button:disabled,
+.design-comments-icon-button:disabled {
+  opacity: 0.46;
+}
+
+.design-comments-icon-button svg,
+.design-comments-primary-button svg,
+.design-comments-secondary-button svg,
+.design-comments-state > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.design-comments-composer {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-separator);
+  background: var(--surface-background);
+}
+
+.design-comments-composer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-control);
+  outline: none;
+  color: var(--text-primary);
+  caret-color: var(--accent);
+  background: var(--surface-input);
+  font: inherit;
+  font-size: var(--text-small);
+  line-height: var(--text-small--line-height);
+}
+
+.design-comments-composer textarea:focus {
+  border-color: var(--border-field);
+  outline: none;
+  background: color-mix(
+    in srgb,
+    var(--surface-input) 72%,
+    var(--surface-popover)
+  );
+}
+
+.design-comments-composer textarea:disabled {
+  opacity: 0.58;
+  resize: none;
+}
+
+.design-comments-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.design-comments-composer-footer p {
+  min-width: 0;
+}
+
+.design-comments-inline-error {
+  color: var(--support-danger);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+}
+
+.design-comments-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.design-comments-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.design-comments-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-separator);
+}
+
+.design-comments-card[data-status="resolved"] {
+  background: var(--surface-well);
+}
+
+.design-comments-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+}
+
+.design-comments-card-meta time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.design-comments-stale {
+  color: var(--support-warning);
+}
+
+.design-comments-body {
+  color: var(--text-primary);
+  font-size: var(--text-small);
+  line-height: var(--text-small--line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.design-comments-target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-comments-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.design-comments-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  min-height: 180px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.design-comments-state[role="alert"] {
+  color: var(--support-danger);
+}
+
+@media (max-width: 700px) {
+  .design-comments-panel {
+    width: min(100vw, 420px);
+  }
+
+  .design-comments-composer-footer {
+    align-items: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .design-comments-panel *,
+  .design-comments-panel *::before,
+  .design-comments-panel *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .design-comments-panel,
+  .design-comments-header,
+  .design-comments-composer,
+  .design-comments-card {
+    border-color: CanvasText;
+  }
+
+  .design-comments-primary-button,
+  .design-comments-secondary-button,
+  .design-comments-icon-button:focus-visible {
+    outline: 1px solid ButtonText;
+  }
+}

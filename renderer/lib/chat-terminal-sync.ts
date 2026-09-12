@@ -6,7 +6,14 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
-import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import {
+  chatArtifactIdentity,
+  isChatHtmlArtifact,
+  parseChatArtifactEventV1,
+  parseChatArtifactV1,
+  type ChatArtifactV1,
+  type ChatHtmlArtifactV1,
+} from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 
 const MAX_DETACHED_STREAMS = 64;
@@ -42,6 +49,10 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
   timeline: GenerationTimeline | null;
   artifacts: readonly ChatArtifactV1[];
   subagents: readonly SubagentRunSnapshot[];
+  /** Retained after terminal cache settlement until Design consumes its project handoff. */
+  designPublication?: "published" | "retryable" | "suppressed";
+  /** Main-owned terminal explanation retained only for suppressed Design publication. */
+  terminalError?: string;
 }
 
 export type DetachedLifecycleProjectionSeed = Omit<
@@ -52,6 +63,8 @@ export type DetachedLifecycleProjectionSeed = Omit<
 interface TerminalChatNotification {
   streamId: string;
   chat?: Chat;
+  designPublication?: "retryable" | "suppressed";
+  terminalError?: string;
 }
 
 export interface ChatSettlementNotification {
@@ -91,6 +104,35 @@ function deleteDetachedProjection(streamId: string): void {
 function appendBounded(current: string, delta: string, maximum: number): string {
   if (current.length >= maximum) return current;
   return (current + delta).slice(0, maximum);
+}
+
+function terminalDesignArtifacts(chat: Chat): ChatHtmlArtifactV1[] {
+  const terminalMessage = chat.messages[chat.messages.length - 1];
+  if (terminalMessage?.role !== "assistant" || !Array.isArray(terminalMessage.htmlArtifacts)) {
+    return [];
+  }
+  return terminalMessage.htmlArtifacts
+    .flatMap((value) => {
+      const artifact = parseChatArtifactV1(value);
+      return artifact && isChatHtmlArtifact(artifact) && artifact.mediaId.startsWith("design:")
+        ? [artifact]
+        : [];
+    })
+    .slice(0, MAX_DETACHED_ARTIFACTS);
+}
+
+function mergeBoundedArtifacts(
+  current: readonly ChatArtifactV1[],
+  incoming: readonly ChatArtifactV1[],
+): readonly ChatArtifactV1[] {
+  const merged = [...current];
+  for (const artifact of incoming) {
+    const identity = chatArtifactIdentity(artifact);
+    const index = merged.findIndex((candidate) => chatArtifactIdentity(candidate) === identity);
+    if (index >= 0) merged[index] = artifact;
+    else if (merged.length < MAX_DETACHED_ARTIFACTS) merged.push(artifact);
+  }
+  return merged;
 }
 
 export function detachedTextStreamingRemaining(
@@ -191,9 +233,29 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
     return null;
   }
   const candidate = payload as Record<string, unknown>;
-  if (candidate.chat === undefined) return { streamId };
+  const designPublication =
+    candidate.designPublication === "retryable" || candidate.designPublication === "suppressed"
+      ? candidate.designPublication
+      : undefined;
+  const terminalError =
+    typeof candidate.message === "string" && candidate.message.trim()
+      ? candidate.message.trim().slice(0, MAX_DETACHED_REASONING_CHARS)
+      : undefined;
+  if (candidate.designPublication !== undefined && !designPublication) return null;
+  if (candidate.chat === undefined) {
+    return {
+      streamId,
+      ...(designPublication ? { designPublication } : {}),
+      ...(terminalError ? { terminalError } : {}),
+    };
+  }
   if (!isChatSnapshot(candidate.chat)) return null;
-  return { streamId, chat: candidate.chat as Chat };
+  return {
+    streamId,
+    chat: candidate.chat as Chat,
+    ...(designPublication ? { designPublication } : {}),
+    ...(terminalError ? { terminalError } : {}),
+  };
 }
 
 /** Validate the bounded, content-free reconciliation metadata from main. */
@@ -303,6 +365,16 @@ export function rememberDetachedLifecycleStream(
     // durable terminal handoff. Ask the shell to discard/refetch that chat.
     requestFallback(oldest);
   }
+  while (detachedLifecycleProjections.size > MAX_DETACHED_STREAMS) {
+    const oldest = detachedLifecycleProjections.values().next().value;
+    if (!oldest) break;
+    deleteDetachedProjection(oldest.streamId);
+    const activeOwner = detachedLifecycleStreams.get(oldest.streamId);
+    if (activeOwner) {
+      detachedLifecycleStreams.delete(oldest.streamId);
+      requestFallback(activeOwner);
+    }
+  }
   emitRegistryChange();
 }
 
@@ -332,6 +404,25 @@ export function detachedLifecycleChatProjection(
     }
   }
   return null;
+}
+
+/** Exact acknowledgement after ChatPane has adopted a detached terminal Design handoff. */
+export function acknowledgeDetachedDesignPublication(input: {
+  streamId: string;
+  chatId: string;
+  workspaceId: string;
+}): boolean {
+  const projection = detachedLifecycleProjections.get(input.streamId);
+  if (
+    projection?.designPublication === undefined ||
+    projection.chatId !== input.chatId ||
+    projection.workspaceId !== persistedChatWorkspaceId(input.workspaceId)
+  ) {
+    return false;
+  }
+  detachedLifecycleProjections.delete(input.streamId);
+  emitRegistryChange();
+  return true;
 }
 
 export function isDetachedLifecycleChatDraining(
@@ -524,8 +615,11 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
-      lastTextDeltaAt:
-        reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
+      lastTextDeltaAt: reset
+        ? null
+        : (delta as string).length > 0
+          ? Date.now()
+          : current.lastTextDeltaAt,
     }));
   });
   const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
@@ -583,7 +677,7 @@ export function subscribeDetachedTerminalChats(
       }),
     }));
   });
-  const handle = (payload: unknown) => {
+  const handle = (payload: unknown, terminalKind: "done" | "error") => {
     const terminal = parseTerminalChatNotification(payload);
     if (!terminal) {
       const malformedStreamId = parseTerminalStreamId(payload);
@@ -607,7 +701,32 @@ export function subscribeDetachedTerminalChats(
       terminalSettlementInFlight.delete(terminal.streamId);
       if (detachedLifecycleStreams.get(terminal.streamId) === owner) {
         detachedLifecycleStreams.delete(terminal.streamId);
-        deleteDetachedProjection(terminal.streamId);
+        const projection = detachedLifecycleProjections.get(terminal.streamId);
+        const persistedDesignArtifacts = terminalDesignArtifacts(terminal.chat!);
+        const retainedPublication =
+          terminal.designPublication === "suppressed"
+            ? "suppressed"
+            : terminal.designPublication === "retryable"
+              ? "retryable"
+              : terminalKind === "done" && persistedDesignArtifacts.length > 0
+                ? "published"
+                : undefined;
+        if (retainedPublication && projection) {
+          detachedLifecycleProjections.set(terminal.streamId, {
+            ...projection,
+            artifacts: mergeBoundedArtifacts(projection.artifacts, persistedDesignArtifacts),
+            designPublication: retainedPublication,
+            ...(retainedPublication === "suppressed"
+              ? {
+                  terminalError:
+                    terminal.terminalError ??
+                    "The response was saved, but its Design revision was not added to project history.",
+                }
+              : {}),
+          });
+        } else {
+          deleteDetachedProjection(terminal.streamId);
+        }
         emitRegistryChange();
       }
     };
@@ -642,8 +761,8 @@ export function subscribeDetachedTerminalChats(
     fallbackListeners.add(onFallback);
     for (const owner of fallbackLifecycleStreams.values()) requestFallback(owner);
   }
-  const unsubscribeDone = subscribe("chat:done", handle);
-  const unsubscribeError = subscribe("chat:error", handle);
+  const unsubscribeDone = subscribe("chat:done", (payload) => handle(payload, "done"));
+  const unsubscribeError = subscribe("chat:error", (payload) => handle(payload, "error"));
   return () => {
     if (onFallback) fallbackListeners.delete(onFallback);
     unsubscribeDone();

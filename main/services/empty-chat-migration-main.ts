@@ -4,6 +4,7 @@ import { DataStore } from "./data-store.js";
 import { readRegularFile, decodeUtf8 } from "./regular-file-read.js";
 import { chatStore } from "./chat-store.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
+import { designProjectStore } from "./design-project-store-main.js";
 import { configStore } from "./config-store.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
@@ -13,6 +14,7 @@ import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import {
   isEmptyChatMigrationState,
   isLegacyEmptyWorkspaceChat,
+  readEmptyChatMigrationDesignReservations,
   migrateEmptyWorkspaceChats,
   type EmptyChatMigrationState,
 } from "./empty-chat-migration.js";
@@ -61,9 +63,13 @@ export async function migrateLegacyEmptyWorkspaceChats(): Promise<number> {
     if (!displayImageArtifactStore.availability().available || !generativeUiArtifactStore.availability().available) {
       throw new Error("Empty-chat cleanup requires readable artifact recovery stores.");
     }
+    const reservedChatIds = await scheduledChatIds();
+    for (const chatId of await readEmptyChatMigrationDesignReservations(designProjectStore)) {
+      reservedChatIds.add(chatId);
+    }
     return {
       workspaceIds: new Set((await configStore.listWorkspaces()).map((workspace) => workspace.id)),
-      reservedChatIds: await scheduledChatIds(),
+      reservedChatIds,
     };
   })();
   let reportedPreservation = false;

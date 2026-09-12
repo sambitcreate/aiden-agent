@@ -46,6 +46,18 @@ export function isLegacyEmptyWorkspaceChat(
     !reservedChatIds.has(chat.id);
 }
 
+/** Unknown Design ownership must preserve every candidate, never appear as an empty store. */
+export async function readEmptyChatMigrationDesignReservations(store: {
+  availability(): { available: true } | { available: false; reason: string };
+  list(): Promise<readonly { chatId: string }[]>;
+}): Promise<Set<string>> {
+  const availability = store.availability();
+  if (!availability.available) {
+    throw new Error(`Empty-chat cleanup requires readable Design ownership: ${availability.reason}`);
+  }
+  return new Set((await store.list()).map((project) => project.chatId));
+}
+
 /**
  * Startup-only, before any renderer or remote writer starts. Persist the exact
  * legacy candidates before deleting anything: retries must never sweep chats

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
@@ -8,7 +9,14 @@ import {
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
 } from "../../renderer/shared/generative-ui";
-import { generativeUiExportDocument } from "../../main/services/generative-ui-html";
+import {
+  generativeUiExportDocument,
+  wrapGenerativeUiHtml,
+} from "../../main/services/generative-ui-html";
+import {
+  DESIGN_PICKER_COMMAND,
+  DESIGN_PICKER_SELECTION,
+} from "../../renderer/shared/design-workspace";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
 // condition. Named exports are unavailable; the default object carries them.
@@ -46,7 +54,9 @@ test("sandboxed unique-origin guest cannot fetch the network or read parent DOM"
 }) => {
   expect(GENERATIVE_UI_IFRAME_SANDBOX).toBe("allow-scripts");
   expect(GENERATIVE_UI_IFRAME_SANDBOX).not.toMatch(/allow-same-origin/);
-  expect(GENERATIVE_UI_PARENT_FRAME_SRC).toBe("'self' aiden-genui:");
+  expect(GENERATIVE_UI_PARENT_FRAME_SRC).toBe(
+    "'self' aiden-genui: http://127.0.0.1:*",
+  );
 
   // Parent and guest share one HTTP origin so a missing unique-origin sandbox
   // would make window.parent.document readable. That is the containment proof.
@@ -125,6 +135,70 @@ test("sandboxed unique-origin guest cannot fetch the network or read parent DOM"
   } finally {
     await site.close();
   }
+});
+
+test("React Grab visual edit selects the exact nested element", async ({ page }) => {
+  const capability = "exact-element-capability";
+  const artifact = `<button id="outer" data-aiden-id="save" type="button"><span id="exact">Save label</span></button>
+<script>
+  document.getElementById("outer").addEventListener("click", () => {
+    document.body.dataset.activated = "true";
+  });
+</script>`;
+  const primitives = await readFile(
+    "resources/generative-ui/react-grab-primitives.js",
+    "utf8",
+  );
+  const document = wrapGenerativeUiHtml(artifact, "Exact nested selection", undefined, {
+    designCapability: capability,
+  }).replace(
+    '<script src="aiden-genui://react-grab-primitives.js"></script>',
+    `<script>${primitives}</script>`,
+  );
+  const src = `data:text/html;base64,${Buffer.from(document).toString("base64")}`;
+
+  await page.setContent(
+    `<iframe id="guest" title="design" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="${src}"></iframe>`,
+  );
+  await expect(page.frameLocator("#guest").locator("#exact")).toBeVisible();
+  await page.evaluate(
+    ({ commandType, selectionType, capabilityValue }) => {
+      const state = window as unknown as { __designSelection?: unknown };
+      window.addEventListener("message", (event) => {
+        const frame = document.querySelector<HTMLIFrameElement>("#guest");
+        if (event.source === frame?.contentWindow && event.data?.type === selectionType) {
+          state.__designSelection = event.data;
+        }
+      });
+      document.querySelector<HTMLIFrameElement>("#guest")?.contentWindow?.postMessage(
+        { type: commandType, capability: capabilityValue, enabled: true },
+        "*",
+      );
+    },
+    {
+      commandType: DESIGN_PICKER_COMMAND,
+      selectionType: DESIGN_PICKER_SELECTION,
+      capabilityValue: capability,
+    },
+  );
+
+  await page.frameLocator("#guest").locator("#exact").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __designSelection?: { selection?: { tagName?: string; selector?: string } };
+            }
+          ).__designSelection?.selection,
+      ),
+    )
+    .toMatchObject({ tagName: "span", selector: "#exact" });
+  await expect(page.frameLocator("#guest").locator("body")).not.toHaveAttribute(
+    "data-activated",
+    "true",
+  );
 });
 
 test("srcdoc in a privileged parent CSP does not run guest scripts", async ({ page }) => {

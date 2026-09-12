@@ -232,6 +232,40 @@ test("user Stop retains terminal delivery before releasing subscriptions", () =>
   }
 });
 
+test("terminal Design publication state is forwarded without turning suppression into retry", () => {
+  const { bridge, restore } = installFakeBridge();
+  const publicationStates: Array<"retryable" | "suppressed" | undefined> = [];
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-design-conflict",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      {
+        ...callbacks(),
+        onError: (_message, _content, _timeline, _chat, _reasoning, designPublication) => {
+          publicationStates.push(designPublication);
+        },
+      },
+      "turn-design-conflict",
+    );
+
+    for (const handler of bridge.listeners.get("chat:error") ?? []) {
+      handler({
+        streamId: handle.streamId,
+        message: "The Design revision conflicted with newer project history.",
+        designPublication: "suppressed",
+      });
+    }
+    assert.deepEqual(publicationStates, ["suppressed"]);
+    assert.equal(listenerCount(bridge), 0);
+  } finally {
+    restore();
+  }
+});
+
 test("overflow retry reset is routed separately from text deltas", () => {
   const { bridge, restore } = installFakeBridge();
   const deltas: string[] = [];

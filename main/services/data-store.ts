@@ -41,6 +41,8 @@ export interface DataStoreOptions<T> {
   beforeProtectedHold?: () => Promise<void>;
   /** Test seam for an old descriptor writing after the final held-byte check. */
   afterProtectedPublish?: () => Promise<void>;
+  /** Test seam after a replacement is visible but before directory durability is confirmed. */
+  afterDestinationPublish?: () => Promise<void>;
   /** Test seam for holding a disk read before it becomes the active snapshot. */
   beforeLoadCommit?: () => Promise<void>;
   /**
@@ -130,14 +132,9 @@ export class DataStore<T> {
           const parsed = JSON.parse(data) as unknown;
           await this.options.beforeLoadCommit?.();
           this.unsafe = this.options.isSafe ? !this.options.isSafe(parsed) : false;
-          const next = this.options.normalize
-            ? this.options.normalize(parsed)
-            : (parsed as T);
+          const next = this.options.normalize ? this.options.normalize(parsed) : (parsed as T);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         } catch (error) {
@@ -162,10 +159,7 @@ export class DataStore<T> {
           this.unsafe = false;
           const next = structuredClone(this.defaultValue);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         }
@@ -201,6 +195,19 @@ export class DataStore<T> {
       () => undefined,
     );
     return result;
+  }
+
+  /**
+   * Hold the writer queue while a caller checks one immutable snapshot and
+   * performs a mutation in another store. The callback must not call save,
+   * update, reload, or another guard on this DataStore: those operations queue
+   * behind the guard and awaiting them here would deadlock.
+   *
+   * The snapshot is a detached clone. This operation never writes the backing
+   * file, even if the callback mutates its copy.
+   */
+  async withSerializedSnapshot<R>(operation: (snapshot: Readonly<T>) => Promise<R>): Promise<R> {
+    return this.serialized(async () => operation(structuredClone(await this.load())));
   }
 
   /**
@@ -386,6 +393,7 @@ export class DataStore<T> {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       await fs.link(staged, destination);
       destinationPublished = true;
+      await this.options.afterDestinationPublish?.();
       await this.syncDirectory(path.dirname(destination));
       // A writer that already held the old inode can still modify it after the
       // pre-publication comparison. Publication is already committed at this
@@ -477,6 +485,7 @@ export class DataStore<T> {
       } else {
         if (!isCurrent()) throw new Error("The renderer document is no longer active.");
         await fs.rename(staged, destination);
+        await this.options.afterDestinationPublish?.();
         await this.syncDirectory(path.dirname(destination));
       }
       // Publish the in-memory view in the same synchronous turn as the durable

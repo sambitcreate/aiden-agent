@@ -22,6 +22,7 @@ import {
   Mic2,
   MousePointer2,
   Network,
+  PanelsTopLeft,
   Palette,
   Plug,
   Send,
@@ -80,6 +81,8 @@ const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).hr
 
 const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
+  designWorkspace: new URL("../assets/onboarding/features/design-workspace.png", import.meta.url)
+    .href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
   browser: new URL("../assets/onboarding/features/browser.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
@@ -190,6 +193,16 @@ const featureBentos: FeatureBento[] = [
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",
+  },
+  {
+    id: "designWorkspace",
+    group: "create",
+    title: "Design Workspace",
+    description:
+      "Explore 2–4 directions in durable named projects stored locally on this Mac, choose an alternative, and refine one exact Screen revision. Inspect Preview, Code, and History, apply a project Design Language, verify prototype links, and export a reviewed Screen bundle or Continue in workspace with the exact selected scope.",
+    icon: PanelsTopLeft,
+    imageUrl: FEATURE_ILLUSTRATIONS.designWorkspace,
+    size: "tall",
   },
   {
     id: "computerUse",

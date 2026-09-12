@@ -836,6 +836,34 @@ export class AidenRemoteStreamService {
         );
         return;
       }
+      if (payload.designPublication === "suppressed") {
+        this.append(
+          stream,
+          "error",
+          {
+            code: "internal_error",
+            message:
+              "The response was saved, but its Design revision conflicted with newer project history and was not added. The existing canvas was preserved; generate again from the latest project state.",
+          },
+          true,
+          "error",
+        );
+        return;
+      }
+      if (payload.designPublication === "retryable") {
+        this.append(
+          stream,
+          "error",
+          {
+            code: "internal_error",
+            message:
+              "The response was saved, but its Design revision could not be added to the canvas. Refresh or reopen the project to retry recovery before sending another prompt.",
+          },
+          true,
+          "error",
+        );
+        return;
+      }
       this.append(
         stream,
         "error",
