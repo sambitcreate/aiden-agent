@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../../renderer/shared/compaction.js";
 import type { ContextLifecycleService } from "./context-lifecycle-service.js";
 import {
   telegramCompactionResult,
@@ -9,11 +10,13 @@ export function compactDesktopChat(
   service: ContextLifecycleService,
   chatId: string,
   ownerDocumentId: string,
+  engine?: CompactionEngine,
 ) {
   return service.compactChat(
     chatId,
     { kind: "desktop", ownerId: ownerDocumentId },
     "operator",
+    engine,
   );
 }
 
@@ -37,11 +40,7 @@ export function createTelegramLifecycleAdapter(
   return {
     compactChat: async (chatId) =>
       telegramCompactionResult(
-        await service.compactChat(
-          chatId,
-          { kind: "telegram", profile, ownerId },
-          "operator",
-        ),
+        await service.compactChat(chatId, { kind: "telegram", profile, ownerId }, "operator"),
       ),
     cancelChat: (chatId) => service.cancelChat(chatId, ownerId),
   };

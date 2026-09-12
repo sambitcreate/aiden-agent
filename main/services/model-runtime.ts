@@ -4,6 +4,7 @@ import type { AnthropicMessagesCompat, Models } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import {
+  buildModel,
   resolveModelRuntimeWith,
   withPinnedBotProviderAuth,
   type ResolvedModelRuntime,
@@ -106,11 +107,7 @@ export async function resolveBotModelRuntime(
     throw new Error("This Bot's AI connection is no longer configured.");
   }
   if (signal?.aborted) throw signal.reason;
-  return withPinnedBotProviderAuth(
-    runtime,
-    auth,
-    provider.streamSimple.bind(provider),
-  );
+  return withPinnedBotProviderAuth(runtime, auth, provider.streamSimple.bind(provider));
 }
 
 /**
@@ -134,4 +131,14 @@ export async function preflightBotModelAuth(
   const auth = await providerRegistry.models.getAuth(runtime.model);
   if (!auth) throw new Error("This Bot's AI connection is no longer configured.");
   if (signal?.aborted) throw signal.reason;
+}
+
+/** Offline model metadata only: no credential migration, auth, discovery or provider I/O. */
+export async function resolveCompactionModelMetadata(providerId: string, modelId: string) {
+  const native = providerRegistry.getBuiltinModel(providerId, modelId);
+  if (native) return native;
+  const provider = await configStore.getProvider(providerId);
+  if (!provider || !provider.models.includes(modelId))
+    throw new Error("Saved model metadata is unavailable.");
+  return buildModel(provider, modelId, await modelsCatalog.runtimeLimits(provider, modelId));
 }

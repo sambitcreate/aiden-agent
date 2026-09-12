@@ -113,6 +113,7 @@ export interface TelegramServiceDeps {
     botId?: string;
   }): Promise<string>;
   listPromptCommands?(workspaceId?: string): Promise<readonly TelegramPromptCommand[]>;
+  validateSkillInvocation?(selection: NonNullable<QueuedTelegramTurn["skillInvocation"]>): Promise<void>;
   readOutboundAttachment?(workspaceId: string | undefined, requestedPath: string): Promise<{
     bytes: Uint8Array;
     name: string;
@@ -173,6 +174,7 @@ interface TelegramPromptCommand {
   command: string;
   description: string;
   expand?(argument: string): string;
+  skillInvocation?: QueuedTelegramTurn["skillInvocation"];
   handle?(argument: string, message: TelegramMessage, context: TelegramExtensionRuntimeContext): Promise<string | void>;
 }
 
@@ -397,6 +399,25 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     deps.info("Telegram bridge disconnected.");
   }
 
+  let commandRefresh: Promise<void> = Promise.resolve();
+  function refreshCommands(): Promise<void> {
+    // Serialize mutations so an older registration cannot restore disabled skills.
+    commandRefresh = commandRefresh.then(async () => {
+      if (!started) return;
+      const settings = await deps.config.getSettings();
+      const templates = await deps.listPromptCommands?.(settings.telegramWorkspaceId) ?? [];
+      if (!started) return;
+      await deps.api.setMyCommands?.([
+        ...TELEGRAM_COMMANDS,
+        ...templates.slice(0, Math.max(0, 100 - TELEGRAM_COMMANDS.length))
+          .map(({ command, description }) => ({ command, description })),
+      ]);
+    }).catch((cause) => {
+      deps.warn(`Telegram command registration failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    });
+    return commandRefresh;
+  }
+
   async function runPollLoop(signal: AbortSignal): Promise<void> {
     try {
       const me = await deps.api.getMe();
@@ -411,13 +432,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           deps.warn(`Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
         });
       }
-      const templates = await deps.listPromptCommands?.(settings.telegramWorkspaceId).catch(() => []) ?? [];
-      await deps.api.setMyCommands?.([
-        ...TELEGRAM_COMMANDS,
-        ...templates.slice(0, Math.max(0, 100 - TELEGRAM_COMMANDS.length)).map(({ command, description }) => ({ command, description })),
-      ]).catch((cause) => {
-        deps.warn(`Telegram command registration failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-      });
+      await refreshCommands();
     } catch (cause) {
       lastError = cause instanceof Error ? cause.message : String(cause);
       deps.error("Telegram getMe failed.", cause);
@@ -1385,10 +1400,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         if (reply) await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: reply });
         return;
       }
-      if (!template.expand) throw new Error(`Telegram command /${template.command} has no handler.`);
+      if (!template.expand && !template.skillInvocation) throw new Error(`Telegram command /${template.command} has no handler.`);
       await enqueuePrompt({
         lane: "default",
-        text: template.expand(commandArgument(command)),
+        text: template.skillInvocation
+          ? commandArgument(command) || `Use the ${template.command} skill.`
+          : template.expand!(commandArgument(command)),
+        ...(template.skillInvocation ? { skillInvocation: template.skillInvocation } : {}),
         chatId,
         threadId: message.message_thread_id,
         ownerUserId: message.from?.id ?? chatId,
@@ -1441,6 +1459,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         ? { kind: "project" as const, workspaceId: turn.binding.backingWorkspaceId }
         : await deps.turn.resolveWorkspace(turn.workspaceId);
       const workspaceId = workspace.kind === "project" ? workspace.workspaceId : undefined;
+      if (turn.skillInvocation) {
+        if (turn.skillInvocation.workspaceId !== workspaceId || !deps.validateSkillInvocation) {
+          throw new Error("This queued skill is no longer available for the Telegram workspace.");
+        }
+        await deps.validateSkillInvocation(turn.skillInvocation);
+      }
       const chatId = turn.binding?.backingChatId ?? telegramChatId(
         turn.ownerUserId,
         workspaceId,
@@ -1498,7 +1522,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         workspace,
         turn.attachments,
         activity.observe,
-        { binding: turn.binding },
+        { binding: turn.binding, skillInvocation: turn.skillInvocation },
       );
       await activity.settle();
       await deliverReply(
@@ -1752,6 +1776,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     connect,
     disconnect,
     resetPairing,
+    refreshCommands,
     ensureThreads,
     clearThreads,
     getStatus,

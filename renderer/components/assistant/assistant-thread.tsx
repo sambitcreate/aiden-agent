@@ -57,7 +57,7 @@ export function AssistantThread({
           );
         })}
         {error ? (
-          <p role="alert" className="text-sm text-support-red">
+          <p role="alert" className="text-regular text-support-red">
             {error}
           </p>
         ) : null}

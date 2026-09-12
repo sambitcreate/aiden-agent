@@ -1,3 +1,4 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -35,19 +36,12 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <EnvironmentCommandSystemProvider>
+          <CommandSystemProvider>
             <RootContent />
-          </EnvironmentCommandSystemProvider>
+          </CommandSystemProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
-  );
-}
-
-function EnvironmentCommandSystemProvider({ children }: React.PropsWithChildren) {
-  const { compactModalOpen } = useEnvironmentPanel();
-  return (
-    <CommandSystemProvider applicationModal={compactModalOpen}>{children}</CommandSystemProvider>
   );
 }
 
@@ -115,7 +109,18 @@ function RootContent() {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
       }
-      environmentPanel.toggle("overview");
+      environmentPanel.toggleTools();
+    },
+    workspaceCommands.environment,
+  );
+  useCommandHandler(
+    "quick-view.toggle",
+    () => {
+      if (environmentPanel.gitOperationBusy) {
+        toast.info("Wait for the current Git operation to finish before changing panels.");
+        return;
+      }
+      environmentPanel.toggleQuickView();
     },
     workspaceCommands.environment,
   );
@@ -134,9 +139,13 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      const chat = await chatsApi.create({ workspaceId: activeId });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
-      await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      const chat = createChatDraft(activeId).chat;
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      } catch (error) {
+        discardChatDraft(chat.id);
+        throw error;
+      }
     },
     Boolean(activeId) && !appendReconciliationRequired,
   );
@@ -297,7 +306,7 @@ function RootContent() {
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
       <OnboardingFlow />
-      <AssistantDock interactionBlocked={environmentPanel.compactModalOpen} />
+      <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );

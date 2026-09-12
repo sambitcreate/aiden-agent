@@ -100,6 +100,8 @@ test("BTW slash eligibility is scoped to ordinary chat surfaces", () => {
   const pane = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
   assert.match(pane, /presentation === "design"/u);
   assert.match(pane, /chat\.data\?\.botId \|\| bot\.data/u);
+  assert.match(pane, /const sideQuestionBlockedReason = draft[\s\S]*chat\.data\?\.botId \|\| bot\.data/u);
+  assert.match(pane, /Send the first message before asking a side question/u);
   assert.match(pane, /effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID/u);
   assert.match(pane, /sideQuestionBlockedReason=\{sideQuestionBlockedReason\}/u);
 });

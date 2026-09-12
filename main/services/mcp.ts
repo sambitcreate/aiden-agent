@@ -10,6 +10,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
+import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import {
   assertMcpPresetServer,
   createNoRedirectFetch,
@@ -82,7 +83,10 @@ async function resolveAuth(
     );
   return {
     ...server,
-    headers: { ...server.headers, [preset.auth.headerName]: key },
+    headers: {
+      ...server.headers,
+      [preset.auth.headerName]: mcpApiKeyHeaderValue(key, preset.auth.headerValuePrefix),
+    },
   };
 }
 

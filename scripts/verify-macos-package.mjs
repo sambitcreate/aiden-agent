@@ -200,9 +200,7 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
     "utf8",
   );
   const lockdownIndex = bootstrap.indexOf("Object.defineProperty(childProcess");
-  const promiseLockdownIndex = bootstrap.indexOf(
-    'Object.defineProperty(childProcess, "promises"',
-  );
+  const promiseLockdownIndex = bootstrap.indexOf('Object.defineProperty(childProcess, "promises"');
   // The emitted ESM bootstrap names this symbol in its import before any
   // lockdown code. Match the invocation, not the import declaration.
   const syncIndex = bootstrap.indexOf("syncBuiltinESMExports();", promiseLockdownIndex);
@@ -260,7 +258,35 @@ export async function verifyPackagedParakeetWorker(appAsar) {
     "files" in entry ||
     "link" in entry
   ) {
-    throw new Error("Packaged on-device transcription worker must be a bounded packed regular file.");
+    throw new Error(
+      "Packaged on-device transcription worker must be a bounded packed regular file.",
+    );
+  }
+}
+
+export async function verifyPackagedVccWorker(appAsar) {
+  await assertRegularFile(appAsar);
+  for (const name of ["build/main/pi-vcc-worker.js", "THIRD_PARTY_NOTICES.md"]) {
+    const entry = statFile(appAsar, name, false);
+    if (
+      !entry ||
+      entry.unpacked === true ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      entry.size > 4 * 1024 * 1024 ||
+      typeof entry.offset !== "string" ||
+      "files" in entry ||
+      "link" in entry
+    ) {
+      throw new Error("Packaged VCC worker and attribution must be bounded packed regular files.");
+    }
+  }
+  const notices = extractFile(appAsar, "THIRD_PARTY_NOTICES.md").toString("utf8");
+  if (
+    !notices.includes("## pi-vcc") ||
+    !notices.includes("1f1575b6e0a07df51e0a9ea8413394ccac3714ae")
+  ) {
+    throw new Error("Packaged VCC attribution is missing.");
   }
 }
 
@@ -604,12 +630,7 @@ export async function verifyMacPackage(appPath) {
   const paths = packagedComputerUsePaths(appPath);
   const appAsar = path.join(paths.app, "Contents", "Resources", "app.asar");
   const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
-  const botInboxWriter = path.join(
-    paths.app,
-    "Contents",
-    "Helpers",
-    BOT_INBOX_WRITER_EXECUTABLE,
-  );
+  const botInboxWriter = path.join(paths.app, "Contents", "Helpers", BOT_INBOX_WRITER_EXECUTABLE);
   const subagentRunStore = path.join(
     paths.app,
     "Contents",
@@ -661,6 +682,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedModelCatalogResources(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedParakeetWorker(appAsar);
+  await verifyPackagedVccWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);
   await verifyExactComputerUseHelperTree(paths.helperApp);

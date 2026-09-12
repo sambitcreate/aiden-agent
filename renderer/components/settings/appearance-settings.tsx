@@ -96,21 +96,22 @@ function appearanceSafetyIssues(config: AppearanceConfig): string[] {
   ];
 }
 
-function ThemeModePreview({ mode }: { mode: AppearanceMode }) {
+function ThemeModePreview({ mode, config }: { mode: AppearanceMode; config: AppearanceConfig }) {
+  const schemes: AppearanceScheme[] = mode === "system" ? ["light", "dark"] : [mode];
   return (
     <span className={`appearance-mode-preview appearance-mode-preview-${mode}`} aria-hidden="true">
-      <span className="appearance-mode-preview-toolbar" />
-      <span className="appearance-mode-preview-sidebar" />
-      <span className="appearance-mode-preview-content">
-        <i />
-        <i />
-        <i />
-      </span>
+      {schemes.map((scheme) => (
+        <span key={scheme} className="appearance-mode-scene" data-preview-scheme={scheme} style={previewStyle(config[scheme], scheme)}>
+          <span className="appearance-mode-preview-toolbar" />
+          <span className="appearance-mode-preview-sidebar" />
+          <span className="appearance-mode-preview-content"><i /><i /><i /></span>
+        </span>
+      ))}
     </span>
   );
 }
 
-function ThemeModePicker({ value, disabled, onChange }: { value: AppearanceMode; disabled?: boolean; onChange: (mode: AppearanceMode) => void }) {
+function ThemeModePicker({ value, config, disabled, onChange }: { value: AppearanceMode; config: AppearanceConfig; disabled?: boolean; onChange: (mode: AppearanceMode) => void }) {
   const options: Array<{ value: AppearanceMode; label: string; icon: React.ReactNode }> = [
     { value: "system", label: "System", icon: <Monitor /> },
     { value: "light", label: "Light", icon: <Sun /> },
@@ -130,7 +131,7 @@ function ThemeModePicker({ value, disabled, onChange }: { value: AppearanceMode;
           onClick={() => onChange(option.value)}
           onKeyDown={(event) => handleRadioNavigation(event, index, options, onChange)}
         >
-          <ThemeModePreview mode={option.value} />
+          <ThemeModePreview mode={option.value} config={config} />
           <span className="appearance-mode-option-label">
             {option.icon}
             {option.label}
@@ -145,6 +146,7 @@ function previewStyle(variant: ThemeVariantConfig, scheme: AppearanceScheme): Cs
   const tokens = resolveThemeTokens(variant, scheme);
   return {
     "--preview-bg": tokens["--surface-popover"],
+    "--preview-sidebar": tokens["--theme-sidebar"],
     "--preview-fg": tokens["--text-primary"],
     "--preview-muted": tokens["--text-tertiary"],
     "--preview-accent": tokens["--accent"],
@@ -434,6 +436,22 @@ function Preferences({
     >
       <h2 id="appearance-preferences-title">Preferences</h2>
       <div className="appearance-preferences-card">
+        <PreferenceRow label="Auto-hide workspace bar" description="Slide the workspace and Local bar away after your first message. Turn off to keep it above the composer.">
+          <Switch checked={config.autoHideComposerContext} onCheckedChange={(checked) => onChange({ autoHideComposerContext: checked })} aria-label="Auto-hide workspace bar" />
+        </PreferenceRow>
+        <PreferenceRow label="Show workspace folder paths" description="Show folder locations below workspace names in the sidebar and workspace picker.">
+          <Switch checked={config.showWorkspacePaths} onCheckedChange={(checked) => onChange({ showWorkspacePaths: checked })} aria-label="Show workspace folder paths" />
+        </PreferenceRow>
+        <PreferenceRow label="Workspace path format" description="Choose which part of a long folder path stays visible.">
+          <Select value={config.workspacePathFormat} onValueChange={(value) => onChange({ workspacePathFormat: value as AppearanceConfig["workspacePathFormat"] })} disabled={!config.showWorkspacePaths}>
+            <SelectTrigger size="small" className="appearance-value-select" aria-label="Workspace path format"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="middle">Beginning and end · /Users/xyz/…/aiden</SelectItem>
+              <SelectItem value="end">Last folders · …/projects/aiden</SelectItem>
+              <SelectItem value="start">Beginning · /Users/xyz/…</SelectItem>
+            </SelectContent>
+          </Select>
+        </PreferenceRow>
         <PreferenceRow label="Use pointer cursors" description="Show a pointer when hovering over interactive elements.">
           <Switch checked={config.pointerCursors} onCheckedChange={(checked) => onChange({ pointerCursors: checked })} aria-label="Use pointer cursors" />
         </PreferenceRow>
@@ -744,7 +762,7 @@ export function AppearanceSettings() {
 
   return (
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
-      <div className="appearance-heading">
+      <div className="settings-page-heading appearance-heading">
         <h1>Appearance</h1>
         <p>Shape Aiden’s light and dark interfaces independently. Changes apply live.</p>
       </div>
@@ -779,7 +797,7 @@ export function AppearanceSettings() {
 
       <section className="appearance-theme-section" aria-labelledby="appearance-theme-title">
         <h2 id="appearance-theme-title">Theme</h2>
-        <ThemeModePicker value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
+        <ThemeModePicker config={config} value={config.mode} disabled={hasSafetyIssues || modePending} onChange={changeMode} />
         <ThemeCodePreview light={config.light} dark={config.dark} />
         <div className="appearance-theme-editors">
           <ThemeEditor scheme="light" variant={config.light} onChange={(light) => update((current) => ({ ...current, light }))} />

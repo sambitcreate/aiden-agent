@@ -194,6 +194,8 @@ function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
           ...(status >= 500 ? { code: "internal-error" as const } : {}),
           fields: {
             routeCategory: remoteRouteCategory(details.route),
+            ...(typeof details.method === "string" ? { method: details.method } : {}),
+            ...(typeof details.routePath === "string" ? { route: details.routePath } : {}),
             statusClass: status >= 500 ? "5xx" : status >= 400 ? "4xx" : "2xx",
             latencyBucket: latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
             remoteCode: typeof details.errorCode === "string" ? details.errorCode : null,

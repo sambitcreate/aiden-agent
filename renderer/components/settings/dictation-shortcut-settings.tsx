@@ -248,7 +248,7 @@ export function DictationShortcutSettings() {
           orientation="vertical"
           aria-label="Dictation shortcut behavior"
         >
-          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="hold" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
               <span className="block text-regular text-primary">Hold to dictate</span>
@@ -257,7 +257,7 @@ export function DictationShortcutSettings() {
               </span>
             </span>
           </Label>
-          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="toggle" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
               <span className="block text-regular text-primary">Press to toggle</span>

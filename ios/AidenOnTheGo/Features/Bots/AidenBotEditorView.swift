@@ -10,6 +10,13 @@ enum AidenBotEditorMode: Identifiable, Sendable {
     case create(defaultAccess: AidenBotEditorDefaultAccess)
     case edit(botID: String)
 
+    var catalogBotID: String? {
+        switch self {
+        case .create: nil
+        case let .edit(botID): botID
+        }
+    }
+
     var id: String {
         switch self {
         case let .create(defaultAccess): "create-\(String(describing: defaultAccess))"
@@ -1089,7 +1096,7 @@ struct AidenBotEditorView: View {
             if let cached = await AidenBotCache.shared.load(
                 instanceId: context.instanceId,
                 deviceId: context.deviceId
-            ), let cachedCatalog = cached.catalog {
+            ), let cachedCatalog = cached.catalog(forBotID: mode.catalogBotID) {
                 let cachedBot: AidenBotDetail?
                 switch mode {
                 case .create:
@@ -1118,7 +1125,7 @@ struct AidenBotEditorView: View {
                 loadedCatalog = try await client.botCapabilityCatalog()
                 loadedBot = nil
             case let .edit(botID):
-                async let catalogRequest = client.botCapabilityCatalog()
+                async let catalogRequest = client.botCapabilityCatalog(botId: botID)
                 async let detailRequest = client.bot(id: botID)
                 (loadedCatalog, loadedBot) = try await (catalogRequest, detailRequest)
             }
@@ -1146,7 +1153,8 @@ struct AidenBotEditorView: View {
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.mergeAndStore(
                     AidenBotCacheSegments(
-                        catalog: loadedCatalog,
+                        catalog: mode.catalogBotID == nil ? loadedCatalog : nil,
+                        catalogsByBotID: mode.catalogBotID.map { [$0: loadedCatalog] },
                         notice: loadedCatalog.notice
                     ),
                     instanceId: context.instanceId,
@@ -1334,7 +1342,7 @@ struct AidenBotEditorView: View {
             do {
                 let client = try coordinator.remoteClient(for: attempt.context)
                 async let detailRequest = client.bot(id: attempt.botID)
-                async let catalogRequest = client.botCapabilityCatalog()
+                async let catalogRequest = client.botCapabilityCatalog(botId: attempt.botID)
                 let (authoritative, refreshedCatalog) = try await (detailRequest, catalogRequest)
                 guard isCurrent(attempt) else { return }
                 let rebasedDraft = try aidenBotEditorRebasedDraft(

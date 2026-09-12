@@ -12,6 +12,29 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Ghostty / libghostty-vt
+
+Aiden's in-app terminal uses a WebAssembly build of Ghostty's `libghostty-vt`
+(`renderer/lib/ghostty-terminal/vendor/ghostty-vt.wasm`) plus a 112-byte PTY
+callback trampoline. The browser host is adapted from T3 Code's MIT-licensed
+`libghostty-vt` adapter.
+
+Ghostty: Copyright (c) 2024-2026 Mitchell Hashimoto and Ghostty contributors  
+T3 Code adapter: Copyright (c) 2026 T3 Tools Inc.
+
+MIT License. See `renderer/lib/ghostty-terminal/GHOSTTY-LICENSE` and
+https://github.com/pingdotgg/t3code/blob/main/LICENSE
+
+## Symbols Nerd Font Mono
+
+Vendored as `renderer/lib/ghostty-terminal/fonts/SymbolsNerdFontMono-Regular.woff2`
+for terminal prompt glyphs.
+
+Copyright (c) 2014 Ryan L McIntyre
+
+MIT License. See `renderer/lib/ghostty-terminal/fonts/LICENSE`
+
+
 ## Chart.js
 
 Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
@@ -78,3 +101,48 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## pi-vcc
+
+Ranked compiler adapted from https://github.com/sting8k/pi-vcc, version 0.7.1,
+commit `1f1575b6e0a07df51e0a9ea8413394ccac3714ae`.
+The upstream README declares MIT licensing; attribution: pi-vcc contributors.
+Upstream does not include a separate copyright notice or license file at this commit.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## T3 Code browser
+
+The browser feature contract and device viewport presets are adapted from T3 Code.
+
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Playwright browser selector runtime
+
+The pinned injected selector runtime is bundled for sandboxed browser automation. Copyright Microsoft Corporation. Licensed under the Apache License, Version 2.0; the full license is in `main/services/browser/PLAYWRIGHT-LICENSE`.

@@ -4,6 +4,14 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+The locked electron-builder 26.15.3 signing implementation receives a guarded
+postinstall backport of [upstream #10101](https://github.com/electron-userland/electron-builder/pull/10101).
+It uses the temporary keychain password for partition access while retaining
+each certificate password for import. The stable v26 packages inspected during
+the 0.38.1 release still lacked this fix. Remove the backport only after an
+explicit builder upgrade includes it; the branding suite checks both password
+paths, idempotence, and rejection of unexpected source/version changes.
+
 ## Model catalog refreshes
 
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for

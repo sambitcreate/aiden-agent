@@ -459,3 +459,6 @@ export async function runPiUpgradeReplayCases(): Promise<PiUpgradeReplayMeasurem
     };
   }));
 }
+
+/** Separate opt-in report; does not change installed Pi rollout receipts. */
+export { runVccReplayCases } from "./pi-vcc/evaluation.js";

@@ -74,6 +74,7 @@ async function managedTestHarness(
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
+    prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
@@ -149,6 +150,7 @@ async function managedTestHarness(
       model,
     },
     beforeToolCall: options.beforeToolCall,
+    prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     durability: {
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
@@ -2641,4 +2643,115 @@ test("canonical observers never label private synthetic host failures durable", 
     (await session.buildContext()).messages.map((message) => message.role),
     ["user"],
   );
+});
+
+
+test("managed runtime installs disclosed tools at the next turn and budgets their actual schemas", async () => {
+  const { createBrowserDiscovery } = await import("./browser-discovery.js");
+  let called = 0;
+  const browserTool = declarePiRuntimeReplay({ name: "browser_status", label: "Browser status", description: "Browser status", parameters: Type.Object({}), execute: async () => { called++; return { content: [{ type: "text" as const, text: "ready" }], details: null }; } }, "safe");
+  const discovery = createBrowserDiscovery([browserTool], async () => {});
+  const { harness, session } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("browser_status", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { tools: [discovery.tool], prepareNextTurnWithContext: async ({ context }) => ({ context: await discovery.prepare(context) }) });
+  await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: [{ type: "text", text: "Inspect browser" }], timestamp: Date.now() } });
+  assert.equal(called, 1);
+  assert.deepEqual(harness.state.tools.map(({ name }) => name), ["browser", "browser_status"]);
+  const projection = (harness as unknown as { contextProjectionOptions: { tools: AgentTool[]; systemPrompt: string } }).contextProjectionOptions;
+  assert.equal(projection.tools.length, 2);
+  assert.match(projection.systemPrompt, /untrusted website content/);
+  const journal = await session.buildContext();
+  assert.ok(journal.messages.some((message) => message.role === "toolResult" && message.toolName === "browser_status"));
+});
+
+test("Stop during host preparation of browser disclosure stays app cancellation without installing tools", { timeout: 5_000 }, async () => {
+  const { createBrowserDiscovery } = await import("./browser-discovery.js");
+  let entered!: () => void;
+  const atRevalidation = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  const browserTool = declarePiRuntimeReplay({ name: "browser_status", label: "Browser status", description: "Browser status", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text" as const, text: "must not run" }], details: null }) }, "safe");
+  const discovery = createBrowserDiscovery([browserTool], async () => {});
+  const { core, harness, session } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("must not reach the provider after Stop"),
+  ], {
+    tools: [discovery.tool],
+    prepareNextTurnWithContext: async ({ context, toolResults }, signal) => {
+      if (toolResults.some((result) => result.toolName === "browser")) {
+        entered();
+        await released;
+        signal?.throwIfAborted();
+      }
+      return { context: await discovery.prepare(context) };
+    },
+  });
+  const running = harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Inspect browser", timestamp: 1 } });
+  await atRevalidation;
+  harness.abort();
+  release();
+  const outcome = await running;
+  assert.equal(outcome.kind, "app_cancelled");
+  assert.equal(core.state.callCount, 1);
+  assert.deepEqual(harness.state.tools.map(({ name }) => name), ["browser"]);
+  const journal = await session.buildContext();
+  assert.deepEqual(journal.messages.slice(0, 3).map((message) => message.role), ["user", "assistant", "toolResult"]);
+  assert.equal(journal.messages[2]?.role === "toolResult" ? journal.messages[2].toolName : undefined, "browser");
+  assert.ok(journal.messages.slice(3).every((message) => message.role === "assistant" && message.stopReason === "aborted"));
+});
+
+test("host preparation failures remain closed, including explicit host faults concurrent with Stop", async () => {
+  for (const concurrentStop of [false, true]) {
+    let stop: (() => void) | undefined;
+    const tool = declarePiRuntimeReplay({ name: "prepare_next_turn", label: "Prepare", description: "Reach host preparation", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text" as const, text: "ready" }], details: null }) }, "safe");
+    const { core, harness, session } = await managedTestHarness([
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not run"),
+    ], {
+      tools: [tool],
+      prepareNextTurnWithContext: async () => {
+        if (concurrentStop) {
+          stop?.();
+          throw new PiAgentRuntimeHostError("PRIVATE_HOST_CANARY", "policy");
+        }
+        throw new Error("PRIVATE_HOST_CANARY");
+      },
+    });
+    stop = () => harness.abort();
+    const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Inspect browser", timestamp: 1 } });
+    assert.equal(outcome.kind, "host_failed");
+    assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "policy");
+    assert.equal(core.state.callCount, 1);
+    assert.doesNotMatch(JSON.stringify(await session.buildContext()), /PRIVATE_HOST_CANARY/);
+  }
+});
+
+test("disclosed browser tools remain executable and budgeted after managed provider recovery", async () => {
+  const { createBrowserDiscovery } = await import("./browser-discovery.js");
+  let calls = 0;
+  const browserTool = declarePiRuntimeReplay({ name: "browser_status", label: "Browser status", description: "Browser status", parameters: Type.Object({}), execute: async () => { calls += 1; return { content: [{ type: "text" as const, text: "ready" }], details: null }; } }, "safe");
+  const discovery = createBrowserDiscovery([browserTool], async () => {});
+  const { core, harness, session } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(browserTool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 service unavailable" }),
+    fauxAssistantMessage([fauxToolCall(browserTool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Recovered browser status"),
+  ], {
+    tools: [discovery.tool],
+    retryDelayMs: 1,
+    prepareNextTurnWithContext: async ({ context }) => ({ context: await discovery.prepare(context) }),
+  });
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Inspect browser", timestamp: 1 } });
+  assert.equal(outcome.kind, "completed");
+  assert.equal(outcome.attempts, 2);
+  assert.equal(calls, 2);
+  assert.equal(core.state.callCount, 5);
+  const projection = (harness as unknown as { contextProjectionOptions: { tools: AgentTool[]; systemPrompt: string } }).contextProjectionOptions;
+  assert.deepEqual(projection.tools.map(({ name }) => name), ["browser", "browser_status"]);
+  assert.match(projection.systemPrompt, /untrusted website content/);
+  const journal = await session.buildContext();
+  assert.equal(journal.messages.filter((message) => message.role === "toolResult" && message.toolName === "browser_status").length, 2);
 });

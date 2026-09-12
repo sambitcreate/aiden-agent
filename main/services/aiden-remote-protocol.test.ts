@@ -237,6 +237,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "mac", "linux"]);
   assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
@@ -371,6 +372,20 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     const content = record(requestBody.content, `${method} ${route} request content`);
     return record(record(content["application/json"], "application/json").schema, "request schema").$ref;
   };
+
+  const botIdQuery = record(parameters.BotIdQuery, "BotIdQuery");
+  assert.equal(botIdQuery.name, "botId");
+  assert.equal(botIdQuery.in, "query");
+  assert.equal(botIdQuery.required, false);
+  assert.deepEqual(record(botIdQuery.schema, "BotIdQuery schema"), {
+    type: "string",
+    minLength: 1,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9._:-]+$",
+  });
+  assert.deepEqual(operation("/bot-capabilities", "get").parameters, [
+    { $ref: "#/components/parameters/BotIdQuery" },
+  ]);
 
   assert.deepEqual(
     record(document["x-aiden-json-response-emission"], "JSON response emission"),
@@ -581,7 +596,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
 
   const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
-  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skills", "otherCapabilities", "notice"]);
+  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities", "notice"]);
   assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
   assert.equal(
     record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
@@ -589,6 +604,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   assert.equal(record(catalogProperties.connections, "connections").maxItems, 128);
   assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
+  assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").type, "boolean");
+  assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").default, true);
   assert.equal(record(catalogProperties.notice, "notice").$ref, "#/components/schemas/BotAccessNoticeStatus");
   const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
   assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);

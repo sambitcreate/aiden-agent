@@ -14,7 +14,35 @@ import {
   repairKeybindingOverrides,
   shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
+  COMMAND_BY_ID,
 } from "./keybindings";
+
+test("Environment keeps its command id and shortcut while Quick View has a separate command", () => {
+  assert.deepEqual(
+    {
+      id: COMMAND_BY_ID["environment.toggle"]?.id,
+      title: COMMAND_BY_ID["environment.toggle"]?.title,
+      binding: COMMAND_BY_ID["environment.toggle"]?.defaultBinding,
+    },
+    {
+      id: "environment.toggle",
+      title: "Toggle Environment",
+      binding: "Command+Shift+E",
+    },
+  );
+  assert.deepEqual(
+    {
+      id: COMMAND_BY_ID["quick-view.toggle"]?.id,
+      title: COMMAND_BY_ID["quick-view.toggle"]?.title,
+      binding: COMMAND_BY_ID["quick-view.toggle"]?.defaultBinding,
+    },
+    {
+      id: "quick-view.toggle",
+      title: "Toggle Quick View",
+      binding: null,
+    },
+  );
+});
 
 test("future keybinding documents are used defensively without being downgraded", () => {
   const future = { version: 2, commands: { "chat.new": { binding: "Command+J" } } };

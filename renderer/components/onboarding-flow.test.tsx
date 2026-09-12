@@ -19,6 +19,7 @@ const featureAssetPaths = [
   "features/command-palette.png",
   "features/computer-use.png",
   "features/design-workspace.png",
+  "features/browser.png",
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
@@ -191,7 +192,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
 });
 
 test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
-  assert.match(source, />\s*Choose from more\s*</u);
+  assert.match(source, />\s*Other ways\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
   assert.match(source, /data-onboarding-more-providers/u);
@@ -306,6 +307,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
+  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
@@ -318,7 +320,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,
@@ -330,7 +332,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
-  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
@@ -389,12 +391,15 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /Preview, Code, and History/u);
   assert.match(featurePresentation, /Continue in workspace/u);
   assert.match(featurePresentation, /every source change reviewed/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
+  assert.match(featurePresentation, /Browser & Annotations/u);
+  assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
+  assert.match(featurePresentation, /Incognito is temporary/u);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 27);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 26);
+  assert.equal(featureAssetPaths.length, 27);
   assert.ok(featureAssetPaths.includes("features/design-workspace.png"));
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
@@ -418,4 +423,18 @@ test("every advertised feature has its own one-megapixel PNG with alpha", () => 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
+});
+
+
+test("primary AI choices include custom setup without opening advanced providers", () => {
+  assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
+  for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
+    assert.ok(source.includes(`title: "${title}"`));
+  }
+  assert.match(source, /<ProviderEditor[\s\S]*?layer="onboarding"[\s\S]*?requireReady/u);
+  const editor = readFileSync(new URL("./settings/provider-editor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /requireReady &&/u);
+  assert.match(editor, /models.length === 0/u);
+  assert.match(editor, /defaultModelIsHidden/u);
+  assert.match(editor, /await onSaved\(\)/u);
 });

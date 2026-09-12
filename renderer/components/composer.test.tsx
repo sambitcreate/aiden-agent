@@ -1,10 +1,52 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderIcon } from "./provider-icon";
+import type { ProviderArtwork } from "../shared/provider-artwork";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
+
+const PROVIDER_ARTWORK: ProviderArtwork = {
+  mimeType: "image/png",
+  dataBase64:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+};
+
+test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {
+  const markup = renderToStaticMarkup(
+    <ProviderIcon
+      providerId="custom:color-logo"
+      providerLabel="Color logo"
+      artwork={PROVIDER_ARTWORK}
+      className="size-4"
+    />,
+  );
+
+  assert.match(markup, /^<img /u);
+  assert.match(markup, /data-provider-icon="custom"/u);
+  assert.match(markup, /src="data:image\/png;base64,/u);
+  assert.match(markup, /class="shrink-0 object-contain size-4"/u);
+  assert.doesNotMatch(markup, /mask-image|background-color/u);
+});
+
+test("workspace context collapses only after a persisted user message and retains portal controls", () => {
+  const composer = source("./composer.tsx");
+  const bar = source("./composer-context-bar.tsx");
+  const styles = source("../styles.css");
+  assert.match(composer, /sessionChat\?\.messages\.some\(\(message\) => message\.role === "user"\)/u);
+  assert.match(bar, /autoHide && hasUserMessages/u);
+  assert.match(bar, /inert=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /aria-hidden=\{hidden \|\| undefined\}/u);
+  assert.match(bar, /APPEARANCE_CHANGE_EVENT/u);
+  assert.match(styles, /\.composer-context-collapse\[data-collapsed="true"\][\s\S]*?grid-template-rows: 0fr/u);
+  assert.match(styles, /transform: translateY\(8px\)/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.composer-context-content \{\s*transition: none;/u);
+  // A hidden strip must not unmount slash-opened worktree dialogs.
+  assert.match(bar, /className="composer-context-content">\{children\}/u);
+});
 
 test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
@@ -22,6 +64,10 @@ test("composer focus tints the whole shell, not only the textarea", () => {
     styles,
     /:root :where\(input, textarea, \[contenteditable="true"\]\):focus,\s*:root :where\(input, textarea, \[contenteditable="true"\]\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
+  assert.match(
+    styles,
+    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
+  );
 });
 
 test("composer context controls stay compact without exposing provider copy", () => {
@@ -31,10 +77,14 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.match(composer, /group\/access relative h-8 w-34/u);
   assert.match(composer, /role="radiogroup"\s*aria-label="Workspace access"/u);
   assert.match(composer, /absolute bottom-full left-0/u);
-  assert.match(composer, /group-hover\/access:visible/u);
-  assert.match(composer, /group-focus-within\/access:visible/u);
+  assert.doesNotMatch(composer, /group-hover\/access:visible/u);
+  assert.doesNotMatch(composer, /group-focus-within\/access:visible/u);
+  assert.match(composer, /aria-expanded=\{permissionMenuOpen\}/u);
+  assert.match(composer, /aria-controls=\{permissionOptionsId\}/u);
+  assert.doesNotMatch(composer, /aria-haspopup=\{true\}/u);
   assert.match(composer, /group-data-\[open=true\]\/access:visible/u);
-  assert.match(composer, /bg-control\/80/u);
+  assert.match(composer, /rounded-dialog bg-popover p-1/u);
+  assert.doesNotMatch(composer, /bg-control\/80/u);
   assert.match(composer, /selected\s*\? "bg-popover shadow-control"/u);
   assert.doesNotMatch(composer, /group-hover\/access:max-h/u);
   assert.match(composer, /aria-disabled=\{disabled \|\| undefined\}/u);
@@ -183,7 +233,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
     composer,
     /aria-activedescendant=\{\s*slashSession \? effectiveActiveSlashId : undefined\s*\}/u,
   );
-  assert.doesNotMatch(composer, /aria-expanded=/u);
+  assert.doesNotMatch(composer.slice(composer.indexOf("<Textarea"), composer.indexOf("/>", composer.indexOf("<Textarea"))), /aria-expanded=/u);
   assert.match(composer, /if \(slashPaletteBlocked\) dismissSlash\(\)/u);
   assert.match(composer, /event\.key === "Escape"/u);
   assert.match(composer, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/u);
@@ -246,9 +296,9 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /skillSelectionEnabled/u);
   assert.match(composer, /Remove \$\{selectedSkill\.invocation\.displayName\} skill from message/u);
   const optimisticClear = composer.indexOf('setText("");');
-  const sendAwait = composer.indexOf("await onSend(");
+  const sendAwait = composer.indexOf("await submit(");
   assert.ok(optimisticClear >= 0 && optimisticClear < sendAwait);
-  assert.match(composer, /if \(sendPendingRef\.current\) return false;/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false;/u);
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
@@ -279,7 +329,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{sessionCommandBusy\}/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /chatsApi\.copyVisibleHistory\([\s\S]{0,100}throughAssistantMessageId/u);
@@ -331,4 +381,70 @@ test("workspace access keyboard navigation moves focus without changing permissi
   );
   assert.match(composer, /radios\?\.\[nextIndex\]\?\.focus\(\)/u);
   assert.doesNotMatch(composer, /requestPermission\(nextPermission\)/u);
+});
+
+test("model picker details sit beside the menu without overlapping the pad", () => {
+  const modelPicker = source("./model-picker.tsx");
+  const pad = source("./model-picker-pad.tsx");
+  const styles = source("../styles.css");
+
+  assert.match(
+    modelPicker,
+    /className="flex w-max max-w-\[calc\(100vw-1\.5rem\)\] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="relative w-\[min\(19\.75rem,calc\(100vw-1\.5rem\)\)\] overflow-hidden rounded-popover bg-popover shadow-popover"/u,
+  );
+  assert.match(
+    modelPicker,
+    /className="pointer-events-auto flex h-\[min\(22\.5rem,70vh\)\] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
+  );
+  assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
+  assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);
+  assert.doesNotMatch(pad, /focus-visible:bg-list-selection/u);
+  assert.match(
+    styles,
+    /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
+  );
+  assert.match(pad, /import \{ ProviderIcon \} from "\.\/provider-icon"/u);
+  assert.match(pad, /artwork=\{puckPoint\.providerArtwork\}/u);
+  assert.match(
+    styles,
+    /\.model-pad-knob\s*\{[^}]*color: var\(--model-pad-knob-foreground\)/u,
+  );
+  assert.match(
+    styles,
+    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--accent-foreground\)/u,
+  );
+});
+
+test("first-send draft freeze blocks edits and browser annotation delivery until commit", () => {
+  const composer = source("./composer.tsx");
+  assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
+  assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
+  assert.match(composer, /if \(firstSendPendingRef\.current \|\| !available\(\)\) return false/u);
+  assert.match(composer, /readOnly=\{sessionCommandBusy \|\| firstSendPending\}/u);
+  assert.match(composer, /role="status"[^\n]*Sending…/u);
+});
+
+
+test("reopening a draft uses its shared pending state instead of fresh composer state", () => {
+  const composer = source("./composer.tsx");
+  const pane = source("../main/chat-pane.tsx");
+  assert.match(pane, /firstMessageSaving=\{draft\?\.sending === true\}/u);
+  assert.match(composer, /const firstSendPending = firstMessageSaving \|\| \(freezeWhileSending && sending\)/u);
+  assert.match(composer, /!firstMessageSaving &&/u);
+  assert.match(composer, /if \(sendPendingRef\.current \|\| firstSendPendingRef\.current\) return false/u);
+});
+
+test("voice recovery preserves the draft and offers a direct settings action", () => {
+  const composer = source("./composer.tsx");
+  const recorder = source("../lib/use-voice-recorder.ts");
+  assert.match(composer, /voice.lastError/u);
+  assert.match(composer, /Open voice settings/u);
+  assert.match(composer, /Your draft is still here/u);
+  assert.match(composer, /voice.dismissError/u);
+  assert.match(recorder, /setLastError\(message\)/u);
+  assert.match(composer, /onOpenSettings && readinessSettingsSection/u);
 });

@@ -1,7 +1,11 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Unified workspace/chat sidebar with alternate workspace-grouped and recent
 // projections, route-driven selection, and workspace/chat management actions.
 
 import * as React from "react";
+import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
+import { WorkspacePathLabel } from "./workspace-path-label";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -95,17 +99,8 @@ interface ChatSidebarProps {
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
-function workspaceSecondaryLabel(workspace: Workspace): string {
-  if (workspace.managedWorktree?.branch) {
-    return workspace.folderPath
-      ? `${workspace.managedWorktree.branch} · ${workspace.folderPath}`
-      : workspace.managedWorktree.branch;
-  }
-  return workspace.folderPath ?? `No folder · ${workspace.id.slice(0, 8)}`;
-}
-
-function workspaceAccessibleName(workspace: Workspace): string {
-  return `${workspace.name}, ${workspaceSecondaryLabel(workspace)}`;
+function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+  return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
 }
 
 function SidebarOverflowMenu({
@@ -242,7 +237,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
   }, [bannerKey, snapshot.status]);
 
   // Keep the banner mounted through its exit animation, matching Aiden's
-  // environment summary and assistant dock presence primitives.
+  // Quick View and assistant dock presence primitives.
   React.useLayoutEffect(() => {
     if (open) {
       setDisplayedSnapshot(snapshot);
@@ -493,6 +488,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 }
 
 export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: ChatSidebarProps) {
+  const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const { closeIfCompact } = useSplitViewSidebar();
   const pathname = useRouterState({
@@ -757,7 +753,7 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
     return () => unregister.forEach((dispose) => dispose());
   }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
 
-  // Move to a workspace and land on one of its chats (creating one if empty).
+  // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
     async (id: string, allowDirtyDiscard = false) => {
       if (environmentPanel.gitOperationBusy) {
@@ -778,14 +774,14 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
         toast.error("Reload Aiden before creating a chat in this workspace.");
         return false;
       }
-      const target = list[0] ?? (await chatsApi.create({ workspaceId: id }));
-      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      const target = list[0] ?? createChatDraft(id).chat;
       const previousWorkspaceId = activeId;
       select(id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
         closeIfCompact();
       } catch (error) {
+        if (!list.length) discardChatDraft(target.id);
         if (previousWorkspaceId) select(previousWorkspaceId);
         throw error;
       }
@@ -973,11 +969,15 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
         if (workspaceId !== activeId && environmentPanel.agentBusy) {
           environmentPanel.cancelAgent?.();
         }
-        const created = await chatsApi.create({ workspaceId });
-        await qc.invalidateQueries({ queryKey: queryKeys.chats });
+        const created = createChatDraft(workspaceId).chat;
         select(workspaceId);
         setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
-        await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        try {
+          await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        } catch (error) {
+          discardChatDraft(created.id);
+          throw error;
+        }
         closeIfCompact();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
@@ -1288,7 +1288,7 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
                 />
               ) : (
                 projection.groups.map((group) => {
-                  const secondaryLabel = workspaceSecondaryLabel(group.workspace);
+                  const secondaryLabel = workspaceSecondaryLabel(group.workspace, pathPreferences);
                   const expanded =
                     Boolean(search.trim()) || expandedWorkspaceIds.has(group.workspace.id);
                   const revealAll =
@@ -1310,18 +1310,21 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{group.workspace.name}</span>
-                              <span className="truncate text-small text-tertiary">
-                                {secondaryLabel}
-                              </span>
+                              <span className="truncate">{workspaceDisplayName(group.workspace, workspaces)}</span>
+                              {group.workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                                  {group.workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{group.workspace.managedWorktree.branch} ·</span> : null}
+                                  <WorkspacePathLabel path={group.workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                                </span>
+                              ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                             </span>
                           }
-                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace)}`}
+                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(group.workspace.id)}
                         />
                         <SidebarOverflowMenu
-                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace)}`}
+                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
                           triggerClassName="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                           contentClassName="w-64"
                         >
@@ -1539,7 +1542,7 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
               deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
-              Dirty worktrees are refused. Target: {workspaceSecondaryLabel(deletingWorktree)}.
+              Dirty worktrees are refused. Target: {deletingWorktree.folderPath ?? deletingWorktree.name}.
               {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
@@ -1563,7 +1566,7 @@ export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: C
             <Text variant="small" color="secondary">
               “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be
               listed. The folder itself is not touched. Target:{" "}
-              {workspaceSecondaryLabel(removingWorkspace)}.
+              {removingWorkspace.folderPath ?? removingWorkspace.name}.
               {environmentPanel.editorState.workspaceId === removingWorkspace.id &&
               environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`

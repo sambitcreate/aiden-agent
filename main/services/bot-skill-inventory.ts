@@ -9,6 +9,7 @@ import type { DiscoveredSkill, Skill } from "./types.js";
 import type { BotResolvedSkill } from "./bot-capability-inventory-ports.js";
 
 export interface BotSkillInventoryDependencies {
+  isEnabled?(): Promise<boolean>;
   loadIdentityKey(): Promise<Uint8Array>;
   listConfigured(): Promise<readonly Skill[]>;
   botId?: string;
@@ -51,6 +52,9 @@ function safeSourceId(key: Uint8Array, candidate: SkillRegistryCandidate): strin
 async function resolvedBotSkills(
   dependencies: BotSkillInventoryDependencies,
 ): Promise<{ key: Uint8Array; skills: readonly ResolvedSkillCandidate[] }> {
+  if (dependencies.isEnabled && !(await dependencies.isEnabled())) {
+    return { key: new Uint8Array(32), skills: [] };
+  }
   const [key, configured, home, globalDiscovered] = await Promise.all([
     dependencies.loadIdentityKey(),
     dependencies.listConfigured(),
@@ -58,9 +62,15 @@ async function resolvedBotSkills(
     dependencies.discover(undefined),
   ]);
   if (key.byteLength !== 32) throw new Error("Bot skill identity key is invalid.");
+  if (dependencies.isEnabled && !(await dependencies.isEnabled())) {
+    return { key, skills: [] };
+  }
   const workspaceDiscovered = home
     ? (await dependencies.discover(home)).filter(({ source }) => source === "workspace")
     : [];
+  if (dependencies.isEnabled && !(await dependencies.isEnabled())) {
+    return { key, skills: [] };
+  }
   return {
     key,
     skills: resolveSkillCandidates([
@@ -77,14 +87,13 @@ export async function resolveBotCapabilitySkills(
 ): Promise<readonly BotResolvedSkill[]> {
   const { key, skills } = await resolvedBotSkills(dependencies);
   return skills.map((skill) => ({
-      sourceId: safeSourceId(key, skill),
-      label: skill.name,
-      description: skill.description,
-      instructions: skill.instructions,
-      available: skill.available,
-      incarnationPartition:
-        skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
-    }));
+    sourceId: safeSourceId(key, skill),
+    label: skill.name,
+    description: skill.description,
+    instructions: skill.instructions,
+    available: skill.available,
+    incarnationPartition: skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
+  }));
 }
 
 export interface BotRuntimeResolvedSkill extends BotResolvedSkill {
@@ -106,7 +115,6 @@ export async function resolveBotRuntimeSkillBindings(
     description: skill.description,
     instructions: skill.instructions,
     available: skill.available,
-    incarnationPartition:
-      skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
+    incarnationPartition: skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
   }));
 }

@@ -1,3 +1,7 @@
+import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
+import { QueuedMessages } from "../components/queued-messages";
+import { chatMessageQueue } from "../lib/chat-message-queue";
+import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 // The active chat: transcript (ScrollArea) + composer. Generation runs inline
 // against a concrete chatId in the active workspace, streams tokens via
 // startGeneration, and surfaces tool-approval prompts when the workspace is in
@@ -62,7 +66,7 @@ import {
 } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
-import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import { EnvironmentPanelToggle, QuickViewToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { DesignWorkspaceCanvas } from "../components/design-workspace";
 import type { DesignProjectSnapshot as DesignProjectSnapshotV1 } from "../shared/design-projects";
 import { orderDesignContextItems } from "../shared/design-selection";
@@ -230,7 +234,13 @@ export function ChatPane({
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
-  const chat = useChat(chatId);
+  const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(chatId));
+  const persistedChat = useChat(draft ? undefined : chatId);
+  // Draft projection stays out of the query cache and every persisted chat list.
+  const chat = draft
+    ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
+    : persistedChat;
+  React.useEffect(() => retainChatDraft(chatId), [chatId]);
   const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
@@ -256,8 +266,9 @@ export function ChatPane({
         ? currentDesignProject.workspaceId
         : undefined
       : effectiveWorkspaceId;
-  const sideQuestionBlockedReason =
-    presentation === "design"
+  const sideQuestionBlockedReason = draft
+    ? "Send the first message before asking a side question."
+    : presentation === "design"
       ? "Side questions are not available in Design Projects."
       : chat.data?.botId || bot.data
         ? "Side questions are not available in Bot chats."
@@ -395,6 +406,8 @@ export function ChatPane({
     ? "Loading chat…"
     : chat.isError
       ? "This chat could not be loaded. Try again."
+      : !chat.data
+        ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
         : detachedGenerationDraining
@@ -506,8 +519,8 @@ export function ChatPane({
   React.useEffect(() => {
     if (!chat.data || effectiveWorkspace) return;
     if (terminal.open) terminal.toggle();
-    environmentPanel.close();
-  }, [chat.data, effectiveWorkspace, environmentPanel.close, terminal.open, terminal.toggle]);
+    environmentPanel.closeAll();
+  }, [chat.data, effectiveWorkspace, environmentPanel.closeAll, terminal.open, terminal.toggle]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
@@ -628,6 +641,7 @@ export function ChatPane({
   );
 
   React.useEffect(() => {
+    if (draft) return;
     let active = true;
     const refresh = async () => {
       const requestId = ++remoteApprovalRefreshRef.current;
@@ -653,7 +667,7 @@ export function ChatPane({
       remoteApprovalRefreshRef.current += 1;
       unsubscribe();
     };
-  }, [chatId]);
+  }, [chatId, Boolean(draft)]);
 
   // Detach only the generation owned by the departing chat. The main process
   // keeps that operation alive and reconciles its durable terminal state.
@@ -750,6 +764,7 @@ export function ChatPane({
   ]);
 
   React.useEffect(() => {
+    if (draft) return;
     let current = true;
     const ticket = todoSnapshotReadFence.beginInitialRead(chatId);
     void chatsApi.todoSnapshot(chatId).then(
@@ -770,7 +785,7 @@ export function ChatPane({
     return () => {
       current = false;
     };
-  }, [chatId]);
+  }, [chatId, Boolean(draft)]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
   const visibleDetachedProjection =
@@ -1180,6 +1195,7 @@ export function ChatPane({
 
   const renameChat = React.useCallback(
     async (title: string) => {
+      if (getChatDraft(chatId)) { updateChatDraft(chatId, { title }); return; }
       await chatsApi.rename(chatId, title);
       qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
         current ? { ...current, title } : current,
@@ -1191,6 +1207,7 @@ export function ChatPane({
 
   const copyChat = React.useCallback(
     async (throughAssistantMessageId?: string) => {
+      if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
       }
@@ -1250,6 +1267,7 @@ export function ChatPane({
   );
 
   const exportChat = React.useCallback(async () => {
+    if (getChatDraft(chatId)) throw new Error("Send the first message before exporting this chat.");
     const result = await chatsApi.export(chatId);
     return result.status;
   }, [chatId]);
@@ -1645,6 +1663,7 @@ export function ChatPane({
             finalReasoning,
             designPublication,
           ) => {
+            chatMessageQueue(chatId).pause();
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -1782,6 +1801,7 @@ export function ChatPane({
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
       if (options?.btw) {
+        if (getChatDraft(chatId)) throw new Error("Send the first message before asking a side question.");
         if (attachments.length > 0 || skillInvocation) {
           throw new Error("Side questions do not accept attachments or skills.");
         }
@@ -1808,6 +1828,7 @@ export function ChatPane({
         }
         return;
       }
+      if (chatMessageQueue(chatId).getSnapshot().messages.length === 0) chatMessageQueue(chatId).resume();
       const design = presentation === "design";
       designTurnRef.current = false;
       designContextTurnRef.current = undefined;
@@ -1894,6 +1915,7 @@ export function ChatPane({
           preparedWorkspaceId = preflight.workspaceId;
           designPreflight = preflight;
         }
+        const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
         const generationIntent = ++generationIntentRef.current;
         const messageTurnId = createChatTurnId();
         setIsStoppingGeneration(false);
@@ -1901,7 +1923,19 @@ export function ChatPane({
         try {
           let updated: Chat;
           try {
-            updated = await chatsApi.appendMessage(
+            updated = firstDraft
+              ? await chatsApi.createWithFirstMessage({
+                  draftId: chatId,
+                  title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
+                  workspaceId: firstDraft.chat.workspaceId!,
+                  providerId,
+                  model,
+                  computerUseEnabled: firstDraft.chat.computerUseEnabled,
+                  turnId: messageTurnId,
+                  message: { role: "user", content: text, attachments: submittedAttachments.length ? submittedAttachments : undefined },
+                  skillInvocation,
+                })
+              : await chatsApi.appendMessage(
               chatId,
               {
                 role: "user",
@@ -1920,13 +1954,15 @@ export function ChatPane({
           } catch (appendError) {
             if (isAppendReconciliationRequired(appendError)) {
               setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
-              void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+              if (!firstDraft) void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
             }
             throw appendError;
           }
           qc.setQueryData(queryKeys.chat(chatId), updated);
+          if (firstDraft) finishChatDraftSend(chatId, true);
           void qc.invalidateQueries({ queryKey: queryKeys.chats });
-          if (generationIntentRef.current !== generationIntent) {
+          if (generationIntentRef.current !== generationIntent ||
+              (firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))) {
             try {
               await chatsApi.abandonTurn(chatId, messageTurnId);
             } catch (error) {
@@ -1967,6 +2003,7 @@ export function ChatPane({
           // that committed message back into an unsent composer payload.
           if (!started.ok && mountedRef.current) setError(started.error.message);
         } finally {
+          if (firstDraft) finishChatDraftSend(chatId, false);
           if (
             mountedRef.current &&
             chatIdRef.current === chatId &&
@@ -2007,6 +2044,29 @@ export function ChatPane({
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
   }, [canStopGeneration]);
+
+  const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
+    chatId,
+    contextKey: JSON.stringify([providerId, model, effectiveWorkspaceId, effectiveWorkspace?.permission]),
+    enabled: presentation === "chat" && !draft && ready && !isGenerating && !isStartingGeneration && !isStoppingGeneration &&
+      !detachedGenerationDraining && !thinkingSaving && !computerUseSaving &&
+      !environmentPanel.gitOperationBusy && !imageArtifactRecoveryPending &&
+      !imageArtifactRecoveryUnavailable && !questionnaire && approvals.length === 0,
+    send: (message) => {
+      if (visionSupported === false && message.attachments.some((attachment) => attachment.kind === "image")) {
+        return Promise.reject(new Error("Switch to a vision-capable model before resuming these queued images."));
+      }
+      return handleSend(message.text, message.attachments, message.skillInvocation, message.options);
+    },
+  });
+
+  const queueMessage = React.useCallback(async (
+    text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean; btw?: boolean },
+  ) => {
+    messageQueue.add({ id: createChatTurnId(), text, attachments, skillInvocation,
+      options: options?.visualize ? { visualize: true } : undefined });
+  }, [messageQueue]);
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -2117,6 +2177,7 @@ export function ChatPane({
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
       if (!effectiveWorkspace) return;
+      if (getChatDraft(chatId)?.sending) throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
           "Wait for the current Git operation to finish before changing workspace access.",
@@ -2137,6 +2198,7 @@ export function ChatPane({
       ]);
     },
     [
+      chatId,
       effectiveWorkspace,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
@@ -2152,6 +2214,7 @@ export function ChatPane({
       if (computerUseSaving || isStartingGeneration || isGenerating) return;
       setComputerUseSaving(true);
       try {
+        if (getChatDraft(chatId)) { updateChatDraft(chatId, { computerUseEnabled: enabled }); return; }
         const updated = await chatsApi.setComputerUse(chatId, enabled);
         qc.setQueryData(queryKeys.chat(chatId), updated);
       } catch (changeError) {
@@ -2333,6 +2396,11 @@ export function ChatPane({
         throw new Error("Save or discard the open file's edits before switching workspaces.");
       }
       if (workspaceId === effectiveWorkspaceId) return;
+      if (getChatDraft(chatId)) {
+        updateChatDraft(chatId, { workspaceId });
+        selectWorkspace(workspaceId);
+        return;
+      }
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
       qc.setQueryData(queryKeys.chat(chatId), updated);
       selectWorkspace(workspaceId);
@@ -2415,41 +2483,15 @@ export function ChatPane({
         }
         return;
       }
-      let created: Chat;
-      try {
-        created = await chatsApi.create({ workspaceId: workspace.id });
-      } catch (error) {
-        toast.info(
-          error instanceof Error
-            ? `The worktree was created, but its chat could not be created: ${error.message}`
-            : "The worktree was created, but its chat could not be created.",
-        );
-        return;
-      }
-      qc.setQueryData(queryKeys.chat(created.id), created);
-      qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(workspace.id), (current) => [
-        {
-          id: created.id,
-          title: created.title,
-          workspaceId: workspace.id,
-          providerId: created.providerId,
-          model: created.model,
-          createdAt: created.createdAt,
-          updatedAt: created.updatedAt,
-        },
-        ...(current ?? []).filter((entry) => entry.id !== created.id),
-      ]);
-      if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
+      const created = createChatDraft(workspace.id).chat;
       selectWorkspace(workspace.id);
-      void qc.invalidateQueries({ queryKey: queryKeys.chats });
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
         requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
       } catch {
+        discardChatDraft(created.id);
         selectWorkspace(effectiveWorkspace.id);
-        toast.info(
-          "The worktree and chat were created, but Aiden could not open them automatically.",
-        );
+        toast.info("The worktree was created, but Aiden could not open its new chat.");
       }
     },
     [
@@ -2654,6 +2696,7 @@ export function ChatPane({
                 folderPath={effectiveWorkspace?.folderPath}
               />
               <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+              <QuickViewToggle disabled={!effectiveWorkspace} />
               <Button
                 iconOnly
                 variant="toolbar"
@@ -2717,7 +2760,7 @@ export function ChatPane({
                     className="rounded-card bg-popover p-3 shadow-popover"
                   >
                     <div className="flex items-start gap-2.5">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
                         <ShieldQuestion className="size-4" />
                       </span>
                       <div className="min-w-0 flex-1">
@@ -2871,6 +2914,7 @@ export function ChatPane({
                   !imageArtifactRecoveryUnavailable &&
                   (presentation !== "design" || !designWorkspaceDisabled)
                 }
+                readinessSettingsSection={!chatReadinessMessage && !botReadinessMessage ? (modelReadinessMessage ? "providers" : computerUseReadinessMessage ? "computerUse" : undefined) : undefined}
                 readinessMessage={
                   presentation === "design" && designWorkspaceDisabled
                     ? designWorkspaceTitle
@@ -2883,8 +2927,21 @@ export function ChatPane({
                 hasMessages={hasMessages}
                 chatId={chatId}
                 onSend={handleSend}
-                onStop={handleStop}
-                isGenerating={isGenerating}
+                freezeWhileSending={Boolean(draft)}
+                firstMessageSaving={draft?.sending === true}
+                onQueue={draft || presentation === "design" ? undefined : queueMessage}
+                hasQueuedMessages={presentation === "chat" && queuedState.messages.length > 0}
+                queuedMessages={presentation === "chat" ? <QueuedMessages key={chatId} queue={messageQueue}
+                  canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
+                  returnFocus={() => composerRef.current}
+                  onSteer={(id) => {
+                    if (!canStopGeneration || isStoppingGeneration) return;
+                    messageQueue.move(id, 0);
+                    messageQueue.resume();
+                    handleStop();
+                  }} /> : undefined}
+                onStop={() => { messageQueue.pause(); handleStop(); }}
+                isGenerating={isGenerating || isStartingGeneration}
                 canStopGeneration={canStopGeneration}
                 configurationBusy={
                   thinkingSaving ||
@@ -2970,13 +3027,13 @@ export function ChatPane({
                     ? undefined
                     : () => environmentPanel.openReview("changes")
                 }
-                sessionChat={chat.data ?? undefined}
+                sessionChat={draft ? undefined : chat.data ?? undefined}
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
                 onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
                 onExportChat={exportChat}
-                onCompactChat={() => chatsApi.compact(chatId)}
-                onCancelCompact={() => chatsApi.cancelCompact(chatId)}
+                onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
+                onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
                   googleThinkingSupported ? (
@@ -3026,8 +3083,10 @@ export function ChatPane({
                     providers={settings.data ? (providers.data ?? []) : []}
                     providerId={providerId}
                     model={model}
-                    onChange={select}
-                    disabled={isGenerating || thinkingSaving}
+                    onChange={(nextProviderId, nextModel) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                    }}
+                    disabled={isGenerating || isStartingGeneration || thinkingSaving}
                     settingsBlockedReason={settingsBlockedReason}
                     hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
                   />

@@ -1,14 +1,15 @@
 # Aiden On The Go remote access
 
-Aiden Agent can expose a small authenticated API to Aiden On The Go on iPhone and iPad. Remote Access is off by default. Aiden must remain running on the Mac, although its window may be closed.
+Aiden Agent can expose a small authenticated API to Aiden On The Go on phones and tablets. Phone access is off by default. Aiden must remain running on the Mac, although its window may be closed.
 
 ## Local Network setup
 
-1. Open **Settings → Remote Access** in Aiden Agent.
-2. Choose **Local Network** or **Local Network + Tailscale**.
-3. Turn on **Enable Remote Access**.
-4. Add only the folders the phone or iPad may explore. Selecting the entire home directory requires a second confirmation on the Mac; the filesystem root is never allowed.
-5. Choose **Pair over Local Network** and scan the one-time QR code in Aiden On The Go.
+1. Open **Settings → Aiden On The Go** in Aiden Agent.
+2. Choose **On the same Wi-Fi**, then **Connect a device**.
+3. Review what Aiden will enable and choose **Enable and show code**.
+4. Scan the code in Aiden On The Go. If the camera is unavailable, use the setup code instead.
+
+After choosing the method, setup takes two desktop actions. Scanning and any phone permissions are additional steps. Existing ready connections can add a device directly. Under **Workspace access**, approve any additional folders the phone may browse; existing workspace access is unchanged. Approving the whole home folder requires a separate confirmation.
 
 The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network access is running. LAN traffic uses a per-install P-256 HTTPS identity. The QR contains the private CA trust anchor and the server public-key pin so the mobile client can validate the hostname, certificate chain, and pinned key. A certificate renewal keeps the server key; an identity-key change requires pairing again.
 
@@ -16,19 +17,22 @@ The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network acc
 
 Tailscale supplies reachability and network encryption, but Aiden still requires its own device credential on every request.
 
-1. Install Tailscale on the Mac and sign in to the intended tailnet.
-2. Ensure HTTPS certificates are available for the tailnet. Aiden reports this prerequisite rather than enabling it silently.
-3. In **Settings → Remote Access**, select **Tailscale** or **Local Network + Tailscale** and enable Remote Access.
-4. Review the exact command-equivalent route preview, then choose **Connect**.
-5. Pair with **Pair over Tailscale** after the stable `https://…ts.net/api/aiden/v1` address appears.
+1. Install Tailscale on the Mac and phone, sign in to the intended network, and make sure HTTPS is authorized for the Mac’s Tailscale name.
+2. Open **Settings → Aiden On The Go** and choose **Away from home**.
+3. Choose **Connect a device → Enable and show code**. Aiden turns on access, sets up its private connection, checks it, and shows the one-time code.
+4. Scan the code on your phone.
+
+Aiden checks installation, sign-in, HTTPS availability, and route ownership before setup. Missing prerequisites remain user actions. Conflicts and uncertain changes direct you to the advanced **Connection** controls; setup never silently replaces another route. If setup fails, Aiden removes only access introduced by that attempt where the outcome is known. An uncertain external change remains available for explicit verification.
+
+**This Mac settings** contains the Mac name and enable switch; **Connection** contains the saved mode and technical controls. Closing the code window stops pairing; phone access remains enabled until switched off. Removing a device’s access is separate from turning off all phone access.
 
 Aiden owns only `/api/aiden/v1`, proxies it to the loopback-only HTTP listener's matching `/api/aiden/v1` base, and verifies the resulting route. The matching target base is required because Tailscale strips the public `--set-path` prefix before proxying. On macOS, Aiden invokes Tailscale's shared app executable in its documented explicit CLI mode, so Finder and Dock launches do not depend on terminal environment variables. First-time connection works from an empty Serve configuration only after the node's exact Tailscale certificate domain proves HTTPS was already authorized. Aiden never enables Tailscale Funnel, never runs `tailscale serve reset`, never completes Tailscale authorization for you, and never changes unrelated Serve handlers. **Disconnect** removes only the exact route and target recorded by Aiden. A conflict is reported instead of being overwritten.
 
 ## Devices, credentials, and revocation
 
-Each phone or iPad receives a separate random credential. Aiden persists only a fast lookup digest, a salted scrypt digest, and redacted device metadata—not the credential or pairing secret. Pairing QR codes expire after five minutes and work once.
+Each phone or tablet receives a separate random credential. Aiden persists only a fast lookup digest, a salted scrypt digest, and redacted device metadata—not the credential or pairing secret. Pairing QR codes expire after five minutes and work once.
 
-Use **Revoke** beside a paired device to invalidate it immediately. Revocation does not rotate model-provider credentials or affect other paired devices. Pair the device again to restore access.
+Use **Remove access** beside a paired device to invalidate it immediately. Revocation does not rotate model-provider credentials or affect other paired devices. Pair the device again to restore access.
 
 ## Offline behavior
 

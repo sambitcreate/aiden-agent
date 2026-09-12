@@ -1,5 +1,21 @@
+/// <reference lib="es2022.intl" />
+
 /** Default character budget for workspace path sublabels in menus (~max-w-72). */
 export const DEFAULT_PATH_TRUNCATE_LENGTH = 44;
+
+const pathSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Keep whole graphemes (including emoji and combining marks) within a UTF-16 budget. */
+export function pathTextEdge(value: string, budget: number, edge: "start" | "end"): string {
+  const segments = Array.from(pathSegmenter.segment(value), ({ segment }) => segment);
+  if (edge === "end") segments.reverse();
+  let result = "";
+  for (const segment of segments) {
+    if (result.length + segment.length > budget) break;
+    result = edge === "end" ? segment + result : result + segment;
+  }
+  return result;
+}
 
 /**
  * Truncate a filesystem path with an ellipsis in the middle so both the
@@ -12,7 +28,7 @@ export function truncatePathMiddle(
   path: string,
   maxLength: number = DEFAULT_PATH_TRUNCATE_LENGTH,
 ): string {
-  const value = path.trim();
+  const value = path;
   if (maxLength <= 0) return "";
   if (value.length <= maxLength) return value;
 
@@ -59,7 +75,7 @@ export function truncatePathMiddle(
 
   const head = Math.ceil(budget / 2);
   const tail = Math.floor(budget / 2);
-  return `${value.slice(0, head)}${ellipsis}${value.slice(value.length - tail)}`;
+  return `${pathTextEdge(value, head, "start")}${ellipsis}${pathTextEdge(value, tail, "end")}`;
 }
 
 function formatPathEnds(

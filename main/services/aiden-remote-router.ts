@@ -150,52 +150,158 @@ export interface AidenRemoteRouterDependencies {
   acceptStrippedBasePath?: boolean;
   log(entry: {
     requestId: string;
-    route:
-      | "health"
-      | "pairingManualBootstrap"
-      | "pairingExchange"
-      | "server"
-      | "deviceIdentity"
-      | "botAccessNotice"
-      | "bots"
-      | "bot"
-      | "botCapabilities"
-      | "botChatCapabilities"
-      | "botFavorites"
-      | "botConversations"
-      | "botAvatar"
-      | "botFiles"
-      | "botFile"
-      | "workspaces"
-      | "workspace"
-      | "workspaceBrowserRoots"
-      | "workspaceBrowserChildren"
-      | "workspaceBrowserSelection"
-      | "workspaceFiles"
-      | "workspaceFile"
-      | "workspaceGit"
-      | "scheduledTasks"
-      | "memorySettings"
-      | "usage"
-      | "speech"
-      | "chats"
-      | "chatSummaries"
-      | "chat"
-      | "chatMove"
-      | "chatAttachment"
-      | "turns"
-      | "models"
-      | "stream"
-      | "streamApproval"
-      | "streamEvents"
-      | "streamCancel"
-      | "approvalRespond"
-      | "unknown";
+    route: AidenRemoteRouteLabel;
+    /** The request HTTP method (GET/POST/...). */
+    method?: string;
+    /**
+     * The matched route template (for example `/chats/:id/turns`) without any
+     * query string. Present only when the request resolved to a known route;
+     * caller-controlled literal paths are never reflected here.
+     */
+    routePath?: string;
     status: number;
     latencyMs: number;
     deviceIdSuffix?: string;
     errorCode?: string;
   }): void;
+}
+
+export type AidenRemoteRouteLabel =
+  | "health"
+  | "pairingManualBootstrap"
+  | "pairingExchange"
+  | "server"
+  | "deviceIdentity"
+  | "botAccessNotice"
+  | "bots"
+  | "bot"
+  | "botCapabilities"
+  | "botChatCapabilities"
+  | "botFavorites"
+  | "botConversations"
+  | "botAvatar"
+  | "botFiles"
+  | "botFile"
+  | "workspaces"
+  | "workspace"
+  | "workspaceBrowserRoots"
+  | "workspaceBrowserChildren"
+  | "workspaceBrowserSelection"
+  | "workspaceFiles"
+  | "workspaceFile"
+  | "workspaceGit"
+  | "scheduledTasks"
+  | "memorySettings"
+  | "usage"
+  | "speech"
+  | "chats"
+  | "chatSummaries"
+  | "chat"
+  | "chatMove"
+  | "chatAttachment"
+  | "turns"
+  | "models"
+  | "stream"
+  | "streamApproval"
+  | "streamEvents"
+  | "streamCancel"
+  | "approvalRespond"
+  | "unknown";
+
+/** Canonical template(s) for every router route label. */
+export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
+  health: ["/health"],
+  pairingManualBootstrap: ["/pairing/manual-bootstrap"],
+  pairingExchange: ["/pairing/exchange"],
+  server: ["/server"],
+  deviceIdentity: ["/device/identity"],
+  botAccessNotice: ["/bot-access-notice", "/bot-access-notice/acknowledgement"],
+  bots: ["/bots", "/bots/:botId/chats"],
+  bot: ["/bots/:botId", "/bots/:botId/restore"],
+  botCapabilities: ["/bot-capabilities", "/bots/:botId/capabilities"],
+  botChatCapabilities: ["/chats/:chatId/capabilities"],
+  botFavorites: ["/bot-favorites"],
+  botConversations: ["/bot-conversations"],
+  botFiles: ["/bot-conversations/:chatId/files"],
+  botFile: ["/bot-conversations/:chatId/files/:fileId"],
+  botAvatar: ["/bots/:botId/avatar", "/bots/:botId/avatar/:avatarRevision"],
+  workspaces: ["/workspaces"],
+  workspace: ["/workspaces/:id"],
+  workspaceBrowserRoots: ["/workspace-browser/roots"],
+  workspaceBrowserChildren: ["/workspace-browser/children"],
+  workspaceBrowserSelection: ["/workspace-browser/selections"],
+  workspaceFiles: ["/workspaces/:id/files"],
+  workspaceFile: ["/workspaces/:id/files/:fileId"],
+  workspaceGit: ["/workspaces/:id/git/managed-worktree", "/workspaces/:id/git/:action"],
+  scheduledTasks: [
+    "/scheduled-tasks",
+    "/scheduled-tasks/preview",
+    "/scheduled-tasks/scripts",
+    "/scheduled-tasks/mcp-servers",
+    "/scheduled-tasks/settings",
+    "/scheduled-tasks/:id/runs",
+    "/scheduled-tasks/:id/:action",
+    "/scheduled-tasks/:id",
+  ],
+  memorySettings: ["/memory/settings"],
+  usage: ["/usage"],
+  speech: ["/speech", "/speech/transcriptions", "/speech/models/:modelId/download", "/speech/models/:modelId"],
+  chats: ["/chats"],
+  chatSummaries: ["/chat-summaries"],
+  chat: ["/chats/:id"],
+  chatMove: ["/chats/:id/move"],
+  chatAttachment: [
+    "/chats/:id/attachments",
+    "/chats/:id/attachments/:attachmentId",
+    "/chats/:id/attachments/:attachmentName/content",
+  ],
+  turns: ["/chats/:id/turns"],
+  models: ["/models"],
+  stream: ["/streams/:streamId"],
+  streamApproval: ["/streams/:streamId/approval"],
+  streamEvents: ["/streams/:streamId/events"],
+  streamCancel: ["/streams/:streamId/cancel"],
+  approvalRespond: ["/approvals/:approvalId/respond"],
+  unknown: [],
+};
+
+/** Resolve the canonical route template for a classified route and concrete request path. */
+export function remoteRouteTemplate(
+  route: AidenRemoteRouteLabel,
+  requestPath: string,
+): string | undefined {
+  const candidates = AIDEN_REMOTE_ROUTE_TEMPLATES[route];
+  if (candidates.length === 0) return undefined;
+  const requestSegments = requestPath.split("/");
+  let best: { template: string; parameterSegments: number } | undefined;
+  for (const template of candidates) {
+    const templateSegments = template.split("/");
+    if (templateSegments.length !== requestSegments.length) continue;
+    let parameterSegments = 0;
+    let matched = true;
+    for (let index = 0; index < requestSegments.length; index += 1) {
+      const expected = templateSegments[index];
+      if (expected === undefined) {
+        matched = false;
+        break;
+      }
+      if (expected.startsWith(":")) {
+        parameterSegments += 1;
+        continue;
+      }
+      if (expected !== requestSegments[index]) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) continue;
+    // Prefer the most specific template (fewest parameter segments), so static
+    // endpoints such as `/scheduled-tasks/scripts` never resolve to a `:id`.
+    if (!best || parameterSegments < best.parameterSegments) {
+      best = { template, parameterSegments };
+    }
+  }
+  return best?.template;
 }
 
 function requestId(): string {
@@ -795,6 +901,33 @@ function includeArchivedBotsQuery(query: string): boolean {
   );
 }
 
+function botCapabilityCatalogQuery(query: string): string | undefined {
+  if (!query) return undefined;
+  const components = query.split("&");
+  if (components.length !== 1) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The Bot capability catalog query is invalid.",
+      400,
+    );
+  }
+  const component = components[0]!;
+  const separator = component.indexOf("=");
+  const botId = separator < 0 ? "" : component.slice(separator + 1);
+  if (
+    component.slice(0, separator) !== "botId" ||
+    botId.includes("=") ||
+    !/^[A-Za-z0-9._:-]{1,160}$/u.test(botId)
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The Bot capability catalog query is invalid.",
+      400,
+    );
+  }
+  return botId;
+}
+
 function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
   if (!query) return {};
   const params = new URLSearchParams(query);
@@ -846,6 +979,25 @@ export function createAidenRemoteRequestHandler(
     let route: Parameters<AidenRemoteRouterDependencies["log"]>[0]["route"] = "unknown";
     let deviceIdSuffix: string | undefined;
     let releaseDeviceAuthorization: (() => void) | undefined;
+    let requestPath: string | undefined;
+    const logRequest = (
+      status: number,
+      options: { errorCode?: string } = {},
+    ) => {
+      const routePath = requestPath === undefined
+        ? undefined
+        : remoteRouteTemplate(route, requestPath);
+      dependencies.log({
+        requestId: id,
+        route,
+        method: request.method,
+        ...(routePath !== undefined ? { routePath } : {}),
+        status,
+        latencyMs: Math.max(0, dependencies.now() - startedAt),
+        ...(deviceIdSuffix ? { deviceIdSuffix } : {}),
+        ...(options.errorCode ? { errorCode: options.errorCode } : {}),
+      });
+    };
     void (async () => {
       if (request.headers.origin !== undefined) {
         throw new AidenRemoteServiceError(
@@ -859,6 +1011,7 @@ export function createAidenRemoteRequestHandler(
         dependencies.acceptStrippedBasePath === true,
       );
       const { path, query } = target;
+      requestPath = path;
       const authenticate = async (
         _request: IncomingMessage,
         _devices: Pick<AidenRemoteRouterDeviceRegistry, "authenticate">,
@@ -1029,14 +1182,14 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       if (path === "/bot-capabilities" && request.method === "GET") {
-        requireNoQuery(query);
+        const botId = botCapabilityCatalogQuery(query);
         route = "botCapabilities";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(response, 200, await dependencies.bots.capabilityCatalog(device.id));
+        writeJson(response, 200, await dependencies.bots.capabilityCatalog(device.id, botId));
         return;
       }
       if (path === "/bot-favorites" && request.method === "GET") {
@@ -2142,26 +2295,13 @@ export function createAidenRemoteRequestHandler(
     })()
       .finally(() => releaseDeviceAuthorization?.())
       .then(() => {
-        dependencies.log({
-          requestId: id,
-          route,
-          status: response.statusCode,
-          latencyMs: Math.max(0, dependencies.now() - startedAt),
-          ...(deviceIdSuffix ? { deviceIdSuffix } : {}),
-        });
+        logRequest(response.statusCode);
       })
       .catch((error: unknown) => {
         const safe = asAidenRemoteServiceError(error);
         if (!response.headersSent) writeError(response, id, safe);
         else response.destroy();
-        dependencies.log({
-          requestId: id,
-          route,
-          status: safe.status,
-          latencyMs: Math.max(0, dependencies.now() - startedAt),
-          ...(deviceIdSuffix ? { deviceIdSuffix } : {}),
-          errorCode: safe.code,
-        });
+        logRequest(safe.status, { errorCode: safe.code });
       });
   };
 }

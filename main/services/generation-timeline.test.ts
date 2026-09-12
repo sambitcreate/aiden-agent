@@ -621,9 +621,8 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
 
 test("streaming tool updates do not republish a timeline whose visible status is unchanged", () => {
   const snapshots: GenerationTimeline[] = [];
-  const projector = new GenerationTimelineProjector(
-    "generation-1",
-    (timeline) => snapshots.push(timeline),
+  const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
+    snapshots.push(timeline),
   );
   projector.toolStarted("call-a", "run_command", { description: "install deps" });
   const afterStart = snapshots.length;
@@ -647,4 +646,35 @@ test("streaming tool updates do not republish a timeline whose visible status is
   projector.toolFinished("call-a", "completed");
   assert.equal(snapshots.length, afterFirstRunning + 1);
   assert.equal(toolSteps(snapshots[snapshots.length - 1]!)[0]?.status, "completed");
+});
+
+test("history recall activity never projects queries or recalled excerpts", () => {
+  assert.deepEqual(
+    safeToolDescriptor("vcc_recall", { query: "private query", reference: "private-entry" }),
+    {
+      label: "Recall chat history",
+    },
+  );
+});
+
+test("automatic compaction publishes bounded engine metrics without summary content", () => {
+  const projector = new GenerationTimelineProjector(
+    "metrics",
+    () => {},
+    () => 100,
+  );
+  const id = projector.compactionStarted();
+  const result = {
+    engine: "vcc" as const,
+    durationMs: 400,
+    tokensBefore: 25900,
+    estimatedTokensAfter: 6758,
+    summary: "PRIVATE SUMMARY",
+    retainedTail: [{ content: "PRIVATE TOOL OUTPUT" }],
+  };
+  projector.compactionFinished(id, "completed", result);
+  const snapshot = projector.snapshot();
+  assert.equal(toolSteps(snapshot)[0].detail, "pi-vcc · 0.4s · ~25900 → 6758 tokens");
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });

@@ -1,11 +1,13 @@
+import { createModels } from "@earendil-works/pi-ai";
+import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { estimateTokens, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
+import { createPiCompactionModels, PiCompactionCoordinator } from "./pi-compaction-core.js";
 import {
-  createPiCompactionModels,
-  PiCompactionCoordinator,
-} from "./pi-compaction-core.js";
-import { syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+  projectVisibleHistoryWithoutSkills,
+  syncChatMessagesToPiSession,
+} from "./pi-compaction-session-store.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Chat, ChatMeta } from "./types.js";
@@ -32,19 +34,28 @@ export type CompactChatClosedReason =
 export type CompactChatResult =
   | {
       compacted: true;
+      engine?: CompactionEngine;
+      durationMs?: number;
       tokensBefore?: number;
       estimatedTokensAfter?: number;
     }
   | { compacted: false; reason: CompactChatClosedReason };
 
 export interface ContextLifecycleServiceDeps {
+  getCompactionEngine?(): Promise<CompactionEngine>;
+  resolveLocalModel?(providerId: string, model: string): Promise<ResolvedModelRuntime["model"]>;
   compactionEnabled?(): boolean;
   compactionEligible?(chat: Chat): boolean | Promise<boolean>;
+  skillsEnabled?(): Promise<boolean>;
   getChat(chatId: string): Promise<Chat | null>;
   listChatsByBot(botId: string): Promise<readonly ChatMeta[]>;
   isBotArchived(botId: string): Promise<boolean>;
   beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
-  openSession(chatId: string): Promise<PiSessionPort>;
+  /**
+   * Opens the durable Pi journal for the chat. Rollout-ineligible chats resolve
+   * `null` instead of throwing, so compaction closes benignly.
+   */
+  openSession(chatId: string): Promise<PiSessionPort | null>;
   resolveRuntime(
     providerId: string,
     model: string,
@@ -55,10 +66,7 @@ export interface ContextLifecycleServiceDeps {
     audience: ContextLifecycleAudience,
     runtime: ResolvedModelRuntime,
   ): Promise<ThinkingLevel>;
-  recordUsage?(
-    message: AssistantMessage,
-    runtime: ResolvedModelRuntime,
-  ): void | Promise<void>;
+  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime): void | Promise<void>;
 }
 
 function cancelled(cause: unknown): boolean {
@@ -84,11 +92,22 @@ export class ContextLifecycleService {
     return true;
   }
 
+  cancelForSkillsDisabled(): void {
+    for (const operation of this.activeCompactions.values()) {
+      operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
+    }
+  }
+
   async compactChat(
     chatId: string,
     audience: ContextLifecycleAudience,
     _source: ContextLifecycleSource,
+    engineOverride?: CompactionEngine,
   ): Promise<CompactChatResult> {
+    const startedAt = performance.now();
+    const engine = compactionEngineFrom(
+      engineOverride ?? (await this.deps.getCompactionEngine?.()),
+    );
     if (this.deps.compactionEnabled?.() === false) {
       return { compacted: false, reason: "already_compact" };
     }
@@ -108,7 +127,7 @@ export class ContextLifecycleService {
     try {
       const chat = await this.deps.getChat(chatId);
       if (!chat) return { compacted: false, reason: "archived" };
-      if (await this.deps.compactionEligible?.(chat) === false) {
+      if ((await this.deps.compactionEligible?.(chat)) === false) {
         return { compacted: false, reason: "already_compact" };
       }
       if (!chat.providerId || !chat.model) {
@@ -118,50 +137,73 @@ export class ContextLifecycleService {
         if (await this.deps.isBotArchived(chat.botId)) {
           return { compacted: false, reason: "archived" };
         }
-        const canonical = selectCanonicalBotChat(
-          await this.deps.listChatsByBot(chat.botId),
-        );
+        const canonical = selectCanonicalBotChat(await this.deps.listChatsByBot(chat.botId));
         if (canonical?.id !== chat.id) {
           return { compacted: false, reason: "not_canonical" };
         }
       }
 
-      let runtime: ResolvedModelRuntime;
+      let runtime: ResolvedModelRuntime | undefined;
+      let model: ResolvedModelRuntime["model"];
       try {
-        runtime = await this.deps.resolveRuntime(
-          chat.providerId,
-          chat.model,
-          operationAbort.signal,
-        );
+        if (engine === "vcc") {
+          if (!this.deps.resolveLocalModel) throw new Error("Offline metadata is unavailable.");
+          model = await this.deps.resolveLocalModel(chat.providerId, chat.model);
+        } else {
+          runtime = await this.deps.resolveRuntime(
+            chat.providerId,
+            chat.model,
+            operationAbort.signal,
+          );
+          model = runtime.model;
+        }
       } catch (cause) {
         return {
           compacted: false,
-          reason: cancelled(cause) || operationAbort.signal.aborted
-            ? "cancelled"
-            : "provider_unavailable",
+          reason:
+            cancelled(cause) || operationAbort.signal.aborted
+              ? "cancelled"
+              : "provider_unavailable",
         };
       }
-      if (runtime.provider.id !== chat.providerId || runtime.model.id !== chat.model) {
+      if (
+        (runtime ? runtime.provider.id : model.provider) !== chat.providerId ||
+        model.id !== chat.model
+      ) {
         return { compacted: false, reason: "context_metadata_invalid" };
       }
 
-      const session = await this.deps.openSession(chat.id);
+      let session = await this.deps.openSession(chat.id);
+      if (!session) {
+        return { compacted: false, reason: "already_compact" };
+      }
       await syncChatMessagesToPiSession(
         session,
         chat.messages,
-        runtime.model,
-        runtime.model.input.includes("image"),
+        model,
+        model.input.includes("image"),
       );
+      if ((await this.deps.skillsEnabled?.()) === false) {
+        session = await projectVisibleHistoryWithoutSkills(session, chat.messages, model);
+      }
       const coordinator = new PiCompactionCoordinator({
         session,
-        models: createPiCompactionModels(runtime, (message) =>
-          this.deps.recordUsage?.(message, runtime),
-        ),
-        model: runtime.model,
-        thinkingLevel: await this.deps.resolveThinkingLevel(chat, audience, runtime),
+        engine,
+        models: runtime
+          ? createPiCompactionModels(runtime, (message) =>
+              this.deps.recordUsage?.(message, runtime!),
+            )
+          : createModels(),
+        model,
+        thinkingLevel: runtime
+          ? await this.deps.resolveThinkingLevel(chat, audience, runtime)
+          : "off",
         signal: operationAbort.signal,
       });
       const result = await coordinator.compact();
+      if (operationAbort.signal.aborted) {
+        return { compacted: false, reason: "cancelled" };
+      }
       if (result.errorMessage) {
         return { compacted: false, reason: "compaction_failed" };
       }
@@ -172,6 +214,12 @@ export class ContextLifecycleService {
       const latest = [...entries].reverse().find((entry) => entry.type === "compaction");
       return {
         compacted: true,
+        engine,
+        durationMs: Math.round(performance.now() - startedAt),
+        estimatedTokensAfter: result.messages?.reduce(
+          (total, message) => total + estimateTokens(message),
+          0,
+        ),
         ...(latest?.type === "compaction"
           ? {
               tokensBefore: latest.tokensBefore,

@@ -1,3 +1,4 @@
+import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in Finder. Git workspaces also show the
 // current branch. The input
@@ -25,6 +26,7 @@ import {
   FileText,
   Folder,
   Image as ImageIcon,
+  ListPlus,
   Loader2,
   Lock,
   Mic,
@@ -37,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { ComposerContextBar } from "./composer-context-bar";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -44,7 +47,10 @@ import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi } from "../lib/ipc";
+import { attachmentsApi, browserApi } from "../lib/ipc";
+import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -114,6 +120,7 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  readinessSettingsSection?: SettingsSection;
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
@@ -124,11 +131,18 @@ interface ComposerProps {
     skillInvocation?: SkillInvocationV1,
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
+  onQueue?: ComposerProps["onSend"];
+  queuedMessages?: React.ReactNode;
+  hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
+  /** New-agent drafts cannot accept edits while their first message commits. */
+  freezeWhileSending?: boolean;
+  /** Survives navigating away and reopening a draft whose commit is pending. */
+  firstMessageSaving?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   /** Places the same composer state inside the compact Design conversation rail. */
   placement?: "chat" | "design-conversation";
@@ -186,8 +200,14 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
-  onCompactChat?: () => Promise<
-    | { compacted: true; tokensBefore?: number }
+  onCompactChat?: (engine?: CompactionEngine) => Promise<
+    | {
+        compacted: true;
+        engine?: CompactionEngine;
+        durationMs?: number;
+        tokensBefore?: number;
+        estimatedTokensAfter?: number;
+      }
     | {
         compacted: false;
         reason:
@@ -269,13 +289,19 @@ export function Composer({
   placeholder,
   ready,
   readinessMessage,
+  readinessSettingsSection,
   hasMessages,
   chatId,
   onSend,
   onStop,
+  onQueue,
+  queuedMessages,
+  hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
   configurationBusy = false,
+  freezeWhileSending = false,
+  firstMessageSaving = false,
   inputRef,
   placement = "chat",
   onVisibilityRequirementChange,
@@ -330,6 +356,7 @@ export function Composer({
   React.useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+  const firstSendPendingRef = React.useRef(false);
   const slashActionPendingRef = React.useRef(false);
   const sessionCommandBusyRef = React.useRef(false);
   const slashPaletteBlockedRef = React.useRef(slashPaletteBlocked);
@@ -368,13 +395,43 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  React.useLayoutEffect(() => {
+    if (!workspace?.id) return;
+    const available = () => {
+      const input = inputRef?.current;
+      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+    };
+    const receive = (annotation: BrowserAnnotation) => {
+      if (firstSendPendingRef.current || !available()) return false;
+      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const comment = annotation.comment.trim();
+      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      if (result.attachments.length) {
+        attachmentRevisionRef.current += 1;
+        updateAttachments((current) => [...current, ...result.attachments]);
+      }
+      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
+    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+    });
+    return () => { unregister(); unsubscribe(); };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
   const attachmentOperationRef = React.useRef(false);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
+  const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
+  firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const permissionOptionsId = React.useId();
   const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTitle, setRenameTitle] = React.useState("");
@@ -391,6 +448,7 @@ export function Composer({
   }>();
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
+  const [compactionBusy, setCompactionBusy] = React.useState(false);
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
   const [composing, setComposing] = React.useState(false);
@@ -418,7 +476,7 @@ export function Composer({
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
-      isGenerating,
+      isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
@@ -426,6 +484,7 @@ export function Composer({
       attaching,
     }) &&
     !configurationBusy &&
+    !firstMessageSaving &&
     !sessionCommandBusy;
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
@@ -453,7 +512,9 @@ export function Composer({
     !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
+    (transcript) => {
+      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    },
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
@@ -676,37 +737,47 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
-  const compactChat = React.useCallback(async () => {
-    if (!onCompactChat || sessionCommandBusy) return;
-    sessionCommandBusyRef.current = true;
-    setSessionCommandStatus("Compacting chat…");
-    try {
-      const result = await onCompactChat();
-      if (result.compacted) {
-        toast.success(
-          result.tokensBefore
-            ? `Chat compacted from about ${result.tokensBefore.toLocaleString()} tokens`
-            : "Chat compacted",
-        );
-      } else {
-        const copy = {
-          already_compact: "This chat is already compact enough.",
-          busy: "Finish the current response or approval first.",
-          archived: "This chat is archived or unavailable.",
-          not_canonical: "This legacy Bot conversation is read-only.",
-          provider_unavailable: "The saved provider is unavailable.",
-          context_metadata_invalid: "The saved model context is invalid.",
-          cancelled: "Compaction was cancelled.",
-          compaction_failed: "Compaction failed.",
-        } as const;
-        toast.info(copy[result.reason]);
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      if (!onCompactChat || sessionCommandBusy) return;
+      sessionCommandBusyRef.current = true;
+      setCompactionBusy(true);
+      setSessionCommandStatus(
+        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+      );
+      try {
+        const result = await onCompactChat(engine);
+        if (result.compacted) {
+          const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
+          const size =
+            result.tokensBefore !== undefined && result.estimatedTokensAfter !== undefined
+              ? ` · about ${result.tokensBefore.toLocaleString()} → ${result.estimatedTokensAfter.toLocaleString()} tokens`
+              : "";
+          const duration =
+            result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
+          toast.success(`${label} compaction complete${duration}${size}`);
+        } else {
+          const copy = {
+            already_compact: "This chat is already compact enough.",
+            busy: "Finish the current response or approval first.",
+            archived: "This chat is archived or unavailable.",
+            not_canonical: "This legacy Bot conversation is read-only.",
+            provider_unavailable: "The saved provider is unavailable.",
+            context_metadata_invalid: "The saved model context is invalid.",
+            cancelled: "Compaction was cancelled.",
+            compaction_failed: "Compaction failed.",
+          } as const;
+          toast.info(copy[result.reason]);
+        }
+      } finally {
+        sessionCommandBusyRef.current = false;
+        setCompactionBusy(false);
+        setSessionCommandStatus(null);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
-    } finally {
-      sessionCommandBusyRef.current = false;
-      setSessionCommandStatus(null);
-      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
-    }
-  }, [inputRef, onCompactChat, sessionCommandBusy]);
+    },
+    [inputRef, onCompactChat, sessionCommandBusy],
+  );
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -787,8 +858,9 @@ export function Composer({
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
-      if (sendPendingRef.current) return false;
+      if (sendPendingRef.current || firstSendPendingRef.current) return false;
       sendPendingRef.current = true;
+      firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
 
       setText("");
@@ -803,7 +875,8 @@ export function Composer({
       });
 
       try {
-        await onSend(
+        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
@@ -847,15 +920,17 @@ export function Composer({
         throw error;
       } finally {
         sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
         setSending(false);
       }
     },
-    [onSend, setText, updateAttachments],
+    [onSend, onQueue, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
+        firstSendPendingRef.current ||
         slashActionPendingRef.current ||
         !slashSession ||
         result.kind !== slashSession.kind ||
@@ -932,7 +1007,6 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          if (instruction !== "visualize" && instruction !== "btw") return false;
           const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
           const missingPromptMessage =
             instruction === "btw"
@@ -1064,6 +1138,7 @@ export function Composer({
   }, [onRenameChat, renameTitle, renaming]);
 
   const beginAttachmentRead = (status: string): boolean => {
+    if (firstSendPendingRef.current) return false;
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
       return false;
@@ -1229,6 +1304,7 @@ export function Composer({
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (firstSendPendingRef.current) { event.preventDefault(); return; }
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1255,6 +1331,7 @@ export function Composer({
   };
 
   const removeAttachment = (id: string) => {
+    if (firstSendPendingRef.current) return;
     attachmentRevisionRef.current += 1;
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
@@ -1417,8 +1494,8 @@ export function Composer({
       gitOperationBusy
     )
       return;
-    setPermissionMenuOpen(false);
     if (nextPermission === "full") {
+      setPermissionMenuOpen(false);
       setConfirmFullAccess(true);
       return;
     }
@@ -1428,6 +1505,7 @@ export function Composer({
   return (
     <>
       <div
+        data-browser-composer-inset={placement === "chat" ? "true" : undefined}
         className={cn(
           "pointer-events-none",
           placement === "design-conversation"
@@ -1435,7 +1513,8 @@ export function Composer({
             : "aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5",
         )}
       >
-        <div className="composer-responsive pointer-events-auto relative isolate">
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1473,7 +1552,7 @@ export function Composer({
           {showComputerUseNotice ? (
             <aside
               aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
+              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
             >
               <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
               <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
@@ -1504,8 +1583,10 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
+          {queuedMessages}
           {/* Design Projects are local-first; workspace connection remains a later project action. */}
           {placement === "chat" ? (
+            <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
             <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
               {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
                 <WorkspacePicker
@@ -1581,10 +1662,11 @@ export function Composer({
                 />
               ) : null}
             </div>
+            </ComposerContextBar>
           ) : null}
 
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
+            className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -1596,12 +1678,12 @@ export function Composer({
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
                   className={cn(
-                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-small",
+                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-small",
                     selectedSkillState?.state === "valid"
-                      ? "border-accent/25 bg-accent/10 text-primary"
+                      ? "bg-status-accent-surface text-primary"
                       : selectedSkillState?.state === "checking"
-                        ? "border-field bg-control text-secondary"
-                        : "border-support-warning/35 bg-support-warning/10 text-primary",
+                        ? "bg-control text-secondary"
+                        : "bg-status-warning-surface text-primary",
                   )}
                   title={
                     selectedSkillState?.state === "valid"
@@ -1634,7 +1716,7 @@ export function Composer({
                       );
                     }}
                     aria-label={`Remove ${selectedSkill.invocation.displayName} skill from message`}
-                    className="-mr-1 rounded-full p-0.5 text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
+                    className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
                   >
                     <X aria-hidden="true" className="size-3.5" />
                   </button>
@@ -1687,7 +1769,7 @@ export function Composer({
                 {attachments.map((a) => (
                   <div
                     key={a.id}
-                    className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
+                    className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
                   >
                     {a.kind === "image" && a.data ? (
                       <img
@@ -1704,7 +1786,7 @@ export function Composer({
                       disabled={sessionCommandBusy}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
+                      className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -1716,9 +1798,10 @@ export function Composer({
               data-chat-composer
               ref={inputRef}
               value={text}
-              readOnly={sessionCommandBusy}
-              aria-busy={sessionCommandBusy || undefined}
+              readOnly={sessionCommandBusy || firstSendPending}
+              aria-busy={sessionCommandBusy || firstSendPending || undefined}
               onChange={(event) => {
+                if (firstSendPendingRef.current) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
@@ -1771,7 +1854,7 @@ export function Composer({
                 <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
                   {sessionCommandStatus}
                 </Text>
-                {sessionCommandStatus === "Compacting chat…" && onCancelCompact ? (
+                {compactionBusy && onCancelCompact ? (
                   <Button
                     type="button"
                     variant="transparent"
@@ -1783,9 +1866,17 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {!ready && readinessMessage && text.trim().length > 0 ? (
+            {voice.lastError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
+                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
+                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+              </div>
+            ) : null}
+            {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
@@ -1797,7 +1888,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || isGenerating || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -1809,129 +1900,140 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
-                {/* Design has full authority inside its project scope and no workspace access mode. */}
                 {placement === "chat" ? (
-                  <div
-                    className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
-                    data-open={permissionMenuOpen || undefined}
-                    onPointerEnter={dismissSlash}
-                    onPointerLeave={() => setPermissionMenuOpen(false)}
-                    onBlur={(event) => {
-                      if (!event.currentTarget.contains(event.relatedTarget)) {
-                        setPermissionMenuOpen(false);
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Escape") return;
-                      event.preventDefault();
+                <div
+                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                  data-open={permissionMenuOpen || undefined}
+                  onPointerEnter={() => {
+                    dismissSlash();
+                    setPermissionMenuOpen(true);
+                  }}
+                  onPointerLeave={(event) => {
+                    if (!event.currentTarget.contains(document.activeElement)) setPermissionMenuOpen(false);
+                  }}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) {
                       setPermissionMenuOpen(false);
-                      inputRef?.current?.focus();
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    setPermissionMenuOpen(false);
+                    inputRef?.current?.focus();
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                    aria-expanded={permissionMenuOpen}
+                    aria-controls={permissionOptionsId}
+                    onFocus={() => setPermissionMenuOpen(true)}
+                    onClick={() => setPermissionMenuOpen(true)}
+                    onKeyDown={(event) => {
+                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(true);
+                      requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
                   >
-                    <button
-                      type="button"
-                      aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
-                      aria-haspopup="true"
-                      onFocus={() => setPermissionMenuOpen(true)}
-                      onClick={() => setPermissionMenuOpen(true)}
-                      onKeyDown={(event) => {
-                        if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
-                        event.preventDefault();
-                        setPermissionMenuOpen(true);
-                        requestAnimationFrame(() => permissionControlRef.current?.focus());
-                      }}
-                      className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out group-hover/access:opacity-0 group-focus-within/access:opacity-0 group-data-[open=true]/access:opacity-0 max-[520px]:justify-center max-[520px]:px-0"
-                    >
-                      <PermissionIcon
-                        className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
-                      />
-                      <span className="truncate max-[520px]:sr-only">
-                        {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
-                      </span>
-                    </button>
-                    <div
-                      role="radiogroup"
-                      aria-label="Workspace access"
-                      aria-disabled={
+                    <PermissionIcon
+                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                    />
+                    <span className="truncate max-[520px]:sr-only">
+                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                    </span>
+                  </button>
+                  <div
+                    id={permissionOptionsId}
+                    role="radiogroup"
+                    aria-label="Workspace access"
+                    aria-disabled={
+                      !workspace ||
+                      permissionSaving ||
+                      isGenerating ||
+                      sending ||
+                      gitOperationBusy ||
+                      Boolean(workspaceChangeBlockedReason) ||
+                      undefined
+                    }
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                  >
+                    {PERMISSION_ORDER.map((value, index) => {
+                      const meta = PERMISSION_META[value];
+                      const Icon = meta.icon;
+                      const selected = value === permission;
+                      const disabled =
                         !workspace ||
                         permissionSaving ||
                         isGenerating ||
                         sending ||
                         gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason) ||
-                        undefined
-                      }
-                      className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-[16px] bg-control/80 p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-hover/access:visible group-hover/access:pointer-events-auto group-hover/access:translate-y-0 group-hover/access:opacity-100 group-focus-within/access:visible group-focus-within/access:pointer-events-auto group-focus-within/access:translate-y-0 group-focus-within/access:opacity-100 group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
-                    >
-                      {PERMISSION_ORDER.map((value, index) => {
-                        const meta = PERMISSION_META[value];
-                        const Icon = meta.icon;
-                        const selected = value === permission;
-                        const disabled =
-                          !workspace ||
-                          permissionSaving ||
-                          isGenerating ||
-                          sending ||
-                          gitOperationBusy ||
-                          Boolean(workspaceChangeBlockedReason);
-                        return (
-                          <button
-                            ref={selected ? permissionControlRef : undefined}
-                            key={value}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            aria-label={
-                              workspaceChangeBlockedReason
-                                ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
-                                : isGenerating || sending
-                                  ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
-                                  : `Workspace access: ${meta.label}`
+                        Boolean(workspaceChangeBlockedReason);
+                      return (
+                        <button
+                          ref={selected ? permissionControlRef : undefined}
+                          key={value}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={
+                            workspaceChangeBlockedReason
+                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                              : isGenerating || sending
+                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
+                                : `Workspace access: ${meta.label}`
+                          }
+                          tabIndex={selected ? 0 : -1}
+                          aria-disabled={disabled || undefined}
+                          onClick={(event) => {
+                            if (disabled) return;
+                            requestPermission(value);
+                            if (event.detail > 0 && (value !== "full" || value === permission)) {
+                              setPermissionMenuOpen(false);
+                              inputRef?.current?.focus({ preventScroll: true });
                             }
-                            tabIndex={selected ? 0 : -1}
-                            aria-disabled={disabled || undefined}
-                            onClick={() => {
-                              if (!disabled) requestPermission(value);
-                            }}
-                            onKeyDown={(event) => {
-                              if (disabled) return;
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                if (value !== permission) requestPermission(value);
-                                return;
-                              }
-                              let nextIndex: number | undefined;
-                              if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-                                nextIndex = (index + 1) % PERMISSION_ORDER.length;
-                              }
-                              if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-                                nextIndex =
-                                  (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
-                              }
-                              if (event.key === "Home") nextIndex = 0;
-                              if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
-                              if (nextIndex === undefined) return;
+                          }}
+                          onKeyDown={(event) => {
+                            if (disabled) return;
+                            if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              const radios =
-                                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
-                                  '[role="radio"]',
-                                );
-                              radios?.[nextIndex]?.focus();
-                            }}
-                            className={cn(
-                              "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
-                              selected
-                                ? "bg-popover shadow-control"
-                                : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
-                            )}
-                          >
-                            <Icon className={cn("size-4 shrink-0", meta.className)} />
-                            <span className="truncate">{meta.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                              if (value !== permission) requestPermission(value);
+                              return;
+                            }
+                            let nextIndex: number | undefined;
+                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                              nextIndex =
+                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "Home") nextIndex = 0;
+                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                            if (nextIndex === undefined) return;
+                            event.preventDefault();
+                            const radios =
+                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                '[role="radio"]',
+                              );
+                            radios?.[nextIndex]?.focus();
+                          }}
+                          className={cn(
+                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            selected
+                              ? "bg-popover shadow-control"
+                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                          )}
+                        >
+                          <Icon className={cn("size-4 shrink-0", meta.className)} />
+                          <span className="truncate">{meta.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
+                </div>
                 ) : null}
                 {computerUse && onChangeComputerUse ? (
                   <Button
@@ -1996,7 +2098,7 @@ export function Composer({
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || isGenerating || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -2006,12 +2108,19 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating && canStopGeneration ? (
+                {onQueue && isGenerating ? (
+                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
+                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
+                    <ListPlus />
+                  </Button>
+                ) : null}
+                {isGenerating ? (
                   <Button
                     variant="filled"
                     size="small"
                     iconOnly
                     onClick={onStop}
+                    disabled={!canStopGeneration}
                     aria-label="Stop generating"
                   >
                     <Square className="fill-current" />
@@ -2023,9 +2132,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label="Send message"
+                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
                   >
-                    <ArrowUp />
+                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>

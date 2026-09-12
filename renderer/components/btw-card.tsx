@@ -87,7 +87,7 @@ export function BtwCard({
       }
     >
       <section
-        className="overflow-hidden rounded-[22px] border border-field/80 bg-popover shadow-composer"
+        className="overflow-hidden rounded-dialog border border-field/80 bg-popover shadow-composer"
         aria-labelledby="btw-card-title"
         aria-busy={running}
       >
@@ -147,7 +147,7 @@ export function BtwCard({
         </div>
 
         <footer className="border-t border-field/60 px-3 py-2.5">
-          <div className="flex items-end gap-2 rounded-2xl bg-control/55 px-3 py-2">
+          <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 px-3 py-2">
             <textarea
               value={draft}
               rows={1}

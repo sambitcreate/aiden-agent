@@ -124,6 +124,7 @@ export function AskUserQuestionComposer({
 
   return (
     <div
+      data-browser-composer-inset={placement === "chat" ? "true" : undefined}
       className={cn(
         placement === "design-conversation"
           ? "w-full px-3 pb-3 pt-2"
@@ -132,7 +133,7 @@ export function AskUserQuestionComposer({
     >
       <section
         className={cn(
-          "ask-user-question-shell overflow-hidden rounded-[24px] bg-popover shadow-composer outline outline-1 outline-field/80",
+          "ask-user-question-shell overflow-hidden rounded-sheet bg-popover shadow-composer outline outline-1 outline-field/80",
           placement === "design-conversation"
             ? "max-h-[min(70vh,36rem)] overflow-y-auto px-3 py-3"
             : "min-h-76 px-5 py-4 sm:px-6 sm:py-5",
@@ -232,7 +233,7 @@ export function AskUserQuestionComposer({
         <div className="mt-3 flex min-h-12 items-end gap-3" hidden={isDesignDraftDecision}>
           <div className="min-w-0 flex-1">
             {customOpen ? (
-              <div className="flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
+              <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
                 <Pencil className="mb-2 size-4 shrink-0 text-secondary" />
                 <textarea
                   ref={customRef}

@@ -15,8 +15,22 @@ export type PluginCompatibility =
 export type PluginCatalogSource = "aiden" | "openai-curated";
 
 export type McpPresetAuth =
-  | { kind: "apiKey"; headerName: string; keyLabel: string; keyHelpUrl: string }
-  | { kind: "oauth" };
+  | {
+      kind: "apiKey";
+      headerName: string;
+      keyLabel: string;
+      keyHelpUrl: string;
+      /** Prepended to the stored key when the vendor needs a scheme (e.g. `Bearer `). */
+      headerValuePrefix?: string;
+    }
+  | {
+      kind: "oauth";
+      /**
+       * Dynamic Client Registration `client_name`. Some hosts allowlist exact
+       * names (Figma). Omit to register as Aiden Agent.
+       */
+      clientName?: string;
+    };
 
 export interface PluginCatalogEntry {
   id: string;
@@ -180,7 +194,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Create, refine, and review Canva designs.",
     vendor: "By Canva Pty Ltd.",
     category: "Creativity",
-    docsUrl: "https://www.canva.com",
+    docsUrl: "https://www.canva.dev/docs/mcp/",
     source: "openai-curated",
     url: "https://mcp.canva.com/mcp",
   }),
@@ -190,9 +204,13 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Inspect designs, extract specs, and implement from Figma.",
     vendor: "By Figma",
     category: "Creativity",
-    docsUrl: "https://www.figma.com",
+    docsUrl: "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/",
     source: "openai-curated",
     url: "https://mcp.figma.com/mcp",
+    // Figma's POST /v1/oauth/mcp/register allowlists MCP catalog client_name
+    // values (Codex, Claude Code, Cursor, VS Code, …) and returns plaintext
+    // HTTP 403 Forbidden for anything else — including "Aiden Agent".
+    auth: { kind: "oauth", clientName: "Codex" },
   }),
   httpMcp({
     id: "stripe",
@@ -210,7 +228,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Build, preview, and deploy Vercel projects.",
     vendor: "By Vercel Labs",
     category: "Developer Tools",
-    docsUrl: "https://vercel.com/",
+    docsUrl: "https://vercel.com/docs/mcp",
     source: "openai-curated",
     url: "https://mcp.vercel.com",
   }),
@@ -232,15 +250,22 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     docsUrl: "https://github.com/obra/superpowers",
     source: "openai-curated",
   }),
-  listed("mcp-auth-unsupported", AUTH_NOTE, {
+  httpMcp({
     id: "github",
     name: "GitHub",
     tagline: "Inspect repositories, triage PRs and issues, and debug CI.",
     vendor: "By GitHub",
     category: "Developer Tools",
-    docsUrl: "https://github.com/mcp",
+    docsUrl: "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server",
     source: "openai-curated",
     url: "https://api.githubcopilot.com/mcp/",
+    auth: {
+      kind: "apiKey",
+      headerName: "Authorization",
+      headerValuePrefix: "Bearer ",
+      keyLabel: "GitHub personal access token",
+      keyHelpUrl: "https://github.com/settings/personal-access-tokens",
+    },
   }),
   listed("skills", SKILLS_NOTE, {
     id: "circleci",
@@ -277,7 +302,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Workers, Wrangler, and the official Cloudflare API MCP server.",
     vendor: "By Cloudflare",
     category: "Developer Tools",
-    docsUrl: "https://developers.cloudflare.com/",
+    docsUrl: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
     source: "openai-curated",
     url: "https://mcp.cloudflare.com/mcp",
   }),
@@ -406,7 +431,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Search boards and create or update items, columns, and assignments.",
     vendor: "By monday.com",
     category: "Productivity",
-    docsUrl: "https://monday.com",
+    docsUrl: "https://developer.monday.com/api-reference/docs/integrate-with-monday-mcp",
     source: "openai-curated",
     url: "https://mcp.monday.com/mcp",
   }),
@@ -471,7 +496,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Analyze and act on Datadog telemetry (US1 preview).",
     vendor: "By Datadog",
     category: "Developer Tools",
-    docsUrl: "https://docs.datadoghq.com/",
+    docsUrl: "https://docs.datadoghq.com/bits_ai/mcp_server/",
     source: "openai-curated",
     url: "https://mcp.datadoghq.com/v1/mcp",
   }),
@@ -500,7 +525,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     tagline: "Ask questions and create or update records in Airtable.",
     vendor: "By Airtable",
     category: "Productivity",
-    docsUrl: "https://airtable.com",
+    docsUrl: "https://support.airtable.com/docs/using-the-airtable-mcp-server",
     source: "openai-curated",
     url: "https://mcp.airtable.com/mcp",
   }),

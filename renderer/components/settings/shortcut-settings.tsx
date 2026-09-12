@@ -84,7 +84,7 @@ function ShortcutRow({
 
   return (
     <div className="px-4 py-3.5 after:mt-3.5 after:block after:h-px after:bg-separator last:after:hidden">
-      <div className="flex items-start gap-3">
+      <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Text variant="strong">{command.title}</Text>
@@ -296,7 +296,7 @@ export function ShortcutSettings() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div>
+      <div className="settings-page-heading">
         <Text as="h1" variant="heading1">
           Keyboard shortcuts
         </Text>

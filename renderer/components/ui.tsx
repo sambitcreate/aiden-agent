@@ -46,8 +46,8 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     | "destructive";
   size?: "small" | "medium" | "large";
   iconOnly?: boolean;
-  radius?: "full" | "rounded";
   asChild?: boolean;
+  pressFeedback?: boolean;
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -56,8 +56,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     variant = "filled",
     size = "medium",
     iconOnly,
-    radius = "full",
     asChild,
+    pressFeedback = false,
     type = "button",
     ...props
   },
@@ -70,8 +70,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       type={asChild ? undefined : type}
       data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform] duration-150 ease-out active:scale-[0.985] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
-        radius === "full" ? "rounded-pill" : "rounded-control",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        pressFeedback && "button-press-feedback",
+        "rounded-button",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
@@ -107,7 +108,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         className,
       )}
       {...props}
@@ -127,7 +128,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
     <textarea
       ref={ref}
       className={cn(
-        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         density === "compact" ? "min-h-7" : "min-h-16",
         className,
       )}
@@ -139,7 +140,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 type TextProps = React.HTMLAttributes<HTMLElement> & {
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
-  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red";
+  color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";
   truncate?: boolean;
 };
 
@@ -165,6 +166,7 @@ export function Text({
         color === "tertiary" && "text-tertiary",
         color === "quaternary" && "text-quaternary",
         color === "red" && "text-red",
+        color === "status-red" && "text-status-red",
         truncate && "truncate",
         className,
       )}
@@ -179,20 +181,25 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
 
 export function Badge({
   color = "gray",
+  icon,
   className,
+  children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
+}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
   return (
     <span
       className={cn(
-        "inline-flex h-6 items-center rounded-pill bg-control px-2 text-small-strong",
-        color === "green" && "border-green/30 bg-green/10 text-green",
-        color === "red" && "border-red/30 bg-red/10 text-red",
-        color === "blue" && "border-accent/30 bg-accent/10 text-accent",
+        "inline-flex h-6 items-center gap-1.5 rounded-pill border-0 bg-control px-2 text-small-strong",
+        color === "green" && "bg-status-green-surface text-status-green",
+        color === "red" && "bg-status-red-surface text-status-red",
+        color === "blue" && "bg-status-accent-surface text-status-accent",
         className,
       )}
       {...props}
-    />
+    >
+      {icon ? <span className="inline-flex shrink-0 [&_svg]:size-3.5" aria-hidden="true">{icon}</span> : null}
+      {children}
+    </span>
   );
 }
 
@@ -205,7 +212,7 @@ export function Callout({
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
-        color === "red" && "border-red/25 bg-red/5",
+        color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
         className,
       )}
       {...props}
@@ -296,9 +303,9 @@ export function FieldSet({
   children,
 }: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
   return (
-    <section className={cn("mb-7", className)}>
-      {title ? <h2 className="mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
-      <div className="overflow-hidden rounded-card bg-well">{children}</div>
+    <section className={cn("settings-group mb-7", className)}>
+      {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
+      <div className="settings-group-card overflow-visible rounded-card bg-well">{children}</div>
     </section>
   );
 }
@@ -323,9 +330,9 @@ export function Field({
       aria-labelledby={label ? labelId : undefined}
       aria-describedby={description ? descriptionId : undefined}
       className={cn(
-        "relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
+        "settings-field relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
         orientation === "horizontal"
-          ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:gap-2"
+          ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 has-[[role=switch]]:grid-cols-[minmax(0,1fr)_auto] max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:has-[[role=switch]]:grid-cols-[minmax(0,1fr)_auto] max-[540px]:has-[[role=switch]]:items-center max-[540px]:gap-2"
           : "flex flex-col gap-3",
         className,
       )}
@@ -342,7 +349,7 @@ export function Field({
           </div>
         ) : null}
       </div>
-      <div className="min-w-0">{children}</div>
+      <div className="settings-field-control min-w-0">{children}</div>
     </div>
   );
 }
@@ -551,7 +558,10 @@ function SplitViewRoot({
 
   return (
     <SplitContext.Provider value={{ collapsed, toggle, closeIfCompact, leadingAnchor }}>
-      <div className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary">
+      <div
+        data-compact-sidebar-open={compactOpen ? "true" : "false"}
+        className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary"
+      >
         {compactOpen ? (
           <button
             type="button"
@@ -605,7 +615,7 @@ function SplitViewRoot({
         <main
           inert={compactOpen ? true : undefined}
           aria-hidden={compactOpen ? true : undefined}
-          className="min-w-0 flex-1 bg-background"
+          className="relative z-0 min-w-0 flex-1 bg-background"
         >
           {children}
         </main>
@@ -730,7 +740,7 @@ export function Sidebar({
               }}
               placeholder={searchPlaceholder ?? "Search"}
               aria-label={searchPlaceholder ?? "Search"}
-              className="h-full min-w-0 flex-1 bg-transparent text-[14px] text-primary outline-none placeholder:text-tertiary"
+              className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-tertiary"
             />
           </label>
         </div>
@@ -769,7 +779,7 @@ export function SidebarListGroup({
   return (
     <div className={cn("mt-5 first:mt-0", className)}>
       {title ? (
-        <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div>
+        <div className="mb-1.5 px-2.5 text-small-strong font-medium text-tertiary">{title}</div>
       ) : null}
       <div className="flex flex-col gap-0.5">{children}</div>
     </div>
@@ -793,7 +803,7 @@ export function SidebarListItem({
       type="button"
       aria-current={selected ? "page" : undefined}
       className={cn(
-        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-regular text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
         selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
         className,
       )}
@@ -1225,7 +1235,8 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );
@@ -1344,7 +1355,8 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
-      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      className={cn(menuItemClass, color === "red" && "text-red",
+        color === "status-red" && "text-status-red", className)}
       {...props}
     />
   );
@@ -1371,7 +1383,7 @@ export const SelectTrigger = React.forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       className={cn(
-        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
+        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
         size === "small" ? "h-7 rounded-lg px-2" : "h-8",
         className,
       )}
@@ -1430,12 +1442,12 @@ export const Switch = React.forwardRef<
     <SwitchPrimitive.Root
       ref={ref}
       className={cn(
-        "relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
+        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
     </SwitchPrimitive.Root>
   );
 });
@@ -1461,12 +1473,12 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" />
+      <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-accent-foreground" />
     </RadioGroupPrimitive.Item>
   );
 });

@@ -200,7 +200,7 @@ export function ComposerSlashPalette({
           else if (unavailableReason) setAnnouncement(unavailableReason);
         }}
         className={cn(
-          "flex min-h-10 cursor-default items-center gap-2 rounded-[10px] px-2.5 py-1.5 outline-none transition-colors duration-100",
+          "flex min-h-10 cursor-default items-center gap-2 rounded-menu px-2.5 py-1.5 outline-none transition-colors duration-100",
           selected && available && "bg-control",
           !selected && available && "hover:bg-list-hover",
           !available && "opacity-45",

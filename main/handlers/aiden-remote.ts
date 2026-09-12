@@ -129,6 +129,23 @@ export function registerAidenRemoteHandlers(): void {
     return settingsSnapshot();
   });
 
+  ipcMain.handle("remote:setupPairing", async (event, transport: unknown, expected: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Phone setup requires the active application document."));
+    const selectedTransport = parseAidenRemoteTransport(transport);
+    if (!expected || typeof expected !== "object" || Array.isArray(expected)) throw new Error("Invalid phone setup review.");
+    const review = expected as Record<string, unknown>;
+    if (typeof review.instanceId !== "string" || review.instanceId.length > 128
+      || typeof review.enabled !== "boolean") throw new Error("Invalid phone setup review.");
+    const connectionMode = parseAidenRemoteConnectionMode(review.connectionMode);
+    const service = (await getAidenRemoteRuntime()).service;
+    const pairing = await service.setupPairing(selectedTransport, {
+      instanceId: review.instanceId, enabled: review.enabled, connectionMode,
+    }, () => !owner.isDestroyed());
+    return { ...pairing.bootstrap, pairingSessionId: pairing.sessionId,
+      qrPayload: pairing.qrPayload ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+      manualCode: pairing.manualCode };
+  });
+
   ipcMain.handle("remote:beginPairing", async (_event, transport: unknown) => {
     const selectedTransport = parseAidenRemoteTransport(transport);
     const service = (await getAidenRemoteRuntime()).service;

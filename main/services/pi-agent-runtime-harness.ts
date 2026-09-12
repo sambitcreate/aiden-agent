@@ -1367,6 +1367,18 @@ export class PiAgentRuntimeHarness {
         try {
           hostPrepared = await hostPrepare?.(input, signal);
         } catch (error) {
+          // A host revalidation can reject after Stop aborts its signal. Keep
+          // that cancellation out of the policy-failure path, while preserving
+          // an independently recorded or explicitly typed host failure.
+          if (
+            !this.managedHostFault &&
+            !this.policyFault &&
+            !(error instanceof PiAgentRuntimeHostError) &&
+            (this.appCancelRequested || error instanceof PiManagedCancellationError)
+          ) {
+            this.agent.abort();
+            throw new PiManagedCancellationError();
+          }
           this.managedHostFault ??= "policy";
           this.reportFault({
             source: "host_prepare_turn",
@@ -1379,6 +1391,19 @@ export class PiAgentRuntimeHarness {
           );
         }
         const context = hostPrepared?.context ?? input.context;
+        // Host-disclosed tools must participate in compaction budgeting and remain
+        // installed if emergency recovery continues this same generation. A Stop
+        // after this synchronous install can leave schemas in the cancelled
+        // generation's state; the checks below prevent a provider turn, and the
+        // next generation constructs a fresh discovery registry.
+        if (hostPrepared?.context) {
+          this.agent.state.tools = [...(context.tools ?? [])];
+          this.agent.state.systemPrompt = context.systemPrompt;
+          if (this.contextProjectionOptions) {
+            this.contextProjectionOptions.tools = context.tools ?? [];
+            this.contextProjectionOptions.systemPrompt = context.systemPrompt;
+          }
+        }
         try {
           await this.flushDurableMessages();
           const coordinator = await this.resolveCompaction();

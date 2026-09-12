@@ -12,6 +12,7 @@ import {
   type McpPresetAuth as SharedMcpPresetAuth,
   type PluginCatalogEntry,
 } from "../../renderer/shared/plugin-catalog.js";
+import { DEFAULT_MCP_OAUTH_CLIENT_NAME } from "./mcp-oauth-client-metadata.js";
 import type { McpServer } from "./types.js";
 
 export type McpPresetAuth = SharedMcpPresetAuth;
@@ -76,6 +77,19 @@ export function presetSecretId(serverId: string): string {
 
 export function getMcpPreset(presetId: string): McpPreset | undefined {
   return MCP_PRESETS.find((preset) => preset.id === presetId);
+}
+
+/** DCR `client_name` for this server: preset override, otherwise Aiden Agent. */
+export function mcpOAuthClientNameForServer(
+  server: Pick<McpServer, "id" | "presetId">,
+): string {
+  const preset =
+    getMcpPresetForServerId(server.id) ??
+    (server.presetId ? getMcpPreset(server.presetId) : undefined);
+  if (preset?.auth.kind === "oauth" && preset.auth.clientName?.trim()) {
+    return preset.auth.clientName.trim();
+  }
+  return DEFAULT_MCP_OAUTH_CLIENT_NAME;
 }
 
 export function getMcpPresetForServerId(serverId: string): McpPreset | undefined {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   TelegramApiError,
+  createFetchTransport,
   TelegramBotApi,
   type TelegramApiResponse,
   type TelegramTransport,
@@ -171,4 +172,22 @@ test("getUpdates with an already-aborted signal rejects immediately without call
 
   await assert.rejects(() => api.getUpdates(undefined, 0, AbortSignal.abort()), /aborted/i);
   assert.equal(called, false, "transport must not be invoked for an aborted signal");
+});
+
+
+test("command menu updates have a bounded request without altering long-poll transport", async (t) => {
+  const signals: Array<AbortSignal | null | undefined> = [];
+  const timeouts: number[] = [];
+  const signal = new AbortController().signal;
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => { timeouts.push(milliseconds); return signal; });
+  t.mock.method(globalThis, "fetch", async (_url: unknown, options?: RequestInit) => {
+    signals.push(options?.signal);
+    return { json: async () => ({ ok: true, result: true }) };
+  });
+  const transport = createFetchTransport(async () => "test-token");
+  await transport("setMyCommands", { commands: [] });
+  await transport("getUpdates", { timeout: 25 });
+  assert.deepEqual(timeouts, [10_000]);
+  assert.equal(signals[0], signal);
+  assert.equal(signals[1], undefined);
 });

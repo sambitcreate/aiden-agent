@@ -47,6 +47,9 @@ function fixture(options: { existing?: Workspace | null; saveError?: Error } = {
     terminalService: {
       closeForWorkspace: () => { events.push("close-terminal"); },
     },
+    browserService: {
+      closeForWorkspace: () => { events.push("close-browser"); },
+    },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
     createScratchWorkspaceDirectory: async () => ({
@@ -108,6 +111,7 @@ test("shared workspace permission updates preserve cancellation and schedule res
   assert.equal(updated.memoryEnabled, false);
   assert.deepEqual(application.events, [
     "close-terminal",
+    "close-browser",
     "cancel-generations",
     "cancel-schedules",
     "save",
@@ -153,7 +157,7 @@ test("shared workspace removal never unregisters a managed worktree", async () =
     }),
   });
   await assert.rejects(application.service.remove("workspace-1"), /Delete worktree/u);
-  assert.deepEqual(application.events, ["close-terminal"]);
+  assert.deepEqual(application.events, ["close-terminal", "close-browser"]);
 
   // The mutation lease releases even when removal is refused.
   await assert.rejects(application.service.remove("workspace-1"), /Delete worktree/u);

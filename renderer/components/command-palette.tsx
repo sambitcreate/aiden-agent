@@ -348,7 +348,7 @@ export function AppCommandPalette({
           data-slot="dialog-content"
           data-command-palette-content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-[22px] bg-popover shadow-modal outline-none"
+          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-dialog bg-popover shadow-modal outline-none"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             requestAnimationFrame(() =>

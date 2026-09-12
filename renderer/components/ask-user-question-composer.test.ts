@@ -14,7 +14,8 @@ test("structured questions fully replace the composer with the reference card", 
     pane,
     /questionnaire \? \([\s\S]*<AskUserQuestionComposer[\s\S]*\) : \([\s\S]*<Composer/u,
   );
-  assert.match(component, /rounded-\[24px\] bg-popover/u);
+  assert.match(component, /rounded-sheet bg-popover/u);
+  assert.match(styles, /--radius-sheet: 24px;/u);
   assert.match(component, /\{activeIndex \+ 1\} of \{prompt\.questions\.length\}/u);
   assert.match(component, /Type your own answer/u);
   assert.match(component, /"Sending…" : "Skip"/u);

@@ -32,15 +32,21 @@ import {
   type McpOAuthGeneration,
 } from "./mcp-oauth-operation.js";
 import type { McpOAuthOperation } from "./mcp-oauth-operation.js";
-import { assertMcpPresetServer } from "./mcp-presets.js";
+import {
+  MCP_OAUTH_LOOPBACK_PORT,
+  MCP_OAUTH_REDIRECT_URI,
+  explainMcpOAuthFailure,
+  mcpOAuthClientMetadata,
+} from "./mcp-oauth-client-metadata.js";
+import { assertMcpPresetServer, mcpOAuthClientNameForServer } from "./mcp-presets.js";
 import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
-const OAUTH_PORT = 41390;
-const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_PORT}/callback`;
+const OAUTH_PORT = MCP_OAUTH_LOOPBACK_PORT;
+const OAUTH_REDIRECT_URI = MCP_OAUTH_REDIRECT_URI;
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const oauthOperations = new McpOAuthOperationGate();
 
@@ -67,6 +73,7 @@ class McpOAuthProvider implements OAuthClientProvider {
     private readonly requestIsCurrent: () => boolean = () => true,
     private readonly transaction?: McpOAuthSessionTransaction,
     private readonly observeTokens?: (tokens: OAuthTokens) => void,
+    private readonly oauthClientName: string = mcpOAuthClientMetadata().client_name,
   ) {}
 
   private async boundSession() {
@@ -109,13 +116,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   get clientMetadata(): OAuthClientMetadata {
-    return {
-      client_name: "Aiden Agent",
-      redirect_uris: [OAUTH_REDIRECT_URI],
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      token_endpoint_auth_method: "none",
-    };
+    return mcpOAuthClientMetadata(this.oauthClientName) as OAuthClientMetadata;
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
@@ -235,6 +236,7 @@ export function oauthProviderFor(
     isCurrent,
     undefined,
     observeTokens,
+    mcpOAuthClientNameForServer(server),
   );
 }
 
@@ -432,6 +434,8 @@ export async function authorizeMcpServer(
     operation,
     isCurrent,
     transaction,
+    undefined,
+    mcpOAuthClientNameForServer(server),
   );
   let loopback: Loopback | null = null;
   let commitAttempted = false;
@@ -524,7 +528,7 @@ export async function authorizeMcpServer(
       "mcp-oauth",
       `Authorization failed for "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
     );
-    throw error;
+    throw explainMcpOAuthFailure(error);
   } finally {
     loopback?.close();
     oauthOperations.end(operation);

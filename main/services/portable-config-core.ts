@@ -1,3 +1,4 @@
+import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -549,6 +550,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "profileName",
     "telegramProviderId",
     "telegramModel",
+    "compactionEngine",
     "telegramWorkspaceId",
     "telegramActiveProfile",
   ] as const) {
@@ -565,6 +567,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSounds",
     "showLocalModelReasoning",
     "memoryEnabled",
+    "skillsEnabled",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
@@ -637,6 +640,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 /** Safe projection for consumers; persistence retains unknown nested future data. */
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
+  runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;

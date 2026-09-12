@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -22,9 +22,11 @@ import {
   beginPiVisibleTurnLease,
   PiCompactionSessionStore,
   syncChatMessagesToPiSession,
+  projectVisibleHistoryWithoutSkills,
 } from "./pi-compaction-session-store.js";
 import type { ChatMessage } from "./types.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
+import { migratePiSessionJournal } from "./pi-session-migration.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1205,6 +1207,121 @@ test("durable journals are private and delete with their chat", async (t) => {
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
 });
 
+test("private history inspection preserves indexed, current, legacy, and quarantined journals without opening sessions", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new PiCompactionSessionStore({
+    root: async () => { throw new Error("inspection must not initialize the repository"); },
+    readOnlyRoot: async () => root,
+  });
+  assert.equal(await store.hasChatHistory("empty"), false);
+  assert.deepEqual(await readdir(root), []);
+  await writeFile(path.join(root, "aiden-journal-index.json"), JSON.stringify({ version: 1, chats: { indexed: [path.join(root, "old.jsonl.corrupt-1")] } }));
+  assert.equal(await store.hasChatHistory("indexed"), true);
+  await unlink(path.join(root, "aiden-journal-index.json"));
+  for (const [chatId, file, version] of [
+    ["current", "current.jsonl", 4],
+    ["legacy", "legacy.jsonl", 3],
+    ["backup", "legacy.jsonl.v3-backup", 3],
+    ["quarantine", "current.jsonl.corrupt-1", 4],
+  ] as const) {
+    const header = JSON.stringify({
+      ...(version === 4 ? { kind: "header" } : { type: "session" }), version, id: chatId,
+      metadata: { kind: "aiden-chat-compaction-v1", chatId },
+    });
+    await writeFile(path.join(root, file), `${header}\n{"private":"untouched"}\n`);
+    assert.equal(await store.hasChatHistory(chatId), true);
+    assert.equal(await readFile(path.join(root, file), "utf8"), `${header}\n{"private":"untouched"}\n`);
+  }
+  assert.equal(await store.hasChatHistory("unrelated-empty"), false);
+  assert.equal((await readdir(root)).length, 4);
+  const header = JSON.stringify({ kind: "header", version: 4, id: "multibyte-body", metadata: { kind: "aiden-chat-compaction-v1", chatId: "multibyte-body" } });
+  const contents = `${header}\n${"x".repeat(65_536 - Buffer.byteLength(header) - 2)}€`;
+  await writeFile(path.join(root, "multibyte.jsonl"), contents);
+  assert.equal(await store.hasChatHistory("multibyte-body"), true, "decode only the complete header when the scan ends inside a multibyte body character");
+  assert.equal(await store.hasChatHistory("still-unrelated"), false);
+  store.quarantineChatUntilRecovered("recovering", new Promise<void>(() => {}));
+  assert.equal(await store.hasChatHistory("recovering"), true);
+});
+
+test("private history inspection fails closed on corrupt index, malformed journals, and unreadable paths", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-corrupt-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  for (const contents of ["{broken", JSON.stringify({ version: 1, chats: { other: "not-an-array" } })]) {
+    await writeFile(indexPath, contents);
+    await assert.rejects(store.hasChatHistory("empty"));
+    assert.equal(await readFile(indexPath, "utf8"), contents);
+  }
+  await unlink(indexPath);
+  const journal = path.join(root, "unknown.jsonl.corrupt-1");
+  await writeFile(journal, "{broken private history");
+  await assert.rejects(store.hasChatHistory("empty"));
+  assert.equal(await readFile(journal, "utf8"), "{broken private history");
+  await unlink(journal);
+  await symlink(path.join(root, "missing-private-file"), journal);
+  await assert.rejects(store.hasChatHistory("empty"), /symbolic link/u);
+  const absentRoot = path.join(root, "absent");
+  assert.equal(await new PiCompactionSessionStore({ root: async () => absentRoot }).hasChatHistory("empty"), false);
+  await assert.rejects(stat(absentRoot), { code: "ENOENT" });
+});
+
+test("header-only sessions created by old empty-chat reads are empty, but private body entries preserve them", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-header-only-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original = new PiCompactionSessionStore({ root: async () => root });
+  const session = await original.openChat("empty-chat-read");
+  assert.equal(await original.hasChatHistory("empty-chat-read"), true, "an active session stays protected");
+  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory("empty-chat-read");
+  assert.equal(await inspect(), false, "a persisted index plus valid header alone is not private history");
+  const metadata = await session.getMetadata();
+  await appendFile(metadata.path, " \t\n\r\n");
+  assert.equal(await inspect(), false, "trailing JSON whitespace is still empty");
+  await session.appendMessage(user("private retained work"));
+  assert.equal(await inspect(), true);
+  assert.match(await readFile(metadata.path, "utf8"), /private retained work/u);
+  await unlink(metadata.path);
+  assert.equal(await inspect(), true, "an unresolved indexed path stays protected");
+});
+
+test("completed migration of an empty legacy journal is disposable with indexed backup and receipt", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-empty-migration-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const chatId = "empty-promoted-chat";
+  const promoted = path.join(root, "empty.jsonl");
+  const header = {
+    type: "session", version: 3, id: chatId, timestamp: "2026-08-31T12:00:00.000Z", cwd: root,
+    metadata: { kind: "aiden-chat-compaction-v1", chatId },
+  };
+  await writeFile(promoted, `${JSON.stringify(header)}\n`);
+  const migration = await migratePiSessionJournal(promoted, chatId);
+  assert.equal(migration.receipt.counts.entries, 0);
+  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
+  assert.equal(await inspect(), false, "discovery recognizes actual empty migration scaffolding");
+  const index = JSON.stringify({ version: 1, chats: { [chatId]: [promoted, migration.receipt.backupPath, migration.receiptPath] } });
+  await writeFile(path.join(root, "aiden-journal-index.json"), index);
+  assert.equal(await inspect(), false, "indexed migration artifacts alone are not conversation history");
+  const originalPromoted = await readFile(promoted, "utf8");
+  const originalBackup = await readFile(migration.receipt.backupPath, "utf8");
+  const originalReceipt = await readFile(migration.receiptPath, "utf8");
+  await appendFile(promoted, '{"private":"preserve additional content"}\n');
+  assert.equal(await inspect(), true);
+  await writeFile(promoted, originalPromoted);
+  await appendFile(migration.receipt.backupPath, '{"private":"preserve backup history"}\n');
+  assert.equal(await inspect(), true);
+  await writeFile(migration.receipt.backupPath, originalBackup);
+  await writeFile(migration.receiptPath, JSON.stringify({ ...migration.receipt, validation: "failed" }));
+  assert.equal(await inspect(), true);
+  await writeFile(migration.receiptPath, originalReceipt);
+  await unlink(migration.receipt.backupPath);
+  assert.equal(await inspect(), true, "incomplete artifact sets remain protected");
+  await writeFile(migration.receipt.backupPath, originalBackup);
+  await writeFile(migration.receiptPath, "{invalid receipt");
+  await assert.rejects(inspect());
+  assert.equal(await readFile(promoted, "utf8"), originalPromoted);
+});
+
 test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-open-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
@@ -1609,4 +1726,77 @@ test("startup reconciliation removes indexed orphan journals", async (t) => {
 
   await store.reconcileChats(new Set());
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+
+test("disabled skills project visible history without old expanded inputs, results, or compactions", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const visible: ChatMessage[] = [
+    { id: "skill-user", role: "user", content: "Review this code", createdAt: 10 },
+    { id: "skill-answer", role: "assistant", content: "The code looks sound", createdAt: 20 },
+  ];
+  await syncChatMessagesToPiSession(session, visible, model, false,
+    new Map([["skill-user", "HIDDEN_SKILL_INSTRUCTIONS Review this code"]]));
+  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
+  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 30 });
+  await session.appendCompaction({ id: "old-compaction", summary: "HIDDEN_SKILL_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  const durableBefore = JSON.stringify(await session.getEntries());
+  const projected = await projectVisibleHistoryWithoutSkills(session, visible, model);
+  for (const view of [await projected.buildContext(), await projected.getBranch(), await projected.getEntries()]) {
+    assert.doesNotMatch(JSON.stringify(view), /HIDDEN_SKILL/u);
+    assert.match(JSON.stringify(view), /Review this code/u);
+    assert.match(JSON.stringify(view), /The code looks sound/u);
+  }
+  assert.equal(JSON.stringify(await session.getEntries()), durableBefore, "visible projection never deletes or rewrites durable history");
+  const call = { ...assistant(model), content: [{ type: "toolCall" as const, id: "normal-call", name: "read_file", arguments: {} }] };
+  await projected.appendMessage(call);
+  await projected.appendMessage({ role: "toolResult", toolCallId: "normal-call", toolName: "read_file",
+    content: [{ type: "text", text: "CURRENT_TOOL_RESULT" }], isError: false, timestamp: 40 });
+  const context = JSON.stringify(await projected.buildContext());
+  assert.doesNotMatch(context, /HIDDEN_SKILL/u);
+  assert.match(context, /normal-call/u);
+  assert.match(context, /CURRENT_TOOL_RESULT/u);
+  await projected.appendCompaction({ id: "new-compaction", summary: "CLEAN_CURRENT_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  assert.match(JSON.stringify(await projected.buildContext()), /CLEAN_CURRENT_SUMMARY/u);
+  assert.doesNotMatch(JSON.stringify(await projected.buildContext()), /HIDDEN_SKILL/u);
+  assert.match(JSON.stringify(await session.getEntries()), /HIDDEN_SKILL_INSTRUCTIONS/u);
+});
+
+
+test("skill-free visible context compacts and reopens through the real JSONL repository", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-skill-free-jsonl-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { model, models, faux } = compactionFixture();
+  let compactedVisibleContext = false;
+  faux.setResponses([(context) => {
+    const text = JSON.stringify(context);
+    assert.doesNotMatch(text, /HIDDEN_SKILL/u);
+    assert.match(text, /Visible user request/u);
+    compactedVisibleContext = true;
+    return fauxAssistantMessage(structuredSummary("CLEAN_SKILL_FREE_CHECKPOINT"));
+  }]);
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const session = await store.openChat("skill-free-persistent");
+  const messages: ChatMessage[] = [
+    { id: "visible-one", role: "user", content: `Visible user request ${"x".repeat(2000)}`, createdAt: 10 },
+    { id: "visible-two", role: "assistant", content: `Visible response ${"y".repeat(1000)}`, createdAt: 20 },
+    { id: "visible-three", role: "user", content: "Continue with the next part", createdAt: 30 },
+    { id: "visible-four", role: "assistant", content: "Current answer", createdAt: 40 },
+  ];
+  await syncChatMessagesToPiSession(session, messages, model, false,
+    new Map([["visible-one", "HIDDEN_SKILL_EXPANSION"]]));
+  const projected = await projectVisibleHistoryWithoutSkills(session, messages, model);
+  const coordinator = new PiCompactionCoordinator({ session: projected, model, models, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 } });
+  const result = await coordinator.compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(compactedVisibleContext, true);
+  const expected = (await projected.buildContext()).messages;
+  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat("skill-free-persistent");
+  assert.deepEqual((await reopened.buildContext()).messages, expected);
+  assert.match(JSON.stringify(await reopened.getEntries()), /HIDDEN_SKILL_EXPANSION/u,
+    "rich history is still durable when the user re-enables skills");
+  assert.doesNotMatch(JSON.stringify(await reopened.buildContext()), /HIDDEN_SKILL/u);
 });

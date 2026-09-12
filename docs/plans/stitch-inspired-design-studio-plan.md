@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–2 complete; Phase 3 implementation in progress
+Status: Active — Phases 1–2 complete; current-main integration underway before Phase 3
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -26,7 +26,14 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 - [ ] Phase 6 — project export and handoff V2
 - [ ] Final — combined review, full CI, packaged acceptance, and PR delivery
 
-Each phase requires focused implementation tests, a fresh correctness/edge-case review, a UI/UX review where applicable, remediation, and rerun verification before the next phase begins.
+Each phase requires focused implementation tests, two independent GPT-6 Astra reviews at medium reasoning effort (correctness/edge cases and integration/UI/UX where applicable), remediation, and rerun verification before the next phase begins.
+
+### 2026-09-12 continuation
+
+- Working branch: `feature/stitch-design-studio-f397`, based on `615d58a0` and tracking the existing Studio branch.
+- Prerequisite integration: merge current `main` (`a4c85c6d`) while preserving Design and current desktop/native behavior. Twenty-four conflicting files require resolution.
+- Review gates apply to integration and each remaining Phase 3–6. Signed package and hosted CI evidence must be reported separately from local tests.
+- Integration reviews: both independent GPT-6 Astra medium reviewers reported no actionable findings. Local verification passed type-check, lint, build, Design recovery/policy, 396 Generative UI tests, nine browser scenarios, and Design Studio Electron acceptance. Android unit tests/test compilation and generic iOS hardware app/test compilation passed; physical-device acceptance remains separate. Full npm regression is running.
 
 ## Product and vocabulary contract
 

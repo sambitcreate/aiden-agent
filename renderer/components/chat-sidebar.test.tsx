@@ -64,10 +64,11 @@ test("Agent and Design are peer workspace modes above the mode-specific search",
   assert.ok(ui.indexOf("{header ?") < ui.indexOf("{searchable ?"));
 });
 
-test("newAgent delegates explicit creation to the active workspace", () => {
+test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
-  assert.match(sidebar, /chatsApi\.create\(\{ workspaceId \}\)/u);
+  assert.match(sidebar, /createChatDraft\(workspaceId\)/u);
+  assert.doesNotMatch(sidebar, /chatsApi\.create\(/u);
   assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
   assert.match(sidebar, /if \(!activeId\) return;/u);
   assert.match(sidebar, /await newAgentInWorkspace\(activeId\)/u);
@@ -218,13 +219,14 @@ test("chat shortcuts follow the rows rendered by the active organization", () =>
 
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /function workspaceSecondaryLabel/u);
+  assert.match(sidebar, /useWorkspacePathPreferences/u);
+  assert.match(source("../lib/workspace-path-display.ts"), /function workspaceSecondaryLabel/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
-  assert.match(sidebar, /Target: \{workspaceSecondaryLabel\(deletingWorktree\)\}/u);
-  assert.match(sidebar, /workspaceSecondaryLabel\(removingWorkspace\)/u);
+  assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
+  assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
 });
 
 test("sidebar overflow menus open beyond the sidebar's right edge", () => {
@@ -254,7 +256,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(
     sidebar,
-    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace\)\}`\}/u,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
   );
 });
 
@@ -356,7 +358,7 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   const settings = source("../main/settings-view.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
-  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-5xl/u);
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
@@ -365,7 +367,12 @@ test("allocated composer and settings widths drive their compact layouts", () =>
 
 test("environment inline handoff uses the same animated spacer pattern", () => {
   const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(panel, /environment-panel absolute z-30/u);
+  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
+  assert.match(
+    panel,
+    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
+  );
   assert.match(
     panel,
     /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
@@ -395,6 +402,7 @@ test("shared controls use theme fills for text entry and focus states", () => {
   const button = between(ui, "export const Button =", "});");
   const input = between(ui, "export const Input =", "});");
   const textarea = between(ui, "export const Textarea =", "type TextProps");
+  const selectTrigger = between(ui, "export const SelectTrigger =", "export const SelectContent =");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
   assert.match(button, /focus-visible:bg-accent-hover/u);
@@ -404,9 +412,12 @@ test("shared controls use theme fills for text entry and focus states", () => {
     assert.doesNotMatch(control, /focus:border-focus-ring/u);
     assert.doesNotMatch(control, /focus:ring-/u);
   }
+  assert.match(selectTrigger, /focus:bg-input/u);
+  assert.doesNotMatch(selectTrigger, /focus-visible:ring-/u);
+  assert.match(source("../styles.css"), /outline: 2px solid var\(--focus-ring\) !important/u);
+  assert.doesNotMatch(selectTrigger, /focus:border-focus-ring/u);
   assert.match(ui, /focus-within:bg-control/u);
   assert.doesNotMatch(ui, /focus-within:border-focus-ring/u);
-  assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
 });
 
