@@ -22,6 +22,8 @@ app.whenReady().then(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   receipt.network = await (await net.fetch(`http://127.0.0.1:${server.address().port}/`)).text();
   server.close();
+  const ipc = require(path.join(__dirname, 'ipc-addon.node'));
+  receipt.ipc = [JSON.parse(ipc.receive(false)), JSON.parse(ipc.receive(true))];
   const worker = utilityProcess.fork(path.join(__dirname, 'worker.cjs'), [], { stdio: 'ignore' });
   receipt.worker = await new Promise((resolve, reject) => {
     worker.once('message', resolve);

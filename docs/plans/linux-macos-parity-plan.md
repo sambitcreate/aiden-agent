@@ -269,3 +269,43 @@ receipts. Thirteen focused tests, 194 Linux contract tests (one platform skip),
 and scoped lint passed; both new suites are registered in package.json.
 Inherited endpoints, pipes, Electron integration and current-holder authentication
 remain separate work; no Computer Use admission was enabled.
+
+## Phase 14: Combined Electron roles and protected socket transfer
+
+Active: perform SCM_RIGHTS receipt inside actual Electron main and Node utility
+processes through a small N-API v8 fixture addon. One native sender creates all
+four pairs. Main must complete generic and protected token/ACK roundtrips; the
+utility must complete generic IPC while the protected endpoint is omitted with
+an exact enforcing socket-object AVC. Retain the existing sandboxed renderer,
+network, shell, command and complete observed-role checks. This combines the
+previous socket and role experiments without enabling production Computer Use.
+
+The ARM64 pinned Cua binary separately passed an isolated `--version` startup
+check without network or desktop sockets; see the driver gap audit. This is not
+a desktop acceptance result.
+
+Production package provenance is a separate missing prerequisite. The repository
+is currently public (verified through GitHub), so repository-bound GitHub build
+attestations are an available candidate without introducing a new private release
+key. Existing Linux release jobs do not yet attest their packages. A future
+installer must verify the exact repository, release workflow and approved source
+ref, not just a matching digest or arbitrary workflow attestation.
+
+Phase 14 passed with both independent Astra medium reviews clear. All four
+actual Electron IPC cells and prior sandboxed renderer/role checks passed in
+final Fedora run 4. Cleanup returned zero and restored the module inventory
+under enforcing SELinux. The 41 focused tests, 210 Linux contract tests (one
+platform skip), scoped lint and diff checks passed. Evidence is retained at
+`/tmp/aiden-fedora-parity-vm/phase14-electron-ipc-evidence`. This establishes
+selective SCM_RIGHTS receipt in the tested Electron processes; inherited
+endpoints, pipes, current-holder authentication, payload/JIT integrity and
+production admission remain open. Exact phase-13 head `88592efa` passed every
+hosted CI lane in run `34701326411`.
+
+## Phase 15: Linux release package provenance
+
+Active: add repository/workflow-bound build attestations for verified Linux
+release packages, with a pinned official action and focused workflow contracts.
+Verification guidance must bind the expected source commit and main ref. This
+prepares future releases; it neither publishes a release now nor authenticates
+an installed process or enables Computer Use.

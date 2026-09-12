@@ -506,3 +506,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Electron zygote sets NoNewPrivs before exec. A diagnostic without the execute_no_trans subtraction launched but left zygote descendants in main_t, correctly failing role verification. Kernel-source review identified the dedicated main-to-child process2 nnp_transition permission; the next run restores execute_no_trans denial and tests that narrow transition grant. Extra GTK image-loader descendants also need inventory coverage.
 
 - 2026-09-12: With the narrow NNP transition grant, observed Electron children entered child_t and GUI/network/commands worked. The verifier still rejected a systemd cgroup snapshot that omitted main/Node processes despite live receipts. Treat cgroup membership as incomplete inventory; collect the dedicated fixture domains and pin processes with pidfds before cleanup. Desktop scope migration remains a production-containment concern.
+
+- 2026-09-12: Combined Electron IPC fixture needed matching Fedora nodejs22-devel N-API headers. The normal guest package transaction also updated OpenSSL 3.5.5 to 3.5.8; Electron and Node versions remained unchanged. Record this environment change with the next VM evidence.
+
+- 2026-09-12: Combined Electron IPC fixture initially lacked socket getopt permission for SO_PEERSEC label inspection. Added metadata access while retaining the protected read/write denial; subsequent actual-main/Node-utility IPC cells passed with one sender creating all four pairs.
+
+- 2026-09-12: Denying the native IPC sender access to its own executable caused startup failure after transition. Keep its required execute/map permission while denying outsider entry; final run 4 passed all cells and cleanup.

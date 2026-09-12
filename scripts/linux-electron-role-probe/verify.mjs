@@ -1,6 +1,7 @@
 import process from 'node:process';
 import console from 'node:console';
 import assert from 'node:assert/strict';
+import { verifyIpc } from './verify-ipc.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 const dir = process.argv[2];
@@ -45,7 +46,8 @@ assert.match(read('direct.txt'), /Permission denied/);
 assert.match(read('forged.txt'), /Permission denied/);
 assert.equal(read('main-execute-no-trans.txt').trim(), '');
 assert.equal(read('outsider-transition.txt').trim(), '');
-const result = { scope: 'role-boundary-candidate', passed: true, computerUseEnabled: false,
+const ipc = verifyIpc(read, app);
+const result = { ipc, scope: 'role-boundary-candidate', passed: true, computerUseEnabled: false,
   firstInstructionIdentityEstablished: false, immutablePayloadEstablished: false,
   jitConstrained: false, descriptorAuthorityEstablished: false, descendantSnapshot: processes.rows.length };
 fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result, null, 2));

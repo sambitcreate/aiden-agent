@@ -4,7 +4,7 @@ from pathlib import Path
 import signal
 import sys
 import time
-roles = {'aiden_electron_role_probe_main_t', 'aiden_electron_role_probe_child_t'}
+roles = {'aiden_electron_role_probe_main_t', 'aiden_electron_role_probe_child_t', 'aiden_electron_role_probe_sender_t'}
 def fixture_role(proc):
     return (proc / 'attr/current').read_text().split(':')[2] in roles
 for attempt in range(30):

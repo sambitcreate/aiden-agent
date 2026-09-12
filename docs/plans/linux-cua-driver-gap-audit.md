@@ -1,6 +1,6 @@
 # Pinned Cua driver: Fedora GNOME gap audit
 
-Status: source audit, 2026-09-12. No Linux Computer Use admission or full-parity acceptance. This audit did not install the extension, run the Linux driver, or change policy. Upstream test claims below are not Aiden's Fedora 44 / GNOME 50.4 acceptance results.
+Status: source audit, 2026-09-12. No Linux Computer Use admission or full-parity acceptance. This audit did not install the extension, exercise desktop driver operations, or change policy. The separately noted isolated ARM64 version check grants no desktop access. Upstream test claims below are not Aiden's Fedora 44 / GNOME 50.4 acceptance results.
 
 ## Pin and release artifacts
 
@@ -16,7 +16,7 @@ Both exact archives were subsequently downloaded through the release, matched th
 - ARM64: `6fb1b0b43b5123390f77b61e00e1acab8ec8e32ff3133a8e5463738cd73ccb29`
 - x86-64: `4b7f229ea82ed93da7e2414e53224aed4b1a76685503d4558e07007e693747eb`
 
-Static `DT_NEEDED` inspection found X11, Xi, xkbcommon, GCC support and glibc libraries. This is not a complete runtime dependency inventory: dynamically opened libraries, the extension and runtime resources still require inspection. Neither executable was run. The downloads and receipt are under `/tmp/aiden-linux-cua-artifact-audit/`. These hashes record observed upstream bytes; they are not production admission pins or proof of source-to-binary provenance. Linux packaging, immutable payload installation and exact live binary admission remain work. The macOS signing contract does not cover these assets.
+Static `DT_NEEDED` inspection found X11, Xi, xkbcommon, GCC support and glibc libraries. This is not a complete runtime dependency inventory: dynamically opened libraries, the extension and runtime resources still require inspection. The ARM64 executable subsequently returned `cua-driver 0.8.3` for `--version` in a bounded Bubblewrap invocation with a separate network namespace, no session/display sockets, a clean environment, and telemetry/update flags disabled. This establishes basic startup only; the x86-64 executable has not been run and neither driver has desktop acceptance. The downloads and receipt are under `/tmp/aiden-linux-cua-artifact-audit/`. These hashes record observed upstream bytes; they are not production admission pins or proof of source-to-binary provenance. Linux packaging, immutable payload installation and exact live binary admission remain work. The macOS signing contract does not cover these assets.
 
 ## Source-backed capability limits
 

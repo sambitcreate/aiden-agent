@@ -9,7 +9,9 @@ identity. Never install these deliberately broad domains on a production host.
 
 Use the dedicated Fedora ARM64 VM with SELinux enforcing, active GNOME user
 `fedora` UID 1000 and `/run/user/1000/wayland-0`, Node.js, Python 3 with pidfds,
-SELinux development tools, setools, systemd, and util-linux. The operator-provided
+SELinux development tools, setools, systemd, util-linux, GCC, and Fedora
+`nodejs22-devel` headers at `/usr/include/node`. The addon uses stable N-API 8
+and is compiled directly with GCC; no package build/install scripts run. The operator-provided
 Electron distribution must already exist at `/var/tmp/aiden-electron43/dist`.
 The harness rejects symlinks and special files and copies it to a new root-owned
 `/usr/libexec/aiden-electron-role-probe` directory. This copying and hashing do
@@ -21,7 +23,7 @@ sudo bash scripts/linux-electron-role-probe/run.sh /var/tmp/new-electron-role-ev
 node --test scripts/linux-electron-role-probe/*.test.mjs
 ```
 
-The evidence path must be new and absolute. Existing fixture modules, unit,
+The evidence path must be new and absolute. Existing fixture modules, either unit,
 installation, or runtime directory cause refusal. Do not run concurrently with
 another invocation. No SELinux booleans, enforcing state, global dontaudit
 settings, or Electron sandbox settings are relaxed.
@@ -60,8 +62,8 @@ settings, or Electron sandbox settings are relaxed.
 ## Cleanup and evidence
 
 The EXIT/INT/TERM path attempts every cleanup step even after a failure: stop
-the unit; drain fixture-domain processes through pidfds; remove the unit,
-installation, profile, and build directory; remove deny then base modules; and
+both units; drain fixture-domain processes through pidfds; remove both units,
+installation, profile, IPC runtime directory, and build directory; remove deny then base modules; and
 record final enforcement/module state and `cleanup-status.txt`. Inspect status
 0 and `Enforcing` before accepting cleanup. Evidence remains at the requested
 path. Journal/audit records are diagnostics; a missing AVC is not proof of a
@@ -79,8 +81,8 @@ prevent or correctly handle migration and escaped/orphaned descendants.
 
 Both fixture domains use Fedora's broad unconfined interfaces to isolate role
 transition feasibility from the much larger desktop-access policy problem.
-They do not establish hostile same-UID memory, ptrace, socket, or descriptor
-isolation. Necessary Chromium inherited channels are not denied. Writable
+They do not establish hostile same-UID memory, ptrace, or general socket and
+descriptor isolation beyond the specific SCM_RIGHTS cells below. Necessary Chromium inherited channels are not denied. Writable
 runtime data, unsigned interpreted payloads, dynamic libraries, JIT, and user
 configuration remain outside this proof. No broker or Cua process is started.
 
@@ -91,3 +93,50 @@ exec transitions therefore do not authorize production admission.
 
 Relevant primary source: Linux 6.19
 [`selinux_bprm_creds_for_exec` and NNP transition handling](https://github.com/torvalds/linux/blob/v6.19/security/selinux/hooks.c#L2182-L2425).
+
+## Actual Electron protected SCM_RIGHTS experiment
+
+`ipc-server.c` runs as UID 1000 in a separate fixed systemd service and
+`aiden_electron_role_probe_sender_t`. A single server process creates all four
+socketpairs, so generic and protected descriptors have the same FD creator SID.
+For each pair, the protected case uses `/proc/self/attr/sockcreate` to select
+`aiden_electron_role_probe_protected_t`, then resets socket creation context.
+The server reports kernel socket labels and peer PID/context, sends a synthetic
+token, transfers one endpoint, and verifies an ACK on that endpoint.
+
+`ipc-addon.c` is loaded by the **actual Electron main and actual Node utility**.
+Its synchronous N-API call performs `recvmsg(MSG_CMSG_CLOEXEC)` itself; no
+standalone surrogate receives descriptors for Electron. It reads its own native
+PID/context, server credentials/context, and received socket's kernel label.
+A channel boolean selects generic/protected test data; callers cannot supply an
+authorizing role. Connect/read/write/message waits use monotonic deadlines and
+nonblocking sockets; sends use MSG_NOSIGNAL. The server also has a total alarm
+and systemd runtime limit.
+
+The overlay subtracts protected socket **read/write** from every domain except
+main and sender. Main's protected access is explicitly allowed. Both main and
+child retain creator `fd use`, generic read/write, and socket metadata `getopt`
+for label observation. No blanket FD denial can substitute for the object rule.
+
+The verifier requires all four cells from the same server PID:
+
+| Receiver | Generic endpoint | Protected endpoint |
+| --- | --- | --- |
+| Electron main | Token/ACK roundtrip | Token/ACK roundtrip |
+| Node utility child | Token/ACK roundtrip | No received FD, MSG_CTRUNC, no token/ACK |
+
+It cross-checks native receiver PIDs with the existing root process receipt,
+checks sender/receiver socket labels and contexts, requires effective socket
+allows/denials and retained creator FD use, and matches an enforcing
+`unix_stream_socket` read/write AVC to the exact Node utility PID and protected
+object context. Audit evidence contains only bytes appended during this run;
+rotation or truncation fails acceptance. Sender success status and all four
+rows are mandatory. Existing renderer/network/shell and process-role tests
+remain mandatory. Cleanup includes the sender domain in the pidfd drain.
+
+This demonstrates selective SCM_RIGHTS endpoint omission in the actual tested
+Electron roles. It does not prove inherited-descriptor revocation, pipe
+isolation, peer-current-holder authentication, protection against a compromised
+main, or production admission. SO_PEERCRED/SO_PEERSEC here describe the fixed
+fixture's connections; they are not presented as a general transferable-socket
+holder credential. No Cua process or automation capability is enabled.

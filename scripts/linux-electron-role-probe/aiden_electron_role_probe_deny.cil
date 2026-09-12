@@ -9,3 +9,13 @@
 (typeattribute aiden_electron_role_probe_all_types)
 (typeattributeset aiden_electron_role_probe_all_types (all))
 (deny aiden_electron_role_probe_main_t aiden_electron_role_probe_all_types (file (execute_no_trans)))
+; Object-specific filtering, never a coarse creator-fd denial.
+(typeattribute aiden_electron_role_probe_not_protected_reader)
+(typeattributeset aiden_electron_role_probe_not_protected_reader (and (domain) (not (aiden_electron_role_probe_main_t aiden_electron_role_probe_sender_t))))
+(deny aiden_electron_role_probe_not_protected_reader aiden_electron_role_probe_protected_t (unix_stream_socket (read write)))
+; Only the root-managed system unit may enter the synthetic creator domain.
+(deny aiden_electron_role_probe_non_init aiden_electron_role_probe_sender_t (process (transition)))
+(deny domain aiden_electron_role_probe_sender_t (process (dyntransition)))
+(typeattribute aiden_electron_role_probe_sender_outsider)
+(typeattributeset aiden_electron_role_probe_sender_outsider (and (domain) (not (init_t aiden_electron_role_probe_sender_t))))
+(deny aiden_electron_role_probe_sender_outsider aiden_electron_role_probe_sender_exec_t (file (execute execute_no_trans)))
