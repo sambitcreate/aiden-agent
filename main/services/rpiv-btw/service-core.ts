@@ -36,7 +36,7 @@ type BtwEventBody = BtwEventV1 extends infer Event
 
 export interface BtwServiceDependencies {
   getChat(chatId: string): Promise<Chat | null>;
-  resolveRuntime(providerId: string, modelId: string, signal?: AbortSignal): Promise<ResolvedModelRuntime>;
+  resolveRuntime(providerId: string, modelId: string, signal?: AbortSignal, conversationId?: string): Promise<ResolvedModelRuntime>;
   isChatBusy(chatId: string): boolean;
   recordUsage(record: UsageRequestRecord): Promise<void>;
   registry: BtwOperationRegistry;
@@ -177,6 +177,7 @@ export class BtwService {
         input.chat.providerId!,
         input.chat.model!,
         input.controller.signal,
+        input.chat.id,
       );
       input.controller.signal.throwIfAborted();
       const latest = await this.deps.getChat(input.chat.id);

@@ -24,6 +24,7 @@ const workspace = {
 };
 
 const chat = {
+  id: "chat-1",
   botId: bot.id,
   workspaceId: workspace.workspaceId,
   providerId: "provider-1",
@@ -61,8 +62,13 @@ function fixture(
         calls.push(`workspace:${botId}`);
         return workspace;
       },
-      resolveRuntime: async (providerId: string, model: string) => {
-        calls.push(`runtime:${providerId}/${model}`);
+      resolveRuntime: async (
+        providerId: string,
+        model: string,
+        _signal?: AbortSignal,
+        conversationId?: string,
+      ) => {
+        calls.push(`runtime:${providerId}/${model}:${conversationId ?? "none"}`);
         return { provider: { id: providerId }, model: { id: model }, marker: "exact" };
       },
       ...overrides,
@@ -73,7 +79,12 @@ function fixture(
 test("prepares an exact main-only managed-home workspace and persisted runtime", async () => {
   const { input, calls } = fixture();
   const prepared = await prepareBotGeneration(input);
-  assert.deepEqual(calls, ["workspace:bot-1", "runtime:provider-1/model-1"]);
+  assert.deepEqual(calls, [
+    "workspace:bot-1",
+    // The chat id travels with the resolution so OpenCode attribution keys
+    // on the conversation.
+    `runtime:provider-1/model-1:${chat.id}`,
+  ]);
   assert.equal(prepared.managedWorkspace, workspace);
   assert.deepEqual(prepared.workspace, {
     id: workspace.workspaceId,
