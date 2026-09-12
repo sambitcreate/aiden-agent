@@ -260,7 +260,7 @@ export function dedupeGitHubChecks(rawChecks: RawStatusCheckNode[]): GitHubPullR
 export function rollupGitHubChecksState(
   checks: readonly GitHubPullRequestCheck[],
 ): GitHubPullRequestChecksState | null {
-  if (checks.some((check) => check.status === "failure")) return "failing";
+  if (checks.some((check) => check.status === "failure" || check.status === "cancelled")) return "failing";
   if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
     return "pending";
   }
@@ -301,6 +301,8 @@ export function githubCliEnvironment(): NodeJS.ProcessEnv {
   for (const key of GIT_ROUTING_ENV) delete env[key];
   delete env.GIT_CONFIG_COUNT;
   delete env.GIT_CONFIG_PARAMETERS;
+  delete env.GH_HOST;
+  delete env.GH_REPO;
   for (const key of Object.keys(env)) {
     if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
   }

@@ -79,11 +79,16 @@ test("qualifies same-named checks from different workflows", () => {
   assert.equal(rollupGitHubChecksState(checks), "failing");
 });
 
-test("rollup treats no checks as absent instead of passing", () => {
+test("rollup treats no checks as absent and cancelled checks as non-passing", () => {
   assert.equal(rollupGitHubChecksState([]), null);
   assert.equal(rollupGitHubChecksState([{ name: "lint", status: "success" }]), "passing");
   assert.equal(rollupGitHubChecksState([{ name: "lint", status: "action-required" }]), "pending");
   assert.equal(rollupGitHubChecksState([{ name: "lint", status: "failure" }]), "failing");
+  assert.equal(rollupGitHubChecksState([{ name: "lint", status: "cancelled" }]), "failing");
+  assert.equal(rollupGitHubChecksState([
+    { name: "lint", status: "success" },
+    { name: "test", status: "cancelled" },
+  ]), "failing");
 });
 
 test("parses gh pr view statusCheckRollup into the renderer-safe summary", () => {
@@ -306,6 +311,8 @@ test("GitHub CLI environment removes Git routing while preserving noninteractive
     process.env.GIT_CONFIG_PARAMETERS = "'core.sshCommand=bad'";
     process.env.GIT_CONFIG_KEY_0 = "remote.origin.url";
     process.env.GIT_CONFIG_VALUE_0 = "https://example.test/repo";
+    process.env.GH_HOST = "github.example.test";
+    process.env.GH_REPO = "owner/other";
     process.env.GH_TOKEN = "kept-for-gh";
     const env = githubCliEnvironment();
     assert.equal(env.GIT_DIR, undefined);
@@ -314,6 +321,8 @@ test("GitHub CLI environment removes Git routing while preserving noninteractive
     assert.equal(env.GIT_CONFIG_PARAMETERS, undefined);
     assert.equal(env.GIT_CONFIG_KEY_0, undefined);
     assert.equal(env.GIT_CONFIG_VALUE_0, undefined);
+    assert.equal(env.GH_HOST, undefined);
+    assert.equal(env.GH_REPO, undefined);
     assert.equal(env.GIT_TERMINAL_PROMPT, "0");
     assert.equal(env.LANG, "C");
     assert.equal(env.LC_ALL, "C");
