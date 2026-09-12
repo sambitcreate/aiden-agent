@@ -13,6 +13,8 @@
 #define SHORTCUTS "org.freedesktop.portal.GlobalShortcuts"
 #define REQUEST "org.freedesktop.portal.Request"
 #define SESSION "org.freedesktop.portal.Session"
+#define REGISTRY "org.freedesktop.host.portal.Registry"
+#define APP_ID "com.sambitcreate.aiden-agent"
 static GDBusConnection *bus;
 static GMainLoop *loop;
 static char *owner, *request_path, *session_path, *sender_component;
@@ -59,6 +61,41 @@ static GVariant *options(const char *handle, const char *session) {
   g_variant_builder_add(&b, "{sv}", "handle_token", g_variant_new_string(handle));
   if (session) g_variant_builder_add(&b, "{sv}", "session_handle_token", g_variant_new_string(session));
   return g_variant_builder_end(&b);
+}
+static gboolean supports_hold_session(void) {
+  /* Mutter 50.4 can lose a chord release when its modifier is released first.
+   * The portal returns only a localized trigger_description, not the assigned
+   * accelerator, so even a requested plain function key cannot be verified.
+   * Conservatively retain toggle dictation on GNOME until release handling is
+   * fixed and accepted. This nonactivating probe is not process authentication. */
+  GError *error = NULL;
+  GVariant *reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus",
+    "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+    g_variant_new("(s)", "org.gnome.Shell"), G_VARIANT_TYPE("(b)"),
+    G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &error);
+  gboolean gnome = TRUE;
+  if (reply) { g_variant_get(reply, "(b)", &gnome); g_variant_unref(reply); }
+  gboolean supported = !error && !gnome;
+  g_clear_error(&error);
+  if (!supported) finish("unavailable");
+  return supported;
+}
+static gboolean register_app(void) {
+  /* Portal display/association metadata, not authenticated process identity.
+   * Register this connection before any portal call, against the fenced owner. */
+  GError *error = NULL;
+  GVariantBuilder values;
+  g_variant_builder_init(&values, G_VARIANT_TYPE_VARDICT);
+  GVariant *reply = g_dbus_connection_call_sync(bus, owner, ROOT, REGISTRY, "Register",
+    g_variant_new("(s@a{sv})", APP_ID, g_variant_builder_end(&values)),
+    G_VARIANT_TYPE_UNIT, G_DBUS_CALL_FLAGS_NONE, 10000, NULL, &error);
+  gboolean supported_or_legacy = reply != NULL ||
+    g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_INTERFACE) ||
+    g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD);
+  if (reply) g_variant_unref(reply);
+  g_clear_error(&error);
+  if (!supported_or_legacy) finish("unavailable");
+  return supported_or_legacy;
 }
 static gboolean call_request(const char *method, GVariant *parameters, const char *handle) {
   g_free(request_path);
@@ -178,6 +215,7 @@ int main(int argc, char **argv) {
   bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
   if (!bus) { g_clear_error(&error); finish("unavailable"); return exit_status; }
   g_dbus_connection_set_exit_on_close(bus, FALSE);
+  if (!supports_hold_session()) { g_object_unref(bus); return exit_status; }
   GVariant *started = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "StartServiceByName", g_variant_new("(su)", PORTAL, 0), G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 10000, NULL, NULL);
   if (started) g_variant_unref(started);
   GVariant *reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner", g_variant_new("(s)", PORTAL), G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &error);
@@ -198,7 +236,7 @@ int main(int argc, char **argv) {
   g_unix_signal_add(SIGTERM, terminated, NULL); g_unix_signal_add(SIGINT, terminated, NULL);
   g_unix_fd_add(STDIN_FILENO, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_ready, NULL);
   deadline = g_timeout_add_seconds(120, expired, NULL);
-  if (call_request("CreateSession", g_variant_new("(@a{sv})", options(handle, session_token)), handle)) g_main_loop_run(loop);
+  if (register_app() && call_request("CreateSession", g_variant_new("(@a{sv})", options(handle, session_token)), handle)) g_main_loop_run(loop);
   if (request_path) g_dbus_connection_call(bus, owner, request_path, REQUEST, "Close", NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL, NULL);
   if (session_path) g_dbus_connection_call(bus, owner, session_path, SESSION, "Close", NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL, NULL);
   g_dbus_connection_flush_sync(bus, NULL, NULL);

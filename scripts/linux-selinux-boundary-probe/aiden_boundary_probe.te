@@ -1,0 +1,27 @@
+policy_module(aiden_boundary_probe, 1.0)
+
+type aiden_boundary_probe_t;
+type aiden_boundary_probe_exec_t;
+init_daemon_domain(aiden_boundary_probe_t, aiden_boundary_probe_exec_t)
+gen_require(`
+  role unconfined_r;
+')
+# Make the forged context structurally valid so runcon tests authorization,
+# rather than failing merely because this role lacks the fixture type.
+role unconfined_r types aiden_boundary_probe_t;
+
+type aiden_boundary_probe_data_t;
+files_pid_file(aiden_boundary_probe_data_t)
+
+allow aiden_boundary_probe_t self:unix_stream_socket create_stream_socket_perms;
+allow aiden_boundary_probe_t self:file { getattr open read };
+manage_files_pattern(aiden_boundary_probe_t, aiden_boundary_probe_data_t, aiden_boundary_probe_data_t)
+manage_sock_files_pattern(aiden_boundary_probe_t, aiden_boundary_probe_data_t, aiden_boundary_probe_data_t)
+files_search_pids(aiden_boundary_probe_t)
+libs_use_ld_so(aiden_boundary_probe_t)
+libs_use_shared_libs(aiden_boundary_probe_t)
+dev_rw_null(aiden_boundary_probe_t)
+
+# The root-installed executable is an entrypoint only for this fixture domain.
+# Extra access is intentionally not granted to unconfined domains here: the
+# baseline measures Fedora's existing attribute-derived permissions.

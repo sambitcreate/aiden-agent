@@ -6,6 +6,7 @@
 #define IFACE "org.freedesktop.portal.GlobalShortcuts"
 static GDBusConnection *bus;
 static char *session, *request, *client;
+static char *registered_client;
 static const char *mode;
 static gboolean creating;
 static GMainLoop *loop;
@@ -14,7 +15,8 @@ static const char xml[] =
 "<node><interface name='org.freedesktop.portal.GlobalShortcuts'>"
 "<method name='CreateSession'><arg type='a{sv}' direction='in'/><arg type='o' direction='out'/></method>"
 "<method name='BindShortcuts'><arg type='o' direction='in'/><arg type='a(sa{sv})' direction='in'/><arg type='s' direction='in'/><arg type='a{sv}' direction='in'/><arg type='o' direction='out'/></method>"
-"</interface><interface name='org.freedesktop.portal.Session'><method name='Close'/></interface></node>";
+"</interface><interface name='org.freedesktop.portal.Session'><method name='Close'/></interface>"
+"<interface name='org.freedesktop.host.portal.Registry'><method name='Register'><arg type='s' direction='in'/><arg type='a{sv}' direction='in'/></method></interface></node>";
 static void emit_event(const char *signal, const char *target, const char *id) {
   GVariantBuilder values; g_variant_builder_init(&values, G_VARIANT_TYPE_VARDICT);
   g_dbus_connection_emit_signal(bus, client, ROOT, IFACE, signal,
@@ -78,6 +80,27 @@ static void method(GDBusConnection *connection, const gchar *sender, const gchar
   const gchar *interface, const gchar *name, GVariant *parameters, GDBusMethodInvocation *invocation, gpointer data) {
   (void)connection; (void)object; (void)interface; (void)data;
   if (!strcmp(name, "Close")) { puts("closed"); fflush(stdout); g_dbus_method_invocation_return_value(invocation, NULL); return; }
+  if (!strcmp(name, "Register")) {
+    const char *app_id; GVariant *values;
+    g_variant_get(parameters, "(&s@a{sv})", &app_id, &values);
+    gboolean valid = !strcmp(app_id, "com.sambitcreate.aiden-agent") && !g_variant_n_children(values) && !registered_client;
+    g_variant_unref(values);
+    puts("register"); fflush(stdout);
+    if (!valid || !strcmp(mode, "registry-rejected")) {
+      g_dbus_method_invocation_return_dbus_error(invocation, "org.freedesktop.portal.Error.NotAllowed", "Registration rejected"); return;
+    }
+    if (!strcmp(mode, "registry-unknown-interface") || !strcmp(mode, "registry-unknown-method")) {
+      g_dbus_method_invocation_return_dbus_error(invocation,
+        !strcmp(mode, "registry-unknown-interface") ? "org.freedesktop.DBus.Error.UnknownInterface" : "org.freedesktop.DBus.Error.UnknownMethod", "Legacy portal"); return;
+    }
+    registered_client = g_strdup(sender);
+    g_dbus_method_invocation_return_value(invocation, NULL); return;
+  }
+  puts("portal-call"); fflush(stdout);
+  if ((!registered_client || strcmp(sender, registered_client)) &&
+      strcmp(mode, "registry-unknown-interface") && strcmp(mode, "registry-unknown-method")) {
+    g_dbus_method_invocation_return_dbus_error(invocation, "org.freedesktop.portal.Error.NotAllowed", "Register first"); return;
+  }
   GVariant *options;
   creating = !strcmp(name, "CreateSession");
   if (creating) g_variant_get(parameters, "(@a{sv})", &options);
@@ -107,8 +130,16 @@ int main(int argc, char **argv) {
   GDBusNodeInfo *info = g_dbus_node_info_new_for_xml(xml, NULL);
   static const GDBusInterfaceVTable vtable = { .method_call = method };
   g_dbus_connection_register_object(bus, ROOT, info->interfaces[0], &vtable, NULL, NULL, NULL);
+  g_dbus_connection_register_object(bus, ROOT, info->interfaces[2], &vtable, NULL, NULL, NULL);
   GVariant *reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName", g_variant_new("(su)", "org.freedesktop.portal.Desktop", 0), NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL);
   if (!reply) return 2;
+  if (!strcmp(mode, "gnome-running")) {
+    GVariant *shell = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+      "org.freedesktop.DBus", "RequestName", g_variant_new("(su)", "org.gnome.Shell", 0),
+      NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL);
+    if (!shell) return 2;
+    g_variant_unref(shell);
+  }
   puts("ready"); fflush(stdout);
   loop = g_main_loop_new(NULL, FALSE); g_main_loop_run(loop);
   return 0;

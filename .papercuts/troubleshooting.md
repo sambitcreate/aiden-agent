@@ -486,3 +486,13 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Isolated Fedora VM setup: Homebrew QEMU installation could not resolve a capstone bottle on macOS27; checking the official UTM bundle as a bounded alternative.
 
 - 2026-09-12: Fedora RPM CI reached the new portal suite but lacked dbus-run-session. Fedora44 provides it in dbus-daemon; add that explicit prerequisite rather than skip native acceptance.
+
+- 2026-09-12: Real GNOME50GlobalShortcuts rejected direct helperlaunch with NotAllowed: An app id is required. Privatebusmock didnotmodelhostRegistry registration; add fixedAidenDesktopID registration beforeportalrequests and validate realcompositor.
+
+- 2026-09-12: Fedora44 SELinux development interfaces expose dev_rw_null, not dev_read_write_null. Prototype base-policy compile failed safely and cleanup completed; checked installed interface before retry.
+
+- 2026-09-12: Scoped SELinux deny also blocks the root runner's unconfined-domain /proc reads. Keep the deny intact; native holder verifies its own domain before exposing its synthetic socket, while root uses service liveness for hardened restart evidence.
+
+- 2026-09-12: Fedora stock dontaudit suppresses unconfined reads of domain-labeled /proc files. SELinux probe now records this explicit evidence limit, requires exact-PID enforcing AVCs for file/socket, and avoids global -DB. Appended audit-byte capture avoids ausearch recent-window ambiguity.
+
+- 2026-09-12: GNOME 50.4 delivered Ctrl+D activation without release when Control was released first; plain F8 delivered both. Portal results expose only a human-readable description, so safe binding detection cannot use the requested accelerator. Keep GNOME hold unavailable until reliable release behavior can be established.

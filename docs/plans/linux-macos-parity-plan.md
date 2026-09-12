@@ -77,7 +77,7 @@ A minimal visible-canvas Electron reproduction crashes at the ARM SVE instructio
 - Nine native private-D-Bus cases, 87 voice tests, onboarding, Linux Settings Electron, TypeScript, full lint, ARM64 package build/verifier passed. Full desktop command passed 5,946 tests, 3 skipped, zero failures.
 - Real GNOME/KDE shortcut assignment and physical press/release acceptance remain external to the mock and Xvfb tests. Linux transcript delivery remains clipboard-only.
 
-## Phase 4: Hosted acceptance repair (implementation complete; CI pending)
+## Phase 4: Hosted acceptance repair (complete; hosted CI passed)
 
 Hosted CI at cedcc841 passed shared verification, macOS Electron, Android, and Linux ARM64. Linux x64 passed packaging/keyring but failed three Electron cases: legacy empty-chat migration, unsupported Computer Use setup expectation, and Model Pad minimum-height fit with Linux window chrome. Repair and rerun before final acceptance; Fedora RPM job depends on x64 success.
 
@@ -155,3 +155,18 @@ or a claim that Fedora Computer Use currently works.
 - Hosted b637bfdc passed shared verification, macOS Electron, Linux x64, Linux ARM64 and Android. Fedora RPM failed before portal execution because dbus-run-session was absent.
 - Fedora44 package query identifies dbus-daemon as the provider. Added it to the existing CI prerequisites and extended the CI policy regression. Both Astra medium reviews cleared; six policy tests and the native portal suite on a real Fedora44 container passed.
 - Independently booted a new isolated Fedora44 ARM64 UTM VM with kernel 6.19.10-300.fc44.aarch64 and SELinux Enforcing. This removes the OrbStack kernel limitation for future testing; GNOME setup and launch-boundary acceptance are still pending.
+
+## Phase 9: Enforcing Fedora desktop acceptance host
+
+- Provisioned an independently booted Fedora 44 ARM64 VM: kernel 6.19.10-300.fc44.aarch64, SELinux Enforcing, SELinux userspace 3.11, GNOME 50.4 on Wayland, and GNOME portal 50.0. Two independent Astra medium reviewers verified the live host and prerequisite report.
+- The VM has 32 GiB sparse storage, key-only SSH bound to host loopback, and no clipboard, directory, or USB sharing. Ordinary outbound NAT remains enabled; this is not isolation from host network services.
+- Exact-head CI at f620ef14 (run 34697719544) passed shared verification, macOS Electron, Linux x64, Linux ARM64, Android, and Fedora RPM.
+
+## Phase 10: Native desktop and SELinux prerequisite experiments
+
+- Added fixed desktop application registration before GlobalShortcuts requests. GNOME rejected the previous unregistered connection. Registration is display metadata, never process authentication; older portals may omit the interface, while genuine registration failures remain errors.
+- Real GNOME accepted the registered helper, delivered F8 activation and deactivation, and revoked the helper after a settings rebind. Ctrl+D delivered activation but lost deactivation when Control was released first. GNOME Mutter 50.4 looks up the release using the current modifier mask, so the modified binding is missed after modifier release. Hold dictation cannot be declared generally accepted from the F8 result. See [Mutter key processing](https://github.com/GNOME/mutter/blob/50.4/src/core/keybindings.c) and [GNOME portal forwarding](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/50.0/src/globalshortcuts.c).
+- Added an explicitly invoked disposable-VM SELinux probe. With the same non-root UID, baseline file/socket access succeeded, target-scoped CIL denies removed effective allows and denied operations, the root-managed fixture service still launched, and removing the overlay restored baseline access. Ptrace/pidfd results require successful baselines and matching AVCs; proc inspection remains separately qualified because stock policy suppresses some audit records.
+- The runner bounds unauthorized launch attempts and always attempts every cleanup step. Host-independent regression tests cover verifier rejection and cleanup faults. The sixth real enforcing-VM run passed and removed its fixture service, modules, user and files. This proves synthetic prerequisites only: authenticated releases, Electron role separation, endpoint delegation and complete revocation remain unimplemented. Computer Use remains disabled on Linux.
+
+- Mitigation: GNOME sessions now reject hold setup before portal activation and retain toggle dictation; the gate does not guess from localized descriptions or requested keys. The final helper returned unavailable on the real GNOME host. The native private D-Bus suite passes 13 cases, and Linux contracts pass 151 tests with one platform skip. Both independent Astra medium reviewers cleared the probe and portal changes.

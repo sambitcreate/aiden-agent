@@ -35,14 +35,18 @@ if (process.platform !== "linux") {
     }
     await assert.rejects(execute(helper, ["bind"], { env: { PATH: "/usr/bin:/bin", DBUS_SESSION_BUS_ADDRESS: "unix:path=/nonexistent-aiden-portal-bus" } }), error => error.code === 2 && JSON.parse(error.stdout).code === "unavailable" && error.stderr === "");
   });
-  for (const mode of ["success", "cancelled", "absent-binding", "wrong-session", "owner-lost", "shortcuts-changed", "await-close", "await-terminate"]) {
+  for (const mode of ["success", "gnome-running", "registry-unknown-interface", "registry-unknown-method", "registry-rejected", "cancelled", "absent-binding", "wrong-session", "owner-lost", "shortcuts-changed", "await-close", "await-terminate"]) {
     test(`portal helper ${mode}`, async () => {
       const portal = spawn(mock, [mode], { stdio: ["ignore", "pipe", "pipe"] });
+      let portalOutput = "";
+      portal.stdout.on("data", chunk => { portalOutput += chunk; });
       let child;
       const timer = setTimeout(() => { child?.kill("SIGKILL"); portal.kill("SIGKILL"); }, 6000);
       try {
         await once(portal.stdout, "data");
-        child = spawn(helper, ["bind", "CTRL+D"], { stdio: ["pipe", "pipe", "pipe"] });
+        // A preferred function key cannot bypass the gate: the compositor may
+        // assign another chord, and its human-readable label is not authority.
+        child = spawn(helper, ["bind", mode === "gnome-running" ? "F8" : "CTRL+D"], { stdio: ["pipe", "pipe", "pipe"] });
         const chunks = []; let stderr = ""; let requestedStop = false;
         child.stdout.on("data", chunk => {
           chunks.push(chunk);
@@ -56,7 +60,12 @@ if (process.platform !== "linux") {
         const [code] = await once(child, "close");
         const events = Buffer.concat(chunks).toString().trim().split("\n").map(line => JSON.parse(line));
         assert.equal(stderr, "");
-        if (["cancelled", "absent-binding", "wrong-session"].includes(mode)) {
+        assert.equal(portalOutput.split("\n").filter(line => line === "register").length, mode === "gnome-running" ? 0 : 1);
+        if (mode === "registry-rejected" || mode === "gnome-running") {
+          assert.equal(code, 2);
+          assert.deepEqual(events, [{ type: "error", code: "unavailable" }]);
+          assert.equal(portalOutput.includes("portal-call"), false);
+        } else if (["cancelled", "absent-binding", "wrong-session"].includes(mode)) {
           assert.equal(code, 2);
           assert.deepEqual(events, [{ type: "error", code: mode === "wrong-session" ? "protocol" : "cancelled" }]);
         } else {
