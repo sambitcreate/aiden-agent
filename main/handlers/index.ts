@@ -25,6 +25,7 @@ import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
+import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
@@ -65,6 +66,7 @@ export function registerHandlers(): void {
   registerTelegramHandlers();
   registerSubagentHandlers();
   registerAidenRemoteHandlers();
+  registerPeerHostHandlers();
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
 

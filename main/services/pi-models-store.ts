@@ -1,7 +1,6 @@
 import type {
   ModelsStore,
   ModelsStoreEntry,
-  ProviderModelsStore,
 } from "@earendil-works/pi-ai";
 
 import { DataStore } from "./data-store.js";
@@ -117,6 +116,12 @@ export const piModelsStore: ModelsStore = {
     });
   },
 };
+
+export interface ProviderModelsStore {
+  read(): Promise<ModelsStoreEntry | undefined>;
+  write(entry: ModelsStoreEntry): Promise<void>;
+  delete(): Promise<void>;
+}
 
 /** Provider-scoped view used for explicit single-provider refreshes on pinned Pi. */
 export function piProviderModelsStore(providerId: string): ProviderModelsStore {

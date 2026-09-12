@@ -36,7 +36,7 @@ test("Assistant MCP inventory exposes only bounded enabled identities", async ()
     truncated: false,
     status: "enabled_servers_invalid_identities_omitted",
     instruction:
-      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → MCP Servers.",
+      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Plugins.",
   });
 });
 
@@ -49,7 +49,7 @@ test("Assistant MCP inventory gives explicit host guidance when no server is ena
     truncated: false,
     status: "no_enabled_servers",
     instruction:
-      "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → MCP Servers.",
+      "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → Plugins.",
   });
 });
 
@@ -96,6 +96,6 @@ test("Assistant MCP inventory never reports unsafe enabled identities as no serv
     truncated: false,
     status: "enabled_servers_invalid_identities_omitted",
     instruction:
-      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → MCP Servers.",
+      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Plugins.",
   });
 });

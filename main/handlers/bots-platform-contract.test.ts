@@ -22,8 +22,9 @@ test("ordinary chat paths cannot activate Bot services on unsupported hosts", ()
   );
   assert.match(
     chatHandlers,
-    /if \(chat\?\.botId\) \{\s+if \(!hostPlatformCapabilities\(\)\.bots\) \{\s+return chatApplicationService\.remove\(chatId\)/u,
+    /const result = chat\?\.botId && hostPlatformCapabilities\(\)\.bots\s+\? await botApplicationService\.deleteChat\(\{ botId: chat\.botId, chatId \}\)\s+: await chatApplicationService\.remove\(chatId\)/u,
   );
+  assert.match(chatHandlers, /await memoryStore\.deleteScope\(\{ kind: "bot", id: chat\.botId \}\)/u);
   assert.match(
     llmClient,
     /if \(chat\.botId && !hostPlatformCapabilities\(\)\.bots\) \{\s+throw new Error\("Bot chats are not available on this platform\."\)/u,

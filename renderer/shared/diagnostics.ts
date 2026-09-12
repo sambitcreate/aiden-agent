@@ -22,6 +22,7 @@ export const DIAGNOSTIC_ERROR_TYPES = [
   "RangeError",
   "ReferenceError",
   "SecurityError",
+  "SubagentTreeBudgetExhaustedError",
   "SyntaxError",
   "TimeoutError",
   "TypeError",

@@ -24,11 +24,11 @@ export interface AssistantMcpServerInventory {
 const MCP_SERVER_FIELD_INSTRUCTION =
   "Use exact server ids only in schedule_task.mcpServerIds or edit_automation.mcpServerIds. Never put an MCP server id in workspaceId.";
 const NO_MCP_SERVER_INSTRUCTION =
-  "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → MCP Servers.";
+  "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → Plugins.";
 const TRUNCATED_MCP_SERVER_INSTRUCTION =
   "Only part of the enabled MCP server inventory is shown. Use only an exact shown server id. Do not infer or select an omitted server; ask the user to narrow the enabled server set.";
 const INVALID_MCP_IDENTITY_INSTRUCTION =
-  "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → MCP Servers.";
+  "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Plugins.";
 
 function hasUnsafeIdentityCharacter(value: string): boolean {
   for (const character of value) {

@@ -1204,6 +1204,7 @@ fun AidenWorkspaceSettingsSheet(
     val scope = rememberCoroutineScope()
     var nameInput by remember { mutableStateOf(workspace.name) }
     var selectedPermission by remember { mutableStateOf(workspace.permission) }
+    var memoryEnabled by remember { mutableStateOf(workspace.memoryEnabled) }
     var isSaving by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
@@ -1292,6 +1293,18 @@ fun AidenWorkspaceSettingsSheet(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("Use memory", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                }
+                Switch(checked = memoryEnabled, onCheckedChange = { memoryEnabled = it })
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Save Button
         Button(
             onClick = {
@@ -1303,7 +1316,8 @@ fun AidenWorkspaceSettingsSheet(
                             coordinator.updateWorkspace(
                                 workspace = workspace,
                                 name = newName,
-                                permission = selectedPermission
+                                permission = selectedPermission,
+                                memoryEnabled = memoryEnabled
                             )
                             onDismiss()
                         } catch (_: Exception) {} finally {

@@ -56,6 +56,8 @@ test("Tailscale takeover is disclosed only for a stale Aiden route with bounded 
 });
 
 test("Tailscale setup failures retain typed actionable remediation", () => {
+  assert.match(source, /Error invoking remote method/u);
+  assert.match(source, /replace\(\/\^Error:\\s\*\/iu, ""\)/u);
   assert.match(source, /status\.tailscaleErrorCode === "not_installed"/u);
   assert.match(source, /status\.tailscaleErrorCode === "not_connected"/u);
   assert.match(source, /status\.tailscaleErrorCode === "https_unavailable"/u);
@@ -104,4 +106,24 @@ test("paired endpoint collisions use typed remediation without exposing socket e
   assert.match(source, /Use another port/u);
   assert.match(source, /Previously paired devices may need to discover this desktop again/u);
   assert.doesNotMatch(source, /EADDRINUSE/u);
+});
+
+
+test("guided setup confirms changed access and calls the main-owned coordinator", () => {
+  assert.match(source, /title="Phone setup"/u);
+  assert.match(source, /1. Connect your phone/u);
+  assert.match(source, /2. Scan to finish/u);
+  assert.match(source, /aidenRemoteApi.setupPairing/u);
+  assert.match(source, /Enable and show code/u);
+  assert.match(source, /instanceId: snapshot.instanceId/u);
+  assert.match(source, /phone access stays on until you turn it off/u);
+  assert.match(source, /setupError.*Callout/u);
+});
+
+
+test("guided setup uses the host platform and advertises only available Bots", () => {
+  assert.match(source, /capabilities\.platform === "darwin" \? "Mac" : "computer"/u);
+  assert.match(source, /capabilities\.bots \? "Bots and workspaces" : "workspaces"/u);
+  assert.match(source, /Your AI keys stay on this \{hostLabel\}/u);
+  assert.match(source, /capabilities\.bots \? " and Bot access" : ""/u);
 });

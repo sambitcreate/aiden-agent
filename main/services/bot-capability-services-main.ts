@@ -74,6 +74,7 @@ export const botSkillContentWatcher = new BotSkillContentWatcher(() => {
 /** Main-only join from exact Bot grants to the existing runtime skill registry. */
 export async function resolveBotRuntimeSkills(botId: string) {
   const skills = await resolveBotRuntimeSkillBindings({
+    isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
     loadIdentityKey: () => opaqueKeyStore.load(),
     listConfigured: () => configStore.listSkills(),
     botId,
@@ -171,6 +172,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       }),
     listSkills: (target) =>
       resolveBotCapabilitySkills({
+        isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
         loadIdentityKey: () => opaqueKeyStore.load(),
         listConfigured: () => configStore.listSkills(),
         ...(target

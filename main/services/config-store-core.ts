@@ -1,3 +1,4 @@
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -183,6 +184,7 @@ function normalizeWorkspace(w: Workspace): Workspace {
     ...w,
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
+    ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&
@@ -757,6 +759,9 @@ export function createConfigStore(
       patch: Partial<AppSettings>,
       isCurrent: () => boolean = () => true,
     ): Promise<AppSettings> {
+      if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
+        throw new Error("Invalid compaction engine.");
+      }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
       // append-only migration record that a settings change never rewrites. Do

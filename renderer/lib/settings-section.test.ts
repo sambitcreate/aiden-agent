@@ -28,6 +28,7 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("assistant"), "assistant");
   assert.equal(parseSettingsSection("remoteAccess"), "remoteAccess");
+  assert.equal(parseSettingsSection("memory"), "memory");
   assert.equal(parseSettingsSection("about"), "about");
   assert.equal(parseSettingsSection("unknown"), undefined);
   assert.equal(parseSettingsSection(["modelData"]), undefined);
@@ -49,6 +50,19 @@ test("parses the Aiden settings deep link", () => {
   });
 });
 
+test("Plugins navigation advertises MCP, connectors, and the plugin directory", () => {
+  const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "mcp");
+  assert.ok(destination);
+  assert.equal(destination.title, "Plugins");
+  assert.deepEqual(destination.keywords, [
+    "mcp",
+    "connections",
+    "protocol",
+    "plugins",
+    "connectors",
+  ]);
+});
+
 test("Web Search navigation advertises provider routing and privacy controls", () => {
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "websearch");
   assert.ok(destination);
@@ -63,4 +77,12 @@ test("Web Search navigation advertises provider routing and privacy controls", (
     "privacy",
     "exa",
   ]);
+});
+
+
+test("settings can be found by the user's task without knowing feature names", () => {
+  for (const [query, expected] of [["connect my phone", "remoteAccess"], ["use my voice", "voice"], ["connect my ai", "providers"], ["see my screen", "computerUse"], ["do this every day", "scheduledTasks"]]) {
+    assert.ok(SETTINGS_DESTINATIONS.find((entry) => entry.id === expected)?.keywords.includes(query));
+  }
+  assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title, "Aiden On The Go");
 });

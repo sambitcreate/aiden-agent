@@ -1,0 +1,7 @@
+[
+  {"surface":"workspace","chatId":"chat-workspace","providerId":"openai","model":"gpt-workspace","scope":"workspace:ws-1"},
+  {"surface":"bot-mac","chatId":"chat-bot-canonical","providerId":"anthropic","model":"claude-bot","scope":"bot:bot-1"},
+  {"surface":"telegram-ordinary","chatId":"telegram-42-ws-1","providerId":"google","model":"gemini-workspace","scope":"workspace:ws-1"},
+  {"surface":"telegram-bot","chatId":"chat-bot-canonical","providerId":"anthropic","model":"claude-bot","scope":"bot:bot-1"},
+  {"surface":"child","chatId":"child:run-1","providerId":"openai","model":"gpt-child","scope":"ephemeral:parent-run-1"}
+]

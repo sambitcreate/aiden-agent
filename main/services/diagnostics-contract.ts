@@ -226,6 +226,7 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
     "unknown",
   ]),
   latencyBucket: new Set(["2s-plus", "5s-plus", "10s-plus"]),
+  method: new Set(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]),
   profile: new Set(["development", "production"]),
   rendererContext: new Set(["root", "router", "subtree", "window"]),
   routeCategory: new Set([
@@ -249,6 +250,13 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
 };
 
 function normalizedStringField(key: string, value: string): string | undefined {
+  // Route templates are structural constants emitted by the Aiden Remote
+  // router itself (for example `/chats/:id/turns`). They are content-free by
+  // construction — never a query string, header, credential, body, or a
+  // caller-controlled literal path — so the generic content scrubber is not
+  // applied; instead a strict grammar admits only bounded leading-slash paths
+  // of lowercase static segments and `:param` placeholders.
+  if (key === "route") return normalizedDiagnosticRoute(value);
   const sanitized = sanitizeDiagnosticText(value);
   if (!sanitized) return undefined;
   const enumerated = ENUM_STRING_FIELDS[key];
@@ -262,6 +270,28 @@ function normalizedStringField(key: string, value: string): string | undefined {
   if (key === "legacyScope") return SAFE_NAME.test(sanitized) ? sanitized : undefined;
   if (key === "message") return sanitized;
   return undefined;
+}
+
+function normalizedDiagnosticRoute(value: string): string | undefined {
+  if (value.length === 0 || [...value].length > MAX_DIAGNOSTIC_FIELD_LENGTH) {
+    return undefined;
+  }
+  if (
+    value[0] !== "/" ||
+    value.includes("//") ||
+    /[?%#@\\\s]/u.test(value)
+  ) {
+    return undefined;
+  }
+  for (const segment of value.split("/")) {
+    if (segment.length === 0) continue;
+    if (segment.startsWith(":")) {
+      if (!/^:[a-z][A-Za-z0-9]{0,63}$/u.test(segment)) return undefined;
+    } else if (!/^[a-z0-9][a-z0-9._~-]{0,127}$/u.test(segment)) {
+      return undefined;
+    }
+  }
+  return value;
 }
 
 function boundedNumber(value: number): number {
@@ -395,6 +425,7 @@ function errorCode(error: unknown): string | undefined {
 
 function diagnosticCodeFor(error: unknown): DiagnosticCode {
   const code = errorCode(error);
+  if (code === "SUBAGENT_TREE_BUDGET_EXHAUSTED") return "contract-rejected";
   if (code === "ENOENT") return "not-found";
   if (code === "EACCES" || code === "EPERM") return "permission-denied";
   if (code === "ENOSPC" || code === "EDQUOT") return "disk-full";

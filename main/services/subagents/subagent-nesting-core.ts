@@ -441,6 +441,28 @@ export interface SubagentTreeBudgetUsageV2 {
   readonly networkOperations: number;
 }
 
+export type SubagentTreeBudgetDimension =
+  | "tokens"
+  | "tool calls"
+  | "output characters"
+  | "turns"
+  | "network operations";
+
+export class SubagentTreeBudgetExhaustedError extends Error {
+  readonly code = "subagent_tree_budget_exhausted";
+
+  constructor(
+    readonly dimension: SubagentTreeBudgetDimension,
+    readonly attempted: number,
+    readonly limit: number,
+  ) {
+    super(
+      `Subagent tree ${dimension} budget exhausted (${attempted.toLocaleString("en-US")} attempted; ${limit.toLocaleString("en-US")} allowed). Start a new parent turn with narrower tasks.`,
+    );
+    this.name = "SubagentTreeBudgetExhaustedError";
+  }
+}
+
 export interface SubagentTreeBudgetSnapshotV2 extends SubagentTreeBudgetUsageV2 {
   readonly launched: number;
   readonly active: number;
@@ -698,17 +720,19 @@ export class SubagentTreeBudgetLedgerV2 {
     const outputChars = this.outputChars + usage.outputChars;
     const turns = this.turns + usage.turns;
     const networkOperations = this.networkOperations + usage.networkOperations;
-    if (
-      tokens > this.limits.maxTokens ||
-      toolCalls > this.limits.maxToolCalls ||
-      outputChars > this.limits.maxOutputChars ||
-      turns > this.limits.maxTurns ||
-      networkOperations > this.limits.maxNetworkOperations
-    ) {
-      throw new Error(
-        "Subagent tree token, tool-call, turn, network, or output budget exhausted.",
-      );
-    }
+    const exceeded: [SubagentTreeBudgetDimension, number, number] | undefined =
+      tokens > this.limits.maxTokens
+        ? ["tokens", tokens, this.limits.maxTokens]
+        : toolCalls > this.limits.maxToolCalls
+          ? ["tool calls", toolCalls, this.limits.maxToolCalls]
+          : outputChars > this.limits.maxOutputChars
+            ? ["output characters", outputChars, this.limits.maxOutputChars]
+            : turns > this.limits.maxTurns
+              ? ["turns", turns, this.limits.maxTurns]
+              : networkOperations > this.limits.maxNetworkOperations
+                ? ["network operations", networkOperations, this.limits.maxNetworkOperations]
+                : undefined;
+    if (exceeded) throw new SubagentTreeBudgetExhaustedError(...exceeded);
     this.tokens = tokens;
     this.toolCalls = toolCalls;
     this.outputChars = outputChars;

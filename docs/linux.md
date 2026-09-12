@@ -98,8 +98,9 @@ macOS Accessibility auto-paste transaction. Wayland compositors own final
 placement of the dictation pill, so exact bottom-center positioning may vary.
 
 Provider inventories may refresh only from the provider services the user has
-configured. Descriptive model metadata comes from Aiden's bundled release
-snapshot; ordinary app reads expose no live models.dev refresh action.
+configured. Descriptive model metadata uses the bundled release snapshot or a validated
+device-local display cache. The explicit **Update model catalogs** action in
+Settings may refresh that cache; startup and ordinary reads stay offline.
 
 ## Updates and troubleshooting
 

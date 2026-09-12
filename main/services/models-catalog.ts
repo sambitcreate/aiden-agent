@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { app, logger } from "../platform.js";
 import { EMPTY_ARTIFICIAL_ANALYSIS_CATALOG } from "./artificial-analysis-catalog-core.js";
 import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
+import { modelsDevCacheRuntime } from "./models-dev-cache.js";
 import {
   createModelCatalogLoader,
   lookupCatalogModelInfo,
@@ -35,6 +36,18 @@ const getModelsDev = createModelCatalogLoader(
     });
   },
 );
+
+async function getDisplayModelsDev() {
+  const bundled = await getModelsDev();
+  try {
+    return await modelsDevCacheRuntime.catalog(bundled);
+  } catch (error) {
+    logger.warn("models-catalog", "Could not read the device-local models.dev cache.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return bundled;
+  }
+}
 
 async function loadOpenRouterBenchmarks() {
   try {
@@ -65,7 +78,7 @@ export const modelsCatalog = {
   /** Capability info for one model. */
   async info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
     const [modelsDev, openRouterBenchmarks] = await Promise.all([
-      getModelsDev(),
+      getDisplayModelsDev(),
       loadOpenRouterBenchmarks(),
     ]);
     return resolveModelInfo(
@@ -83,7 +96,7 @@ export const modelsCatalog = {
     modelIds: string[],
   ): Promise<Record<string, ModelInfo>> {
     const [modelsDev, openRouterBenchmarks] = await Promise.all([
-      getModelsDev(),
+      getDisplayModelsDev(),
       loadOpenRouterBenchmarks(),
     ]);
     return Object.fromEntries(

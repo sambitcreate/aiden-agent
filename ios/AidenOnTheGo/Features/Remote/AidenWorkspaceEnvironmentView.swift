@@ -357,7 +357,7 @@ private struct AidenWorkspaceFileEditorView: View {
                     if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the desktop") {
+                            if message.contains("changed on the paired desktop") {
                                 Button("Reload from desktop") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }

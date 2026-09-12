@@ -18,7 +18,7 @@ test("Linux Wayland launches disable Chromium Vulkan before the main module load
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
   const flags = readFileSync(new URL("./linux-graphics-flags.ts", import.meta.url), "utf8");
   assert.match(bootstrap, /applyLinuxGraphicsFlags\(\)/u);
-  assert.match(flags, /appendSwitch\("disable-features", "Vulkan"\)/u);
+  assert.match(flags, /appendSwitch\("disable-features", disableVulkanFeature\(app\.commandLine\.getSwitchValue\("disable-features"\)\)\)/u);
   assert.doesNotMatch(flags, /disableHardwareAcceleration/u);
 });
 

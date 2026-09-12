@@ -38,6 +38,7 @@ export const appHandlers = {
         computerUse: host.computerUse,
         dockIcon: host.dockIcon,
         accessibilityPaste: host.accessibilityPaste,
+        dictationHoldToTalk: host.dictationHoldToTalk,
         nativeShare: host.nativeShare,
         appleFoundationModels: host.appleFoundationModels,
       },

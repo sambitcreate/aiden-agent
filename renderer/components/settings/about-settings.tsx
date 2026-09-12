@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, Github, Loader2, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
+import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
@@ -159,7 +159,7 @@ export function AboutSettings() {
 
   return (
     <>
-      <FieldSet title="About">
+      <FieldSet title="Application">
         <div className="settings-about-header flex items-center gap-4 p-4 max-[540px]:items-start">
           <img src={APP_ICON_URL} alt="" className="size-16 shrink-0" />
           <div className="min-w-0 flex-1">
@@ -201,7 +201,7 @@ export function AboutSettings() {
               disabled={showingOnboarding}
               onClick={() => void showOnboarding()}
             >
-              {showingOnboarding ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {showingOnboarding ? <Loader2 className="animate-spin" /> : null}
               {showingOnboarding ? "Opening…" : "Show onboarding"}
             </Button>
           </div>

@@ -10,6 +10,14 @@ const catalogWorkflowUrl = new URL(
   import.meta.url,
 );
 
+function workflowStep(workflow, name) {
+  const marker = `      - name: ${name}`;
+  const start = workflow.indexOf(marker);
+  assert.notEqual(start, -1, `Missing workflow step: ${name}`);
+  const next = workflow.indexOf("\n      - name:", start + marker.length);
+  return workflow.slice(start, next === -1 ? workflow.length : next);
+}
+
 test("Android CI only runs for Android or CI workflow changes", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
 
@@ -21,6 +29,16 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /^ {4}needs: changes$/mu);
   assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
   assert.match(workflow, /npm run test:model-catalog/u);
+
+  const mainPushOnly =
+    /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/u;
+  assert.doesNotMatch(workflowStep(workflow, "Verify Android"), /:app:assembleDebug/u);
+
+  const assembly = workflowStep(workflow, "Assemble installable debug APK");
+  assert.match(assembly, mainPushOnly);
+  assert.match(assembly, /:app:assembleDebug/u);
+  assert.match(workflowStep(workflow, "Record APK checksum"), mainPushOnly);
+  assert.match(workflowStep(workflow, "Upload installable debug APK"), mainPushOnly);
 });
 
 test("both Linux package gates exercise the desktop Pi extensions", async () => {
@@ -109,4 +127,12 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /needs: refresh/u);
   assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.match(workflow, /git push.*HEAD:main/u);
+});
+
+test("coverage collection is enabled before positional test paths", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const command = manifest.scripts["test:coverage"].split(/\s+/u);
+  const flag = command.indexOf("--experimental-test-coverage");
+  const firstTest = command.findIndex((argument) => /\.test\.[cm]?[jt]sx?$/u.test(argument));
+  assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
 });

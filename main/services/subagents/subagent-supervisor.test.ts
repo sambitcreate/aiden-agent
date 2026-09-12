@@ -21,10 +21,7 @@ import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
 } from "./eligibility.js";
-import {
-  projectSubagentCompletedSummary,
-  runSubagentChild,
-} from "./subagent-child-runner.js";
+import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -349,11 +346,13 @@ test("supervisor preflights the generation launch budget without partial launche
     ...TEST_SUPERVISOR_SCOPE,
     runtime: runtime(),
     thinkingLevel: "high",
+    compactionEngine: "vcc",
     workspaceRoot: "/workspace",
     permission: "ask",
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
     policy: { launchBudget: 5 },
-    runChild: async ({ request: task }) => {
+    runChild: async ({ request: task, compactionEngine }) => {
+      assert.equal(compactionEngine, "vcc");
       launched.push(task.label);
       return completed(task.label);
     },
@@ -1003,7 +1002,7 @@ test("Phase 6B carries usage budgets across repeated model tool calls", async ()
   await supervisor.execute(request(["First"]));
   await assert.rejects(
     supervisor.execute(request(["Second"])),
-    /generation tree budget exhausted/u,
+    /generation tree budget exhausted.*new parent turn with narrower tasks/u,
   );
   assert.equal(childRuns, 1);
 });
@@ -1046,7 +1045,7 @@ test("Phase 6B telemetry budget exhaustion cancels and terminalizes the whole sc
   );
   await assert.rejects(
     supervisor.execute(request(["Cannot reset"])),
-    /generation tree budget exhausted/u,
+    /generation tree budget exhausted.*new parent turn with narrower tasks/u,
   );
 });
 
@@ -2425,10 +2424,7 @@ test("model-supplied task and label text preserve semantic content before child 
     },
   });
   assert.equal(result.status, "completed");
-  assert.match(
-    control.promptText,
-    /Users|alice|abcd1234secret|hunter2secret|SecretProject|C:\\/,
-  );
+  assert.match(control.promptText, /Users|alice|abcd1234secret|hunter2secret|SecretProject|C:\\/);
 
   const supervisor = new SubagentSupervisor({
     generationId: "sanitized-label",

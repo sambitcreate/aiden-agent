@@ -14,6 +14,8 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
+import { browserService } from "./services/browser/service.js";
+import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import { mainWindowOptions } from "./windows/main-window-options.js";
@@ -105,6 +107,8 @@ import {
 } from "./services/git.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
+import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
+import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
 import {
@@ -408,6 +412,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         await subagentRunStore.close();
       })(),
       terminalService.flushHistory(),
+      browserService.shutdown(),
     ]);
   } catch (error) {
     logger.error(
@@ -1071,6 +1076,7 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on("did-start-loading", () => {
     resetRendererReadiness();
     terminalService.closeForWebContents(createdWebContentsId);
+    browserService.closeForWebContents(createdWebContentsId);
   });
   createdWindow.webContents.on("render-process-gone", (_event, details) => {
     void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
@@ -1091,6 +1097,7 @@ async function createMainWindow(): Promise<void> {
     });
     rendererReadiness.reset();
     terminalService.closeForWebContents(createdWebContentsId);
+    browserService.closeForWebContents(createdWebContentsId);
     if (
       cleanupStarted ||
       shutdownStarted ||
@@ -1256,6 +1263,7 @@ async function createMainWindow(): Promise<void> {
   });
   createdWindow.on("closed", () => {
     terminalService.closeForWebContents(createdWebContentsId);
+    browserService.closeForWebContents(createdWebContentsId);
     if (mainWindow === createdWindow) {
       mainWindow = null;
       mainWindowLoads.clear();
@@ -1529,6 +1537,8 @@ if (!ownsSingleInstanceLock) {
 } else {
   registerNativeHandlers();
   registerHandlers();
+  registerBrowserHandlers();
+  terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
 
   app.on("child-process-gone", (_event, details) => {
     void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
@@ -1814,6 +1824,16 @@ if (!ownsSingleInstanceLock) {
             error,
           );
         }
+      }
+      // One-time legacy cleanup runs after recoverable artifacts and Bot identity
+      // restoration, but before renderers, schedules, or remote clients can write.
+      try {
+        await migrateLegacyEmptyWorkspaceChats();
+      } catch (error) {
+        // Do not admit new writers after an uncertain initial snapshot write:
+        // otherwise a restart could mistake their new chats for legacy data.
+        if (error instanceof EmptyChatMigrationSnapshotError) throw error;
+        logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
       }
       const visibleChatIds = new Set(
         (await chatStore.list()).map((chat) => chat.id),

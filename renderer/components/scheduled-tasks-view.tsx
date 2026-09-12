@@ -43,19 +43,25 @@ import { scheduleApi } from "../lib/ipc";
 import {
   queryKeys,
   useMcpServers,
+  useProviders,
   useScheduledTasks,
   useScheduledTaskSettings,
+  useSettings,
 } from "../lib/queries";
 import {
   filterScheduledTasks,
   formatNextRun,
   formatSchedule,
+  scheduledTaskProviderPin,
   scheduledTaskStatus,
   type ScheduledTaskTab,
 } from "../lib/scheduled-task-view";
+import { readModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import type {
   McpServer,
+  Provider,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskSettings,
@@ -124,10 +130,16 @@ function newTask(
   settings: ScheduledTaskSettings | undefined,
   workspaceId: string | undefined,
   mcpServers: McpServer[],
+  providers: Provider[] | undefined,
+  hiddenModelsByProvider: HiddenModelsByProvider | undefined,
   template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
   const mode = settings?.defaultMode ?? "llm";
   const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
+  const pinned =
+    mode === "llm"
+      ? scheduledTaskProviderPin(providers, readModelSelection(), hiddenModelsByProvider)
+      : undefined;
   return {
     name: template?.name ?? "",
     enabled: true,
@@ -136,6 +148,7 @@ function newTask(
     timezone:
       settings?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     workspaceId,
+    ...(pinned ?? {}),
     prompt: template?.prompt ?? "",
     script: "",
     permission,
@@ -313,6 +326,8 @@ export function ScheduledTasksView() {
   const { activeId, workspaces } = useActiveWorkspace();
   const tasks = useScheduledTasks();
   const settings = useScheduledTaskSettings();
+  const appSettings = useSettings();
+  const providers = useProviders();
   const mcpServers = useMcpServers();
   const [query, setQuery] = React.useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
@@ -448,7 +463,15 @@ export function ScheduledTasksView() {
                   disabled={manualCreationUnavailable}
                   onSelect={() => {
                     setEditingUpdatedAt(undefined);
-                    setEditing(newTask(settings.data, activeId, mcpServers.data ?? []));
+                    setEditing(
+                      newTask(
+                        settings.data,
+                        activeId,
+                        mcpServers.data ?? [],
+                        providers.data,
+                        appSettings.data?.hiddenModelsByProvider,
+                      ),
+                    );
                   }}
                 >
                   <PencilLine className="size-4" />
@@ -560,7 +583,6 @@ export function ScheduledTasksView() {
                       tabIndex={tab === value ? 0 : -1}
                       key={value}
                       size="small"
-                      radius="rounded"
                       variant={tab === value ? "filled" : "transparent"}
                       onClick={() => setTab(value)}
                       onKeyDown={(event) => {
@@ -615,7 +637,7 @@ export function ScheduledTasksView() {
                   />
                 </div>
               ) : (
-                <div className="overflow-hidden rounded-card bg-well">
+                <div className="overflow-visible rounded-card bg-well">
                   {visible.map((task, index) => {
                     const status = statusPresentation(task);
                     const busy = busyTaskId === task.id;
@@ -636,7 +658,7 @@ export function ScheduledTasksView() {
                           <button
                             type="button"
                             aria-pressed={selectedTaskId === task.id}
-                            className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                            className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                             onClick={() => setSelectedTaskId(task.id)}
                           >
                             <span className="flex items-center gap-2">
@@ -738,10 +760,17 @@ export function ScheduledTasksView() {
                             onClick={() => {
                               setEditingUpdatedAt(undefined);
                               setEditing(
-                                newTask(settings.data, activeId, mcpServers.data ?? [], template),
+                                newTask(
+                                  settings.data,
+                                  activeId,
+                                  mcpServers.data ?? [],
+                                  providers.data,
+                                  appSettings.data?.hiddenModelsByProvider,
+                                  template,
+                                ),
                               );
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"
+                            className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 [--keyboard-focus-offset:-2px] focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"
                           >
                             <span className="grid size-9 shrink-0 place-items-center rounded-control bg-control text-secondary">
                               <Icon className="size-4" />
@@ -813,6 +842,9 @@ export function ScheduledTasksView() {
           workspaces={workspaces}
           mcpServers={mcpServers.data ?? []}
           mcpServersUnavailable={mcpServers.isError}
+          providers={providers.data ?? []}
+          hiddenModelsByProvider={appSettings.data?.hiddenModelsByProvider}
+          lastProviderId={appSettings.data?.lastProviderId}
           assistantOwned={Boolean(
             editing.id &&
             tasks.data?.some(
@@ -836,6 +868,7 @@ export function ScheduledTasksView() {
               toast.success(input.id ? "Scheduled task updated." : "Scheduled task created.");
             } catch (error) {
               toast.error(error instanceof Error ? error.message : "Couldn't save this task.");
+              throw error;
             } finally {
               setSaving(false);
             }

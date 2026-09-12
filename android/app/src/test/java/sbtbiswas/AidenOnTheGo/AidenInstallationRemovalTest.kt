@@ -14,6 +14,8 @@ import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotFavorites
 import sbtbiswas.AidenOnTheGo.models.AidenBotList
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
 import sbtbiswas.AidenOnTheGo.models.AidenPairingExchange
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenUsageTokens
@@ -25,6 +27,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import java.time.Instant
 
 class AidenInstallationRemovalTest {
     @get:Rule
@@ -60,6 +63,21 @@ class AidenInstallationRemovalTest {
         )
 
         chatCache.saveChats(emptyList(), installation.instanceId, "workspace-one")
+        chatCache.saveSummaries(
+            listOf(
+                AidenChatSummary(
+                    id = "chat-one",
+                    workspaceId = "workspace-one",
+                    title = "Cached summary",
+                    titlePending = false,
+                    createdAt = Instant.parse("2026-09-01T12:00:00Z"),
+                    updatedAt = Instant.parse("2026-09-01T12:01:00Z"),
+                    revision = "rev-one",
+                    activity = AidenChatSummaryActivity.IDLE
+                )
+            ),
+            installation.instanceId
+        )
         draftStore.setDraft(installation.instanceId, "chat-one", "private draft")
         navigationStore.setSelectedArea(installation.instanceId, AidenProductArea.WORKSPACES)
         coordinator.archiveStore.archive("workspace-one", installation.instanceId)
@@ -83,6 +101,7 @@ class AidenInstallationRemovalTest {
         assertTrue(installationStore.installations.value.isEmpty())
         assertNull(secureStore.getCredential(installation.credentialScope))
         assertNull(chatCache.loadChats(installation.instanceId, "workspace-one"))
+        assertNull(chatCache.loadSummaries(installation.instanceId))
         assertNull(draftStore.getDraft(installation.instanceId, "chat-one"))
         assertEquals(AidenProductArea.BOTS, navigationStore.selectedArea(installation.instanceId))
         assertFalse(coordinator.archiveStore.isArchived("workspace-one", installation.instanceId))

@@ -1,9 +1,14 @@
 package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarPresentation
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotCustomAccessDraft
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
@@ -23,6 +28,10 @@ class AidenBotContractTest {
             ?: throw IllegalStateException("Resource contract.json not found")
         val jsonText = stream.bufferedReader().use { it.readText() }
         AidenRawJsonDuplicateKeyScanner.validate(jsonText)
+        AidenBotPrivateResponseValidator.validate(
+            jsonText,
+            AidenBotPrivateResponseScope.SharedFixture
+        )
         return json.decodeFromString<AidenRemoteContractFixture>(jsonText)
     }
 
@@ -100,8 +109,21 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(9, fixture.contractRevision)
+        assertEquals(10, fixture.contractRevision)
+        assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
+        assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
+        assertTrue(fixture.server.features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE))
+        val chatSummaries = requireNotNull(fixture.chatSummaries)
+        chatSummaries.validatedWire()
+        assertTrue(chatSummaries.summaries.isNotEmpty())
+        assertTrue(chatSummaries.summaries.all { it.revision.isNotEmpty() })
+        assertEquals(
+            listOf("chat_fixture_summary_02", "chat_fixture_summary_01"),
+            chatSummaries.summaries.map { it.id }
+        )
+        assertEquals(AidenChatSummaryActivity.ACTIVE, chatSummaries.summaries.first().activity)
+        assertTrue(requireNotNull(chatSummaries.nextCursor).length <= AidenRemoteProtocol.MAX_CHAT_SUMMARY_CURSOR_LENGTH)
         assertEquals("bot_fixture_01", fixture.botSummary.id)
         assertEquals(256, fixture.botList.maxBots)
         assertEquals(fixture.botPolicy.botId, fixture.botDetail.id)
@@ -194,6 +216,50 @@ class AidenBotContractTest {
                 avatar = AidenBotSemanticAvatar.Recipe(recipe),
                 access = AidenBotAccessUpdate.full("rev_1")
             )
+        }
+    }
+
+    @Test
+    fun testGloballyDisabledSkillsRejectStaleSelectionsAndAllowSkillFreeChoices() {
+        val fixture = loadSharedContractFixture()
+        val catalog = fixture.botCapabilityCatalog.copy(skills = emptyList())
+        val stale = requireNotNull(fixture.botPolicyUpdate.request.custom)
+        assertTrue(stale.skillIds.isNotEmpty())
+        assertFalse(catalog.containsAvailable(stale))
+        assertTrue(catalog.containsAvailable(stale.copy(skillIds = emptyList())))
+    }
+
+    @Test
+    fun testDisabledSkillsPreserveSavedDraftsWithoutGrantingNewChoices() {
+        val fixture = loadSharedContractFixture()
+        val saved = requireNotNull(fixture.botPolicyUpdate.request.custom)
+        val catalog = fixture.botCapabilityCatalog.copy(
+            skillsEnabled = false,
+            skills = fixture.botCapabilityCatalog.skills.map { it.copy(available = false) }
+        )
+        assertTrue(catalog.containsAvailable(saved))
+        val draft = requireNotNull(AidenBotCustomAccessDraft.fromAccess(fixture.botPolicyUpdate.response, catalog))
+        assertEquals(saved.skillIds.toSet(), draft.skillIDs)
+        assertTrue(draft.isSaveable(catalog))
+        assertTrue(requireNotNull(AidenBotCustomAccessDraft.fromCatalog(catalog)).skillIDs.isEmpty())
+        assertFalse(catalog.containsAvailable(saved.copy(skillIds = listOf("skill.unknown"))))
+        assertFalse(catalog.copy(connections = catalog.connections.map { it.copy(available = false) }).containsAvailable(saved))
+        assertFalse(catalog.copy(skillsEnabled = true).containsAvailable(saved))
+        assertTrue(fixture.botCapabilityCatalog.containsAvailable(saved))
+    }
+
+    @Test
+    fun testSkillsGateWireDefaultsAndValidation() {
+        val catalog = loadSharedContractFixture().botCapabilityCatalog
+        val fields = json.parseToJsonElement(json.encodeToString(AidenBotCapabilityCatalog.serializer(), catalog)).jsonObject
+        val legacy = JsonObject(fields - "skillsEnabled")
+        assertTrue(json.decodeFromString<AidenBotCapabilityCatalog>(legacy.toString()).skillsEnabled)
+        val disabled = JsonObject(fields + ("skillsEnabled" to JsonPrimitive(false)))
+        assertFalse(json.decodeFromString<AidenBotCapabilityCatalog>(disabled.toString()).skillsEnabled)
+        for (invalid in listOf(JsonNull, JsonPrimitive("false"), JsonPrimitive(0))) {
+            assertThrows(Exception::class.java) {
+                json.decodeFromString<AidenBotCapabilityCatalog>(JsonObject(fields + ("skillsEnabled" to invalid)).toString())
+            }
         }
     }
 

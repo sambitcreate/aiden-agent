@@ -675,6 +675,8 @@ final class AidenWorkspaceChatsModel {
     private let workspaceId: String
     private let cache: AidenChatCache
     private let hapticScope: UUID
+    private let onChatUpdated: @MainActor (AidenChat) -> Void
+    private let onChatRemoved: @MainActor (String) -> Void
     private(set) var chats: [AidenChat] = []
     private(set) var isLoading = false
     private(set) var isMutating = false
@@ -684,12 +686,16 @@ final class AidenWorkspaceChatsModel {
         coordinator: AidenRemoteCoordinator,
         workspaceId: String,
         hapticScope: UUID = UUID(),
-        cache: AidenChatCache = .shared
+        cache: AidenChatCache = .shared,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatRemoved: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
         self.workspaceId = workspaceId
         self.hapticScope = hapticScope
         self.cache = cache
+        self.onChatUpdated = onChatUpdated
+        self.onChatRemoved = onChatRemoved
     }
 
     var isConnected: Bool { coordinator.connectionState == .connected }
@@ -743,6 +749,7 @@ final class AidenWorkspaceChatsModel {
             }
             upsert(chat)
             try? await persist(chat: chat, instanceId: instanceId)
+            onChatUpdated(chat)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-create:\(chat.id):\(chat.revision)")
             return chat
         } catch let error where aidenIsCancellation(error) {
@@ -773,6 +780,7 @@ final class AidenWorkspaceChatsModel {
             guard coordinator.isCurrent(context) else { return }
             upsert(updated)
             try? await persist(chat: updated, instanceId: instanceId)
+            onChatUpdated(updated)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
@@ -799,6 +807,7 @@ final class AidenWorkspaceChatsModel {
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
             try? await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            onChatRemoved(chat.id)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-remove:\(chat.id):\(chat.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
@@ -822,6 +831,7 @@ final class AidenWorkspaceChatsModel {
     private func persist(chat: AidenChat, instanceId: String) async throws {
         try await cache.saveChat(chat, instanceId: instanceId)
         try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+        try await cache.reconcileChatSummary(chat, instanceId: instanceId)
     }
 
     private static func sorted(_ chats: [AidenChat]) -> [AidenChat] {
@@ -866,6 +876,7 @@ final class AidenChatViewModel {
     private let runtime: Runtime
     private var allowsMutations: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
+    private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
     private let hapticScope: UUID
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -882,7 +893,14 @@ final class AidenChatViewModel {
     private(set) var catalog: AidenModelCatalog?
     private(set) var isLoading = false
     private(set) var isStarting = false
-    private(set) var streamState: AidenStreamState?
+    private(set) var streamState: AidenStreamState? {
+        didSet {
+            let wasActive = oldValue.map { !$0.isTerminal } ?? false
+            let isActive = streamState.map { !$0.isTerminal } ?? false
+            guard wasActive != isActive else { return }
+            onChatActivityChanged(chat.id, isActive ? .active : .idle)
+        }
+    }
     private(set) var liveText = ""
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
@@ -957,7 +975,8 @@ final class AidenChatViewModel {
         draftStore: AidenChatDraftStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         allowsMutations: Bool = true,
-        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         runtime = .live(
             coordinator: coordinator,
@@ -970,6 +989,7 @@ final class AidenChatViewModel {
         self.draftStore = draftStore
         self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
+        self.onChatActivityChanged = onChatActivityChanged
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -982,6 +1002,7 @@ final class AidenChatViewModel {
         draftStore = .shared
         hapticScope = UUID()
         onChatUpdated = { _ in }
+        onChatActivityChanged = { _, _ in }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -2067,18 +2088,32 @@ struct AidenWorkspaceChatsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.aidenPalette) private var palette
     let workspace: AidenWorkspace
+    let onChatUpdated: @MainActor (AidenChat) -> Void
+    let onChatRemoved: @MainActor (String) -> Void
+    let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenWorkspaceChatsModel
     @State private var createdChat: AidenChat?
     @State private var renameChat: AidenChat?
     @State private var renameTitle = ""
     @State private var deleteChat: AidenChat?
 
-    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
+    init(
+        coordinator: AidenRemoteCoordinator,
+        workspace: AidenWorkspace,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+    ) {
         self.coordinator = coordinator
         self.workspace = workspace
+        self.onChatUpdated = onChatUpdated
+        self.onChatRemoved = onChatRemoved
+        self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenWorkspaceChatsModel(
             coordinator: coordinator,
-            workspaceId: workspace.id
+            workspaceId: workspace.id,
+            onChatUpdated: onChatUpdated,
+            onChatRemoved: onChatRemoved
         ))
     }
 
@@ -2108,7 +2143,11 @@ struct AidenWorkspaceChatsView: View {
                             AidenChatDetailView(
                                 coordinator: coordinator,
                                 chat: chat,
-                                onChatUpdated: { model.accept($0) }
+                                onChatUpdated: {
+                                    model.accept($0)
+                                    onChatUpdated($0)
+                                },
+                                onChatActivityChanged: onChatActivityChanged
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -2148,7 +2187,11 @@ struct AidenWorkspaceChatsView: View {
                 AidenChatDetailView(
                     coordinator: coordinator,
                     chat: createdChat,
-                    onChatUpdated: { model.accept($0) }
+                    onChatUpdated: {
+                        model.accept($0)
+                        onChatUpdated($0)
+                    },
+                    onChatActivityChanged: onChatActivityChanged
                 )
             }
         }
@@ -2224,14 +2267,16 @@ struct AidenChatDetailView: View {
         chat: AidenChat,
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
-        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         _coordinator = State(initialValue: coordinator)
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
             allowsMutations: allowsMutations,
-            onChatUpdated: onChatUpdated
+            onChatUpdated: onChatUpdated,
+            onChatActivityChanged: onChatActivityChanged
         ))
         _botToolsModel = State(initialValue: chat.botId.map {
             AidenBotChatToolsModel(chatID: chat.id, botID: $0)

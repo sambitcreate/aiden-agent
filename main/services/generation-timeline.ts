@@ -1,4 +1,9 @@
 import {
+  isCompactionEngine,
+  compactionEngineLabel,
+  type CompactionEngine,
+} from "../../renderer/shared/compaction.js";
+import {
   GENERATION_TIMELINE_VERSION,
   isTerminalAgentStep,
   isToolStep,
@@ -23,6 +28,28 @@ interface SafeToolDescriptor {
   detail?: string;
 }
 
+type SafeToolIssueCode =
+  | "approval-background"
+  | "approval-cancelled"
+  | "approval-unavailable"
+  | "subagent-budget-exhausted"
+  | "subagent-capability-invalid";
+
+const SAFE_TOOL_ISSUE_DETAILS: Record<SafeToolIssueCode, string> = {
+  "approval-background": "approval unavailable while the response continues in the background",
+  "approval-cancelled": "cancelled before approval",
+  "approval-unavailable": "approval request could not be presented; return to the chat and retry",
+  "subagent-budget-exhausted": "budget exhausted; start a new parent turn with narrower tasks",
+  "subagent-capability-invalid":
+    "capability request was invalid; retry with the shown capability schema",
+};
+
+interface SafeToolIssueDetails {
+  kind: "safe_tool_issue";
+  version: 1;
+  code: SafeToolIssueCode;
+}
+
 function safeLineChanges(toolName: string, value: unknown): AgentToolStep["lineChanges"] {
   if (toolName !== "write_file" && toolName !== "edit_file") return undefined;
   const details = record(value);
@@ -42,6 +69,59 @@ function safeLineChanges(toolName: string, value: unknown): AgentToolStep["lineC
     additions: details.additions as number,
     deletions: details.deletions as number,
   };
+}
+
+function safeToolIssue(value: unknown): string | undefined {
+  const details = record(value);
+  if (details.kind !== "safe_tool_issue" || details.version !== 1) return undefined;
+  const code = details.code;
+  return typeof code === "string" && code in SAFE_TOOL_ISSUE_DETAILS
+    ? SAFE_TOOL_ISSUE_DETAILS[code as SafeToolIssueCode]
+    : undefined;
+}
+
+function firstToolResultText(result: unknown): string | undefined {
+  const content = record(result).content;
+  if (!Array.isArray(content)) return undefined;
+  const item = content.find(
+    (candidate) => record(candidate).type === "text" && typeof record(candidate).text === "string",
+  );
+  return item ? (record(item).text as string) : undefined;
+}
+
+/** Convert only recognized host failures to codes; raw result text is never persisted. */
+export function safeToolIssueDetails(
+  toolName: string,
+  status: Extract<AgentStepStatus, "failed" | "blocked" | "cancelled">,
+  result: unknown,
+): SafeToolIssueDetails | undefined {
+  const text = firstToolResultText(result);
+  let code: SafeToolIssueCode | undefined;
+  if (status === "blocked") {
+    if (
+      text ===
+      "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+    ) {
+      code = "approval-background";
+    } else if (
+      text ===
+      "Aiden could not present the approval request. Return to the chat and retry the action."
+    ) {
+      code = "approval-unavailable";
+    } else if (text === "The action was cancelled before approval.") {
+      code = "approval-cancelled";
+    }
+  } else if (status === "failed" && toolName === "subagent" && text) {
+    if (/Subagent (?:generation )?tree .*budget exhausted/iu.test(text)) {
+      code = "subagent-budget-exhausted";
+    } else if (
+      /subagent .*capability request.*cannot widen/iu.test(text) ||
+      /invalid subagent capability request/iu.test(text)
+    ) {
+      code = "subagent-capability-invalid";
+    }
+  }
+  return code ? { kind: "safe_tool_issue", version: 1, code } : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -149,6 +229,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use computer", detail: safeDetail(values.action) };
+    case "vcc_recall":
+      return { label: "Recall chat history" };
     case "compact_context":
       return { label: "Compact context" };
     case "ask_user_question":
@@ -282,7 +364,32 @@ export class GenerationTimelineProjector {
   compactionFinished(
     id: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "cancelled">,
+    metrics?: {
+      engine?: CompactionEngine;
+      durationMs?: number;
+      tokensBefore: number;
+      estimatedTokensAfter: number;
+    },
   ): void {
+    const index = this.stepIndex.get(id);
+    const step = index === undefined ? undefined : this.timeline.steps[index];
+    // Publish only explicitly selected, bounded metrics, never the private result.
+    if (
+      step &&
+      isToolStep(step) &&
+      status === "completed" &&
+      metrics &&
+      isCompactionEngine(metrics.engine) &&
+      [metrics.durationMs, metrics.tokensBefore, metrics.estimatedTokensAfter].every(
+        (value) =>
+          typeof value === "number" &&
+          Number.isSafeInteger(value) &&
+          value >= 0 &&
+          value <= 1_000_000_000,
+      )
+    ) {
+      step.detail = `${compactionEngineLabel(metrics.engine)} · ${(metrics.durationMs! / 1000).toFixed(1)}s · ~${metrics.tokensBefore} → ${metrics.estimatedTokensAfter} tokens`;
+    }
     this.toolFinished(id, status);
   }
 
@@ -415,6 +522,11 @@ export class GenerationTimelineProjector {
     if (index === undefined) return;
     const step = this.timeline.steps[index];
     if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
+    // Pi can emit many tool_execution_update ticks while a tool is already
+    // running. Republishing the full timeline on each tick would copy the
+    // whole step list over IPC and into the Remote SSE journal without
+    // changing anything the activity feed can show.
+    if (!terminal && step.status === status) return;
     const timestamp = this.now();
     step.status = status;
     step.updatedAt = timestamp;
@@ -423,6 +535,9 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
+      } else {
+        const issue = safeToolIssue(resultDetails);
+        if (issue) step.detail = issue;
       }
     }
     this.emit();

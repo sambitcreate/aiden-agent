@@ -62,7 +62,7 @@ const FAILURE_MARKER = String.raw`(?:fail(?:ed|ure)?|blocked|denied|cancelled|ca
 const ACKNOWLEDGEMENT_ACTIONS: Record<ConsequentialStepKind, string> = {
   file: String.raw`(?:edit(?:ed|ing)?|writ(?:e|ten|ing)|updat(?:e|ed|ing)|sav(?:e|ed|ing)|appl(?:y|ied|ying)|files?|changes?|docs?|code|config(?:uration)?)`,
   command: String.raw`(?:tests?|checks?|build|lint|type[- ]?check|commands?|run|execution)`,
-  computer: String.raw`(?:computer|mac|app|button|field|window|click|typ(?:e|ed|ing)|drag|scroll|selection?)`,
+  computer: String.raw`(?:computer|mac|app|browser|page|button|field|window|click|typ(?:e|ed|ing)|drag|scroll|selection?)`,
   schedule: String.raw`(?:schedul(?:e|ed|ing)|tasks?|cron|run)`,
   connector: String.raw`(?:mcp|connector|tools?|calls?)`,
 };
@@ -107,6 +107,11 @@ function consequentialStepKind(step: AgentToolStep): ConsequentialStepKind | und
     case "run_command":
       return "command";
     case "computer_use":
+    case "browser_click":
+    case "browser_type":
+    case "browser_press":
+    case "browser_scroll":
+    case "browser_evaluate":
       return "computer";
     case "schedule_task":
     case "edit_automation":

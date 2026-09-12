@@ -9,7 +9,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
 
   const providerIds = providers.map((entry) => entry.id);
   assert.equal(new Set(providerIds).size, providerIds.length);
-  assert.equal(providerIds.length, 36);
+  assert.equal(providerIds.length, 40);
   assert.ok(providerIds.includes("radius"));
   assert.deepEqual(
     providers.filter(

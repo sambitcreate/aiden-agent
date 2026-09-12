@@ -1,13 +1,14 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Persistent chat shell: workspace switcher + history sidebar + active chat.
-// Selection is route-driven (chatId param); the visible chat list is scoped to
-// the active workspace (shared via WorkspaceProvider).
+// Selection is route-driven (chatId param); the unified sidebar can open chats
+// across registered workspaces while WorkspaceProvider tracks execution context.
 
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { SplitView, Text, toast } from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
-import { chatsApi, onNotification } from "../lib/ipc";
+import { onNotification } from "../lib/ipc";
 import {
   CHAT_TITLE_FADE_OUT_MS,
   CHAT_TITLE_REVEAL_DURATION_MS,
@@ -16,10 +17,7 @@ import {
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
-import {
-  EnvironmentWorkbench,
-  useEnvironmentPanel,
-} from "../components/environment-panel";
+import { EnvironmentWorkbench } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
@@ -27,7 +25,6 @@ export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
-  const environmentPanel = useEnvironmentPanel();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
   React.useEffect(() => {
@@ -75,14 +72,17 @@ export function ChatLayout() {
       storageKey="aiden-agent"
       sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
       sidebarSize={{ default: 272, min: 236, max: 340 }}
-      contentModalOpen={environmentPanel.compactModalOpen}
     >
       <EnvironmentWorkbench>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
           </div>
-          {pathname === "/profile" || pathname === "/scheduled" || (pathname.startsWith("/bots") && !params.chatId) ? null : <TerminalDrawer />}
+          {pathname === "/profile" ||
+          pathname === "/scheduled" ||
+          (pathname.startsWith("/bots") && !params.chatId) ? null : (
+            <TerminalDrawer />
+          )}
         </div>
       </EnvironmentWorkbench>
     </SplitView>
@@ -91,7 +91,7 @@ export function ChatLayout() {
 
 /**
  * Index route: send the user to the most recent chat in the active workspace,
- * or create a fresh one so the composer always operates on a concrete chatId.
+ * or open a renderer-only draft until its first message is saved.
  */
 export function ChatIndex() {
   const navigate = useNavigate();
@@ -115,18 +115,23 @@ export function ChatIndex() {
     if (list.length > 0) {
       void navigate({ to: "/chat/$chatId", params: { chatId: list[0].id }, replace: true });
     } else {
-      void chatsApi
-        .create({ workspaceId: activeId })
-        .then((chat) => {
-          void chats.refetch();
-          void navigate({ to: "/chat/$chatId", params: { chatId: chat.id }, replace: true });
-        })
+      const draft = createChatDraft(activeId);
+      void navigate({ to: "/chat/$chatId", params: { chatId: draft.chat.id }, replace: true })
         .catch((error: unknown) => {
+          discardChatDraft(draft.chat.id);
           startedRef.current = false;
-          toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
+          toast.error(error instanceof Error ? error.message : "Aiden could not open a new chat.");
         });
     }
-  }, [appendReconciliationRequired, isLoading, activeId, chats.isLoading, chats.data, navigate, chats]);
+  }, [
+    appendReconciliationRequired,
+    isLoading,
+    activeId,
+    chats.isLoading,
+    chats.data,
+    navigate,
+    chats,
+  ]);
 
   return appendReconciliationRequired ? (
     <div className="flex h-full items-center justify-center p-6" role="status">

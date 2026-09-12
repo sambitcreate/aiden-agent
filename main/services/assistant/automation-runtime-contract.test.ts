@@ -30,6 +30,7 @@ test("project automations receive only folder-scoped coding tools and reject MCP
   );
 
   const execution = source("../schedule-execution.ts");
+  const surfaces = source("../conversation-surface-generation.ts");
   const client = source("../llm-client.ts");
   assert.match(execution, /const allowMcpTools =/u);
   assert.match(execution, /mcpServerIds,/u);
@@ -38,8 +39,13 @@ test("project automations receive only folder-scoped coding tools and reject MCP
     client,
     /assertScheduledProviderFingerprint\(\s*runtime\.provider,\s*options\.providerFingerprint/u,
   );
-  assert.match(execution, /allowComputerUse: false/u);
-  assert.match(execution, /allowSubagents: false/u);
+  const scheduledSurface = between(
+    surfaces,
+    "export function scheduledGenerationSurface",
+    "export function beginSurfaceGeneration",
+  );
+  assert.match(scheduledSurface, /allowComputerUse: false/u);
+  assert.match(scheduledSurface, /allowSubagents: false/u);
   assert.match(execution, /scheduledTaskAllowsWebSearch\(task\)/u);
   assert.match(execution, /await webSearchService\.availability\(\)/u);
   assert.match(execution, /if \(!webSearchReady\) excluded\.add\("web_search"\)/u);

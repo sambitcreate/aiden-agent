@@ -43,6 +43,7 @@ import type { AidenRemoteFileService } from "./aiden-remote-files.js";
 import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
+import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
@@ -133,13 +134,14 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
@@ -176,13 +178,14 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
@@ -472,6 +475,7 @@ export class AidenRemoteService {
   private lastError: string | undefined;
   private lastErrorCode: "remote_port_in_use" | undefined;
   private tailscalePermissionDenied = false;
+  private setupInFlight = false;
   private operationTail: Promise<void> = Promise.resolve();
   private settleRemoteApi: (() => Promise<void>) | undefined;
   private readonly now: () => number;
@@ -530,6 +534,8 @@ export class AidenRemoteService {
             details: {
               requestId: entry.requestId,
               route: entry.route,
+              method: entry.method,
+              routePath: entry.routePath,
               status: entry.status,
               latencyMs: entry.latencyMs,
               deviceIdSuffix: entry.deviceIdSuffix,
@@ -783,35 +789,37 @@ export class AidenRemoteService {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
-    await this.serialized(async () => {
-      const current = await this.options.state.snapshot();
-      if (enabled) {
-        if (!current.enabled || !this.activeState) {
-          await this.startConfigured({ ...current, enabled: true });
-          try {
-            await this.options.state.setEnabled(true);
-          } catch (error) {
-            await this.stopListeners();
-            throw error;
-          }
-        }
-        return;
-      }
-      let disconnectError: unknown;
-      if (current.tailscaleOwnership) {
+    return this.serialized(() => this.setEnabledInternal(enabled));
+  }
+
+  private async setEnabledInternal(enabled: boolean): Promise<void> {
+    const current = await this.options.state.snapshot();
+    if (enabled) {
+      if (!current.enabled || !this.activeState) {
+        await this.startConfigured({ ...current, enabled: true });
         try {
-          await this.disconnectTailscaleInternal(current);
+          await this.options.state.setEnabled(true);
         } catch (error) {
-          disconnectError = error;
+          await this.stopListeners();
+          throw error;
         }
       }
-      await this.stopListeners();
-      await this.options.state.setEnabled(false);
-      this.lastError = undefined;
-      this.lastErrorCode = undefined;
-      this.tailscalePermissionDenied = false;
-      if (disconnectError) throw disconnectError;
-    });
+      return;
+    }
+    let disconnectError: unknown;
+    if (current.tailscaleOwnership) {
+      try {
+        await this.disconnectTailscaleInternal(current);
+      } catch (error) {
+        disconnectError = error;
+      }
+    }
+    await this.stopListeners();
+    await this.options.state.setEnabled(false);
+    this.lastError = undefined;
+    this.lastErrorCode = undefined;
+    this.tailscalePermissionDenied = false;
+    if (disconnectError) throw disconnectError;
   }
 
   /**
@@ -847,40 +855,42 @@ export class AidenRemoteService {
   }
 
   async setConnectionMode(connectionMode: AidenRemoteConnectionMode): Promise<void> {
-    await this.serialized(async () => {
-      const current = await this.options.state.snapshot();
-      if (current.tailscaleOwnership && connectionMode === "lan") {
-        await this.disconnectTailscaleInternal(current);
+    return this.serialized(() => this.setConnectionModeInternal(connectionMode));
+  }
+
+  private async setConnectionModeInternal(connectionMode: AidenRemoteConnectionMode): Promise<void> {
+    const current = await this.options.state.snapshot();
+    if (current.tailscaleOwnership && connectionMode === "lan") {
+      await this.disconnectTailscaleInternal(current);
+    }
+    await this.options.state.setConnectionMode(connectionMode);
+    if (connectionMode === "lan") this.tailscalePermissionDenied = false;
+    if (current.enabled) {
+      if (!this.activeState || !this.lanServer || !this.tailscaleServer) {
+        await this.startConfigured({ ...current, connectionMode });
+        return;
       }
-      await this.options.state.setConnectionMode(connectionMode);
-      if (connectionMode === "lan") this.tailscalePermissionDenied = false;
-      if (current.enabled) {
-        if (!this.activeState || !this.lanServer || !this.tailscaleServer) {
-          await this.startConfigured({ ...current, connectionMode });
-          return;
-        }
-        const previouslyAdvertised = current.connectionMode === "lan"
-          || current.connectionMode === "both";
-        const shouldAdvertise = connectionMode === "lan" || connectionMode === "both";
-        this.activeState.connectionMode = connectionMode;
-        if (connectionMode === "tailscale") this.destroyConnections(this.lanConnections);
-        if (connectionMode === "lan") this.destroyConnections(this.tailscaleConnections);
-        if (previouslyAdvertised && !shouldAdvertise) {
-          this.options.bonjour.stop();
-        } else if (!previouslyAdvertised && shouldAdvertise) {
-          try {
-            await this.publishBonjour({
-              instanceId: this.activeState.instanceId,
-              displayName: this.activeState.displayName,
-              port: this.activeState.lanPort,
-            });
-          } catch (error) {
-            await this.stopListeners();
-            throw error;
-          }
+      const previouslyAdvertised = current.connectionMode === "lan"
+        || current.connectionMode === "both";
+      const shouldAdvertise = connectionMode === "lan" || connectionMode === "both";
+      this.activeState.connectionMode = connectionMode;
+      if (connectionMode === "tailscale") this.destroyConnections(this.lanConnections);
+      if (connectionMode === "lan") this.destroyConnections(this.tailscaleConnections);
+      if (previouslyAdvertised && !shouldAdvertise) {
+        this.options.bonjour.stop();
+      } else if (!previouslyAdvertised && shouldAdvertise) {
+        try {
+          await this.publishBonjour({
+            instanceId: this.activeState.instanceId,
+            displayName: this.activeState.displayName,
+            port: this.activeState.lanPort,
+          });
+        } catch (error) {
+          await this.stopListeners();
+          throw error;
         }
       }
-    });
+    }
   }
 
   private destroyConnections(connections: Set<Duplex>): void {
@@ -916,41 +926,49 @@ export class AidenRemoteService {
   }
 
   async connectTailscale(): Promise<void> {
-    await this.serialized(async () => {
-      const state = await this.options.state.snapshot();
-      if (state.tailscalePendingOutcome) throw new Error("tailscale_reconciliation_required");
-      if (!state.enabled || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")) {
-        throw new Error("Enable Aiden Remote with Tailscale access before connecting Serve.");
-      }
-      if (!this.tailscaleServer) throw new Error("Aiden Remote loopback service is not running.");
-      const target = this.loopbackTarget(state);
-      let ownership = state.tailscaleOwnership;
-      if (ownership && ownership.target !== target) {
-        // Pre-acceptance builds persisted an origin-only target that cannot
-        // route the canonical API after Tailscale strips --set-path. Remove
-        // only that exact owned route before creating the corrected one.
-        await this.options.tailscale.disconnect(
-          ownership.target,
-          ownership,
-          () => this.options.state.commitTailscaleOutcome(undefined),
-        );
-        ownership = undefined;
-      }
+    return this.serialized(async () => {
       try {
-        await this.options.tailscale.connect(
-          target,
-          ownership,
-          (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
-        );
-        this.tailscalePermissionDenied = false;
+        await this.connectTailscaleInternal();
       } catch (error) {
-        if (error instanceof Error && error.message === "tailscale_permission_denied") {
-          this.tailscalePermissionDenied = true;
-          return;
-        }
+        if (error instanceof Error && error.message === "tailscale_permission_denied") return;
         throw error;
       }
     });
+  }
+
+  private async connectTailscaleInternal(): Promise<void> {
+    const state = await this.options.state.snapshot();
+    if (state.tailscalePendingOutcome) throw new Error("tailscale_reconciliation_required");
+    if (!state.enabled || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")) {
+      throw new Error("Enable Aiden Remote with Tailscale access before connecting Serve.");
+    }
+    if (!this.tailscaleServer) throw new Error("Aiden Remote loopback service is not running.");
+    const target = this.loopbackTarget(state);
+    let ownership = state.tailscaleOwnership;
+    if (ownership && ownership.target !== target) {
+      // Pre-acceptance builds persisted an origin-only target that cannot
+      // route the canonical API after Tailscale strips --set-path. Remove
+      // only that exact owned route before creating the corrected one.
+      await this.options.tailscale.disconnect(
+        ownership.target,
+        ownership,
+        () => this.options.state.commitTailscaleOutcome(undefined),
+      );
+      ownership = undefined;
+    }
+    try {
+      await this.options.tailscale.connect(
+        target,
+        ownership,
+        (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
+      );
+      this.tailscalePermissionDenied = false;
+    } catch (error) {
+      if (error instanceof Error && error.message === "tailscale_permission_denied") {
+        this.tailscalePermissionDenied = true;
+      }
+      throw error;
+    }
   }
 
   async reviewTailscaleTakeover(): Promise<AidenTailscaleTakeoverReview> {
@@ -1018,83 +1036,196 @@ export class AidenRemoteService {
   }
 
   async beginPairing(transport: "lan" | "tailscale"): Promise<AidenRemoteDesktopPairing> {
-    return this.serialized(async () => {
-      const state = await this.options.state.snapshot();
-      if (!state.enabled || !this.pairing || !this.tlsIdentity) {
-        throw new Error("Enable Aiden Remote before pairing a device.");
+    return this.serialized(() => this.beginPairingInternal(transport));
+  }
+
+  private async beginPairingInternal(transport: "lan" | "tailscale"): Promise<AidenRemoteDesktopPairing> {
+    const state = await this.options.state.snapshot();
+    if (!state.enabled || !this.pairing || !this.tlsIdentity) {
+      throw new Error("Enable Aiden Remote before pairing a device.");
+    }
+    let endpoint: string;
+    let serverSpkiSha256: string;
+    if (transport === "lan") {
+      if (
+        !this.lanServer
+        || (state.connectionMode !== "lan" && state.connectionMode !== "both")
+      ) throw new Error("Local-network access is not enabled.");
+      endpoint = `https://${localDnsName(this.hostname)}:${state.lanPort}${AIDEN_REMOTE_BASE_PATH}`;
+      serverSpkiSha256 = this.tlsIdentity.serverSpkiSha256;
+    } else {
+      if (state.tailscalePendingOutcome) {
+        throw new Error("Verify the previous Tailscale route update before pairing.");
       }
-      let endpoint: string;
-      let serverSpkiSha256: string;
-      if (transport === "lan") {
-        if (
-          !this.lanServer
-          || (state.connectionMode !== "lan" && state.connectionMode !== "both")
-        ) throw new Error("Local-network access is not enabled.");
-        endpoint = `https://${localDnsName(this.hostname)}:${state.lanPort}${AIDEN_REMOTE_BASE_PATH}`;
-        serverSpkiSha256 = this.tlsIdentity.serverSpkiSha256;
+      if (
+        !state.tailscaleOwnership
+        || !this.tailscaleServer
+        || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")
+      ) {
+        throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
+      }
+      const inspection = this.options.tailscale.inspectRoute
+        ? await this.options.tailscale.inspectRoute(
+          this.loopbackTarget(state),
+          state.tailscaleOwnership,
+        )
+        : undefined;
+      const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
+      if (inspection || this.options.tailscale.assessRoute) {
+        const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
+          this.loopbackTarget(state),
+          state.tailscaleOwnership,
+        );
+        if (assessment.state !== "owned" || assessment.errorCode) {
+          throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
+        }
       } else {
-        if (state.tailscalePendingOutcome) {
-          throw new Error("Verify the previous Tailscale route update before pairing.");
-        }
-        if (
-          !state.tailscaleOwnership
-          || !this.tailscaleServer
-          || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")
-        ) {
-          throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
-        }
-        const inspection = this.options.tailscale.inspectRoute
-          ? await this.options.tailscale.inspectRoute(
-            this.loopbackTarget(state),
-            state.tailscaleOwnership,
-          )
-          : undefined;
-        const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
-        if (inspection || this.options.tailscale.assessRoute) {
-          const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
-            this.loopbackTarget(state),
-            state.tailscaleOwnership,
-          );
-          if (assessment.state !== "owned" || assessment.errorCode) {
-            throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
-          }
-        } else {
-          let connected = false;
-          try {
-            connected = status.serveStatus !== undefined
-              && planAidenTailscaleConnect(
-                status.serveStatus,
-                this.loopbackTarget(state),
-                state.tailscaleOwnership,
-                status.httpsAvailable,
-              ).action === "noop";
-          } catch {
-            connected = false;
-          }
-          if (!connected) {
-            throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
-          }
-        }
-        if (!status.dnsName) throw new Error("Tailscale does not report a stable DNS name.");
-        endpoint = `https://${status.dnsName}${AIDEN_REMOTE_BASE_PATH}`;
+        let connected = false;
         try {
-          serverSpkiSha256 = await (
-            this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
-          )(status.dnsName, 443);
-        } catch (error) {
-          throw classifyAidenRemoteTlsEndpointFailure(error);
+          connected = status.serveStatus !== undefined
+            && planAidenTailscaleConnect(
+              status.serveStatus,
+              this.loopbackTarget(state),
+              state.tailscaleOwnership,
+              status.httpsAvailable,
+            ).action === "noop";
+        } catch {
+          connected = false;
+        }
+        if (!connected) {
+          throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
         }
       }
-      const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
+      if (!status.dnsName) throw new Error("Tailscale does not report a stable DNS name.");
+      endpoint = `https://${status.dnsName}${AIDEN_REMOTE_BASE_PATH}`;
       try {
-        const qrPayload = this.pairingQrPayload(pairing.bootstrap, transport);
-        this.pairing.sealManualPayload(pairing.sessionId, qrPayload);
-        return { ...pairing, qrPayload };
+        serverSpkiSha256 = await (
+          this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
+        )(status.dnsName, 443);
       } catch (error) {
-        this.pairing.close(pairing.sessionId);
-        throw error;
+        throw classifyAidenRemoteTlsEndpointFailure(error);
       }
-    });
+    }
+    const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
+    try {
+      const qrPayload = this.pairingQrPayload(pairing.bootstrap, transport);
+      this.pairing.sealManualPayload(pairing.sessionId, qrPayload);
+      return { ...pairing, qrPayload };
+    } catch (error) {
+      this.pairing.close(pairing.sessionId);
+      throw error;
+    }
+  }
+
+  /** One acknowledged desktop action; shares the service mutation lane with advanced controls. */
+  async setupPairing(
+    transport: "lan" | "tailscale",
+    expected: { instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode },
+    isCurrent: () => boolean = () => true,
+  ): Promise<AidenRemoteDesktopPairing> {
+    if (this.setupInFlight) throw new Error("Phone setup is already in progress.");
+    this.setupInFlight = true;
+    try {
+      return await this.serialized(async () => {
+        const current = await this.options.state.snapshot();
+        const checkOwner = () => {
+          if (!isCurrent()) throw new Error("Phone setup was cancelled. Return to Settings to try again.");
+        };
+        checkOwner();
+        if (current.instanceId !== expected.instanceId || current.enabled !== expected.enabled
+          || current.connectionMode !== expected.connectionMode) {
+          throw new Error("Phone access changed. Review the setup again before continuing.");
+        }
+        if (current.tailscalePendingOutcome) throw new Error("tailscale_reconciliation_required");
+        const mode = current.connectionMode === "both" ? "both" : transport;
+        // Changing a saved transport can strand existing devices. Keep that an
+        // explicit advanced operation, rather than silently choosing both.
+        if (mode !== current.connectionMode && (current.devices.length || current.tailscaleOwnership)) {
+          throw new Error("This computer already has a saved connection. Use its current method, or review Connection settings before changing it.");
+        }
+        if (["finishing", "awaiting_scan"].includes(this.pairingStatus()?.state ?? "")) {
+          throw new Error("A phone connection is already open. Finish or close it before adding another device.");
+        }
+        if (transport === "tailscale") {
+          const inspection = await this.options.tailscale.inspectRoute?.(
+            this.loopbackTarget(current), current.tailscaleOwnership,
+          );
+          const connection = inspection?.connectionStatus ?? await this.options.tailscale.status();
+          checkOwner();
+          if (!connection.installed) throw new Error("tailscale_not_installed");
+          if (connection.errorCode) throw new Error(`tailscale_${connection.errorCode}`);
+          if (!connection.dnsName) throw new Error("tailscale_not_connected");
+          if (connection.httpsAvailable !== true) throw new Error("tailscale_https_unavailable");
+          if (inspection && !["available", "owned"].includes(inspection.assessment.state)) {
+            throw new Error("This phone connection is already in use or needs review. Open Connection settings to resolve it; nothing was replaced.");
+          }
+        }
+        let pairing: AidenRemoteDesktopPairing | undefined;
+        try {
+          if (mode !== current.connectionMode) await this.setConnectionModeInternal(mode);
+          checkOwner();
+          await this.setEnabledInternal(true);
+          checkOwner();
+          if (transport === "tailscale") await this.connectTailscaleInternal();
+          checkOwner();
+          pairing = await this.beginPairingInternal(transport);
+          checkOwner();
+          return pairing;
+        } catch (error) {
+          if (pairing) this.pairing?.close(pairing.sessionId);
+          const after = await this.options.state.snapshot();
+          // Keep uncertain external results available for explicit reconciliation.
+          // Roll back only the access introduced by this acknowledged attempt.
+          if (!after.tailscalePendingOutcome) {
+            let routeCleanupFailed = false;
+            let localCleanupFailed = false;
+            if (!current.tailscaleOwnership && after.tailscaleOwnership) {
+              try {
+                await this.disconnectTailscaleInternal(after);
+              } catch {
+                routeCleanupFailed = true;
+              }
+            }
+            if (!current.enabled) {
+              try {
+                await this.stopListeners();
+              } catch {
+                localCleanupFailed = true;
+              }
+              try {
+                await this.options.state.setEnabled(false);
+              } catch {
+                localCleanupFailed = true;
+              }
+              if (mode !== current.connectionMode) {
+                try {
+                  await this.options.state.setConnectionMode(current.connectionMode);
+                } catch {
+                  localCleanupFailed = true;
+                }
+              }
+            } else if (mode !== current.connectionMode) {
+              try {
+                await this.setConnectionModeInternal(current.connectionMode);
+              } catch {
+                localCleanupFailed = true;
+              }
+            }
+            if (localCleanupFailed) {
+              throw new Error("Phone setup did not finish and cleanup could not be confirmed. Check Connection settings before trying again.");
+            }
+            if (routeCleanupFailed) {
+              throw new Error(current.enabled
+                ? "Phone setup did not finish, and the new Tailscale route could not be removed. Existing local access stayed on; check Connection settings before trying again."
+                : "Phone setup did not finish. Local access was turned off, but the new Tailscale route could not be removed. Check Connection settings before trying again.");
+            }
+          }
+          throw error;
+        }
+      });
+    } finally {
+      this.setupInFlight = false;
+    }
   }
 
   async closePairing(sessionId: string): Promise<boolean> {

@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { Type } from "@earendil-works/pi-ai";
+import type { AgentContext, AgentTool } from "@earendil-works/pi-agent-core";
+import { createBrowserDiscovery } from "./browser-discovery.js";
+import { estimateStaticContextTokens } from "./generation-context.js";
+
+const tool: AgentTool = { name: "browser_status", label: "Status", description: "Browser status", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) };
+test("discovery installs real tools only after successful use and keeps them across compacted history", async () => {
+  const discovery = createBrowserDiscovery([tool], async () => {});
+  const initial: AgentContext = { systemPrompt: "Base", messages: [], tools: [discovery.tool] };
+  assert.equal(await discovery.prepare(initial), initial);
+  await discovery.tool.execute("discover", {});
+  const next = await discovery.prepare(initial);
+  assert.deepEqual(next.tools?.map(({ name }) => name), ["browser", "browser_status"]);
+  assert.match(next.systemPrompt, /untrusted website content/);
+  assert.equal(await discovery.prepare(next), next);
+  const compacted = { ...next, messages: [] };
+  assert.equal(await discovery.prepare(compacted), compacted);
+  const fresh = createBrowserDiscovery([tool], async () => {});
+  const freshContext = { ...initial, tools: [fresh.tool] };
+  assert.equal(await fresh.prepare(freshContext), freshContext);
+});
+test("discovery is small and cannot bypass invalid arguments, revocation, cancellation or excluded gateway", async () => {
+  let revoked = false;
+  const discovery = createBrowserDiscovery([tool], async () => { if (revoked) throw new Error("revoked"); });
+  const context: AgentContext = { systemPrompt: "", messages: [], tools: [discovery.tool] };
+  assert.ok(estimateStaticContextTokens({ contextWindow: 128000, systemPrompt: "", tools: [discovery.tool] }) < 130);
+  await assert.rejects(discovery.tool.execute("bad", { workspaceId: "other" }));
+  assert.equal(await discovery.prepare(context), context);
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(discovery.tool.execute("cancel", {}, abort.signal));
+  revoked = true;
+  await assert.rejects(discovery.tool.execute("revoked", {}), /revoked/);
+  revoked = false;
+  await discovery.tool.execute("ok", {});
+  const excluded = { ...context, tools: [] };
+  assert.equal(await discovery.prepare(excluded), excluded);
+  revoked = true;
+  assert.equal((await discovery.prepare(context)).tools?.length, 2);
+  await assert.rejects(discovery.tool.execute("still-revoked", {}), /revoked/);
+});

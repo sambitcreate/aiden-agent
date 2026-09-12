@@ -45,6 +45,14 @@ function step(
   };
 }
 
+test("all browser actions have readable activity labels", () => {
+  const expected = [["browser","Loading browser tools","Loaded browser tools"],["browser_status","Checking browser","Checked browser"],["browser_open","Opening browser","Opened browser"],["browser_navigate","Navigating browser","Navigated browser"],["browser_resize","Resizing browser","Resized browser"],["browser_set_appearance","Setting browser appearance","Set browser appearance"],["browser_snapshot","Inspecting browser","Inspected browser"],["browser_click","Clicking in browser","Clicked in browser"],["browser_type","Typing in browser","Typed in browser"],["browser_press","Pressing browser keys","Pressed browser keys"],["browser_scroll","Scrolling browser","Scrolled browser"],["browser_evaluate","Evaluating page","Evaluated page"],["browser_wait_for","Waiting for page","Waited for page"],["browser_recording_start","Starting browser recording","Started browser recording"],["browser_recording_stop","Stopping browser recording","Stopped browser recording"]];
+  for (const [name, active, complete] of expected) {
+    assert.equal(activityLine(step(name, 0, name, "running")).verb, active);
+    assert.equal(activityLine(step(name, 0, name, "completed")).verb, complete);
+  }
+});
+
 function thinking(id: string, order: number, durationMs?: number): AgentThinkingStep {
   return {
     id,

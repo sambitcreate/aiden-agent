@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
+import { telegramChatId } from "./telegram-turn.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -28,6 +29,11 @@ import type {
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps } from "./telegram-turn.js";
 import type { AppSettings } from "../types.js";
+import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
+import type {
+  ContextLifecycleAudience,
+  ContextLifecycleService,
+} from "../context-lifecycle-service.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -91,6 +97,7 @@ function createMockApi(opts: MockApiOptions) {
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
   const calls: string[] = [];
+  const commandRegistrations: Array<readonly { command: string; description: string }[]> = [];
   let getMeCalls = 0;
   let getUpdatesCalls = 0;
   let sendChatActionCalls = 0;
@@ -98,6 +105,8 @@ function createMockApi(opts: MockApiOptions) {
 
   const api = {
     sentMessages,
+    commandRegistrations,
+    async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
     voiceMessages,
     calls,
@@ -475,6 +484,8 @@ function createLogs() {
 // ---------------------------------------------------------------------------
 
 interface HarnessOptions {
+  listPromptCommands?: import("./telegram-service-core.js").TelegramServiceDeps["listPromptCommands"];
+  validateSkillInvocation?: import("./telegram-service-core.js").TelegramServiceDeps["validateSkillInvocation"];
   enabled?: boolean;
   hasToken?: boolean;
   allowedUserId?: number;
@@ -502,6 +513,7 @@ interface HarnessOptions {
   applyModelSelection?: (
     choice: import("./telegram-controls.js").TelegramModelChoice,
   ) => Promise<void>;
+  compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
@@ -563,7 +575,10 @@ function harness(o: HarnessOptions = {}) {
     assertBotBindingStoreHealthy: o.assertBotBindingStoreHealthy,
     listWorkspaces: async () => o.workspaces ?? [],
     listModels: o.listModels,
+    listPromptCommands: o.listPromptCommands,
+    validateSkillInvocation: o.validateSkillInvocation,
     applyModelSelection: o.applyModelSelection,
+    compactChat: o.compactChat,
     abortChat: o.abortChat,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
@@ -1648,4 +1663,134 @@ test("a stale model callback cannot select a model omitted by the current visibl
   await waitFor(() => result.api.answerCallbackQueryCalls() > 0);
   assert.deepEqual(applied, []);
   result.service.stop();
+});
+
+test("bound Bot compaction callback targets the immutable canonical backing chat", async () => {
+  const owner = person(42);
+  const binding = {
+    botId: "bot-1",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: owner.id,
+    workspaceId: "bot-workspace",
+    backingWorkspaceId: "bot-workspace",
+    backingChatId: "canonical-bot-chat",
+    enabled: true,
+  } as const;
+  const compactedChatIds: string[] = [];
+  const lifecycle = createTelegramLifecycleAdapter(
+    {
+      compactChat: async (chatId: string, audience: ContextLifecycleAudience) => {
+        compactedChatIds.push(chatId);
+        assert.deepEqual(audience, {
+          kind: "telegram",
+          profile: "default",
+          ownerId: "telegram:default",
+        });
+        return { compacted: true, tokensBefore: 123_456 };
+      },
+      cancelChat: () => false,
+    } as unknown as ContextLifecycleService,
+    "default",
+  );
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-bound-bot",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    resolveBotBinding: async () => binding,
+    validateBotBinding: async () => true,
+    compactChat: lifecycle.compactChat,
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [binding.backingChatId]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Session compacted from about 123,456 tokens")),
+  );
+  result.service.stop();
+});
+
+test("manual Telegram compaction preserves the shared busy admission result", async () => {
+  const owner = person(42);
+  const compactedChatIds: string[] = [];
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    telegramWorkspaceId: "workspace-a",
+    profile: "work",
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-busy",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    compactChat: async (chatId) => {
+      compactedChatIds.push(chatId);
+      return { compacted: false, error: "Wait for the active turn to finish or abort it first." };
+    },
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [telegramChatId(owner.id, "workspace-a", "work")]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Wait for the active turn to finish or abort it first")),
+  );
+  assert.equal(result.turnMock.startCalls(), 0);
+  result.service.stop();
+});
+
+
+test("a skill queued before global disable is rejected at dispatch and command registration refreshes", async () => {
+  let skillsEnabled = true;
+  let validations = 0;
+  const h = harness({
+    enabled: true, hasToken: true, allowedUserId: 42, pendingTurn: true, autoStop: false,
+    telegramWorkspaceId: "project",
+    workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "ordinary work")),
+      makeUpdate(2, makeMessage(11, person(42), "/review inspect the patch"))]],
+    listPromptCommands: async () => skillsEnabled ? [{ command: "review", description: "Review code",
+      skillInvocation: { workspaceId: "project", invocationId: "opaque-skill" } }] : [],
+    validateSkillInvocation: async () => { validations += 1; if (!skillsEnabled) throw new Error("Skills are disabled"); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1 && h.service.queueSize === 1);
+  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  skillsEnabled = false;
+  await h.service.refreshCommands();
+  assert(!h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  h.turnMock.completePendingTurn();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Skills are disabled")));
+  assert.equal(validations, 1);
+  assert.equal(h.turnMock.startCalls(), 1, "disabled queued skill never starts inference");
+  assert.equal(h.turnMock.appendCalls(), 1, "expanded or disabled skill text never enters visible history");
+  skillsEnabled = true;
+  await h.service.refreshCommands();
+  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  h.service.stop();
 });

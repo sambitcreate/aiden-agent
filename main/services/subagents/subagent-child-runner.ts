@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
@@ -82,6 +83,7 @@ export interface SubagentChildRunnerDependencies {
     childId?: string;
     runtime: ResolvedModelRuntime;
     thinkingLevel: ThinkingLevel;
+    compactionEngine?: CompactionEngine;
     systemPrompt: string;
     tools: AgentTool[];
     initialMessages: AgentMessage[];
@@ -113,6 +115,7 @@ export interface SubagentChildToolAssembly {
 }
 
 export interface RunSubagentChildInput {
+  compactionEngine?: CompactionEngine;
   authority: SubagentRuntimeAuthority;
   runId?: string;
   childId?: string;
@@ -576,6 +579,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       childId: input.childId,
       runtime: input.runtime,
       thinkingLevel: input.thinkingLevel,
+      compactionEngine: input.compactionEngine,
       systemPrompt: subagentRoleSystemPrompt(input.request.role, {
         contextMode: input.context.mode,
         workspaceRead:

@@ -26,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.config.*
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
+import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
@@ -44,6 +45,9 @@ fun AidenAppearanceSettingsScreen(
     val voiceMode by voiceInputStore.mode.collectAsState()
     var speechStatus by remember { mutableStateOf<AidenSpeechStatus?>(null) }
     var speechError by remember { mutableStateOf<String?>(null) }
+    var memorySettings by remember { mutableStateOf<AidenMemorySettings?>(null) }
+    var memoryError by remember { mutableStateOf<String?>(null) }
+    var memorySaving by remember { mutableStateOf(false) }
 
     suspend fun refreshSpeech() {
         val client = remoteClient ?: run {
@@ -65,6 +69,13 @@ fun AidenAppearanceSettingsScreen(
 
     LaunchedEffect(remoteClient, voiceMode) {
         if (voiceMode == AidenVoiceInputMode.PAIRED_MAC) refreshSpeech()
+    }
+    LaunchedEffect(remoteClient) {
+        memorySettings = remoteClient?.let { client ->
+            runCatching { client.memorySettings() }
+                .onFailure { memoryError = it.message ?: "Memory settings are unavailable." }
+                .getOrNull()
+        }
     }
     LaunchedEffect(speechStatus) {
         if (speechStatus?.models?.any { it.download?.status == "downloading" } == true) {
@@ -106,6 +117,45 @@ fun AidenAppearanceSettingsScreen(
             }
             Spacer(modifier = Modifier.height(22.dp))
         }
+
+        Text(
+            text = "Memory",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = palette.foreground
+        )
+        Spacer(Modifier.height(8.dp))
+        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Use memory", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                    Text("Controls recall, saving, and indexing on your paired Mac. Existing approved facts are not deleted.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                }
+                Switch(
+                    checked = memorySettings?.enabled ?: true,
+                    enabled = memorySettings != null && !memorySaving,
+                    onCheckedChange = { enabled ->
+                        val current = memorySettings ?: return@Switch
+                        memorySettings = current.copy(enabled = enabled)
+                        memorySaving = true
+                        scope.launch {
+                            runCatching { remoteClient?.updateMemorySettings(current.revision, enabled) ?: error("Connect to a paired Mac.") }
+                                .onSuccess { memorySettings = it; memoryError = null }
+                                .onFailure { memorySettings = current; memoryError = it.message ?: "Memory settings are unavailable." }
+                            memorySaving = false
+                        }
+                    }
+                )
+            }
+        }
+        memoryError?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = palette.danger)
+        }
+        Spacer(modifier = Modifier.height(22.dp))
 
         Text(
             text = "Voice input",

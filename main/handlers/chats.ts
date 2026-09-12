@@ -1,3 +1,4 @@
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
@@ -30,6 +31,8 @@ import {
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { parseChatFirstMessage } from "./chat-first-message-params.js";
+import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -51,9 +54,15 @@ import {
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
+import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
+import {
+  cancelDesktopCompaction,
+  compactDesktopChat,
+} from "../services/context-lifecycle-adapters.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { memoryStore } from "../services/memory-store-main.js";
 import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
 import {
   todoSnapshotForRenderer,
@@ -76,6 +85,53 @@ function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): 
 }
 
 export function registerChatHistoryHandlers(): void {
+  const commitFirstMessage = createFirstMessageCommitter({
+    store: chatStore,
+    beginTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
+    requiresReconciliation: (ownerId) => llmClient.requiresAppendReconciliation(ownerId),
+    markReconciliation: (ownerId) => llmClient.markAppendReconciliationRequired(ownerId),
+    clearReconciliation: (ownerId) => llmClient.clearAppendReconciliationRequired(ownerId),
+    admitWorkspace: (workspaceId, owner) => {
+      const mutation = workspaceMutationGate.admit(workspaceId);
+      try {
+        const operation = admitRendererOwnedWorkspaceOperation(workspaceOperationRegistry, owner, workspaceId);
+        const abort = () => operation.cancel();
+        mutation.signal.addEventListener("abort", abort, { once: true });
+        if (mutation.signal.aborted) abort();
+        return {
+          signal: operation.signal,
+          cancel: operation.cancel,
+          release: () => {
+            mutation.signal.removeEventListener("abort", abort);
+            operation.release();
+            mutation.release();
+          },
+        };
+      } catch (error) {
+        mutation.release();
+        throw error;
+      }
+    },
+    workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+    requireComputerUseReady: async (signal) => {
+      const status = await computerUseStatus.status({ signal });
+      if (!status.ready) throw new Error(status.detail);
+    },
+    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+  });
+  ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
+    const parsed = parseChatFirstMessage(input);
+    const owner = rendererDocumentOwner(event, () => new Error("Chats require the active application document."));
+    return commitFirstMessage(parsed, owner).then((chat) => {
+      ipcMain.broadcast("chats:metadata-updated", {
+        chatId: chat.id,
+        title: chat.title,
+        workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+        updatedAt: chat.updatedAt,
+      });
+      return chatForRenderer(chat);
+    });
+  });
   let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
@@ -100,11 +156,14 @@ export function registerChatHistoryHandlers(): void {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
+    if (!opened.session) {
+      // Rollout-ineligible chats have no durable journal to replay, so todo is
+      // unavailable exactly like a corrupt journal. Never mint a journal here.
+      return unavailableTodoSnapshot(chatId);
+    }
     try {
-      const snapshot = todoSnapshotForRenderer(
-        chatId,
-        await replayTodoState(await piCompactionSessionStore.openChat(chatId)),
-      );
+      const snapshot = todoSnapshotForRenderer(chatId, await replayTodoState(opened.session));
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
       return snapshot;
     } catch (error) {
@@ -117,6 +176,26 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:waitUntilIdle", async (_event, id: unknown) =>
     chatApplicationService.waitUntilIdle(asString(id, "id")),
   );
+
+  ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {
+    if (engine !== undefined && !isCompactionEngine(engine)) throw new Error("Invalid compaction engine.");
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Compaction requires the active application document."),
+    );
+    return compactDesktopChat(contextLifecycleService, asString(id, "id"), owner.documentId, engine);
+  });
+  ipcMain.handle("chats:cancelCompact", (event, id: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Compaction cancellation requires the active application document."),
+    );
+    return cancelDesktopCompaction(
+      contextLifecycleService,
+      asString(id, "id"),
+      owner.documentId,
+    );
+  });
 
   ipcMain.handle("chats:create", async (event, input: unknown) => {
     const owner = rendererDocumentOwner(
@@ -468,13 +547,11 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:remove", async (_event, id: unknown) => {
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (chat?.botId) {
-      if (!hostPlatformCapabilities().bots) {
-        return chatApplicationService.remove(chatId);
-      }
-      return botApplicationService.deleteChat({ botId: chat.botId, chatId });
-    }
-    return chatApplicationService.remove(chatId);
+    const result = chat?.botId && hostPlatformCapabilities().bots
+      ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
+      : await chatApplicationService.remove(chatId);
+    if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
+    return result;
   });
 
   ipcMain.handle(

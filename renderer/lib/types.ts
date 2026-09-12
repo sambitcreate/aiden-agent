@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
@@ -231,6 +232,8 @@ export interface Workspace {
   name: string;
   folderPath?: string;
   permission: WorkspacePermission;
+  /** Omitted in older configs; memory is enabled unless explicitly disabled. */
+  memoryEnabled?: boolean;
   managedWorktree?: ManagedWorktree;
   createdAt: number;
   updatedAt: number;
@@ -687,8 +690,14 @@ export interface McpServer {
 }
 
 export type McpPresetAuth =
-  | { kind: "apiKey"; headerName: string; keyLabel: string; keyHelpUrl: string }
-  | { kind: "oauth" };
+  | {
+      kind: "apiKey";
+      headerName: string;
+      keyLabel: string;
+      keyHelpUrl: string;
+      headerValuePrefix?: string;
+    }
+  | { kind: "oauth"; clientName?: string };
 
 /** A built-in MCP provider definition from the main-process catalog. */
 export interface McpPreset {
@@ -696,6 +705,7 @@ export interface McpPreset {
   name: string;
   tagline: string;
   vendor: string;
+  category: string;
   transport: "http";
   url: string;
   auth: McpPresetAuth;
@@ -787,6 +797,7 @@ export interface AssistantConfigSnapshot {
 }
 
 export interface AppSettings {
+  compactionEngine?: CompactionEngine;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
@@ -814,6 +825,10 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Omitted in older configs; memory is enabled unless explicitly disabled. */
+  /** Global skill discovery/invocation gate. Omitted means enabled. */
+  skillsEnabled?: boolean;
+  memoryEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
   scheduledDefaultPermission?: ScheduledTaskPermission;

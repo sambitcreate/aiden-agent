@@ -33,6 +33,7 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
+import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import {
   AidenIdempotencyLedger,
@@ -56,6 +57,7 @@ import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
+import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
@@ -193,6 +195,8 @@ function writeRemoteLog(entry: AidenRemoteServiceLogEntry): void {
           ...(status >= 500 ? { code: "internal-error" as const } : {}),
           fields: {
             routeCategory: remoteRouteCategory(details.route),
+            ...(typeof details.method === "string" ? { method: details.method } : {}),
+            ...(typeof details.routePath === "string" ? { route: details.routePath } : {}),
             statusClass: status >= 500 ? "5xx" : status >= 400 ? "4xx" : "2xx",
             latencyBucket: latencyMs >= 10_000 ? "10s-plus" : latencyMs >= 5_000 ? "5s-plus" : "2s-plus",
             remoteCode: typeof details.errorCode === "string" ? details.errorCode : null,
@@ -366,6 +370,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
         bots?: AidenRemoteBotService;
@@ -483,6 +488,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
+            activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
           });
           activeChats = chats;
           const projectBotHealth = async (
@@ -669,6 +675,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
+          const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
           return {
             instanceId,
@@ -679,6 +686,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             files,
             git,
             schedules,
+            memorySettings,
             usage: usageStore,
             speech,
             ...(botsSupported

@@ -82,6 +82,13 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("share_image"), true);
 });
 
+test("share_image advertises outbound sharing rather than image inspection", () => {
+  const tool = createShareImageTool({ workspaceRoot: "/workspace", share: () => undefined });
+  assert.match(tool.description, /outbound sharing tool/u);
+  assert.match(tool.description, /cannot inspect an image/u);
+  assert.match(tool.description, /Images attached by the user are already supplied/u);
+});
+
 test("share_image admits verified PNG bytes from absolute paths without exposing the path", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-share-image-"));
   try {

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "engine": "vcc",
+  "corpus": "synthetic-annotated-v1",
+  "measurements": [
+    {
+      "caseId": "coding",
+      "facts": [
+        {
+          "category": "goal",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "constraint",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "decision",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "unresolved",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "completed",
+          "inSummary": true,
+          "recalled": true
+        }
+      ],
+      "tokensBefore": 25928,
+      "estimatedTokensAfter": 6775,
+      "durationMs": 385,
+      "summarizationCalls": 0,
+      "processPeakRssBytes": 202997760
+    },
+    {
+      "caseId": "planning-multilingual",
+      "facts": [
+        {
+          "category": "goal",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "constraint",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "decision",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "unresolved",
+          "inSummary": true,
+          "recalled": true
+        },
+        {
+          "category": "completed",
+          "inSummary": true,
+          "recalled": true
+        }
+      ],
+      "tokensBefore": 25917,
+      "estimatedTokensAfter": 6758,
+      "durationMs": 369,
+      "summarizationCalls": 0,
+      "processPeakRssBytes": 207470592
+    }
+  ]
+}

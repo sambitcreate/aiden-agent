@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"fixture-uncompacted","timestamp":"2026-08-31T12:00:00.000Z","cwd":"/private/aiden","metadata":{"kind":"aiden-chat-compaction-v1","chatId":"fixture-uncompacted"}}
+{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-08-31T12:00:01.000Z","provider":"openai","modelId":"gpt-fixture"}
+{"type":"message","id":"u1","parentId":"m1","timestamp":"2026-08-31T12:00:02.000Z","message":{"role":"user","content":[{"type":"text","text":"Inspect the image."},{"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}],"timestamp":1788177602000}}
+{"type":"custom","id":"c1","parentId":"u1","timestamp":"2026-08-31T12:00:03.000Z","customType":"aiden.chat-message.v1","data":{"chatMessageId":"visible-u1"}}
+{"type":"message","id":"a1","parentId":"c1","timestamp":"2026-08-31T12:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I can inspect it."}],"api":"openai-responses","provider":"openai","model":"gpt-fixture","usage":{"input":12,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":17,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1788177604000}}

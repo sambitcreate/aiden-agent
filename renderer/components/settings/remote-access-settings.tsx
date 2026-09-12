@@ -1,3 +1,4 @@
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
@@ -36,6 +37,8 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  RadioGroup,
+  RadioGroupItem,
   Text,
   toast,
 } from "../ui";
@@ -139,7 +142,9 @@ function tailscaleRouteCopy(status: AidenRemoteSettingsSnapshot["status"]): {
 }
 
 function friendlyTailscaleError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
+  const message = (error instanceof Error ? error.message : "")
+    .replace(/^Error invoking remote method ['"][^'"]+['"]:\s*/iu, "")
+    .replace(/^Error:\s*/iu, "");
   if (message.includes("tailscale_route_live")) return "Another Aiden profile is active on this route. Nothing was changed.";
   if (message.includes("tailscale_takeover_changed") || message.includes("tailscale_takeover_expired")) return "The route changed or this review expired. Review it again before taking over.";
   if (message.includes("tailscale_funnel_conflict")) return "Tailscale Funnel is using this listener. Aiden did not change it.";
@@ -150,11 +155,12 @@ function friendlyTailscaleError(error: unknown): string {
   if (message.includes("tailscale_reconciliation_conflict")) return "The route changed after the uncertain update. Aiden left it untouched; inspect Tailscale Serve.";
   if (message.includes("tailscale_reconciliation_unhealthy")) return "The route exists but this Aiden service did not answer its health check. Nothing was claimed.";
   if (message.includes("tailscale_reconciliation_required")) return "Verify the previous Tailscale update before starting another route change.";
+  if (message.includes("tailscale_not_installed")) return "Install Tailscale on your desktop and phone, then sign in to the same private network. You can also choose On the same Wi-Fi.";
   if (message.includes("tailscale_not_connected")) return "Open Tailscale and sign in before connecting Aiden.";
   if (message.includes("tailscale_https_unavailable")) return "Enable HTTPS for this Tailscale device name before connecting Aiden.";
   if (message.includes("tailscale_permission_denied")) return "On Linux, allow your user to manage Tailscale once with: sudo tailscale set --operator=$USER";
   if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this desktop’s mobile route. Wait a moment and try again.";
-  return "Aiden couldn’t safely update the Tailscale route.";
+  return message && !message.startsWith("tailscale_") ? message : "Aiden couldn’t safely update the Tailscale route.";
 }
 
 function Disclosure({
@@ -163,7 +169,7 @@ function Disclosure({
   children,
 }: React.PropsWithChildren<{ title: string; summary: string }>) {
   return (
-    <details className="group mb-7 overflow-hidden rounded-card bg-well">
+    <details className="settings-card group mb-7 overflow-hidden rounded-card bg-well">
       <summary className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1">
           <span className="block text-large-strong text-primary">{title}</span>
@@ -222,7 +228,7 @@ function SettingsDeviceRow({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{device.name}</Text>
         <Text variant="small" color="secondary" className="block">
-          {device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
+          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
             ? "Finishing connection"
             : `${state === "previous" ? "Removed" : "Last seen"} ${friendlyDate(timestamp)}`}
         </Text>
@@ -231,14 +237,22 @@ function SettingsDeviceRow({
       {state === "pending" ? <Badge color="blue">Finishing</Badge> : null}
       {state === "inactive" ? <Badge>Inactive</Badge> : null}
       {state === "previous" ? <Badge>Previous</Badge> : null}
-      {onRevoke ? <Button size="small" variant="transparent" onClick={onRevoke}>Revoke</Button> : null}
+      {onRevoke ? <Button size="small" variant="transparent" onClick={onRevoke}>Remove access</Button> : null}
     </div>
   );
 }
 
 export function RemoteAccessSettings() {
+  const capabilities = useAppCapabilities();
+  const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
   const queryClient = useQueryClient();
   const settingsQuery = useAidenRemoteSettings();
+  const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
+  const [setupReview, setSetupReview] = React.useState<{
+    transport: "lan" | "tailscale"; instanceId: string; enabled: boolean;
+    connectionMode: AidenRemoteConnectionMode;
+  } | null>(null);
+  const [setupError, setSetupError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [pairing, setPairing] = React.useState<AidenRemotePairingBootstrapView | null>(null);
   const completedPairingDeviceId = React.useRef<string | null>(null);
@@ -390,23 +404,26 @@ export function RemoteAccessSettings() {
     }
   };
 
-  const beginPairing = async (transport: "lan" | "tailscale") => {
-    if (busy) return;
+  const beginPairing = async (transport: "lan" | "tailscale", review?: NonNullable<typeof setupReview>): Promise<boolean> => {
+    if (busy) return false;
+    setSetupError(null);
     setBusy("pairing");
     const requestGeneration = ++pairingRequestGeneration.current;
     try {
       completedPairingDeviceId.current = null;
       observedPairingSession.current = null;
-      const nextPairing = await aidenRemoteApi.beginPairing(transport);
+      const nextPairing = review
+        ? await aidenRemoteApi.setupPairing(transport, review)
+        : await aidenRemoteApi.beginPairing(transport);
       if (isAidenRemoteTlsEndpointFailure(nextPairing)) {
         if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
           toast.error(nextPairing.message);
         }
-        return;
+        return false;
       }
       if (!mounted.current || pairingRequestGeneration.current !== requestGeneration) {
         await aidenRemoteApi.closePairing(nextPairing.pairingSessionId).catch(() => undefined);
-        return;
+        return false;
       }
       observedPairingSession.current = nextPairing.pairingSessionId;
       queryClient.setQueryData<AidenRemoteSettingsSnapshot>(
@@ -423,10 +440,15 @@ export function RemoteAccessSettings() {
       );
       setPairing(nextPairing);
       await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
+      return true;
     } catch (error) {
       if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
-        toast.error(error instanceof Error ? error.message : "Aiden couldn't open pairing.");
+        const message = friendlyTailscaleError(error);
+        setSetupError(message);
+        toast.error(message);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
       }
+      return false;
     } finally {
       if (mounted.current && pairingRequestGeneration.current === requestGeneration) {
         setBusy(null);
@@ -480,7 +502,7 @@ export function RemoteAccessSettings() {
 
   if (settingsQuery.isLoading) {
     return (
-      <FieldSet title="Remote Access">
+      <FieldSet title="Connection">
         <Field label="Status" description="Checking Aiden's local remote service.">
           <span className="flex items-center justify-end gap-2 text-small text-secondary">
             <Loader2 className="size-4 animate-spin" /> Checking…
@@ -532,9 +554,46 @@ export function RemoteAccessSettings() {
     ? "Local service ready"
     : status.running ? "Ready" : summary;
 
+  const selectedTransport = setupTransport ?? (status.connectionMode === "lan" ? "lan" : "tailscale");
+  const selectedReady = selectedTransport === "lan" ? canPairLan : canPairTailscale;
+  const hasSavedConnection = snapshot.devices.length > 0;
+
   return (
     <>
-      <FieldSet title="Remote Access">
+      <FieldSet title="Phone setup">
+        <Field label="1. Connect your phone" orientation="vertical"
+          description={`Use your ${capabilities.bots ? "Bots and workspaces" : "workspaces"} from your phone or tablet while Aiden runs on this ${hostLabel}.`}>
+          <div className="flex flex-col gap-3">
+            <RadioGroup value={selectedTransport} onValueChange={(value) => {
+              setSetupTransport(value as "lan" | "tailscale"); setSetupError(null);
+            }} className="grid gap-2" aria-label="Where will you use Aiden?" disabled={busy !== null}>
+              {([ ["tailscale", "Away from home", `Uses Tailscale on your ${hostLabel} and phone.`],
+                ["lan", "On the same Wi-Fi", "No Tailscale needed. Use the same local network."] ] as const).map(([value, title, description]) => (
+                <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-control p-3 ${selectedTransport === value ? "bg-list-selection" : "bg-well"}`}>
+                  <RadioGroupItem value={value} />
+                  <span><Text variant="small-strong" className="block">{title}</Text>
+                    <Text variant="small" color="secondary" className="block">{description}</Text></span>
+                </label>
+              ))}
+            </RadioGroup>
+            <Button className="self-start" variant="accent" disabled={busy !== null} onClick={() => {
+              if (selectedReady) { void beginPairing(selectedTransport); return; }
+              setSetupError(null);
+              setSetupReview({ transport: selectedTransport, instanceId: snapshot.instanceId,
+                enabled: status.enabled, connectionMode: status.connectionMode });
+            }}>
+              {busy === "pairing" ? <Loader2 className="animate-spin" /> : <Smartphone />}
+              {busy === "pairing" ? "Preparing connection…" : hasSavedConnection ? "Add device" : "Connect a device"}
+            </Button>
+            {setupError ? <Callout color="red" role="alert">{setupError}</Callout> : null}
+          </div>
+        </Field>
+        <Field label="2. Scan to finish" description="Aiden prepares the connection and shows a one-time code. Scan it in Aiden On The Go, or enter the setup code instead." orientation="vertical">
+          <Text variant="small" color="secondary">Keep Aiden running on your {hostLabel}. You can remove a device’s access below.</Text>
+        </Field>
+      </FieldSet>
+
+      <Disclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
         <Field
           label={(
             <span className="flex items-center gap-1.5">
@@ -544,7 +603,7 @@ export function RemoteAccessSettings() {
           )}
           description="Connect Aiden On The Go while Aiden is running."
         >
-          <div className="flex items-center justify-end gap-2 max-[540px]:justify-start">
+          <div className="flex items-center justify-end gap-2">
             {busy === "enabled" ? <Loader2 className="size-4 animate-spin text-secondary" /> : null}
             <Badge color={status.running ? "green" : status.error ? "red" : undefined}>{summary}</Badge>
             <Switch
@@ -593,10 +652,10 @@ export function RemoteAccessSettings() {
             <span>{status.error}</span>
           </div>
         ) : null}
-      </FieldSet>
+      </Disclosure>
 
       <FieldSet title="Mobile devices">
-        <Field
+        {hasSavedConnection ? <Field
           label="Add a device"
           description="Scan a one-time code in Aiden On The Go. Pairing expires after five minutes."
         >
@@ -633,7 +692,7 @@ export function RemoteAccessSettings() {
               </DropdownMenu>
             )}
           </div>
-        </Field>
+        </Field> : null}
         {groups.active.length === 0 && groups.pending.length === 0 && groups.inactive.length === 0 ? (
           <div className="p-4 text-small text-secondary">No devices are paired with this desktop.</div>
         ) : (
@@ -846,6 +905,22 @@ export function RemoteAccessSettings() {
         ))}
       </Disclosure>
 
+      <Dialog open={setupReview !== null} onOpenChange={(open) => { if (!open && !busy) setSetupReview(null); }}
+        title={`Connect your phone to this ${hostLabel}?`}
+        description={setupReview?.transport === "tailscale"
+          ? "Aiden will turn on phone access, prepare its private connection through Tailscale, and show a one-time code."
+          : `Aiden will turn on phone access over your local network and show a one-time code. Your phone and ${hostLabel} need to be on the same network.`}
+        confirmLabel={busy === "pairing" ? "Preparing connection…" : "Enable and show code"}
+        busy={busy !== null} dismissDisabled={busy !== null}
+        onConfirm={async () => { if (setupReview && await beginPairing(setupReview.transport, setupReview)) setSetupReview(null); }}>
+        <Text as="p" variant="small" color="secondary">Paired devices can use the workspaces and capabilities this {hostLabel} allows. Your AI keys stay on this {hostLabel}; requests still go to the AI service you choose.</Text>
+        <Text as="p" variant="small" color="secondary" className="mt-3">Keep Aiden running. Remove a device’s access here at any time. Closing the code window stops pairing; phone access stays on until you turn it off.</Text>
+        <details className="mt-3 text-small"><summary className="cursor-pointer rounded-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Review folder browsing access</summary>
+          <Text as="p" variant="small" color="secondary" className="mt-2">{snapshot.approvedRoots.length ? snapshot.approvedRoots.map((root) => root.label).join(", ") : "No additional folders approved for browsing."} Existing permitted workspaces{capabilities.bots ? " and Bot access" : ""} stay unchanged.</Text>
+        </details>
+        {setupError ? <Callout color="red" role="alert" className="mt-3">{setupError}</Callout> : null}
+      </Dialog>
+
       <Dialog
         open={pairing !== null}
         onOpenChange={(open) => void closePairing(open)}
@@ -909,14 +984,14 @@ export function RemoteAccessSettings() {
               </div>
               <Text variant="small" color="secondary" className="mt-2 block">
                 {pairingTransport === "tailscale"
-                  ? "Enter this private address and the setup code on your iPhone or iPad."
-                  : "Select this discovered desktop, then enter the setup code on your iPhone or iPad."}
+                  ? "Enter this private address and the setup code on your phone or tablet."
+                  : "Select this discovered desktop, then enter the setup code on your phone or tablet."}
               </Text>
             </div>
             <Text variant="small" color="secondary" role="status" aria-live="polite">
               Certificate check {pairingVerificationCode(pairing)} · {pairingPresentation.qrDisabled
                 ? pairingPresentation.badge
-                : `Expires in ${pairingSeconds} seconds`}.
+                : <>Expires in <span className="inline-block min-w-[3ch] text-right tabular-nums">{pairingSeconds}</span> seconds</>}.
             </Text>
             {(effectivePairingLifecycle.state === "expired" || effectivePairingLifecycle.state === "failed") ? (
               <Button
@@ -961,9 +1036,9 @@ export function RemoteAccessSettings() {
       <AlertDialog
         open={revokeDevice !== null}
         onOpenChange={(open) => !open && setRevokeDevice(null)}
-        title="Revoke this device?"
+        title="Remove this device’s access?"
         description={revokeDevice ? `“${revokeDevice.name}” will immediately lose Remote Access. Pair it again to restore access.` : undefined}
-        confirmLabel="Revoke"
+        confirmLabel="Remove access"
         confirmVariant="destructive"
         busy={busy === "revoke"}
         keepOpenOnConfirm

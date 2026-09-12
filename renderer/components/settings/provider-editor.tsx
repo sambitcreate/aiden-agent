@@ -17,6 +17,7 @@ import {
   SelectValue,
   Text,
   toast,
+  type DialogLayer,
 } from "../ui";
 import { providersApi } from "../../lib/ipc";
 import { useModelInfo, useSettings } from "../../lib/queries";
@@ -52,7 +53,9 @@ interface ProviderEditorProps {
   provider: Provider;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
+  layer?: DialogLayer;
+  requireReady?: boolean;
   returnFocus?: () => HTMLElement | null;
 }
 
@@ -62,6 +65,8 @@ export function ProviderEditor({
   onOpenChange,
   onSaved,
   returnFocus,
+  layer,
+  requireReady = false,
 }: ProviderEditorProps) {
   const artworkInputRef = React.useRef<HTMLInputElement>(null);
   const artworkBusyRef = React.useRef(false);
@@ -228,13 +233,17 @@ export function ProviderEditor({
       toast.error(message);
       return;
     }
+    if (requireReady && (models.length === 0 || !defaultModel || !models.includes(defaultModel) || defaultModelIsHidden)) {
+      setConnectionNotice({ message: "Discover models and choose an available default before continuing.", error: true });
+      return;
+    }
     setSaving(true);
     try {
       await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
       if (models.length === 0) {
         toast.info("Saved without models. Discover models before sending a chat.");
       }
-      onSaved();
+      await onSaved();
       onOpenChange(false);
     } catch (error) {
       const message = `Couldn't save provider: ${error instanceof Error ? error.message : String(error)}`;
@@ -248,6 +257,8 @@ export function ProviderEditor({
   return (
     <Dialog
       open={open}
+      layer={layer}
+      busy={saving || testing}
       onOpenChange={onOpenChange}
       title={`Configure ${provider.label}`}
       description="Set the connection details and models for this custom endpoint."

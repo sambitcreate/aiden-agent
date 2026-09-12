@@ -242,6 +242,15 @@ export function useChats(workspaceId?: string) {
   });
 }
 
+/** Every regular chat that belongs to the registered workspace navigation surface. */
+export function useAllRegularChats(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatsIn(undefined),
+    queryFn: () => chatsApi.list(),
+    enabled,
+  });
+}
+
 export function useBots(includeArchived = false) {
   return useQuery({
     queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
@@ -266,10 +275,10 @@ export function useBotChats(botId: string | undefined) {
 }
 
 /** Bot capability catalog for the desktop audience; refreshed after saves. */
-export function useBotCapabilityCatalog(enabled: boolean) {
+export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   return useQuery({
-    queryKey: queryKeys.botCapabilityCatalog,
-    queryFn: () => botsApi.getCapabilityCatalog(),
+    queryKey: [...queryKeys.botCapabilityCatalog, botId],
+    queryFn: () => botsApi.getCapabilityCatalog(botId),
     enabled,
   });
 }

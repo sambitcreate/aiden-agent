@@ -18,6 +18,7 @@ const featureAssetPaths = [
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
+  "features/browser.png",
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
@@ -190,7 +191,7 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
 });
 
 test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
-  assert.match(source, />\s*Choose from more\s*</u);
+  assert.match(source, />\s*Other ways\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
   assert.match(source, /data-onboarding-more-providers/u);
@@ -305,6 +306,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
+  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{visibleFeatureBentos\.length\}/u);
   assert.match(
@@ -322,7 +324,11 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(source, /Use Ctrl-K or \/ for app commands/u);
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+  );
+  assert.match(
+    source,
+    /Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline\./u,
   );
   assert.match(
     featurePresentation,
@@ -330,7 +336,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
-  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
@@ -379,15 +385,19 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     featurePresentation,
     /benchmark-only OpenRouter key never imports its model catalog/u,
   );
-  assert.match(featurePresentation, /bundled model details stay offline during ordinary browsing/u);
+  assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
+  assert.match(featurePresentation, /ordinary browsing stays offline/u);
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 25);
+  assert.match(featurePresentation, /Browser & Annotations/u);
+  assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
+  assert.match(featurePresentation, /Incognito is temporary/u);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 25);
+  assert.equal(featureAssetPaths.length, 26);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.ok(featureAssetPaths.includes("features/bots.png"));
@@ -410,4 +420,18 @@ test("every advertised feature has its own one-megapixel PNG with alpha", () => 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
+});
+
+
+test("primary AI choices include custom setup without opening advanced providers", () => {
+  assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
+  for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
+    assert.ok(source.includes(`title: "${title}"`));
+  }
+  assert.match(source, /<ProviderEditor[\s\S]*?layer="onboarding"[\s\S]*?requireReady/u);
+  const editor = readFileSync(new URL("./settings/provider-editor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /requireReady &&/u);
+  assert.match(editor, /models.length === 0/u);
+  assert.match(editor, /defaultModelIsHidden/u);
+  assert.match(editor, /await onSaved\(\)/u);
 });

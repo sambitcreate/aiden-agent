@@ -62,6 +62,8 @@ test("two no-capability scouts need no model-supplied resource budget", () => {
   assert.equal(validate({ ...noCapabilityRhymes, deadlineMs: 60_000 }), false);
   assert.match(delegated.description, /resource limits, and run IDs are host-owned/u);
   assert.match(delegated.description, /never send execution, limits, deadline, or budget fields/u);
+  assert.match(delegated.description, /infers only their exact union/u);
+  assert.match(delegated.description, /capability-less siblings workspace-read-only/u);
 });
 
 test("Phase 5E exposes shell only after the complete positive production gate", async () => {

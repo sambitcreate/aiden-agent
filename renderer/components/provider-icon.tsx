@@ -78,6 +78,39 @@ const MULTICOLOR_PROVIDER_ICON_SLUGS = new Set<ProviderIconSlug>([
   "zai-coding-cn",
 ]);
 
+const THEMED_MARK_STYLE = {
+  backgroundColor: "currentColor",
+  WebkitMaskPosition: "center",
+  maskPosition: "center",
+  WebkitMaskRepeat: "no-repeat",
+  maskRepeat: "no-repeat",
+  WebkitMaskSize: "contain",
+  maskSize: "contain",
+} as const;
+
+function ThemedProviderMark({
+  iconUrl,
+  mark,
+  className,
+}: {
+  iconUrl: string;
+  mark: string;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-provider-icon={mark}
+      className={cn("inline-block shrink-0", className)}
+      style={{
+        ...THEMED_MARK_STYLE,
+        WebkitMaskImage: `url("${iconUrl}")`,
+        maskImage: `url("${iconUrl}")`,
+      }}
+    />
+  );
+}
+
 export function ProviderIcon({
   providerId,
   providerLabel,
@@ -106,7 +139,7 @@ export function ProviderIcon({
   const slug = resolveProviderIconSlug(providerId, modelId);
   const iconUrl = slug ? PROVIDER_ICON_URLS[slug] : undefined;
 
-  if (!iconUrl) {
+  if (!slug || !iconUrl) {
     const initial = providerLabel.trim().charAt(0).toLocaleUpperCase() || "?";
     return (
       <span
@@ -135,22 +168,5 @@ export function ProviderIcon({
     );
   }
 
-  return (
-    <span
-      aria-hidden="true"
-      data-provider-icon={slug}
-      className={cn("inline-block shrink-0", className)}
-      style={{
-        backgroundColor: "currentColor",
-        WebkitMaskImage: `url("${iconUrl}")`,
-        maskImage: `url("${iconUrl}")`,
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-      }}
-    />
-  );
+  return <ThemedProviderMark iconUrl={iconUrl} mark={slug} className={className} />;
 }

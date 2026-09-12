@@ -1,9 +1,9 @@
 import type {
   CredentialStore,
   Models,
-  ProviderModelsStore,
   Provider,
 } from "@earendil-works/pi-ai";
+import type { ProviderModelsStore } from "./pi-models-store.js";
 import {
   isPiRemoteCatalogCacheFresh,
   isPiRemoteCatalogProvider,
@@ -119,12 +119,20 @@ export async function refreshPiCatalogs({
         const auth = await raceWithAbort(models.checkAuth(providerId), signal);
         if (!auth || signal?.aborted) return;
         const credential = await raceWithAbort(credentials.read(providerId), signal);
+        const stored = await raceWithAbort(store.read(), signal);
+        const effectiveSignal = signal ?? new AbortController().signal;
         await raceWithAbort(provider.refreshModels({
           credential,
-          store,
+          stored,
+          publish: async (publication) => {
+            if (publication.persist === null) await store.delete();
+            else if (publication.persist !== undefined) await store.write(publication.persist);
+            publication.update?.();
+            return true;
+          },
           allowNetwork: true,
           force,
-          signal,
+          signal: effectiveSignal,
         }), signal);
       } catch (error) {
         errors.set(

@@ -12,7 +12,7 @@
     "atomic": true
   },
   "x-aiden-context-private-response-fields": {
-    "appliesTo": ["Chat", "Bot"],
+    "appliesTo": ["Chat", "ChatSummary", "Bot"],
     "recursive": true,
     "normalization": "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
     "forbiddenNormalizedNames": [
@@ -89,6 +89,18 @@
     "allowedSchemaProperties": [
       "BotDetail.instructions",
       "BotDetail.openingGreeting"
+    ],
+    "chatSummaryOnlyForbiddenNormalizedNames": [
+      "messages",
+      "attachments",
+      "htmlartifacts",
+      "outcome",
+      "timeline",
+      "reasoning",
+      "botid",
+      "providerid",
+      "modelid",
+      "preview"
     ]
   },
   "servers": [
@@ -525,6 +537,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkspaceSelection"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chat-summaries": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listChatSummaries",
+        "description": "Returns a transcript-free frozen page of regular chat metadata, ordered by updatedAt descending and then chat ID ascending. Cursors are opaque, integrity protected, expire after five minutes, and never restart pagination implicitly.",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript-free chat summary page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummaryPage"
                 }
               }
             }
@@ -1191,6 +1253,9 @@
         "operationId": "getBotCapabilityCatalog",
         "x-aiden-capability": "bot:read",
         "x-aiden-capabilities": ["bot:read"],
+        "parameters": [
+          { "$ref": "#/components/parameters/BotIdQuery" }
+        ],
         "responses": {
           "200": {
             "description": "Safe opaque Bot capability catalog; no paths, credentials, headers, or fingerprints",
@@ -3030,6 +3095,66 @@
         }
       }
     },
+    "/memory/settings": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getMemorySettings",
+        "x-aiden-capability": "workspace:read",
+        "responses": {
+          "200": {
+            "description": "Global memory settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMemorySettings",
+        "x-aiden-capability": "workspace:manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySettingsMutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated global memory settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/scheduled-tasks/settings": {
       "parameters": [
         {
@@ -3170,6 +3295,18 @@
         "name": "botId",
         "in": "path",
         "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      },
+      "BotIdQuery": {
+        "name": "botId",
+        "in": "query",
+        "required": false,
+        "description": "Existing authenticated Bot whose saved unavailable catalog choices should be retained; omit for the generic Bot-creation catalog.",
         "schema": {
           "type": "string",
           "minLength": 1,
@@ -3389,7 +3526,9 @@
           "deviceType": {
             "enum": [
               "iphone",
-              "ipad"
+              "ipad",
+              "mac",
+              "linux"
             ]
           },
           "clientVersion": {
@@ -3566,6 +3705,18 @@
                 "bot:read",
                 "bot:write"
               ]
+            },
+            "uniqueItems": true
+          },
+          "features": {
+            "type": "array",
+            "description": "Bounded additive API feature advertisements. Clients recognize supported values and ignore other bounded values.",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
             },
             "uniqueItems": true
           },
@@ -3895,6 +4046,7 @@
           "id",
           "name",
           "permission",
+          "memoryEnabled",
           "hasFolder",
           "isManagedWorktree",
           "createdAt",
@@ -3914,6 +4066,9 @@
               "ask",
               "none"
             ]
+          },
+          "memoryEnabled": {
+            "type": "boolean"
           },
           "hasFolder": {
             "type": "boolean"
@@ -4046,6 +4201,9 @@
               "ask",
               "none"
             ]
+          },
+          "memoryEnabled": {
+            "type": "boolean"
           },
           "confirmedForeground": {
             "const": true
@@ -4892,6 +5050,11 @@
             "maxItems": 128,
             "items": { "$ref": "#/components/schemas/BotCapabilityOption" }
           },
+          "skillsEnabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Optional global Skills gate; omission means enabled. When false, skill choices are unavailable and only authenticated retained selections may be preserved or reduced. This flag never grants runtime skill authority."
+          },
           "skills": {
             "type": "array",
             "maxItems": 256,
@@ -5362,6 +5525,86 @@
           }
         },
         "additionalProperties": false
+      },
+      "ChatSummary": {
+        "type": "object",
+        "description": "Transcript-free regular-chat projection. Harmless additive fields are tolerated, while clients still apply the recursive private-field denial policy.",
+        "x-aiden-updated-at-not-before-created-at": true,
+        "required": [
+          "id",
+          "workspaceId",
+          "title",
+          "titlePending",
+          "createdAt",
+          "updatedAt",
+          "revision",
+          "activity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "titlePending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 47,
+            "maxLength": 47,
+            "pattern": "^rev_[A-Za-z0-9_-]{43}$"
+          },
+          "activity": {
+            "enum": [
+              "idle",
+              "active"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ChatSummaryPage": {
+        "type": "object",
+        "x-aiden-max-json-response-bytes": 1048576,
+        "required": [
+          "summaries"
+        ],
+        "properties": {
+          "summaries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^cur_[A-Za-z0-9_-]{1,384}\\.[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "additionalProperties": true
       },
       "TurnStartRequest": {
         "type": "object",
@@ -6960,6 +7203,38 @@
           },
           "defaultTimezone": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemorySettings": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "revision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemorySettingsMutation": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "confirmedForeground"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "confirmedForeground": {
+            "const": true
           }
         },
         "additionalProperties": false

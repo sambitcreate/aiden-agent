@@ -111,7 +111,7 @@ function codexAccessToken(accountId: string): string {
 
 function terminalStream(
   model: Model<Api>,
-  stopReason: AssistantMessage["stopReason"],
+  stopReason: Exclude<AssistantMessage["stopReason"], "pending">,
   errorMessage?: string,
 ) {
   const stream = createAssistantMessageEventStream();
@@ -953,7 +953,7 @@ test("observes WebSocket auth rejection and recovery without an HTTP response ca
   await credentials.modify("openai-codex", async () => oauthCredential("locally-valid"));
   const builtin = builtinModels({ credentials });
   const results: Array<{
-    stopReason: AssistantMessage["stopReason"];
+    stopReason: Exclude<AssistantMessage["stopReason"], "pending">;
     errorMessage?: string;
   }> = [
     {

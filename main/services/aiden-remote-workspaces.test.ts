@@ -212,8 +212,10 @@ test("workspace update and removal require the exact current revision", async ()
   const updated = await app.service.update("workspace-1", current.revision, {
     confirmedForeground: true,
     permission: "full",
+    memoryEnabled: false,
   });
   assert.equal(updated.permission, "full");
+  assert.equal(updated.memoryEnabled, false);
   assert.notEqual(updated.revision, current.revision);
   await app.service.remove("workspace-1", updated.revision);
   assert.equal(app.notifications(), 2);

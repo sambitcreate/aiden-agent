@@ -320,7 +320,7 @@ function ProviderListRow({
       data-web-search-provider-row
       data-provider-id={provider.id}
       onClick={(event) => onSelect(provider, event.currentTarget)}
-      className="group flex w-full min-w-0 items-center gap-3 border-b border-separator px-3.5 py-3 text-left outline-none transition-colors duration-150 last:border-b-0 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring motion-reduce:transition-none"
+      className="group flex w-full min-w-0 items-center gap-3 border-b border-separator px-3.5 py-3 text-left outline-none transition-colors duration-150 last:border-b-0 hover:bg-list-hover focus-visible:bg-list-hover motion-reduce:transition-none"
     >
       <span className="flex size-9 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
         <ProviderIcon
@@ -420,7 +420,7 @@ function ProviderCard({
           href={provider.privacyUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
         >
           Privacy <LinkIcon />
         </a>
@@ -428,7 +428,7 @@ function ProviderCard({
           href={provider.termsUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
         >
           Terms <LinkIcon />
         </a>
@@ -508,7 +508,7 @@ function RouteEntryRow({
         event.preventDefault();
         onMove(index, event.key === "ArrowUp" ? -1 : 1);
       }}
-      className="group flex min-w-0 items-center gap-2 rounded-control border border-separator bg-popover px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:border-focus-ring focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
+      className="group flex min-w-0 items-center gap-2 rounded-control border border-separator bg-popover px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
     >
       <span
         aria-hidden="true"
@@ -806,7 +806,7 @@ function ProviderSetupDialog({
               href={provider.privacyUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
             >
               Privacy <LinkIcon />
             </a>
@@ -814,7 +814,7 @@ function ProviderSetupDialog({
               href={provider.termsUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
             >
               Terms <LinkIcon />
             </a>
@@ -1461,7 +1461,7 @@ export function WebSearchSettings() {
             <ChevronLeft className="size-4" />
             All providers
           </Button>
-          <header className="px-1">
+          <header className="settings-page-heading px-1">
             <h1
               ref={providerDetailHeadingRef}
               tabIndex={-1}
@@ -1517,7 +1517,7 @@ export function WebSearchSettings() {
           <ChevronLeft className="size-4" />
           Back to Web Search
         </Button>
-        <header className="px-1">
+        <header className="settings-page-heading px-1">
           <h1
             ref={browserHeadingRef}
             tabIndex={-1}
@@ -1669,7 +1669,7 @@ export function WebSearchSettings() {
 
   return (
     <div className="flex flex-col gap-6 pb-8">
-      <header className="flex items-start justify-between gap-4 px-1">
+      <header className="settings-page-heading flex items-start justify-between gap-4 px-1">
         <div className="min-w-0">
           <Text as="h1" variant="heading1">
             Web Search
@@ -1705,7 +1705,7 @@ export function WebSearchSettings() {
       >
         <div className="p-4">
           <div className="flex items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-accent/10 text-accent">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-status-accent-surface text-status-accent">
               <Globe2 aria-hidden="true" className="size-5" />
             </div>
             <div className="min-w-0 flex-1">
@@ -1930,7 +1930,7 @@ export function WebSearchSettings() {
                   ) : null}
                 </div>
                 <details className="mt-3 rounded-control bg-well px-3 py-2">
-                  <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none marker:hidden focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring">
+                  <summary className="flex cursor-default list-none items-center gap-2 rounded-control text-small-strong text-secondary outline-none marker:hidden focus-visible:text-primary ">
                     <ChevronDown
                       aria-hidden="true"
                       className="size-3.5 transition-transform duration-150 open:rotate-180 motion-reduce:transition-none"

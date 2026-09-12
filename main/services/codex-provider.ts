@@ -311,7 +311,10 @@ export class CodexProviderService {
   authenticate(interaction: AuthInteraction): Promise<OAuthCredential> {
     const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
     if (!provider?.auth.oauth) throw new Error("OpenAI Codex provider is unavailable.");
-    return provider.auth.oauth.login(interaction);
+    return provider.auth.oauth.login({
+      ...interaction,
+      signal: interaction.signal ?? new AbortController().signal,
+    });
   }
 
   /** Commit only after the owning flow has crossed its cancellation boundary. */
@@ -470,7 +473,7 @@ export class CodexProviderService {
       const operationGeneration = attempt.credentialGeneration;
       let operationTimeout: ReturnType<typeof setTimeout> | undefined;
       // Reconciliation intentionally outlives the bounded public operation.
-      // Pi 0.80.10 drops the refresh signal, so a token server can still rotate
+      // Pi's refresh callback may omit the signal, so a token server can still rotate
       // a one-time token after our deadline. Preserve that valid result only if
       // both the credential revision and app-owned generation are unchanged.
       const completion = Promise.resolve()
@@ -515,7 +518,7 @@ export class CodexProviderService {
         if (operationTimeout) clearTimeout(operationTimeout);
         if (this.refreshOperation?.controller === controller) this.refreshOperation = null;
       });
-      // Pi 0.80.10 does not forward the signal into Codex's refresh fetch. The
+      // Pi may not forward the signal into Codex's refresh fetch. The
       // service still needs a terminal lifecycle so one dead dependency call
       // cannot pin every later retry to the same promise forever. This longer
       // operation deadline is deliberately separate from each caller's short

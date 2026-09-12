@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
-import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
+import {
+  AIDEN_REMOTE_ROUTE_TEMPLATES,
+  createAidenRemoteRequestHandler,
+  remoteRouteTemplate,
+} from "./aiden-remote-router.js";
+import type { AidenRemoteRouteLabel } from "./aiden-remote-router.js";
 import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-remote-chats.js";
 import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
@@ -37,6 +43,7 @@ async function fixture(options: {
     id: "workspace-1",
     name: "Project",
     permission: "ask" as const,
+    memoryEnabled: true,
     hasFolder: false,
     isManagedWorktree: false,
     createdAt: new Date(1_000).toISOString(),
@@ -376,15 +383,21 @@ async function fixture(options: {
         calls.push(`bots:restore:${deviceId}:${botId}:${revision}:${key}`);
         return { ...botDetail, id: botId, revision: "bot_revision_3" };
       },
-      capabilityCatalog: async (deviceId) => {
-        calls.push(`bots:catalog:${deviceId}`);
+      capabilityCatalog: async (deviceId, botId) => {
+        calls.push(`bots:catalog:${deviceId}:${botId ?? "generic"}`);
+        if (botId === "bot-missing") {
+          throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+        }
         return {
           revision: "bot_catalog_revision_1",
           providers: [],
           fileScopes: [],
           shellAvailable: true,
           connections: [],
-          skills: [],
+          skills: botId === undefined
+            ? []
+            : [{ id: `skill_saved_${botId}`, label: "Saved skill", available: false }],
+          skillsEnabled: false,
           otherCapabilities: [],
           notice,
         };
@@ -988,7 +1001,7 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
 
     assert.deepEqual(app.calls.filter((call) => call.startsWith("bots:")), [
       "bots:list:true",
-      "bots:catalog:device-authorized-12345678",
+      "bots:catalog:device-authorized-12345678:generic",
       "bots:favorites:get",
       "bots:create:device-authorized-12345678:bot-create-key-0001",
       "bots:get:bot-1",
@@ -1001,6 +1014,53 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
       "bots:archive:bot-1:bot_revision_2",
       "bots:restore:device-authorized-12345678:bot-1:bot_revision_2:bot-restore-key-001",
     ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
+  const app = await fixture({ capabilities: ["bot:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const generic = await fetch(`${app.base}/bot-capabilities`, { headers });
+    assert.equal(generic.status, 200);
+    const genericBody = await generic.json();
+    assert.equal(genericBody.skillsEnabled, false);
+    assert.deepEqual(genericBody.skills, []);
+
+    const target = await fetch(`${app.base}/bot-capabilities?botId=bot-1`, { headers });
+    assert.equal(target.status, 200);
+    assert.deepEqual((await target.json()).skills, [
+      { id: "skill_saved_bot-1", label: "Saved skill", available: false },
+    ]);
+    assert.ok(app.calls.includes("bots:catalog:device-authorized-12345678:bot-1"));
+
+    const otherTarget = await fetch(`${app.base}/bot-capabilities?botId=bot-2`, { headers });
+    assert.equal(otherTarget.status, 200);
+    assert.deepEqual((await otherTarget.json()).skills, [
+      { id: "skill_saved_bot-2", label: "Saved skill", available: false },
+    ]);
+
+    for (const query of [
+      "botId=bot-1&botId=bot-2",
+      "target=bot-1",
+      "botId=",
+      `botId=${"b".repeat(161)}`,
+      "botId=bot/id",
+      "botId=bot-1&",
+    ]) {
+      const response = await fetch(`${app.base}/bot-capabilities?${query}`, { headers });
+      assert.equal(response.status, 400, query);
+      assert.equal((await response.json()).error.code, "invalid_request", query);
+    }
+
+    const missing = await fetch(`${app.base}/bot-capabilities?botId=bot-missing`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "not_found");
   } finally {
     await app.close();
   }
@@ -2296,4 +2356,192 @@ test("unknown routes and query aliases fail without reflecting untrusted input",
   } finally {
     await app.close();
   }
+});
+
+test("request logs carry the HTTP method and a query-free canonical route template", async () => {
+  const app = await fixture({ capabilities: ["chat:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    // A matched route failing after resolution still reports the concrete
+    // method and canonical route template (never the literal chat id).
+    const denied = await fetch(`${app.base}/chats/chat-1`, {
+      headers: { "aiden-protocol-version": "1" },
+    });
+    assert.equal(denied.status, 401);
+    let entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "chat");
+    assert.equal(entry.routePath, "/chats/:id");
+    assert.equal(JSON.stringify(app.logs).includes("chat-1"), false);
+
+    // Query strings are never reflected into the recorded route.
+    const listed = await fetch(`${app.base}/chats?workspaceId=workspace-1`, { headers });
+    assert.equal(listed.status, 200);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.routePath, "/chats");
+    assert.equal(JSON.stringify(app.logs).includes("workspaceId"), false);
+    assert.equal(JSON.stringify(app.logs).includes("?"), false);
+
+    // Unknown routes omit the canonical route and never echo the raw path.
+    const missing = await fetch(`${app.base}/missing`);
+    assert.equal(missing.status, 404);
+    entry = app.logs[app.logs.length - 1] as Record<string, unknown>;
+    assert.equal(entry.method, "GET");
+    assert.equal(entry.route, "unknown");
+    assert.equal("routePath" in entry, false);
+    assert.equal(JSON.stringify(app.logs).includes("/missing"), false);
+  } finally {
+    await app.close();
+  }
+});
+
+const ROUTE_METHOD_CANDIDATES = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+/**
+ * Instantiate a declared route template with one concrete request path. `:param`
+ * segments receive tokens that satisfy the matching capture grammars in the
+ * router (plain ids accept `x1`; `:fileId`, `:attachmentId`, and
+ * `:avatarRevision` carry required prefixes; the git/scheduled `:action`
+ * families require one of their fixed action literals).
+ */
+function concreteRequestPath(template: string): string {
+  let parameterIndex = 0;
+  return template
+    .split("/")
+    .map((segment) => {
+      if (!segment.startsWith(":")) return segment;
+      parameterIndex += 1;
+      switch (segment) {
+        case ":fileId":
+          return `file_${"f".repeat(43)}`;
+        case ":attachmentId":
+          return `att_${"a".repeat(43)}`;
+        case ":avatarRevision":
+          return `avatar_revision_${"a".repeat(32)}`;
+        case ":attachmentName":
+          return `x${parameterIndex}.png`;
+        case ":action":
+          return template.includes("/git/") ? "review" : "run";
+        default:
+          return `x${parameterIndex}`;
+      }
+    })
+    .join("/");
+}
+
+test("every declared remote route template resolves to its own label and exact routePath", async () => {
+  const app = await fixture({
+    capabilities: ["chat:read", "chat:write", "schedule:read", "schedule:write"],
+  });
+  const failures: string[] = [];
+  try {
+    for (const [label, templates] of Object.entries(AIDEN_REMOTE_ROUTE_TEMPLATES) as Array<
+      [AidenRemoteRouteLabel, readonly string[]]
+    >) {
+      if (label === "unknown") continue;
+      for (const template of templates) {
+        const path = concreteRequestPath(template);
+        let resolved = false;
+        for (const method of ROUTE_METHOD_CANDIDATES) {
+          const response = await fetch(`${app.base}${path}`, { method });
+          await response.arrayBuffer();
+          const entry = app.logs[app.logs.length - 1] as
+            | Record<string, unknown>
+            | undefined;
+          if (entry?.route === label && entry?.routePath === template) {
+            assert.equal(
+              remoteRouteTemplate(label, path),
+              template,
+              `${label} ${template} must derive its own canonical route`,
+            );
+            resolved = true;
+            break;
+          }
+        }
+        if (!resolved) {
+          failures.push(`${label}: ${template} (instantiated as ${path})`);
+        }
+      }
+    }
+    assert.deepEqual(
+      failures,
+      [],
+      "a declared template with no matching router route is a mistranscription",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+/** Split a template or matcher literal into per-segment route shapes (`:x` for params). */
+function routeShapeSegments(literal: string): string[] {
+  let body = literal;
+  if (body.startsWith("^")) body = body.slice(1);
+  if (body.endsWith("$")) body = body.slice(0, -1);
+  body = body.replace(/\\/gu, "");
+  const segments = body.split("/");
+  if (segments[0] === "") segments.shift();
+  return segments.map((segment) => (segment.includes("(") || segment.startsWith(":") ? ":x" : segment));
+}
+
+/** True when every literal segment of the matcher shape matches the template. */
+function matcherCoveredByTemplate(matcher: string[], template: string[]): boolean {
+  if (matcher.length !== template.length) return false;
+  return matcher.every((segment, index) => {
+    const declared = template[index];
+    return declared === ":x" || declared === segment;
+  });
+}
+
+test("every matcher path pattern in the router source is declared as a route template", () => {
+  const source = readFileSync(
+    new URL("./aiden-remote-router.ts", import.meta.url),
+    "utf8",
+  );
+  // The template table above the handler duplicates these matcher shapes by
+  // hand; this scan starts at the handler so table literals never satisfy it.
+  const handler = source.slice(
+    source.indexOf("export function createAidenRemoteRequestHandler("),
+  );
+  const matcherShapes = new Set<string>();
+  const recordShape = (literal: string) => {
+    const segments = routeShapeSegments(literal);
+    if (segments.length > 0) matcherShapes.add(segments.join("/"));
+  };
+  // String-literal matchers (`path === "/scheduled-tasks/scripts"` and friends).
+  // The handler body's only leading-slash string literals are route equality
+  // checks, so single-segment routes (`/health`, `/chats`) are scanned too.
+  for (const match of handler.matchAll(/["']((?:[^"'\\]|\\.)*)["']/gu)) {
+    const literal = match[1] ?? "";
+    if (literal.startsWith("/")) {
+      recordShape(literal);
+    }
+  }
+  // Regex matcher literals bound to `.exec(path)` (the `const XxxMatch` family).
+  for (const match of handler.matchAll(
+    /\bconst\s+[A-Za-z0-9_]+Match\s*=\s*\/([^\n]*?)\/u\.exec\(path\);/gu,
+  )) {
+    recordShape(match[1] ?? "");
+  }
+  const declaredShapes = Object.values(AIDEN_REMOTE_ROUTE_TEMPLATES)
+    .flat()
+    .map((template) => routeShapeSegments(template));
+  // No allowlist is needed: the scan is confined to the handler body, where
+  // every leading-slash literal is a route matcher rather than a header name,
+  // internal prefix, or `path.includes("//")` guard.
+  const uncovered = [...matcherShapes].filter(
+    (shape) =>
+      !declaredShapes.some((declared) =>
+        matcherCoveredByTemplate(shape.split("/"), declared),
+      ),
+  );
+  assert.deepEqual(
+    uncovered,
+    [],
+    "every router matcher path must have a declared route template for routePath evidence",
+  );
 });

@@ -77,6 +77,8 @@ function fixture(
         }
         return [structuredClone(current)];
       },
+      listSummaryMetadata: async () =>
+        current && current.botId === undefined ? [structuredClone(current)] : [],
       get: async () => {
         fixtureOptions.onPayloadGet?.();
         return {
@@ -1007,6 +1009,15 @@ test("chat create is device-scoped idempotent and CRUD checks exact revisions", 
   assert.equal(renamed.title, "Changed");
   await app.service.remove(created.id, renamed.revision);
   assert.equal(app.notifications(), 3);
+});
+
+test("summary revisions are valid optimistic-concurrency tokens for chat mutations", async () => {
+  const app = fixture(chat());
+  const summary = (await app.service.listSummaries()).summaries[0]!;
+  const renamed = await app.service.rename(summary.id, summary.revision, {
+    title: "Changed from summary",
+  });
+  assert.equal(renamed.title, "Changed from summary");
 });
 
 test("ordinary chat creation rejects a client-authored bot id", async () => {

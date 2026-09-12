@@ -11,6 +11,8 @@ import {
   AIDEN_REMOTE_EVENT_TYPES,
   AIDEN_REMOTE_MAX_CHAT_MESSAGES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH,
+  AIDEN_REMOTE_MAX_SERVER_FEATURES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
@@ -85,7 +87,7 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 9);
+  assert.equal(fixture.contractRevision, 10);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
@@ -162,6 +164,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/workspace-browser/roots",
     "/workspace-browser/children",
     "/workspace-browser/selections",
+    "/chat-summaries",
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/move",
@@ -217,6 +220,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/preview",
     "/scheduled-tasks/scripts",
     "/scheduled-tasks/mcp-servers",
+    "/memory/settings",
     "/scheduled-tasks/settings",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
@@ -233,6 +237,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "mac", "linux"]);
   assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
@@ -260,6 +265,15 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   );
   assert.equal((serverSchema.required as unknown[]).includes("serverCapabilities"), false);
   assert.equal((serverSchema.required as unknown[]).includes("deviceName"), false);
+  const serverFeatures = record(serverProperties.features, "server features");
+  assert.equal(serverFeatures.maxItems, AIDEN_REMOTE_MAX_SERVER_FEATURES);
+  assert.equal(serverFeatures.uniqueItems, true);
+  assert.deepEqual(record(serverFeatures.items, "server feature token"), {
+    type: "string",
+    minLength: 1,
+    maxLength: AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH,
+    pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
+  });
   assert.deepEqual(record(serverProperties.deviceName, "device name"), {
     type: "string",
     description: "Presentation-only label currently stored for the authenticated client device.",
@@ -359,6 +373,20 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     return record(record(content["application/json"], "application/json").schema, "request schema").$ref;
   };
 
+  const botIdQuery = record(parameters.BotIdQuery, "BotIdQuery");
+  assert.equal(botIdQuery.name, "botId");
+  assert.equal(botIdQuery.in, "query");
+  assert.equal(botIdQuery.required, false);
+  assert.deepEqual(record(botIdQuery.schema, "BotIdQuery schema"), {
+    type: "string",
+    minLength: 1,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9._:-]+$",
+  });
+  assert.deepEqual(operation("/bot-capabilities", "get").parameters, [
+    { $ref: "#/components/parameters/BotIdQuery" },
+  ]);
+
   assert.deepEqual(
     record(document["x-aiden-json-response-emission"], "JSON response emission"),
     {
@@ -372,7 +400,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     document["x-aiden-context-private-response-fields"],
     "context-private response fields",
   );
-  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "Bot"]);
+  assert.deepEqual(privateResponseFields.appliesTo, ["Chat", "ChatSummary", "Bot"]);
   assert.equal(privateResponseFields.recursive, true);
   assert.equal(
     privateResponseFields.normalization,
@@ -381,6 +409,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(privateResponseFields.allowedSchemaProperties, [
     "BotDetail.instructions",
     "BotDetail.openingGreeting",
+  ]);
+  assert.deepEqual(privateResponseFields.chatSummaryOnlyForbiddenNormalizedNames, [
+    "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
+    "botid", "providerid", "modelid", "preview",
   ]);
   assert.deepEqual(privateResponseFields.forbiddenNormalizedNames, [
     "credential", "credentials", "secret", "secrets", "apikey", "token",
@@ -564,7 +596,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
 
   const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
-  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skills", "otherCapabilities", "notice"]);
+  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities", "notice"]);
   assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
   assert.equal(
     record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
@@ -572,6 +604,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   assert.equal(record(catalogProperties.connections, "connections").maxItems, 128);
   assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
+  assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").type, "boolean");
+  assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").default, true);
   assert.equal(record(catalogProperties.notice, "notice").$ref, "#/components/schemas/BotAccessNoticeStatus");
   const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
   assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);
@@ -884,6 +918,7 @@ test("wire schemas are allowlists and pairing requires pinned HTTPS identity", a
     assert.equal(endpoint.test("https://user:secret@aiden.example.test/api/aiden/v1"), false);
   }
   assert.deepEqual(record(schemas.WorkspacePatch, "WorkspacePatch").required, ["confirmedForeground"]);
+  assert.deepEqual(record(schemas.MemorySettingsMutation, "MemorySettingsMutation").required, ["enabled", "confirmedForeground"]);
   assert.deepEqual(record(schemas.ScheduleSettingsMutation, "ScheduleSettingsMutation").required, ["confirmedForeground"]);
   const messageRoles = record(record(record(schemas.Message, "Message").properties, "Message properties").role, "Message role").enum;
   assert(Array.isArray(messageRoles));
@@ -1003,6 +1038,11 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const missingServerTime = clone();
   delete record(missingServerTime.server, "server").serverTime;
   assert.throws(() => parseAidenRemoteContractFixture(missingServerTime), /serverTime.*RFC 3339/);
+  for (const invalidFeature of ["Uppercase", "future:feature", `f${"x".repeat(64)}`]) {
+    const malformedFeature = clone();
+    record(malformedFeature.server, "server").features = ["chat-summaries-v1", invalidFeature];
+    assert.throws(() => parseAidenRemoteContractFixture(malformedFeature), /server feature is invalid/);
+  }
   const unknownCapability = clone();
   record(unknownCapability.pairingExchange, "exchange").capabilities = ["admin:everything"];
   assert.throws(() => parseAidenRemoteContractFixture(unknownCapability), /Unknown pairing capability/);

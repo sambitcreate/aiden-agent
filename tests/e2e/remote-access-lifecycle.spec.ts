@@ -1,7 +1,24 @@
 import https from "node:https";
 import type { Page } from "@playwright/test";
-import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+
+type RemoteRuntimeStatus = {
+  enabled: boolean;
+  running: boolean;
+  lanPort: number;
+};
+
+async function remoteStatus(page: Page): Promise<RemoteRuntimeStatus> {
+  return page.evaluate(async () => {
+    const bridge = (window as unknown as {
+      aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } };
+    }).aidenAPI;
+    const snapshot = await bridge.ipc.invoke("remote:get") as {
+      status: RemoteRuntimeStatus;
+    };
+    return snapshot.status;
+  });
+}
 
 async function remoteHealth(port: number): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -27,57 +44,48 @@ async function remoteHealth(port: number): Promise<{ status: number; body: unkno
   });
 }
 
-async function remoteSnapshot(page: Page): Promise<AidenRemoteSettingsSnapshot> {
-  return page.evaluate(() => {
-    const bridgeWindow = window as typeof window & {
-      aidenAPI: {
-        ipc: {
-          invoke<T>(channel: string, ...args: unknown[]): Promise<T>;
-        };
-      };
-    };
-    return bridgeWindow.aidenAPI.ipc.invoke<AidenRemoteSettingsSnapshot>("remote:get");
-  });
-}
-
-async function expectRemoteHealth(port: number): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        try {
-          return await remoteHealth(port);
-        } catch (error) {
-          return {
-            status: 0,
-            body: error instanceof Error ? error.message : String(error),
-          };
-        }
-      },
-      { intervals: [100, 250, 500], timeout: 10_000 },
-    )
-    .toEqual({ status: 200, body: { ok: true, protocolVersion: 1 } });
-}
-
-test("Remote Access is opt-in and remains available after the main window closes", async ({ aiden }) => {
+test("guided phone setup asks once, enables access, and survives closing the main window", async ({ aiden }, testInfo) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" })
-    .getByRole("button", { name: "Remote Access", exact: true })
+    .getByRole("button", { name: "Aiden On The Go", exact: true })
     .click();
 
-  const enabled = page.getByRole("switch", { name: "Enable Aiden Remote Access" });
-  await expect(enabled).toHaveAttribute("data-state", "unchecked");
-  expect((await remoteSnapshot(page)).status.running).toBe(false);
-  await enabled.click();
-  await expect(enabled).toHaveAttribute("data-state", "checked");
-  await expect(
-    page.getByRole("group").filter({ has: enabled })
-      .getByText("Ready for a device", { exact: true }),
-  ).toBeVisible();
-  const port = (await remoteSnapshot(page)).status.lanPort;
-  await expectRemoteHealth(port);
+  const choices = page.getByRole("radiogroup", { name: "Where will you use Aiden?" });
+  const connect = page.getByRole("button", { name: "Connect a device", exact: true });
+  // The field's label/content gap does not space children inside its content.
+  // Guard the actual geometry so the CTA cannot touch the last choice card again.
+  await expect(choices).toBeVisible();
+  const choicesBox = await choices.boundingBox();
+  const connectBox = await connect.boundingBox();
+  expect(choicesBox).not.toBeNull();
+  expect(connectBox).not.toBeNull();
+  expect(connectBox!.y - (choicesBox!.y + choicesBox!.height)).toBeGreaterThanOrEqual(12);
+  expect(connectBox!.x).toBe(choicesBox!.x);
+  expect(connectBox!.width).toBeLessThan(choicesBox!.width);
+  await page.getByRole("group", { name: "1. Connect your phone", exact: true })
+    .screenshot({ path: testInfo.outputPath("phone-setup-spacing.png") });
+
+  expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
+  await page.getByRole("button", { name: "Connect a device", exact: true }).click();
+  const review = page.getByRole("dialog", { name: `Connect your phone to this ${process.platform === "darwin" ? "Mac" : "computer"}?` });
+  await expect(review).toBeVisible();
+  expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
+  await review.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
+  await page.getByRole("button", { name: "Connect a device", exact: true }).click();
+  await review.getByRole("button", { name: "Enable and show code", exact: true }).click();
+  await expect(page.getByRole("img", { name: "One-time Aiden pairing QR code", exact: true })).toBeVisible();
+  const running = await remoteStatus(page);
+  expect(running).toMatchObject({ enabled: true, running: true });
+  assertHealth(await remoteHealth(running.lanPort));
 
   await page.close();
-  await expectRemoteHealth(port);
+  assertHealth(await remoteHealth(running.lanPort));
 });
+
+function assertHealth(result: { status: number; body: unknown }): void {
+  expect(result.status).toBe(200);
+  expect(result.body).toEqual({ ok: true, protocolVersion: 1 });
+}

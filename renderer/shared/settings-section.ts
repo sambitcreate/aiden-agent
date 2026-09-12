@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "memory",
   "scheduledTasks",
   "assistant",
   "voice",
@@ -23,7 +24,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   group: "Agent" | "App";
   keywords: string[];
 }> = [
-  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys"] },
+  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
   {
     id: "modelData",
     title: "Model Pad",
@@ -42,7 +43,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     ],
   },
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
-  { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
+  {
+    id: "mcp",
+    title: "Plugins",
+    group: "Agent",
+    keywords: ["mcp", "connections", "protocol", "plugins", "connectors"],
+  },
   {
     id: "websearch",
     title: "Web Search",
@@ -67,15 +73,15 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "remoteAccess",
-    title: "Remote Access",
+    title: "Aiden On The Go",
     group: "Agent",
-    keywords: ["iphone", "ipad", "aiden on the go", "tailscale", "local network", "pairing"],
+    keywords: ["remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
   },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
     group: "Agent",
-    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications"],
+    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later"],
   },
   {
     id: "assistant",
@@ -96,13 +102,19 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "computerUse",
     title: "Computer Use",
     group: "Agent",
-    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta"],
+    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
+  },
+  {
+    id: "memory",
+    title: "Memory",
+    group: "Agent",
+    keywords: ["remember", "facts", "recall", "workspace", "privacy"],
   },
   {
     id: "voice",
     title: "Voice",
     group: "App",
-    keywords: ["microphone", "audio", "transcription", "dictation"],
+    keywords: ["microphone", "audio", "transcription", "dictation", "use my voice", "microphone not working", "talk to aiden"],
   },
   {
     id: "shortcut",
@@ -114,7 +126,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "appearance",
     title: "Appearance",
     group: "App",
-    keywords: ["theme", "light", "dark"],
+    keywords: ["theme", "light", "dark", "workspace", "folder", "paths", "truncation"],
   },
   {
     id: "about",

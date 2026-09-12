@@ -15,11 +15,19 @@ enum class AidenProductArea {
 }
 
 @Serializable
+enum class AidenWorkspaceSidebarOrganization {
+    WORKSPACE,
+    RECENT
+}
+
+@Serializable
 private data class ProductNavigationState(
     val activeAreas: Map<String, AidenProductArea> = emptyMap(),
     val selectedWorkspaces: Map<String, String?> = emptyMap(),
     val selectedBots: Map<String, String?> = emptyMap(),
     val seenCoachmarks: Map<String, Set<String>> = emptyMap(),
+    val workspaceSidebarOrganizations: Map<String, AidenWorkspaceSidebarOrganization> = emptyMap(),
+    val expandedSidebarWorkspaces: Map<String, Set<String>> = emptyMap(),
     val defaultActiveArea: AidenProductArea = AidenProductArea.BOTS,
     val defaultHasSeenCoachmark: Boolean = false
 )
@@ -123,12 +131,41 @@ class AidenProductNavigationStore(private val storageDir: File) {
         save()
     }
 
+    fun workspaceSidebarOrganization(instanceId: String): AidenWorkspaceSidebarOrganization =
+        _state.value.workspaceSidebarOrganizations[instanceId]
+            ?: AidenWorkspaceSidebarOrganization.WORKSPACE
+
+    fun setWorkspaceSidebarOrganization(
+        instanceId: String,
+        organization: AidenWorkspaceSidebarOrganization
+    ) {
+        _state.value = _state.value.copy(
+            workspaceSidebarOrganizations =
+                _state.value.workspaceSidebarOrganizations + (instanceId to organization)
+        )
+        save()
+    }
+
+    fun expandedSidebarWorkspaceIds(instanceId: String): Set<String> =
+        _state.value.expandedSidebarWorkspaces[instanceId].orEmpty()
+
+    fun setExpandedSidebarWorkspaceIds(instanceId: String, workspaceIds: Set<String>) {
+        _state.value = _state.value.copy(
+            expandedSidebarWorkspaces = _state.value.expandedSidebarWorkspaces +
+                (instanceId to workspaceIds.filter { it.isNotBlank() }.take(200).toSet())
+        )
+        save()
+    }
+
     fun purge(instanceId: String) {
         _state.value = _state.value.copy(
             activeAreas = _state.value.activeAreas - instanceId,
             selectedWorkspaces = _state.value.selectedWorkspaces - instanceId,
             selectedBots = _state.value.selectedBots - instanceId,
-            seenCoachmarks = _state.value.seenCoachmarks - instanceId
+            seenCoachmarks = _state.value.seenCoachmarks - instanceId,
+            workspaceSidebarOrganizations =
+                _state.value.workspaceSidebarOrganizations - instanceId,
+            expandedSidebarWorkspaces = _state.value.expandedSidebarWorkspaces - instanceId
         )
         save()
     }

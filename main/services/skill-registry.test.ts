@@ -356,3 +356,46 @@ test("tool, prompt, catalog, and explicit resolution share one collision-heavy s
     await assert.rejects(h.registry.resolve("one", entry.invocationId), SkillInvocationError);
   }
 });
+
+test("global disable hides cached skills and rejects stale invocations without reading skill files", async () => {
+  let enabled = true;
+  let configuredReads = 0;
+  const h = harness({
+    isEnabled: async () => enabled,
+    listConfigured: async () => {
+      configuredReads += 1;
+      return [configured()];
+    },
+  });
+  h.setDiscovered([discovered("global"), discovered("workspace")]);
+  const before = await h.registry.snapshot("one");
+  const selected = before.available[0]!;
+  assert(before.catalog.length > 0);
+  const reads = h.roots.length;
+  enabled = false;
+  const disabled = await h.registry.snapshot("one");
+  assert.deepEqual(disabled.available, []);
+  assert.deepEqual(disabled.skills, []);
+  assert.deepEqual(disabled.catalog, []);
+  assert.equal(formatAvailableSkills(disabled), undefined);
+  assert.deepEqual(buildSkillTools(disabled), []);
+  await assert.rejects(h.registry.resolveFresh("one", selected.invocationId), SkillInvocationError);
+  assert.equal(configuredReads, 1);
+  assert.equal(h.roots.length, reads);
+  enabled = true;
+  assert((await h.registry.snapshot("one")).available.length > 0);
+  assert.equal(configuredReads, 2, "re-enabling refreshes rather than reviving a stale cache");
+});
+
+test("a skill scan completing after global disable cannot publish instructions", async () => {
+  let enabled = true;
+  const h = harness({
+    isEnabled: async () => enabled,
+    discover: async () => {
+      enabled = false;
+      return [discovered("global")];
+    },
+  });
+  h.setConfigured([configured()]);
+  assert.deepEqual((await h.registry.snapshot("one")).skills, []);
+});

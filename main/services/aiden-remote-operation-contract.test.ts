@@ -893,11 +893,11 @@ test("durable operation registry restores only exact bounded identities and reje
   );
 });
 
-test("canonical revision-9 Bot fixtures parse into explicit bounded contract views", async () => {
+test("canonical revision-10 fixtures parse into explicit bounded contract views", async () => {
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 9);
+  assert.equal(fixture.contractRevision, 10);
   assert.equal(fixture.botList.maxBots, 256);
   assert.deepEqual(fixture.botList.favorites, fixture.botFavorites);
   assert.equal(fixture.botSummary.health, "ready");

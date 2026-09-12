@@ -27,7 +27,7 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
 export const MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS = 80;
 const FALLBACK_AIDEN_REMOTE_DISPLAY_NAME = "Aiden Agent";
 
-export type AidenRemoteDeviceType = "iphone" | "ipad";
+export type AidenRemoteDeviceType = "iphone" | "ipad" | "mac" | "linux";
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
 
 interface StoredAidenRemoteDevice {
@@ -231,7 +231,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   if (
     !boundedString(record.id, 128) ||
     !boundedString(record.name, 80) ||
-    (record.type !== "iphone" && record.type !== "ipad") ||
+    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "mac" && record.type !== "linux") ||
     !boundedString(record.clientVersion, 40) ||
     !digestString(record.lookupDigest) ||
     !digestString(record.credentialSalt) ||
@@ -684,7 +684,7 @@ export class AidenRemoteStateRegistry {
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
-      (input.type !== "iphone" && input.type !== "ipad") ||
+      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "mac" && input.type !== "linux") ||
       !boundedString(input.clientVersion, 40) ||
       (input.acceptsBotCapabilities !== undefined &&
         typeof input.acceptsBotCapabilities !== "boolean")

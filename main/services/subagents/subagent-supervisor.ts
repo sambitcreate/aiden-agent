@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { WorkspacePermission } from "../types.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -102,6 +103,7 @@ export interface PreparedSubagentRun {
 }
 
 export interface SubagentSupervisorInput {
+  compactionEngine?: CompactionEngine;
   generationId: string;
   chatId: string;
   workspaceId: string;
@@ -572,6 +574,7 @@ export class SubagentSupervisor {
                   groupId,
                   runtime: this.input.runtime,
                   thinkingLevel: authority.thinkingLevel,
+                  compactionEngine: this.input.compactionEngine,
                   workspaceRoot: this.input.workspaceRoot,
                   permission: this.input.permission,
                   inheritedCeiling: this.input.inheritedCeiling,
@@ -851,7 +854,9 @@ export class SubagentSupervisor {
       throw new Error("Subagent tree deadline elapsed.");
     }
     if (this.treeBudgetExhausted) {
-      throw new Error("Subagent generation tree budget exhausted.");
+      throw new Error(
+        "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+      );
     }
     if (this.launches + request.tasks.length > this.launchBudget) {
       throw new Error(
@@ -1111,6 +1116,7 @@ export class SubagentSupervisor {
               groupId,
               runtime: this.input.runtime,
               thinkingLevel: this.input.thinkingLevel,
+              compactionEngine: this.input.compactionEngine,
               workspaceRoot: this.input.workspaceRoot,
               permission: this.input.permission,
               inheritedCeiling: this.input.inheritedCeiling,
@@ -1467,7 +1473,9 @@ export class SubagentSupervisor {
           remainingTurns < 1 ||
           (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
-          throw new Error("Subagent generation tree budget exhausted.");
+          throw new Error(
+            "Subagent generation tree budget exhausted. Start a new parent turn with narrower tasks.",
+          );
         }
         const ledger = new SubagentTreeBudgetLedgerV2(first.treeRootId, {
           maxDepth: 2,

@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "./compaction";
 import type { CommandId } from "./keybindings";
 import type { SettingsSection } from "./settings-section";
 
@@ -91,7 +92,8 @@ export type SlashCommandAction =
   | { kind: "composer-control"; control: "access" }
   | {
       kind: "session";
-      action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
+      engine?: CompactionEngine;
+      action: "fork" | "clone" | "export" | "compact" | "details" | "logout" | "worktree";
     }
   | { kind: "composer-instruction"; instruction: "visualize" | "btw" };
 
@@ -250,6 +252,45 @@ export const SLASH_COMMANDS = Object.freeze([
     draftPolicy: "preserve",
   }),
   define({
+    name: "compact",
+    aliases: [],
+    title: "Compact chat",
+    description: "Compact this chat using the engine selected in Settings.",
+    keywords: ["context", "summary", "tokens"],
+    icon: "session",
+    action: { kind: "session", action: "compact" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "compact-LLM",
+    aliases: [],
+    title: "Compact with LLM",
+    description: "Use your chat model to summarize context once. Takes time and uses model tokens.",
+    keywords: ["context", "summary", "tokens"],
+    icon: "session",
+    action: { kind: "session", action: "compact", engine: "llm" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "compact-VCC",
+    aliases: [],
+    title: "Compact with VCC",
+    description: "Try experimental local pi-vcc compaction once. No summarization call.",
+    keywords: ["context", "summary", "tokens"],
+    icon: "session",
+    action: { kind: "session", action: "compact", engine: "vcc" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
     name: "session",
     aliases: ["details"],
     title: "Session details",
@@ -343,11 +384,24 @@ export const SLASH_COMMANDS = Object.freeze([
   define({
     name: "environment",
     aliases: [],
-    title: "Toggle environment",
-    description: "Show or hide files and Git tools.",
-    keywords: ["files", "git"],
+    title: "Toggle Environment",
+    description: "Show or hide Review, Subagents, and Files.",
+    keywords: ["review", "subagents", "files", "git"],
     icon: "environment",
     action: { kind: "command", commandId: "environment.toggle" },
+    behavior: "immediate",
+    availability: "workspace-environment",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "quick-view",
+    aliases: [],
+    title: "Toggle Quick View",
+    description: "Show or hide the compact workspace summary.",
+    keywords: ["summary", "preview", "status", "git"],
+    icon: "environment",
+    action: { kind: "command", commandId: "quick-view.toggle" },
     behavior: "immediate",
     availability: "workspace-environment",
     argument: "none",
@@ -420,10 +474,10 @@ export const SLASH_COMMANDS = Object.freeze([
   }),
   define({
     name: "mcp",
-    aliases: [],
-    title: "MCP servers",
-    description: "Open MCP settings and connection status.",
-    keywords: ["tools", "connectors", "servers"],
+    aliases: ["plugins"],
+    title: "Plugins",
+    description: "Open the plugin directory and MCP connection status.",
+    keywords: ["tools", "connectors", "servers", "mcp", "plugins"],
     icon: "mcp",
     action: { kind: "settings", section: "mcp" },
     behavior: "navigation",

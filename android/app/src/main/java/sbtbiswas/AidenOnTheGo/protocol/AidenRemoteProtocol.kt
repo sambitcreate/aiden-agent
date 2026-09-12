@@ -14,6 +14,12 @@ object AidenRemoteProtocol {
     const val VERSION = 1
     const val BASE_PATH = "/api/aiden/v1"
     const val MAX_IDENTIFIER_LENGTH = 128
+    const val DEFAULT_CHAT_SUMMARY_PAGE_SIZE = 100
+    const val MAX_CHAT_SUMMARY_PAGE_SIZE = 200
+    const val MAX_CHAT_SUMMARY_CURSOR_LENGTH = 512
+    const val CHAT_SUMMARIES_FEATURE = "chat-summaries-v1"
+    val CHAT_SUMMARY_REVISION_PATTERN = Regex("^rev_[A-Za-z0-9_-]{43}$")
+    val CHAT_SUMMARY_CURSOR_PATTERN = Regex("^cur_[A-Za-z0-9_-]{1,384}\\.[A-Za-z0-9_-]{43}$")
     const val MAX_BOT_IDENTIFIER_LENGTH = 160
     const val MAX_ENDPOINT_LENGTH = 2_048
     const val MAX_ENDPOINT_PORT = 65_535
@@ -168,6 +174,7 @@ object AidenRemoteProtocol {
 sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
+    object ChatSummaryProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
 }
 
@@ -185,12 +192,29 @@ object AidenBotPrivateResponseValidator {
     }
 
     private val fixtureBotRoots: Set<String> = setOf(
-        "chat", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
+        "chat", "chatSummaries", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
         "botIdentity", "botArchive", "botRestore", "botConversation", "botConversations",
         "botConversationQuery", "botChatCreate", "botCapabilityCatalog", "botPolicy",
         "botPolicyUpdate", "botChatSubset", "botChatSubsetUpdate", "botFavorites",
         "botFavoritesUpdate", "botNotice", "botNoticeAcknowledgement", "botAvatarUpload",
         "botAvatarMetadata"
+    )
+    private val privateChildBases = listOf("children", "subagents", "subagent", "child")
+    private val privateSummaryProjectionKeys = setOf(
+        "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
+        "botid", "providerid", "modelid", "preview"
+    )
+    private val privateChildParts = listOf(
+        "lifecycles", "histories", "snapshots", "messages", "controls", "projections",
+        "generations", "workspaces", "milestones", "interrupted", "completed", "authority",
+        "projection", "generation", "workspace", "terminal", "execution", "warnings", "finished",
+        "updated", "started", "lifecycle", "history", "snapshot", "message", "counts", "states",
+        "results", "reports", "subagents", "children", "milestone", "notices", "activities",
+        "activity", "markdown", "context", "revision", "version", "latest", "timed", "failed",
+        "parent", "retry", "models", "turns", "tools", "tokens", "items", "count", "state",
+        "control", "result", "report", "subagent", "child", "notice", "warning", "preview",
+        "model", "group", "label", "role", "depth", "text", "error", "total", "item", "turn",
+        "tool", "token", "tasks", "runs", "task", "run", "chat", "at", "out", "of", "ids", "id"
     )
 
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
@@ -211,12 +235,16 @@ object AidenBotPrivateResponseValidator {
     fun validate(element: kotlinx.serialization.json.JsonElement, scope: AidenBotPrivateResponseScope) {
         when (scope) {
             is AidenBotPrivateResponseScope.Root -> {
-                validateElement(element, root = scope.root, path = emptyList())
+                validateElement(element, root = scope.root, path = emptyList(), rejectPrivateChildFields = false)
             }
             is AidenBotPrivateResponseScope.ChatProjection -> {
                 // Chat projections may contain additive public fields, but never
                 // receive the Bot identity exceptions for instructions/greetings.
-                validateElement(element, root = "chatProjection", path = emptyList())
+                validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false)
+            }
+            is AidenBotPrivateResponseScope.ChatSummaryProjection -> {
+                rejectExplicitNullCursor(element)
+                validateElement(element, root = "chatSummaryProjection", path = emptyList(), rejectPrivateChildFields = true)
             }
             is AidenBotPrivateResponseScope.SharedFixture -> {
                 val obj = element as? kotlinx.serialization.json.JsonObject
@@ -224,32 +252,50 @@ object AidenBotPrivateResponseValidator {
                 for (root in fixtureBotRoots) {
                     val botValue = obj[root]
                     if (botValue != null) {
-                        validateElement(botValue, root = root, path = emptyList())
+                        val isSummaryPage = root == "chatSummaries"
+                        if (isSummaryPage) rejectExplicitNullCursor(botValue)
+                        validateElement(
+                            botValue,
+                            root = root,
+                            path = emptyList(),
+                            rejectPrivateChildFields = isSummaryPage
+                        )
                     }
                 }
             }
         }
     }
 
+    private fun rejectExplicitNullCursor(element: kotlinx.serialization.json.JsonElement) {
+        val obj = element as? kotlinx.serialization.json.JsonObject
+            ?: throw AidenRemoteContractException.InvalidJson("Expected Chat Summary page object")
+        if (obj.containsKey("nextCursor") && obj["nextCursor"] is kotlinx.serialization.json.JsonNull) {
+            throw AidenRemoteContractException.InvalidJson("Chat Summary terminal page must omit nextCursor")
+        }
+    }
+
     private fun validateElement(
         element: kotlinx.serialization.json.JsonElement,
         root: String,
-        path: List<String>
+        path: List<String>,
+        rejectPrivateChildFields: Boolean
     ) {
         when (element) {
             is kotlinx.serialization.json.JsonObject -> {
                 for ((key, child) in element) {
-                    if (normalizedPrivateKeys.contains(normalize(key)) &&
+                    if ((normalizedPrivateKeys.contains(normalize(key)) ||
+                            (rejectPrivateChildFields &&
+                                (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
                         !isAllowedKnownIdentityKey(key, root, path)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
-                    validateElement(child, root, path + key)
+                    validateElement(child, root, path + key, rejectPrivateChildFields)
                 }
             }
             is kotlinx.serialization.json.JsonArray -> {
                 for (child in element) {
-                    validateElement(child, root, path + "[]")
+                    validateElement(child, root, path + "[]", rejectPrivateChildFields)
                 }
             }
             else -> {}
@@ -275,6 +321,25 @@ object AidenBotPrivateResponseValidator {
             }
         }
         return sb.toString().lowercase(java.util.Locale.US)
+    }
+
+    private fun isPrivateChildProjectionKey(key: String): Boolean {
+        val normalized = normalize(key)
+        if (normalized.startsWith("subagentrun")) return true
+        for (base in privateChildBases) {
+            if (normalized == base) return true
+            if (!normalized.startsWith(base)) continue
+            val remainder = normalized.removePrefix(base)
+            val reachable = mutableSetOf(0)
+            for (offset in remainder.indices) {
+                if (!reachable.contains(offset)) continue
+                for (part in privateChildParts) {
+                    if (remainder.startsWith(part, offset)) reachable.add(offset + part.length)
+                }
+            }
+            if (reachable.contains(remainder.length)) return true
+        }
+        return false
     }
 
     private fun isAllowedKnownIdentityKey(

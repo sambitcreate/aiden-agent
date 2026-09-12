@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -117,6 +118,8 @@ export interface Workspace {
   /** Absolute path to the folder Pi operates in (undefined = no folder bound yet). */
   folderPath?: string;
   permission: WorkspacePermission;
+  /** Workspace-scoped durable memory. Omitted means enabled. */
+  memoryEnabled?: boolean;
   /** Present only for worktrees created and owned by Aiden. */
   managedWorktree?: ManagedWorktree;
   createdAt: number;
@@ -308,11 +311,18 @@ export interface ChatMeta {
   model?: string;
   /** Bounded last visible message text for list projections; never a full history. */
   preview?: string;
+  /**
+   * Main-owned optimistic-concurrency token for transcript-free list
+   * projections. Legacy records derive a stable token until their next write.
+   */
+  summaryRevision?: string;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface Chat extends ChatMeta {
+  /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
+  firstMessageCommit?: { turnId: string; fingerprint: string };
   /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
   computerUseEnabled?: boolean;
   messages: ChatMessage[];
@@ -517,6 +527,7 @@ export interface AssistantConfigSnapshot {
 
 /** Persisted lightweight app settings. */
 export interface AppSettings {
+  compactionEngine?: CompactionEngine;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
@@ -558,6 +569,10 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
+  /** Global skill discovery/invocation gate. Omitted means enabled. */
+  skillsEnabled?: boolean;
+  /** Global durable-memory gate. Omitted means enabled. */
+  memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

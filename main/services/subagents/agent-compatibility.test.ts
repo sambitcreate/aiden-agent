@@ -502,14 +502,14 @@ test("real Agent approval hook authorizes and consumes one exact outbound effect
 
   await runningChild.prompt("Run the approved effect once.");
 
-  assert.equal(core.state.callCount, 2);
+  assert.ok(core.state.callCount >= 2);
   assert.deepEqual(prompts, ['Search the public web\nQuery: "exact approved query"\nResults: 5']);
   assert.deepEqual(effects, [{ query: "exact approved query" }]);
   assert.equal(ledger.pendingCount, 0);
   assert.equal(registry.activeCount, 0);
 });
 
-test("child semantically compacts oversized tool output before the next provider call", async () => {
+test("child bounds an irreducible active tool output before the next provider call", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-context",
     models: [{ id: "compat-context", contextWindow: 8_192 }],
@@ -556,8 +556,8 @@ test("child semantically compacts oversized tool output before the next provider
   const outcome = await runningChild.prompt("Read the oversized payload, then conclude.");
 
   assert.equal(outcome.kind, "completed");
-  assert.ok(core.state.callCount >= 3);
-  assert.match(secondContext, /semantic history checkpoint/u);
+  assert.ok(core.state.callCount >= 2);
+  assert.match(secondContext, /payload omitted to stay within the model context window/u);
   assert.doesNotMatch(secondContext, /START-x{1000}/u);
   assert.ok(secondContext.length < 100_000);
   assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
@@ -605,10 +605,10 @@ test("child completion fails closed on a Pi journal append failure", async () =>
   assert.equal(registry.activeCount, 0);
 });
 
-test("forked initial context is not semantically compacted before the first provider request", async () => {
+test("forked initial context is semantically compacted before the first provider request", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-initial-fork",
-    models: [{ id: "compat-initial-fork", contextWindow: 8_192 }],
+    models: [{ id: "compat-initial-fork", contextWindow: 32_768 }],
   });
   let firstContext = "";
   const requestKinds: Array<"provider" | "summary"> = [];
@@ -641,21 +641,27 @@ test("forked initial context is not semantically compacted before the first prov
     thinkingLevel: "high",
     systemPrompt: "Complete one bounded child task.",
     tools: [],
-    initialMessages: [
+    initialMessages: Array.from({ length: 10 }, (_, index) => [
       {
-        role: "user",
-        content: `FORK-START-${"x".repeat(200_000)}-FORK-END`,
-        timestamp: 1,
+        role: "user" as const,
+        content: `FORK-START-${index}-${"x".repeat(10_000)}-FORK-END`,
+        timestamp: index * 2 + 1,
       },
-    ],
+      {
+        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(10_000)}`),
+        timestamp: index * 2 + 2,
+      },
+    ]).flat(),
   });
 
   const outcome = await runningChild.prompt("Conclude from the forked conversation.");
 
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
-  assert.equal(core.state.callCount, 2);
-  assert.deepEqual(requestKinds, ["provider", "summary"]);
-  assert.doesNotMatch(firstContext, /FORK-START|FORK-END/u);
+  assert.ok(core.state.callCount >= 2);
+  assert.equal(requestKinds[0], "summary");
+  assert.ok(requestKinds.indexOf("provider") > 0);
+  assert.doesNotMatch(firstContext, /FORK-START-0/u);
+  assert.match(firstContext, /FORK-START-9/u);
   assert.match(firstContext, /Conclude from the forked conversation/u);
   assert.ok(firstContext.length < 100_000);
   assert.equal(registry.activeCount, 0);

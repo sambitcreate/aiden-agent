@@ -1,3 +1,5 @@
+import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
+import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   calculateContextTokens,
@@ -9,7 +11,7 @@ import {
   uuidv7,
   type AgentMessage,
   type CompactionSettings,
-  type Session,
+  type CompactResult,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -18,21 +20,30 @@ import {
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Models,
+  type RetryCallbacks,
+  type RetryPolicy,
+  type Usage,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import type { PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
 export interface PiCompactionDetails {
+  engine?: CompactionEngine;
+  version?: number;
   readFiles: string[];
   modifiedFiles: string[];
 }
 
 export interface PiCompactionResult {
+  engine?: CompactionEngine;
+  durationMs?: number;
   summary: string;
-  firstKeptEntryId: string;
+  retainedTail: AgentMessage[];
   tokensBefore: number;
   estimatedTokensAfter: number;
+  usage?: Usage;
   details?: PiCompactionDetails;
 }
 
@@ -67,7 +78,10 @@ export interface PiCompactionCheckResult {
 }
 
 export interface PiCompactionCoordinatorOptions {
-  session: Session;
+  engine?: CompactionEngine;
+  /** Deterministic seam for worker failure/cancellation tests. */
+  compileVcc?: typeof compileVccInWorker;
+  session: PiSessionPort;
   models: Models;
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
@@ -78,11 +92,9 @@ export interface PiCompactionCoordinatorOptions {
   /** Bounded host backoff for transient provider/transport retries. */
   retryDelayMs?: number;
   /** Current-Pi-compatible retry policy for each standalone hidden summary request. */
-  summaryRetry?: {
-    enabled: boolean;
-    maxRetries: number;
-    baseDelayMs: number;
-  };
+  summaryRetry?: RetryPolicy;
+  /** Native Pi retry lifecycle callbacks for the isolated summary request. */
+  summaryRetryCallbacks?: RetryCallbacks;
 }
 
 class PiCompactionSessionError extends Error {
@@ -100,7 +112,7 @@ async function sessionOperation<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-function latestCompaction(entries: Awaited<ReturnType<Session["getBranch"]>>) {
+function latestCompaction(entries: Awaited<ReturnType<PiSessionPort["getBranch"]>>) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry.type === "compaction") return entry;
@@ -114,78 +126,9 @@ function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
 
 function withoutRetryableAssistantTail(messages: readonly AgentMessage[]): AgentMessage[] {
   const tail = messages[messages.length - 1];
-  return tail?.role === "assistant" &&
-    (tail.stopReason === "error" || tail.stopReason === "length")
+  return tail?.role === "assistant" && (tail.stopReason === "error" || tail.stopReason === "length")
     ? messages.slice(0, -1)
     : [...messages];
-}
-
-function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve(false);
-      return;
-    }
-    const abort = () => {
-      clearTimeout(timeout);
-      resolve(false);
-    };
-    const timeout = setTimeout(
-      () => {
-        signal?.removeEventListener("abort", abort);
-        resolve(true);
-      },
-      Math.max(0, delayMs),
-    );
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
-/** Mirror current Pi's standalone summary request isolation and retry loop. */
-function createUpstreamSummaryModels(
-  models: Models,
-  retry: NonNullable<PiCompactionCoordinatorOptions["summaryRetry"]>,
-): Models {
-  return new Proxy(models, {
-    get(target, property, receiver) {
-      if (property === "completeSimple") {
-        return async (...args: Parameters<Models["completeSimple"]>) => {
-          const [model, context, options] = args;
-          const requestOptions = {
-            ...options,
-            cacheRetention: "none" as const,
-            sessionId: uuidv7(),
-          };
-          const maxRetries = retry.enabled ? Math.max(0, Math.floor(retry.maxRetries)) : 0;
-          let attempt = 0;
-          for (;;) {
-            const message = await target.completeSimple(model, context, requestOptions);
-            if (
-              message.stopReason !== "error" ||
-              !isRetryableAssistantError(message) ||
-              attempt >= maxRetries
-            ) {
-              return message;
-            }
-            attempt += 1;
-            const continued = await abortableDelay(
-              Math.max(0, retry.baseDelayMs) * 2 ** (attempt - 1),
-              requestOptions.signal,
-            );
-            if (!continued) {
-              return {
-                ...message,
-                stopReason: "aborted",
-                errorMessage: undefined,
-              };
-            }
-          }
-        };
-      }
-      const value = Reflect.get(target, property, receiver) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 }
 
 /**
@@ -204,6 +147,16 @@ export class PiCompactionCoordinator {
       ...DEFAULT_COMPACTION_SETTINGS,
       ...options.settings,
     };
+    if (options.engine === "vcc") {
+      this.settings.reserveTokens = Math.min(
+        this.settings.reserveTokens,
+        Math.floor(options.model.contextWindow / 4),
+      );
+      this.settings.keepRecentTokens = Math.min(
+        this.settings.keepRecentTokens,
+        Math.floor((options.model.contextWindow - this.settings.reserveTokens) / 2),
+      );
+    }
   }
 
   abort(): void {
@@ -244,7 +197,11 @@ export class PiCompactionCoordinator {
   }
 
   /** Check the reconstructed journal before provider I/O, including the new user turn. */
-  async checkContextPressure(): Promise<PiCompactionCheckResult> {
+  async checkContextPressure(projected?: {
+    contextTokens: number;
+    compressibleHistoryMessages: number;
+    shouldCompact: boolean;
+  }): Promise<PiCompactionCheckResult> {
     if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
     let branch;
     let context;
@@ -263,6 +220,12 @@ export class PiCompactionCoordinator {
     const previousAssistant = [...context.messages]
       .reverse()
       .find((message): message is AssistantMessage => message.role === "assistant");
+    if (projected) {
+      if (projected.compressibleHistoryMessages === 0 || !projected.shouldCompact) {
+        return { compacted: false, shouldRetry: false, messages: context.messages };
+      }
+      return this.run("threshold", false, true);
+    }
     if (!previousAssistant) return { compacted: false, shouldRetry: false };
     if (
       compactionEntry &&
@@ -371,7 +334,8 @@ export class PiCompactionCoordinator {
       let liveMessages = options.liveMessages;
       if (!liveMessages) {
         try {
-          liveMessages = (await sessionOperation(() => this.options.session.buildContext())).messages;
+          liveMessages = (await sessionOperation(() => this.options.session.buildContext()))
+            .messages;
         } catch (error) {
           return {
             compacted: false,
@@ -442,7 +406,10 @@ export class PiCompactionCoordinator {
   private async run(
     reason: PiCompactionReason,
     willRetry: boolean,
+    requireEffectiveInput = false,
   ): Promise<PiCompactionCheckResult> {
+    const startedAt = performance.now();
+    const engine = compactionEngineFrom(this.options.engine);
     let started = false;
     let removeParentAbort = () => {};
     try {
@@ -451,6 +418,13 @@ export class PiCompactionCoordinator {
       if (!preparationResult.ok) throw preparationResult.error;
       const preparation = preparationResult.value;
       if (!preparation) return { compacted: false, shouldRetry: false };
+      if (
+        requireEffectiveInput &&
+        preparation.messagesToSummarize.length === 0 &&
+        preparation.turnPrefixMessages.length === 0
+      ) {
+        return { compacted: false, shouldRetry: false };
+      }
 
       const abortController = new AbortController();
       this.activeAbortController = abortController;
@@ -462,22 +436,33 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      const summaryModels = createUpstreamSummaryModels(
-        this.options.models,
-        this.options.summaryRetry ?? {
-          enabled: true,
-          maxRetries: 3,
-          baseDelayMs: 2_000,
-        },
-      );
-      const compactResult = await compact(
-        preparation,
-        summaryModels,
-        this.options.model,
-        undefined,
-        abortController.signal,
-        this.options.thinkingLevel,
-      );
+      const compactResult =
+        engine === "vcc"
+          ? {
+              ok: true as const,
+              value: await (this.options.compileVcc ?? compileVccInWorker)(
+                {
+                  branch,
+                  preparation,
+                  contextWindow: this.options.model.contextWindow,
+                },
+                abortController.signal,
+              ),
+            }
+          : await compact(
+              preparation,
+              this.options.models,
+              this.options.model,
+              undefined,
+              abortController.signal,
+              this.options.thinkingLevel,
+              this.options.summaryRetry ?? {
+                enabled: true,
+                maxRetries: 3,
+                baseDelayMs: 2_000,
+              },
+              this.options.summaryRetryCallbacks,
+            );
       if (!compactResult.ok) throw compactResult.error;
       if (abortController.signal.aborted) {
         this.options.onEvent?.({
@@ -489,15 +474,22 @@ export class PiCompactionCoordinator {
         return { compacted: false, shouldRetry: false };
       }
 
-      const result = compactResult.value;
+      const result: CompactResult = compactResult.value;
+      result.details = { ...(result.details as Record<string, unknown>), engine, version: 1 };
       const priorLeafId = await sessionOperation(() => this.options.session.getLeafId());
-      const checkpointId = await sessionOperation(() =>
-        this.options.session.appendCompaction(
-          result.summary,
-          result.firstKeptEntryId,
-          result.tokensBefore,
-          result.details,
-        ),
+      if (priorLeafId !== (branch[branch.length - 1]?.id ?? null)) {
+        throw new PiCompactionSessionError();
+      }
+      const checkpointId = uuidv7();
+      await sessionOperation(() =>
+        this.options.session.appendCompaction({
+          id: checkpointId,
+          summary: result.summary,
+          retainedTail: result.retainedTail,
+          tokensBefore: result.tokensBefore,
+          ...(result.details === undefined ? {} : { details: result.details }),
+          ...(result.usage === undefined ? {} : { usage: result.usage }),
+        }),
       );
       const context = await sessionOperation(() => this.options.session.buildContext());
       if (abortController.signal.aborted) {
@@ -519,10 +511,13 @@ export class PiCompactionCoordinator {
         ? withoutRetryableAssistantTail(context.messages)
         : context.messages;
       const publicResult: PiCompactionResult = {
+        engine,
+        durationMs: Math.round(performance.now() - startedAt),
         summary: result.summary,
-        firstKeptEntryId: result.firstKeptEntryId,
+        retainedTail: result.retainedTail,
         tokensBefore: result.tokensBefore,
         estimatedTokensAfter: estimatedMessageTokens(context.messages),
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
       };
       this.options.onEvent?.({
@@ -624,4 +619,3 @@ export function createPiCompactionModels(
     },
   }) as Models;
 }
-

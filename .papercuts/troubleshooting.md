@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- `.papercuts/` is ignored even when its troubleshooting file is present in the PR branch, so persisting a required update needs an explicit `git add -f`.
+- Layout stabilization must race `animation.finished` against a short timeout because paused or infinite document animations never settle; keep geometry polling as the authoritative E2E readiness check.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.
 - `Session.getEntries()` includes abandoned branches. Synchronization markers must be read from `Session.getBranch()` or a rolled-back partial write can still look committed.
 - Child-runtime unit tests load outside Electron. Keep usage accounting behind an injected callback (with a production-only dynamic import) instead of statically importing the Electron-backed singleton into the reusable child registry.
@@ -28,6 +30,7 @@
 - An Electron E2E teardown deadline must exceed the app's sequential bounded shutdown phases. A 10-second fixture timeout can kill and report a healthy process while foreground, subagent, and packaged-soak drains are still inside their documented 6s + 5s + 5s ceilings.
 - Image generation can return a baked checkerboard or an opaque/RGB file even when asked for transparent onboarding art. Inspect the generated pixels, dimensions, and alpha channel before copying it into `renderer/assets/onboarding/`; extract the real background and resample only after visual inspection.
 - GitHub release create/edit requests can return HTTP 503 after committing server-side state. Publication must re-read the exact tag, target SHA, draft state, and asset set before retrying or reconciling; never treat an unavailable lookup as a missing release.
+- A main-process fallback that reads `settings.lastProviderId` as "the app's last provider" is reading a dead key: the UI persists its real selection in renderer localStorage (`aiden-agent.providerId`/`aiden-agent.model`) and only the Telegram flow ever wrote the settings key. Any main-process consumer (scheduler, tools) must either receive the selection explicitly or have attended chat starts seed the settings fallback.
 - A physical XCTest transport spike can keep secrets out of the project and scheme: use a private temporary Derived Data directory, create an injected `.xctestrun` copy beside its `Build/Products` payload, inject an ephemeral canonical pairing-bootstrap JSON into that copy, then use `test-without-building`. Xcode still requires the physical device to remain unlocked through preflight and launch.
 - A copied `.xctestrun` resolves `__TESTROOT__` relative to its own location. Keep the injected copy beside `Build/Products` (or deliberately rewrite every relative product path), and derive the advertised LAN address from the default-route interface instead of assuming Wi-Fi is `en0`; otherwise Xcode reports a missing test product or the phone silently times out against a link-local adapter.
 - Simulator networking does not prove iOS Local Network privacy readiness. A direct physical LAN request fails as `Local network prohibited` when the host app omits `NSLocalNetworkUsageDescription`; lock both that key and the canonical `NSBonjourServices` value with an XCTest that inspects the built application bundle.
@@ -140,10 +143,22 @@
 - Sequential `lstat` checks cannot secure a multi-component path against a rename between checks; each accepted ancestor has to remain pinned while the next component opens. For workspace artifact reads, extend the native descriptor-relative helper and test a deterministic mid-walk directory swap instead of relying on timing-sensitive JavaScript races.
 - Moving an existing iframe or one of its ancestors between DOM parents can reload its document in Chromium even though React preserves the component identity. Positioning the unchanged host over a portaled modal also fails when transcript `isolate`/`mask-image` stacking contexts trap it below the opaque portal. Promote the unchanged host with the Popover API into Chromium's top layer, override the UA's closed-popover `display:none` plus fixed geometry for its inline state, and browser-test stacking, one-frame count, mutable guest state, small viewports, and Escape relayed from the exact sandbox window.
 - A mobile verification shell may know the Android SDK through `android info` while Gradle still lacks both Java and `ANDROID_HOME`. On this workstation, use Android Studio's bundled JBR as `JAVA_HOME` and the SDK path reported by `android info` as `ANDROID_HOME`; do not write a developer-specific `local.properties` into the repository.
+- An unscoped desktop chat list includes reserved or stale workspace records in addition to user workspaces. Build a workspace-ID whitelist first and project chats through it; filtering only `botId` is insufficient because the reserved Assistant home and removed-workspace orphans are not Bot chats.
+- A unified mobile chat outline can amplify an old transport cost without changing the endpoint: the current global home read carries complete transcripts. Keep the first UI delivery on the compatible read, measure real payload/decode/memory, and treat a bounded paginated summary endpoint as a coordinated server+iOS+Android follow-up rather than silently adding a second background fetch.
 - A generic-hardware `xcodebuild build-for-testing` can finish compiling Swift app/test sources and then remain silent in a stuck `ibtoold` finalization pass. Distinguish that local Xcode tooling hang from a Swift compile failure, retain the generic `platform=iOS` destination (never substitute a simulator), and let the clean CI hardware-target compile provide the terminal gate.
 - A dictation stop can arrive before microphone or Live-session startup finishes, and a Live transcript can be visible before its finalization handshake succeeds. Latch stop intent by operation identity, keep one wall-clock budget across Live and batch fallback, preserve committed Live text, and ensure cancellation remains callable after audio capture disconnects.
 - Release-time and live validators for the same downloaded catalog can drift even when both look strict. Keep one shared acceptance corpus that runs every payload through both validators, including optional display strings and numeric bounds, so packaging cannot emit a snapshot the runtime will reject.
 - A post-merge updater should not run dependency installation or repository scripts with `contents: write`. Verify and test under read-only permissions, transfer a hashed artifact, and give only a minimal publish job write access with checkout credentials disabled and the token scoped to its final push command.
+- A clean `npm ci` can leave the `electron` package installed without its `dist/Electron.app` payload even when npm reports dependency scripts enabled. Before diagnosing the macOS dev-runtime preparation step, check `node_modules/electron/dist` and rerun Electron's package install script when the payload is absent.
+- Computer Use can expose an Electron popover's accessibility tree while returning no screenshot for the open native menu state. Use the fresh accessibility state to verify menu contents and supplement visual-state verification with focused source/tests when pixel capture is unavailable.
+- The root working agreement requires consulting and updating `.memory/`, but this PR worktree contains no `.memory` directory or files. Treat current plans, normative protocol docs, source, and tests as the available project history, and call out the missing checkout memory instead of inventing it.
+- Parallel server/iOS/Android contract work can briefly diverge on seemingly small constants such as activity vocabulary, cursor bounds, and unknown-field behavior. Freeze those values in one explicit coordinator message before client model tests hard-code them; here the final contract is `idle|active`, 512-character cursors, tolerant harmless additions, and fail-closed required/private fields.
+- A cache can satisfy the wire-item bound but still block the UI when every paginated page rewrites one maximum-size aggregate on the main thread. Size the native summary cache against the full 10,000-row contract, move encode/read/fsync work off the UI executor, and commit pagination state only after durable persistence succeeds.
+- A connected iPhone is not enough for XCTest acceptance when the local provisioning profile omits the app's App Group entitlement. Keep generic-device `build-for-testing` as the compile gate, report the signing boundary honestly, and rerun device metrics only after `group.sbtbiswas.AidenOnTheGo` is provisioned.
+- Adding a derived field to the canonical chat-list projection can leave exact-shape resilience and shipping-source assertions stale even when focused feature tests pass. Search every full-suite assertion over that projection before the first push, and derive expected compatibility values through the production helper rather than duplicating the hash contract.
+- The primary checkout can remain on a feature branch whose upstream was deleted, making an otherwise clean hotfix look detached from its delivery path. Check `git status --branch` and worktree registration before editing, then keep diagnosis and verification local unless branch or push authority is explicit.
+- A large exact-context documentation patch can fail atomically on one wrapped paragraph. Re-read the numbered lines and retry with the smallest stable context instead of assuming earlier terminal wrapping matches the file.
+- `npm ci` reports the aggregate advisory count, which can widen a release hotfix unnecessarily when every finding is development-only. Confirm the shipped graph with `npm audit --omit=dev` before changing dependencies; this hotfix had zero production advisories.
 
 ## Packaged Electron consent acceptance without a shipped bypass
 
@@ -182,3 +197,271 @@ exact accessibility label, and verify a post-start diagnostic event plus
 - The documented `.memory/` directory is absent in this checkout; used checked-in Linux documentation and plans for project context.
 - Linux support PR #71 is historically green but currently conflicts with main; stacked fixes PR #89 is separate and has failing verification/Linux jobs. Pulling the support branch alone does not include those fixes.
 - PR #89 hosted logs pinpoint TS2322 at `main/services/aiden-remote-service.ts:1181`: returned `permission_denied` is missing from the service status `tailscaleErrorCode` union, blocking macOS and both Linux verification jobs.
+
+## Pi journal promotion recovery
+
+A promoted v4 journal may legitimately retain a `.v3-backup` after its migration
+receipt is lost in a crash window. Recovery must inspect the authoritative journal
+header before choosing a decoder: decode the backup as v3 and the live journal as
+v4. Treating every backup-bearing path as v3 makes the next packaged restart fail
+on the already-promoted v4 header.
+
+## Stacked release worktree setup
+
+An execution command cannot start with a workdir that the same command is meant
+to create. Add the detached worktree from an existing checkout first, then run
+stack assembly inside it.
+
+A fresh `npm ci` installs Playwright's package but not its Chromium binary, so
+the full suite stops at Generative UI containment before assertions run. Mirror
+CI with `npx playwright install chromium` before the first full local gate.
+
+## Hosted MCP OAuth verification
+
+The Dropbox origin-level protected-resource endpoint can return 429 while the
+resource-path endpoint advertised by `WWW-Authenticate` succeeds. Verify hosted
+MCP setup through that advertised RFC 9728 URL and the SDK's DCR redirect flow.
+
+## Release preflight environment
+
+`npm run release:preflight` intentionally fails outside the release runner when
+Apple notarization credentials are absent. Treat local consumer/branding tests
+as code gates and the credentialed GitHub release job as the signing gate.
+
+## Cross-client global settings
+
+Remote has feature-specific settings routes but no general settings contract.
+An authoritative global preference therefore needs a narrow server-owned
+endpoint; storing it only in iOS or Android would not change Mac agent behavior.
+
+## Worktree verification dependencies
+
+This worktree has no local `node_modules`; `npm run type-check` initially fails
+with `tsc: command not found`, so verification needs the bundled runtime or a
+dependency install before TypeScript suites can run.
+
+Android Gradle also does not discover the installed SDK in this worktree;
+verification needs `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`.
+
+The full iOS `AidenRemoteClientTests` target currently has two unrelated
+failures in chat-summary/private-child validation; focused memory tests are
+needed to separate this change from that baseline noise.
+- Verification initially referenced a guessed OpenAPI path; the canonical files are under `protocol/aiden-remote/v1/`.
+- Focused Android tests need Android Studio's bundled JDK because this shell has no default Java runtime.
+- URLProtocol request bodies can arrive through `httpBodyStream`; iOS request tests must use the existing `bodyData` helper.
+- In zsh, a loop variable named `path` overwrites the executable search path; file-by-file commit scripts must use a non-reserved name.
+- Parallel `xcodebuild` invocations share DerivedData and can lock `build.db`; run simulator build and test gates sequentially or isolate derived-data paths.
+- New focused tests can pass locally yet be absent from `npm test`; register every new test script in the CI entry chain.
+- Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
+- Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
+- A merged feature does not auto-increment releases; bump both package manifests before merging when the current tag already exists.
+
+## Codex-hosted UI reference work
+
+Codex blocks Computer Use from automating its own `com.openai.codex` host. Use
+the supplied screenshot and inspect the installed app bundle for behavior and
+styling evidence instead of treating self-host automation as available.
+
+A fresh linked worktree can lack `node_modules`: `npx` may fetch `tsx`, but
+React-backed renderer tests still fail to load. Run `npm ci` before the focused
+Quick View and Environment verification gates.
+
+In this linked worktree, `npm ci` installed the Electron package without its
+`dist/Electron.app` payload, so `npm run dev` reached Vite but failed in the
+macOS runtime preparation `lipo` step. Run Electron's package installer before
+attempting dev-app visual acceptance.
+
+The project instructions reference a `.memory/` folder, but this linked
+worktree does not contain one. Use the repository plan and UI reference docs as
+the local source of truth, and record the missing folder rather than inventing
+project history.
+
+Adding or changing exports in the Environment or Terminal providers makes Vite
+invalidate Fast Refresh and remount the renderer. An open terminal can then
+briefly reference a main-process session that the remounted provider no longer
+owns; reopen the terminal before judging the final live state.
+- Source-regex coverage made the first Quick View split look independent even though both controls still shared one `open + tab` state. Add reducer transition coverage whenever two UI routes are meant to coexist.
+- Simultaneous right-edge surfaces need measured workbench geometry, not window breakpoints; the app sidebar changes the available allocation without changing the window width.
+- Final dev-window automation was unavailable while macOS was locked; the renderer and Electron process launched, but visual acceptance still requires an unlocked desktop.
+- The deterministic Electron E2E still targeted the retired Environment summary role after the toolbar controls split. Floating surfaces can also cover their toolbar triggers, so smoke tests must use the visible surface-local Show Quick View and Close controls while verifying the toolbar state changes behind them.
+
+- 2026-09-04: A mounted live-region test with only floating/pinned panels missed Quick View covering an open tools panel. Exercise inert/aria-hidden containment and persistent DOM identity in real Electron, plus message updates while the sibling panel is hidden.
+
+- 2026-09-04: The diagnostics forged-record fixture aged past journal retention, so export pruned it before the rejection assertion. Use current timestamps for validation fixtures; keep fixed clocks for explicit retention tests.
+
+## Design audit evidence (2026-09-04)
+
+- The original standalone report copied palette values and hand-entered ratios, so runtime contrast fixes did not update its matrix. Generate measurements from the current appearance resolver and label compositing assumptions explicitly.
+- The original report verification scripts logged failed checks without setting a failing process exit code. A successful command exit alone did not establish that their assertions passed; use enforceable assertions rather than console-only checks.
+- Source-contract tests establish selected implementation rules, not rendered accessibility or full workflow coverage. Keep measured contrast, Electron interaction checks, and manual acceptance distinct.
+- Archive untracked audit documents before a substantial rewrite: Git cannot restore their earlier contents. This run replaced the old `docs/DESIGN.md` with a scoped current reference; a complete original was not recoverable, so no purported historical archive was created.
+
+- 2026-09-04: Full verification exposed a diagnostics fixture timestamp fixed to August 27; after journal retention elapsed, export correctly pruned it before the rejection assertion. Forged-record fixtures now use the current timestamp so the tests exercise validation instead of aging out.
+
+- 2026-09-04: Tailwind 4 emits individual `scale` for scale utilities; transitioning/resetting only `transform` does not cover press feedback. Transition and reset the emitted property explicitly, including both reduced-motion sources.
+
+- 2026-09-04: Electron CI intermittently retained the scheduled-task query after Playwright selectText + Backspace, then passed on retry. Reset this exploratory filter with fill("") while retaining input-value and result assertions; keyboard focus/navigation regressions remain separate. Completed-job REST logs were available before gh run view exposed whole-run logs.
+
+- 2026-09-04: Substring selector edits can match the tail of a compound focus selector and strand base geometry in focus-only styles. Anchor standalone-selector assertions and measure resting preview boxes in Electron; computed colors alone do not prove that a preview renders.
+
+## 2026-09-04 — pi-vcc integration
+
+- The clone has an MIT declaration in README but no separate license file;
+  retain that attribution and full MIT terms in packaged THIRD_PARTY_NOTICES.
+- pi-vcc assumes numeric references and legacy retained IDs. Adapt its pure
+  compiler; use v4 canonical active lineage and fail on an unprovable tail cut.
+  Unknown/LLM summary-only gaps must bypass its format-specific merge parser.
+- Vendor typing needs Intl.Segmenter typings and optional isWordLike; intentional
+  control-byte regexes need a narrow lint exception, not broad lint suppression.
+- Package verifier tests must realpath macOS temporary directories because /var
+  is a symlink to /private/var and the production verifier rejects symlink paths.
+- Android focused tests require Android Studio's bundled JDK plus ANDROID_HOME.
+  iOS activity tests were run on physical iPhone 13 Pro, not a simulator.
+- React Doctor's deprecated --diff invocation scanned the whole repository and
+  reported existing ref-in-render/cleanup diagnostics outside this feature;
+  TypeScript, ESLint and feature suites are tracked separately.
+- Packaged Settings acceptance must seed profile readiness with profile:setName
+  and app:setOnboardingProgress before deferring onboarding; settings:set ignores
+  profile fields. Wait for and click the Settings button instead of racing the
+  initial keyboard-command listener.
+- PR review found cancellation coupled to the legacy status string. Use explicit
+  compaction activity, and exercise engine override commands with IPC held open
+  in Electron so fast local completion cannot hide the regression.
+- Worker errors must preserve bounded, known causes without relaying arbitrary
+  exceptions that could include history. Fixed codes allow operation-specific
+  recall copy; Object.hasOwn is unavailable in this project's TypeScript lib.
+
+## 2026-09-05 — 0.38.1 release signing
+
+- Main CI passed, but the macOS release failed at security set-key-partition-list.
+  app-builder-lib 26.15.3 incorrectly passes the certificate import password to
+  unlock the temporary keychain. Upstream #10101 fixes this; stable v26 packages
+  inspected through 26.16.0 still carry the old code. Keep the existing lockfile
+  and apply the narrow version/source-guarded postinstall backport, with a
+  platform-independent test that exercises both certificate and keychain paths.
+- A changelog search conflated the stable and prerelease lines. Verify published
+  package code before assuming a release contains the upstream patch.
+- The environment-browser checkout has no `.memory/` directory despite AGENTS guidance; use current source, existing design references, and the scoped browser parity document as implementation evidence.
+- t3code's browser spans profiles/import, recording, annotations, device emulation, and agent control across desktop/server/web. Track a source-backed feature matrix before porting; a navigation-only webview would silently miss the requested parity.
+- `npm ci` completed without Electron's macOS payload in this worktree; `node node_modules/electron/install.js` restored `Electron.app` before UI testing.
+- T3's hardcoded `source3` Playwright extraction points at a different bundle string in installed Playwright 1.62.1; locate the named generated module to preserve selector-engine parity.
+- Generated onboarding art had real alpha but a 1254px canvas despite the requested 1024px; normalize the final PNG to the repository's exact 1024px contract and validate its alpha.
+- System `java_home` has no registered JDK, but Android Studio's bundled JBR works for Gradle; use its `Contents/jbr/Contents/Home` and the existing Android SDK explicitly for focused mobile tests.
+- No physical iOS device is connected for this run, and repository guidance prohibits simulators. Generic iOS `build-for-testing` with signing disabled compiles the app/tests; actual XCTest execution remains a physical-device check.
+- Electron 43 emits the console-message payload on the event object; reading the legacy second argument as that payload threw during first navigation and blocked the test app behind an exception dialog. Use the current typed event and verify in real Electron, not just service mocks.
+
+- 2026-09-07: Native Browser views sit above renderer menus/dialogs. Presentation now observes visible overlays and serializes tab show/hide across remounts so delayed cleanup cannot hide the replacement view.
+- Renderer-only Playwright captures omit native WebContentsViews; use the exact worktree Electron.app with CUA for visual proof. Several installed Electron copies share a bundle ID, so resolve the full app path.
+- Streaming reveal briefly renders duplicate final message text; E2E assertions must target the visible transcript occurrence and independently check the scripted tool scenario completed.
+- Browser preflight exposed two existing source-contract mismatches in unchanged provider badges and button press-feedback tests. Keep that baseline distinct from browser regression results.
+- Responsive emulation letterboxes inside the native slot. Crop captures to the rendered viewport before translating annotation coordinates; using the full slot silently distorts vertical selections.
+
+## 2026-09-07 — Browser integration verification
+
+- Floating placement measured the workbench wrapper and covered the Environment close control. Measure the chat viewport and visible side surfaces; retain a normal pointer-click regression.
+- Approval summaries and tool admission both use browser policy helpers. Full-mode E2E misses Ask-mode summary errors; retain TypeScript validation and an actual approval-loop regression.
+- Reverting live styles during the preview debounce must still enqueue the restored desired state; comparing only the last completed key leaves an in-flight change applied.
+- Native visual verification exposed empty-chat composer overlap and CDP visible-size ownership. Reserve every composer and use `dontSetVisibleSize` so device emulation cannot override the measured native slot.
+- Browser tab titles and renderer selection can lag the main state response. E2E waits for `aria-selected`, closes the intended row, and canonicalizes URLs when finding the native guest.
+- Launching the shared Dev profile hit existing artifact/history recovery errors. Browser testing uses `build/browser-dev-profile/` with separate portable/user-data roots, copied provider setup, and a fresh workspace history.
+- Live browser test: agent tried `browser_open(file:///tmp/sample.html)` and received HTTP(S)-only rejection, then recovered with a Python server serving all of `/tmp` on port 8899. UI workspace `open_file` is not exposed to agent tools; add explicit local-preview guidance and a bounded file-preview route through existing tools, including intentional handling of user-requested files outside the workspace and server cleanup.
+
+## Browser lifecycle and progressive disclosure — 2026-09-08
+- An agent-created Python preview outlived its document. Verified the exact task-owned PID/start/cwd/port, terminated it, confirmed the HTML was absent, and removed its log. Managed exact-file previews now replace that fallback.
+- Review found queued actions could resume after human takeover, approvals could outlive page identity, and hover overlays could intercept semantic clicks. Added focused regression coverage and fixes. A cursor-cleanup review incorrectly read evaluate's isolated-world argument; the live cursor test caught the regression, and cleanup was restored to the creation context.
+- Progressive disclosure must install executable tools and update both outbound and durable-compaction budgets at a turn boundary. A setup-return wiring mistake was caught by TypeScript/review before Electron validation.
+- `tsx -e` uses CommonJS here and cannot load Pi's ESM-only export; use `node --import tsx --input-type=module` for measurement scripts.
+- Host preparation runs after a tool turn, and Pi journals an aborted assistant on Stop. Cancellation tests must reach that boundary and preserve its journal record; an abort rejection must not become a policy fault, while an independent host failure must still fail closed.
+
+- Electron main-process evaluation cannot dynamically import a module from the Playwright utility world. The delayed-acquisition regression uses `process.getBuiltinModule` and synchronizes builtin ESM exports so its filesystem gate actually reaches the production namespace import; restored in test cleanup.
+- Final dev restart exposed Browser mounting with a fabricated default workspace while workspace data loaded. Mount it only after the selected workspace exists; verify cold startup and the existing Environment/browser integration suites.
+
+## PR99 hosted CI follow-up — 2026-09-08
+- Diagnostics source scanning treated console calls in the serialized Playwright guest runtime as executable main-process logging. Use syntax-aware scanning with regression cases, retaining the reviewed-sink boundary.
+- Hosted CDP returned redacted object keys in a different order; the test incorrectly tied collision suffixes to boolean values. Verify distinct sanitized keys and preservation of both values without relying on enumeration order.
+
+- Pullfrog identified silent sensitive guest permissions and a workspace-wide local-preview origin. Restrict guest grants and serve exact pinned document/asset sets with distinct origins; keep declared workspace-file authorization while blocking unrelated siblings.
+- Ad-hoc `tsx -e` selected CommonJS and rejected the ESM-only Pi package exports. Use `node --import tsx --input-type=module` for token-estimate probes.
+- Matching-first input probing showed Chromium suppresses the duplicate injected keyDown, so a timing-only expectation could swallow the only physical event. Use Electron's native debugger-source flag for keyboard input, and interrupt unexpected repeats. Mouse-down/up omit this flag and retain a bounded documented collision fallback.
+- The next hosted Electron gate exposed immediate recording stop before the encoder produced a frame (both attempts). Validate recorder readiness instead of weakening the WebM assertion. Completed-job logs during an active run require the jobs/logs API; gh run view waits for whole-run completion.
+- Independent Chromium reproduction showed per-port preview cookies leaked to other localhost ports because cookies ignore ports. Replace cookies with native frame/origin-scoped request authorization, strip inherited headers and legacy cookies, and test redirects against a controlled server.
+
+## PR99 direct-preview follow-up — 2026-09-08
+- Exact-grant hardening left path-only Files/chat/terminal previews unable to load local sidecars. Derive a bounded static resource set for user-originated opens only, preserve strict explicit agent grants, and test the actual path-only entry point.
+- Static-discovery review found a sidecar symlink could target an excluded HTML/PDF, and same-content rewrites could reuse an older modification-time fingerprint. Reject canonical document targets and include pinned source metadata in grant identity.
+
+## 2026-09-04 — Queued composer controls
+
+- Pi harness queueSteer/queueFollowUp are not exposed through the foreground durable transcript path. Use Stop, a persistence barrier, and normal append for desktop Steer.
+- E2E TypeScript uses an older lib target; use reverse/find rather than Array.at in new test helpers.
+- Appearance persistence uses the `settings` envelope in settings.json; verify the preference from that envelope after relaunch.
+- Queue removal confirms durable append, not provider receipt. Wait for the exact provider request before asserting conversation history.
+- Joined actions need explicit square inner seams, shared outer squircle radii, visible focus overflow, and observable hover/focus tests.
+
+## 2026-09-06 — Settings and global Skills verification
+
+- Responsive Model Pad sizing must use the actual Settings scrollport and account for titles, controls, axes, legends, zoom, and scroll position.
+- Gate both skill inventory readers before and after asynchronous discovery, and recheck at execution time; disabled projection must cover inference, compaction, recall, Telegram queues, and every Bot catalog/edit surface.
+- Keep full tests and production builds sequential in one checkout because both build native helpers and concurrent runs can race over universal binaries.
+- Route Bot-scoped catalog identity end to end and isolate per-Bot iOS caches; Android has no persistent catalog cache.
+
+## 2026-09-08 — 0.39.0 four-PR integration
+
+- Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
+- Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+- UX review (2026-09-05): the active Xcode installation rejects tools until its license is accepted. Git and desktop C helpers can use the separately installed Command Line Tools via `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; helper build scripts replace the child environment, so this run compiled their unchanged C sources with the same flags directly. iOS physical-device discovery/test remains blocked; do not claim it passed.
+- Electron E2E failure diagnostics called `app.process()` outside their try/catch; a closed Electron target hid the original launch error. Keep that call within the best-effort diagnostic block. The isolated E2E profile also cannot establish native Bot Keychain authority; the editor test injects a test-owned IPC catalog and captures the submitted access, while storage/authority tests run separately.
+
+## 2026-09-10 — Google catalog PR validation
+
+The main checkout's shared node_modules matched Pi's pinned version but lacked
+postcss-value-parser and @xterm/addon-web-links required by this worktree. The
+resulting type errors disappeared after replacing the temporary dependency
+symlink with this checkout's own npm ci. Full type-check and lint then passed.
+
+## 2026-09-09 — Draft chat planning
+
+- The checkout has no `.memory/` directory despite AGENTS.md referencing it; used current source and the plan index for project context.
+- Native verification: no physical iOS device is online and local Java/Android SDK tools are unavailable. Run generic iOS build-for-testing and shared Remote contract suites; device XCTest and Android runtime acceptance remain unavailable locally.
+- Draft lifecycle regression tests intercepted `chats:appendMessage` for first-send failures; updated that fault injection to the new atomic `chats:createWithFirstMessage` boundary.
+- Empty-chat migration must distinguish header-only Pi journals (created by the old Todo snapshot read even before Send) from real private records; preserving every journal would leave ordinary abandoned chats behind.
+- Completed Pi v3-to-v4 promotion adds lane/navigation records even for a header-only source. Empty cleanup must validate the real receipt, backup digest, and exact migration scaffolding rather than treating all promoted records as user history.
+
+## 2026-09-10 — PR #102 readiness
+
+- The initial source-scanning theory incorrectly credited explicit 1x encode arguments that are already Electron's defaults. Exercise the actual fix with a valid oversized PNG through `providers:save`, relaunch, and verify the recovered, decodable 64px-or-smaller result.
+- Treat user-supplied provider PNGs as original-color artwork; an alpha mask turns fully opaque icons into solid squares and disagrees with native clients.
+- Model Pad animation settling must ignore infinite animations and retain a bounded timeout so hosted Electron runs cannot wait forever.
+- The cold hosted responsive matrix can reach its last 390px case only as the shared 90-second test budget expires, while a warm retry passes in 24 seconds. Give this exhaustive case an explicit bounded 180-second budget without relaxing geometry assertions.
+- On hosted Electron, Playwright `fill("")` can leave a controlled search unchanged; use the native value setter plus a bubbling input event for deterministic test cleanup.
+
+## 2026-09-10 — PR96 readiness rebase
+
+- The branch predated the unified Settings work and conflicted in headings, accessible switch names, shared test fixtures, and the tracked-but-ignored papercut log. Resolve these contracts additively and use `git add -f` for the already tracked `.papercuts/troubleshooting.md`.
+- A parent save handler showed a toast but resolved its promise, making the editor's inline retry state unreachable. Propagate the rejection after the toast so the review dialog keeps the user's choices and exposes the error.
+- Progressive disclosure made two inherited E2E locators inaccessible: tests must open the exact Remote or Telegram details before asserting the controls inside, rather than spending the full timeout waiting for hidden semantics.
+- A single rollback `try` coupled external Tailscale route cleanup to local listener/state cleanup; keep independently knowable cleanup steps best-effort and report external versus local uncertainty separately.
+- Distinct cleanup messages need branch-specific regressions: cover both newly enabled access being disabled and pre-existing access staying enabled when route removal fails.
+- Hosted Electron can leave a controlled scheduled-task search unchanged after Playwright `fill("")`; use the native value setter plus a bubbling input event for deterministic cleanup.
+
+## 2026-09-10 — PR #81 readiness rebase
+
+- The stale terminal migration conflicted with newer browser-link integration and expanded package scripts; preserve current `main` scripts and link routing, then layer the Ghostty-specific test/build hooks back in before regenerating the lockfile.
+- `npm ci` completed without Electron's macOS payload, and the first focused Playwright command omitted this repo's explicit config; install the payload with `node node_modules/electron/install.js` and pass `--config=playwright.config.ts`.
+- Canvas terminal link detection and host navigation policy had separate truth sources, so unsupported file-like text gained a dead click affordance. Pass the host policy into the surface and filter hover and activation together.
+- Ghostty correctly encodes modified keys, but Meta chords belong to the host; suppress unhandled Meta press/release pairs after terminal copy and paste handling. Do not key this off `navigator.platform`: Chromium may reduce it even in a macOS Electron renderer.
+- The terminal Playwright fixture launches compiled renderer output; rebuild before interpreting a focused E2E failure after source edits, or the test exercises the previous bundle.
+
+## 2026-09-11 — 0.40.0 integration
+
+- E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
+- `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+- Phase 2 merge has 31 conflicts spanning shared features and Linux integrations; resolve by intent and inspect automatic merges, because branch histories duplicate prior feature work.
+
+- Package conflict resolution dropped the Linux-only `bonjour-service` dependency; restored the exact pinned version before rerunning remote tests.
+- Linux mobile revision-conflict text said "changed on the paired desktop" while recovery UI searched "changed on the desktop"; aligned the guard and added coverage.
+
+- Linux ARM64 Xvfb exposed hidden browser annotation-preview and recording startup timeouts despite macOS Electron passing; keep real target-platform interaction tests as an integration gate.
+
+- Current main AGENTS file still carried the older release-only models.dev wording. Reconciled it to the root user-provided manual-action policy alongside the source restoration; cache reads remain offline and runtime limits stay bundled.

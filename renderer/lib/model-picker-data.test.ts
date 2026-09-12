@@ -164,6 +164,25 @@ test("selection encoding preserves model ids and format parsing isolates quantiz
   assert.deepEqual(parseModel("gpt-4.1"), { label: "gpt-4.1", format: null });
 });
 
+test("picker entries carry custom provider artwork into the model list and pad", () => {
+  const artwork = normalizeProviderArtwork({
+    mimeType: "image/png",
+    dataBase64:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  });
+  const entries = createModelEntries([
+    provider({
+      id: "custom:connection-abc",
+      label: "Home Lab",
+      artwork,
+      models: ["local-chat"],
+    }),
+  ]);
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0]?.providerArtwork, artwork);
+});
+
 test("entry creation includes every usable model, keeps hosted providers first, and ignores pins", () => {
   const providers = [
     provider({

@@ -7,6 +7,7 @@ export interface AppCapabilities {
   computerUse: boolean;
   dockIcon: boolean;
   accessibilityPaste: boolean;
+  dictationHoldToTalk: boolean;
   nativeShare: boolean;
   appleFoundationModels: boolean;
 }
@@ -18,6 +19,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   computerUse: false,
   dockIcon: false,
   accessibilityPaste: false,
+  dictationHoldToTalk: false,
   nativeShare: false,
   appleFoundationModels: false,
 });
@@ -35,6 +37,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     computerUse: record.computerUse === true,
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,
+    dictationHoldToTalk: record.dictationHoldToTalk === true,
     nativeShare: record.nativeShare === true,
     appleFoundationModels: record.appleFoundationModels === true,
   };

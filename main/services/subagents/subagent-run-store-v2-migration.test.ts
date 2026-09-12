@@ -107,6 +107,31 @@ test("prepared migration resumes and committed migration is idempotent", async (
   assert.equal(v2.writes, writes);
 });
 
+test("committed migration survives filesystem generation changes when V1 bytes are identical", async () => {
+  const v1 = v1State();
+  const v2: MemoryStorageState = { generation: "missing", writes: 0 };
+  const first = await migrateSubagentRunStoreV2(memoryStorage(v1), memoryStorage(v2), () => 3_000);
+  const writes = v2.writes;
+
+  v1.generation = "b-1-1-1-1-1-1-1-1";
+
+  const second = await migrateSubagentRunStoreV2(memoryStorage(v1), memoryStorage(v2), () => 4_000);
+  assert.deepEqual(second, first);
+  assert.equal(v2.writes, writes);
+});
+
+test("prepared migration commits across filesystem generation changes when V1 bytes are identical", async () => {
+  const v1 = v1State();
+  const v2: MemoryStorageState = { generation: "missing", writes: 0 };
+  v2.mutateAfterWrite = () => {
+    v1.generation = "b-1-1-1-1-1-1-1-1";
+  };
+
+  const migrated = await migrateSubagentRunStoreV2(memoryStorage(v1), memoryStorage(v2), () => 3_000);
+  assert.equal(migrated.migration.status, "committed");
+  assert.equal(v2.writes, 2);
+});
+
 test("source drift after prepare preserves both stores and blocks commit", async () => {
   const v1 = v1State();
   const original = Buffer.from(v1.contents!);

@@ -89,7 +89,7 @@ function attendedToolHandbook(input: AssistantPromptInput): string[] {
       "entries: never infer or select an omitted server. Use only exact",
       "returned ids in schedule_task.mcpServerIds or edit_automation.mcpServerIds; never put them",
       'in workspaceId. If status is "no_enabled_servers", do not create or add external-service',
-      "access. Tell the user to connect a server in Settings → MCP Servers. Do not infer Composio,",
+      "access. Tell the user to connect a server in Settings → Plugins. Do not infer Composio,",
       "Gmail, or any other service from presets, prior conversation, credentials, or UI navigation.",
     );
   }
@@ -304,7 +304,7 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
           "Use list_projects before targeting a project. For a concrete recurring request that",
           "needs an external service, use list_mcp_servers, select only the exact matching server",
           "IDs, include them as mcpServerIds, and propose Full access. If no matching enabled",
-          "server exists, explain that it must be connected in Settings → MCP Servers. For local",
+          "server exists, explain that it must be connected in Settings → Plugins. For local",
           "project work, choose read-only unless files or commands must change. Full access requires",
           "an exact project ID or approved MCP server. Do not ask a second conversational permission",
           "question when the requested change is already specific: call the correct mutation tool",

@@ -14,6 +14,7 @@ interface WorkspaceContextValue {
   activeId: string | undefined;
   select: (id: string) => void;
   isLoading: boolean;
+  isReady: boolean;
 }
 
 const WorkspaceContext = React.createContext<WorkspaceContextValue | null>(null);
@@ -21,7 +22,9 @@ const WorkspaceContext = React.createContext<WorkspaceContextValue | null>(null)
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const workspaces = useWorkspaces();
   const list = React.useMemo(() => workspaces.data ?? [], [workspaces.data]);
-  const [activeId, setActiveId] = React.useState<string | null>(() => localStorage.getItem(STORAGE_KEY));
+  const [activeId, setActiveId] = React.useState<string | null>(() =>
+    localStorage.getItem(STORAGE_KEY),
+  );
 
   // Keep the active id pointing at a real workspace as the list loads/changes.
   React.useEffect(() => {
@@ -45,6 +48,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     activeId: active?.id,
     select,
     isLoading: workspaces.isLoading,
+    isReady: workspaces.isSuccess,
   };
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }

@@ -4,7 +4,10 @@ import { createModels } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { Workspace } from "../types.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
-import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
+import {
+  createForegroundSubagentPersistenceV2,
+  cumulativeSubagentTokenBudget,
+} from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import type { SubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-runs.js";
 import { SubagentControlMainV2 } from "./subagent-control-main.js";
@@ -49,6 +52,13 @@ const workspace: Workspace = {
   createdAt: 1,
   updatedAt: 2,
 };
+
+test("cumulative token budgets are separate from one-request context capacity", () => {
+  assert.equal(cumulativeSubagentTokenBudget(128_000), 512_000);
+  assert.equal(cumulativeSubagentTokenBudget(32_000), 128_000);
+  assert.equal(cumulativeSubagentTokenBudget(4_000_000), 10_000_000);
+  assert.equal(cumulativeSubagentTokenBudget(undefined), 4_000_000);
+});
 
 function store(
   selection: "v1" | "v2",

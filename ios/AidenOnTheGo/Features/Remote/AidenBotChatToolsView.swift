@@ -296,7 +296,7 @@ final class AidenBotChatToolsModel {
            coordinator.installationStore.activeInstallation?.id == installation.id,
            coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId {
             bot = cached.details.first(where: { $0.id == botID })
-            catalog = cached.catalog
+            catalog = cached.catalog(forBotID: botID)
         }
         do {
             let context = try coordinator.requestContext()
@@ -305,7 +305,7 @@ final class AidenBotChatToolsModel {
             let client = try coordinator.remoteClient(for: context)
             async let botRequest = client.bot(id: botID)
             async let accessRequest = client.botChatAccess(chatId: chatID)
-            async let catalogRequest = client.botCapabilityCatalog()
+            async let catalogRequest = client.botCapabilityCatalog(botId: botID)
             let (loadedBot, loadedAccess, loadedCatalog) = try await (
                 botRequest, accessRequest, catalogRequest
             )
@@ -331,7 +331,7 @@ final class AidenBotChatToolsModel {
                 details.removeAll { $0.id == loadedBot.id }
                 details.append(loadedBot)
                 _ = try? await cache.mergeAndStore(
-                    AidenBotCacheSegments(details: details, catalog: loadedCatalog),
+                    AidenBotCacheSegments(details: details, catalogsByBotID: [botID: loadedCatalog]),
                     instanceId: context.instanceId,
                     deviceId: context.deviceId
                 )
@@ -820,7 +820,7 @@ final class AidenBotConversationFilesModel {
             let client = try coordinator.remoteClient(for: grant.context)
             async let accessRequest = client.botChatAccess(chatId: grant.chatID)
             async let botRequest = client.bot(id: grant.botID)
-            async let catalogRequest = client.botCapabilityCatalog()
+            async let catalogRequest = client.botCapabilityCatalog(botId: grant.botID)
             async let filesRequest = client.botConversationFiles(chatId: grant.chatID)
             let (access, bot, catalog, files) = try await (
                 accessRequest, botRequest, catalogRequest, filesRequest
@@ -907,7 +907,7 @@ final class AidenBotConversationFilesModel {
     ) async throws {
         async let accessRequest = client.botChatAccess(chatId: grant.chatID)
         async let botRequest = client.bot(id: grant.botID)
-        async let catalogRequest = client.botCapabilityCatalog()
+        async let catalogRequest = client.botCapabilityCatalog(botId: grant.botID)
         let (access, bot, catalog) = try await (accessRequest, botRequest, catalogRequest)
         guard coordinator.isCurrent(grant.context),
               access.chatId == grant.chatID,

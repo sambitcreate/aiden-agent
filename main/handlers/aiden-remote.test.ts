@@ -63,3 +63,16 @@ test("pairing TLS probe failures resolve as a structured IPC outcome", async () 
   assert.match(handler, /ok: false as const/u);
   assert.match(handler, /code: error\.code/u);
 });
+
+test("guided setup IPC binds the acknowledgement to its live document and settings", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  const handler = source.slice(source.indexOf('ipcMain.handle("remote:setupPairing"'), source.indexOf('ipcMain.handle("remote:beginPairing"'));
+  assert.match(handler, /rendererDocumentOwner/u);
+  assert.match(handler, /parseAidenRemoteTransport\(transport\)/u);
+  assert.match(handler, /typeof review.enabled !== "boolean"/u);
+  assert.match(handler, /parseAidenRemoteConnectionMode\(review.connectionMode\)/u);
+  assert.match(handler, /service.setupPairing/u);
+  assert.match(handler, /AidenRemoteTlsEndpointError/u);
+  assert.match(handler, /ok: false as const/u);
+  assert.match(handler, /!owner.isDestroyed\(\)/u);
+});

@@ -100,6 +100,62 @@ test("categorical fields reject grammar-valid but unregistered strings", () => {
   }), { platform: "darwin", arch: "arm64" });
 });
 
+test("remote request diagnostics admit bounded methods and route templates only", () => {
+  const event = createDiagnosticEvent(
+    {
+      level: "warn",
+      area: "remote",
+      event: "remote-request-failed",
+      outcome: "degraded",
+      fields: {
+        routeCategory: "chats",
+        method: "POST",
+        route: "/chats/:id/turns",
+        statusClass: "4xx",
+        latencyBucket: "2s-plus",
+        remoteCode: "not_found",
+      },
+    },
+    sessionId,
+  );
+  assert.equal(event.fields?.method, "POST");
+  assert.equal(event.fields?.route, "/chats/:id/turns");
+  assert.equal(event.fields?.routeCategory, "chats");
+  assert.equal(event.fields?.remoteCode, "not_found");
+  assert.deepEqual(normalizeDiagnosticFields({
+    method: "GET",
+    route: "/scheduled-tasks/:id/runs",
+  }), { method: "GET", route: "/scheduled-tasks/:id/runs" });
+  assert.deepEqual(normalizeDiagnosticFields({
+    method: "DELETE",
+    route: "/workspaces/:id/git/managed-worktree",
+  }), { method: "DELETE", route: "/workspaces/:id/git/managed-worktree" });
+});
+
+test("remote request diagnostics reject unregistered methods and untrusted route strings", () => {
+  assert.deepEqual(normalizeDiagnosticFields({
+    method: "STEAL",
+    route: "/chats/:id/turns",
+  }), { route: "/chats/:id/turns" });
+  assert.deepEqual(normalizeDiagnosticFields({
+    method: "POST",
+    route: "/chats/:id/turns?token=hidden",
+  }), { method: "POST" });
+  assert.deepEqual(normalizeDiagnosticFields({
+    method: "GET",
+    route: "/Users/alice/private.ts",
+  }), { method: "GET" });
+  assert.equal(normalizeDiagnosticFields({
+    route: "chats/:id",
+  }), undefined);
+  assert.equal(normalizeDiagnosticFields({
+    route: "/chats//:id",
+  }), undefined);
+  assert.equal(normalizeDiagnosticFields({
+    route: `/${"x".repeat(500)}`,
+  }), undefined);
+});
+
 test("Tailscale status diagnostics retain only closed failure categories", () => {
   const event = createDiagnosticEvent(
     {
@@ -152,4 +208,10 @@ test("error projection keeps categories and fingerprints without raw messages", 
   const hostile = new Error("private");
   hostile.name = "CorrectHorseBatteryStaple";
   assert.equal(projectDiagnosticError(hostile).errorType, "UnknownError");
+  const budget = Object.assign(new Error("private budget details"), {
+    name: "SubagentTreeBudgetExhaustedError",
+    code: "subagent_tree_budget_exhausted",
+  });
+  assert.equal(projectDiagnosticError(budget).errorType, "SubagentTreeBudgetExhaustedError");
+  assert.equal(projectDiagnosticError(budget).code, "contract-rejected");
 });

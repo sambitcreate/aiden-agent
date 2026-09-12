@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
@@ -149,15 +150,10 @@ import {
   type ChatArtifactV1,
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
-import {
-  parseTodoSnapshotView,
-  type TodoSnapshotViewV1,
-} from "../shared/todo";
-import {
-  parseBtwEvent,
-  type BtwEventV1,
-  type BtwStartReceiptV1,
-} from "../shared/btw";
+import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import type { PeerHostView } from "../shared/peer-host";
+import type { PeerOperation } from "../shared/peer-operation";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -177,6 +173,15 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
+
+export const peerHostsApi = {
+  list: () => invoke<PeerHostView[]>("remote:peersList"),
+  pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
+  setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
+  remove: (id: string) => invoke<void>("remote:peersRemove", id),
+  operation: (hostId: string, operation: PeerOperation) => invoke<unknown>("remote:peerOperation", hostId, operation),
+  onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
+};
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
@@ -481,6 +486,9 @@ export const telegramApi = {
 };
 
 export const aidenRemoteApi = {
+  setupPairing: (transport: "lan" | "tailscale", expected: {
+    instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode;
+  }) => invoke<AidenRemoteBeginPairingResult>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
@@ -632,8 +640,10 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (id: string, patch: { name?: string; permission?: WorkspacePermission }) =>
-    invoke<Workspace>("workspaces:update", id, patch),
+  update: (
+    id: string,
+    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+  ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
@@ -669,6 +679,12 @@ export interface TerminalSnapshot {
   buffer: string;
   sequence: number;
 }
+
+export const browserApi = {
+  getState: (workspaceId: string) => invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) => invoke<import("../shared/browser").BrowserCommandResult>("browser:command", workspaceId, command),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) => onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+};
 
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
@@ -733,11 +749,35 @@ export const chatsApi = {
       : null;
   },
   waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
+  compact: (id: string, engine?: CompactionEngine) =>
+    invoke<
+      | {
+          compacted: true;
+          engine?: CompactionEngine;
+          durationMs?: number;
+          tokensBefore?: number;
+          estimatedTokensAfter?: number;
+        }
+      | {
+          compacted: false;
+          reason:
+            | "already_compact"
+            | "busy"
+            | "archived"
+            | "not_canonical"
+            | "provider_unavailable"
+            | "context_metadata_invalid"
+            | "cancelled"
+            | "compaction_failed";
+        }
+    >("chats:compact", id, engine),
+  cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
   todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
     const value = await invoke<unknown>("chats:todoSnapshot", id);
     if (value === null) return null;
     const snapshot = parseTodoSnapshotView(value);
-    if (!snapshot || snapshot.chatId !== id) throw new Error("The todo snapshot response was invalid.");
+    if (!snapshot || snapshot.chatId !== id)
+      throw new Error("The todo snapshot response was invalid.");
     return snapshot;
   },
   btwStart: (chatId: string, question: string) =>
@@ -750,12 +790,19 @@ export const chatsApi = {
       const event = parseBtwEvent(payload);
       if (event) handler(event);
     }),
-  create: (input: {
+  create: (input: { title?: string; workspaceId: string; providerId?: string; model?: string }) =>
+    invokeChatMutation<Chat>("chats:create", input),
+  createWithFirstMessage: (input: {
+    draftId: string;
     title?: string;
     workspaceId: string;
     providerId?: string;
     model?: string;
-  }) => invokeChatMutation<Chat>("chats:create", input),
+    computerUseEnabled?: boolean;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+  }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
@@ -843,7 +890,7 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: () => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog"),
+  getCapabilityCatalog: (botId?: string) => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),

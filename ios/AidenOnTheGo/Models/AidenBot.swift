@@ -1007,6 +1007,7 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
     let shellAvailable: Bool
     let connections: [AidenBotCapabilityOption]
     let skills: [AidenBotCapabilityOption]
+    let skillsEnabled: Bool
     let otherCapabilities: [AidenBotCapabilityOption]
     let notice: AidenBotNoticeStatus
 
@@ -1022,6 +1023,8 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
         shellAvailable = try values.decode(Bool.self, forKey: .shellAvailable)
         connections = try values.decode([AidenBotCapabilityOption].self, forKey: .connections)
         skills = try values.decode([AidenBotCapabilityOption].self, forKey: .skills)
+        skillsEnabled = values.contains(.skillsEnabled)
+            ? try values.decode(Bool.self, forKey: .skillsEnabled) : true
         otherCapabilities = try values.decode([AidenBotCapabilityOption].self, forKey: .otherCapabilities)
         notice = try values.decode(AidenBotNoticeStatus.self, forKey: .notice)
 
@@ -1056,6 +1059,8 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
             .models.first(where: { $0.id == modelId })
     }
 
+    // Disabled catalogs contain only authenticated retained skills; selection controls
+    // still prohibit adding an unavailable choice and the Mac enforces saved ownership.
     func containsAvailable(_ selection: AidenBotCustomSelection) -> Bool {
         guard containsAvailable(providerId: selection.providerId, modelId: selection.modelId),
               !selection.shellEnabled || shellAvailable else {
@@ -1063,7 +1068,7 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
         }
         return Set(selection.fileScopeIds).isSubset(of: Set(fileScopes.filter(\.available).map(\.id)))
             && Set(selection.connectionIds).isSubset(of: Set(connections.filter(\.available).map(\.id)))
-            && Set(selection.skillIds).isSubset(of: Set(skills.filter(\.available).map(\.id)))
+            && Set(selection.skillIds).isSubset(of: Set(skills.filter { $0.available || !skillsEnabled }.map(\.id)))
             && Set(selection.otherCapabilityIds).isSubset(of: Set(otherCapabilities.filter(\.available).map(\.id)))
     }
 

@@ -67,6 +67,25 @@ const READ_ONLY_CAPABILITIES: SubagentCapabilitySetV2 = {
   mcp: [],
 };
 
+export const SUBAGENT_CUMULATIVE_TOKEN_MULTIPLIER = 4;
+export const MAX_SUBAGENT_CUMULATIVE_TOKENS = 10_000_000;
+
+/**
+ * Pi already enforces the model context window on every provider request. The
+ * tree ledger counts reported input again on every turn, so its cumulative
+ * allowance must span multiple requests instead of reusing the one-request
+ * context ceiling. Keep the cost/lifecycle bound finite and host-owned.
+ */
+export function cumulativeSubagentTokenBudget(contextWindow: number | undefined): number {
+  const perRequestContext = Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0
+    ? contextWindow!
+    : 1_000_000;
+  return Math.min(
+    MAX_SUBAGENT_CUMULATIVE_TOKENS,
+    perRequestContext * SUBAGENT_CUMULATIVE_TOKEN_MULTIPLIER,
+  );
+}
+
 export interface ForegroundSubagentPersistenceV2Input {
   store: ProductionSubagentRunStore;
   generationId: string;
@@ -278,10 +297,7 @@ export function createForegroundSubagentPersistenceV2(
           MAX_SUBAGENT_SUMMARY_CHARS,
           MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
         ),
-        maxTokens: Math.min(
-          10_000_000,
-          Math.max(1, input.runtime.model.contextWindow ?? 1_000_000),
-        ),
+        maxTokens: cumulativeSubagentTokenBudget(input.runtime.model.contextWindow),
         maxLaunches:
           parentAuthority?.budgets.maxLaunches ??
           MAX_SUBAGENT_LAUNCHES_PER_GENERATION,

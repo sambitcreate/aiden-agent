@@ -1,4 +1,4 @@
-import type { McpPresetAuth, McpPresetState } from "./types";
+import type { McpPresetAuth, McpPresetState, McpServer } from "./types";
 
 export function mcpPresetCredentialReady({
   auth,
@@ -27,7 +27,7 @@ export function mcpPresetConnectionBadge(
     };
   }
   if (!state.enabled) return { label: "Disabled", color: "secondary" };
-  return { label: "Ready", color: "green" };
+  return { label: "Configured", color: "green" };
 }
 
 export function mcpServerEditorKind(
@@ -42,4 +42,15 @@ export function mcpServerEditorKind(
   )
     ? "preset"
     : "missing-preset";
+}
+
+/** Open a saved preset as a custom MCP editor when its catalog definition is gone. */
+export function mcpServerDraftForEditor(
+  server: McpServer,
+  kind: ReturnType<typeof mcpServerEditorKind>,
+): McpServer {
+  if (kind !== "missing-preset") return server;
+  const next = { ...server };
+  delete next.presetId;
+  return next;
 }

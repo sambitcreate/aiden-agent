@@ -18,11 +18,7 @@ const PREVIEW_VISIBLE_MS = 8_000;
 /** Must match aiden-assistant-dock-out in styles.css. */
 const PANEL_EXIT_MS = 120;
 
-export function AssistantDock({
-  interactionBlocked = false,
-}: {
-  interactionBlocked?: boolean;
-}): React.ReactElement {
+export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const chat = useAssistantChat();
   const [open, setOpen] = React.useState(false);
   const [present, setPresent] = React.useState(false);
@@ -36,7 +32,6 @@ export function AssistantDock({
   const lastSeenReplyRef = React.useRef<number | null>(null);
 
   const openPanel = React.useCallback(() => {
-    if (interactionBlocked) return;
     if (!open) {
       const activeElement = document.activeElement;
       restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null;
@@ -47,25 +42,24 @@ export function AssistantDock({
     setOpen(true);
     setUnread(0);
     setPreview(null);
-  }, [interactionBlocked, open]);
+  }, [open]);
 
   const minimizePanel = React.useCallback(() => {
     restoreFocusPendingRef.current = true;
     setOpen(false);
   }, []);
-  useCommandHandler("assistant.open", openPanel, !interactionBlocked);
+  useCommandHandler("assistant.open", openPanel);
   React.useEffect(
     () =>
       onAssistantAutomationComposerRequested(() => {
-        if (interactionBlocked) return;
         setDraft(assistantAutomationDraft);
         openPanel();
       }),
-    [interactionBlocked, openPanel],
+    [openPanel],
   );
 
   // Keep the panel mounted through its exit animation, exactly as the
-  // environment summary card does, so minimizing settles instead of vanishing.
+  // Quick View does, so minimizing settles instead of vanishing.
   React.useLayoutEffect(() => {
     if (open) {
       setPresent(true);
@@ -113,11 +107,8 @@ export function AssistantDock({
 
   return (
     <div
-      inert={interactionBlocked ? true : undefined}
-      aria-hidden={interactionBlocked ? true : undefined}
-      data-environment-modal-background="assistant"
-      className="pointer-events-none absolute bottom-4 right-4 z-40 flex flex-col items-end"
-      style={{ visibility: interactionBlocked ? "hidden" : undefined }}
+      className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end transition-[right] duration-300 ease-out motion-reduce:transition-none"
+      style={{ right: `calc(1rem + ${Math.max(0, rightInset)}px)` }}
     >
       {present ? (
         <div

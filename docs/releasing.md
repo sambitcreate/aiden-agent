@@ -4,6 +4,14 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+The locked electron-builder 26.15.3 signing implementation receives a guarded
+postinstall backport of [upstream #10101](https://github.com/electron-userland/electron-builder/pull/10101).
+It uses the temporary keychain password for partition access while retaining
+each certificate password for import. The stable v26 packages inspected during
+the 0.38.1 release still lacked this fix. Remove the backport only after an
+explicit builder upgrade includes it; the branding suite checks both password
+paths, idempotence, and rejection of unexpected source/version changes.
+
 ## Model catalog refreshes
 
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
@@ -36,6 +44,9 @@ authority. Ordinary model reads and application startup remain offline.
   checks remain mandatory on a physical Mac during packaged acceptance.
 - `npm run dist` refreshes only the approved release-time model snapshot, builds the app and
   native helpers, signs with Developer ID, notarizes, staples, and verifies the app, DMG, and ZIP.
+- Before publication, the signed app must launch from a disposable profile whose committed
+  V1-to-V2 subagent migration has identical source bytes but a deliberately stale native file
+  generation. This covers the APFS device-identifier churn observed after a reboot.
 - Automatic-update builds also generate `latest-mac.yml`. macOS archive names are restricted to
   stable GitHub-safe characters, and release verification requires the manifest URL and path to
   equal the exact ZIP basename. Verification also recomputes the ZIP's SHA-512 digest and requires

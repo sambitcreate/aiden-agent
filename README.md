@@ -34,6 +34,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 - **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
 - **Rich responses and local diagnostics** - render sandboxed HTML, chart, math, and raster artifacts with recovery/export controls, and inspect or export bounded local diagnostics without an automatic upload path.
 - **Desktop integration and appearance** - native menus, encrypted system credential storage, **Parakeet**, the dictation pill, semantic themes, high contrast, reduced motion, and consistent light/dark rendering. Apple **Foundation Models**, Accessibility auto-paste, and the signed **Rust** Computer Use broker remain macOS-only.
+- **Shared browser and annotations** - browse beside the chat in Environment, preview workspace HTML/PDF files, use isolated profiles and responsive viewports, and share selected text, elements, drawings, and image crops with Aiden. Aiden's browser tools operate on those same tabs. See [browser behavior and controls](docs/environment-browser.md).
 - **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
 - **Aiden On The Go** - opt in to a pinned local-network connection or an explicit non-Funnel Tailscale Serve route, pair each iPhone or iPad separately, and revoke devices from [Remote Access settings](docs/aiden-on-the-go-remote-access.md).
 - **Updates and release safety** - signed builds use the verified GitHub release feed. Once an update is downloaded, Aiden shows the version above Profile with **Later** and **Restart now**, then follows the normal save and shutdown guards before relaunching.
@@ -97,7 +98,7 @@ The native Aiden On The Go iPhone and iPad client lives in [`ios/`](ios/README.m
 
 ### Mobile distribution
 
-The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation builds remain separate from the macOS release and are uploaded by CI as installable APK artifacts.
+The iPhone and iPad app is distributed through **TestFlight only**. GitHub releases do not publish an IPA; [`ios/README.md`](ios/README.md) documents local development and device validation. Android validation remains separate from the macOS release. Pull requests run the Android verification gates without retaining an installable artifact; relevant merges to `main` publish the debug APK and its checksum.
 
 The development launcher prepares a platform-appropriate **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate app-data, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
 

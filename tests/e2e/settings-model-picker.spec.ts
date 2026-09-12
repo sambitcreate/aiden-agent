@@ -1,12 +1,12 @@
-import { E2E_MODEL_DISPLAY_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 
 const SETTINGS_SECTIONS = [
   "Providers",
   "Model Pad",
   "Skills",
-  "MCP Servers",
+  "Plugins",
   "Web Search",
-  "Remote Access",
+  "Aiden On The Go",
   "Scheduled tasks",
   "Aiden",
   ...(process.platform === "darwin" ? (["Computer Use"] as const) : []),
@@ -30,7 +30,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Model Pad":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Personal Model Pad", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Model Pad", exact: true }),
       ).toBeVisible();
       return;
     case "Skills":
@@ -38,18 +38,23 @@ async function assertRenderedSettingsDestination(
         page.getByText(/Reusable instruction sets the assistant can invoke/u),
       ).toBeVisible();
       return;
-    case "MCP Servers":
-      await expect(page.getByText(/Connect tool providers or add your own server/u)).toBeVisible();
+    case "Plugins":
+      await expect(
+        page.getByText(/Browse plugins, connect hosted MCP servers, or add your own/u),
+      ).toBeVisible();
       return;
     case "Web Search":
       await expect(
         page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
       ).toBeVisible();
       return;
-    case "Remote Access":
+    case "Aiden On The Go":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Remote Access", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
+      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
+      await page.getByText("This Mac settings", { exact: true }).click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -62,7 +67,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "Scheduled tasks":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Scheduled tasks", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Scheduled tasks", exact: true }),
       ).toBeVisible();
       return;
     case "Aiden":
@@ -71,11 +76,11 @@ async function assertRenderedSettingsDestination(
       ).toBeVisible();
       return;
     case "Computer Use":
-      await expect(page.getByRole("heading", { level: 2, name: /^Computer Use/u })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();
       return;
     case "Voice":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Voice Input", exact: true }),
+        page.getByRole("heading", { level: 2, name: "Use your voice", exact: true }),
       ).toBeVisible();
       return;
     case "Keyboard shortcuts":
@@ -90,7 +95,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "About":
       await expect(
-        page.getByRole("heading", { level: 2, name: "About", exact: true }),
+        page.getByRole("heading", { level: 1, name: "About", exact: true }),
       ).toBeVisible();
   }
 }
@@ -125,6 +130,40 @@ test("every Settings destination renders and a one-model local inventory stays u
     await destination.click();
     await expect(destination).toHaveAttribute("aria-current", "page");
     await assertRenderedSettingsDestination(page, section);
+    await expectSquircleButtons(page);
+    if (section === "Appearance") {
+      const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
+      const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
+      const colors = async () => [await light.evaluate(el => getComputedStyle(el).backgroundColor), await dark.evaluate(el => getComputedStyle(el).backgroundColor)];
+      const assertRestingPreviews = async () => {
+        await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).click();
+        for (const preview of await page.locator('.appearance-mode-preview, .appearance-mode-scene').all()) {
+          const bounds = await preview.boundingBox();
+          expect(bounds?.width).toBeGreaterThan(40);
+          expect(bounds?.height).toBeGreaterThan(40);
+        }
+        const selected = page.locator('.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label');
+        await expect(selected).toHaveCount(1);
+        const selectedFill = await selected.evaluate(el => getComputedStyle(el).backgroundColor);
+        expect(selectedFill).not.toBe('rgba(0, 0, 0, 0)');
+        for (const label of await page.locator('.appearance-mode-option[aria-checked="false"] .appearance-mode-option-label').all()) {
+          expect(await label.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(selectedFill);
+        }
+      };
+      await assertRestingPreviews();
+      const before = await colors();
+      expect(before[0]).not.toBe(before[1]);
+      await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
+      await expect(page.locator('html')).toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
+      expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
+      await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
+      await expect(page.locator('html')).not.toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
+      expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
+    }
     if (section === "Web Search") {
       await expect(page.getByText("Current search setup", { exact: true })).toBeVisible();
       await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(

@@ -356,6 +356,22 @@ object AidenAgentActivityPresentation {
         "schedule_task" to Pair("Scheduling", "Scheduled"),
         "edit_automation" to Pair("Editing automation", "Edited automation"),
         "computer_use" to Pair("Using Computer Use", "Used Computer Use"),
+        "browser" to Pair("Loading browser tools", "Loaded browser tools"),
+        "browser_status" to Pair("Checking browser", "Checked browser"),
+        "browser_open" to Pair("Opening browser", "Opened browser"),
+        "browser_navigate" to Pair("Navigating browser", "Navigated browser"),
+        "browser_resize" to Pair("Resizing browser", "Resized browser"),
+        "browser_set_appearance" to Pair("Setting browser appearance", "Set browser appearance"),
+        "browser_snapshot" to Pair("Inspecting browser", "Inspected browser"),
+        "browser_click" to Pair("Clicking in browser", "Clicked in browser"),
+        "browser_type" to Pair("Typing in browser", "Typed in browser"),
+        "browser_press" to Pair("Pressing browser keys", "Pressed browser keys"),
+        "browser_scroll" to Pair("Scrolling browser", "Scrolled browser"),
+        "browser_evaluate" to Pair("Evaluating page", "Evaluated page"),
+        "browser_wait_for" to Pair("Waiting for page", "Waited for page"),
+        "browser_recording_start" to Pair("Starting browser recording", "Started browser recording"),
+        "browser_recording_stop" to Pair("Stopping browser recording", "Stopped browser recording"),
+        "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
 
@@ -502,6 +518,82 @@ data class AidenHtmlArtifact(
                 id.length <= 256 &&
                 title.isNotEmpty() &&
                 title.length <= 120
+}
+
+@Serializable
+enum class AidenChatSummaryActivity {
+    @SerialName("idle") IDLE,
+    @SerialName("active") ACTIVE
+}
+
+@Serializable
+data class AidenChatSummary(
+    val id: String,
+    val workspaceId: String,
+    val title: String,
+    val titlePending: Boolean,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
+    val revision: String,
+    val activity: AidenChatSummaryActivity
+) {
+    init {
+        if (id.isEmpty() || id.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            workspaceId.isEmpty() || workspaceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            !IDENTIFIER.matches(id) || !IDENTIFIER.matches(workspaceId) ||
+            revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            title.codePointCount(0, title.length) > 1_024 ||
+            updatedAt.isBefore(createdAt)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary model")
+        }
+    }
+
+    companion object {
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+
+        fun fromChat(
+            chat: AidenChat,
+            activity: AidenChatSummaryActivity = AidenChatSummaryActivity.IDLE
+        ): AidenChatSummary = AidenChatSummary(
+            id = chat.id,
+            workspaceId = chat.workspaceId,
+            title = chat.title,
+            titlePending = chat.isTitlePending,
+            createdAt = chat.createdAt,
+            updatedAt = chat.updatedAt,
+            revision = chat.revision,
+            activity = activity
+        )
+    }
+}
+
+@Serializable
+data class AidenChatSummaryPage(
+    val summaries: List<AidenChatSummary>,
+    val nextCursor: String? = null
+) {
+    init {
+        val canonicalOrder = summaries.sortedWith(
+            compareByDescending<AidenChatSummary> { it.updatedAt }.thenBy { it.id }
+        )
+        if (summaries.size > AidenRemoteProtocol.MAX_CHAT_SUMMARY_PAGE_SIZE ||
+            (nextCursor != null && !AidenRemoteProtocol.CHAT_SUMMARY_CURSOR_PATTERN.matches(nextCursor)) ||
+            (nextCursor != null && summaries.isEmpty()) ||
+            summaries.map { it.id }.toSet().size != summaries.size ||
+            summaries != canonicalOrder
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary page")
+        }
+    }
+
+    fun validatedWire(): AidenChatSummaryPage {
+        if (summaries.any { !AidenRemoteProtocol.CHAT_SUMMARY_REVISION_PATTERN.matches(it.revision) }) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary wire revision")
+        }
+        return this
+    }
+
 }
 
 @Serializable

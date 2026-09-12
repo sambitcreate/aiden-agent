@@ -220,7 +220,7 @@ export function DictationShortcutSettings() {
   const qc = useQueryClient();
   const capabilities = useAppCapabilities();
   const settings = useSettings();
-  const holdToTalk = settings.data?.dictationHoldToTalk === true;
+  const holdToTalk = capabilities.dictationHoldToTalk && settings.data?.dictationHoldToTalk === true;
   const silenceStop = settings.data?.dictationSilenceStop === true;
   const cleanup = settings.data?.dictationCleanup === true;
   const sounds = settings.data?.dictationSounds === true;
@@ -249,16 +249,19 @@ export function DictationShortcutSettings() {
       )}
       <Field
         label="Shortcut behavior"
-        description="Choose how the global dictation shortcut starts and stops each recording."
+        description={capabilities.dictationHoldToTalk
+          ? "Choose how the global dictation shortcut starts and stops each recording."
+          : "Press the global dictation shortcut once to start and again to stop."}
         orientation="vertical"
       >
         <RadioGroup
           value={holdToTalk ? "hold" : "toggle"}
-          onValueChange={(value) => void patch({ dictationHoldToTalk: value === "hold" })}
+          onValueChange={(value) => void patch({ dictationHoldToTalk: capabilities.dictationHoldToTalk && value === "hold" })}
           orientation="vertical"
           aria-label="Dictation shortcut behavior"
         >
-          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+          {capabilities.dictationHoldToTalk ? (
+          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="hold" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
               <span className="block text-regular text-primary">Hold to dictate</span>
@@ -267,7 +270,8 @@ export function DictationShortcutSettings() {
               </span>
             </span>
           </Label>
-          <Label className="cursor-pointer items-start rounded-control border border-field px-3 py-2.5 hover:border-primary/30 hover:bg-list-hover">
+          ) : null}
+          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
             <RadioGroupItem value="toggle" className="mt-0.5 shrink-0" />
             <span className="min-w-0">
               <span className="block text-regular text-primary">Press to toggle</span>
@@ -280,7 +284,9 @@ export function DictationShortcutSettings() {
       </Field>
       <Field
         label="Stop after silence"
-        description="Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
+        description={capabilities.dictationHoldToTalk
+          ? "Applies to both shortcut behaviors. Release or press the shortcut again to stop manually."
+          : "Press the shortcut again to stop manually."}
       >
         <Switch
           checked={silenceStop}

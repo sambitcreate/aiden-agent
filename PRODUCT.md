@@ -1,8 +1,10 @@
 # Product
 
-## Register
+<!-- impeccable:product-schema 1 -->
 
-product
+## Platform
+
+adaptive
 
 ## Users
 
@@ -12,15 +14,28 @@ Aiden Agent is for people who work with code and local project files on a Mac an
 
 Aiden Agent provides a private, native-feeling workspace for model conversations and agentic coding tasks. Success means the interface recedes behind the work: starting a chat is immediate, context and permissions stay legible, settings are understandable without documentation, and local-versus-network boundaries remain clear.
 
-## Brand Personality
+## Positioning
+
+Aiden combines a native-feeling desktop workspace with Pi-based agent extensibility, user-selected local or hosted models, and explicit workspace and permission boundaries. The paired native iOS and Android clients extend the Mac-owned workspace rather than creating separate sources of authority.
+
+## Operating Context
+
+The primary application is an Electron desktop app for macOS. People work in folder-backed workspaces, use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired Mac for remote access.
+
+## Capabilities and Constraints
+
+- Supports local and hosted model providers without making one provider the product authority.
+- Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
+- Treats the Mac as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
+- Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
+
+## Brand Commitments
 
 Quiet, capable, and trustworthy. The product should feel at home on macOS, with the restraint and task focus of the Codex and ChatGPT desktop apps while retaining Aiden's own workspace and privacy model.
 
-## Anti-references
-
 Avoid a generic web dashboard inside a desktop shell, ornamental cards, feature-promoting empty states, oversized or detached control regions, and settings copy that repeats labels without explaining consequences. Do not add decorative buttons, suggestions, or features to make an empty surface look busier.
 
-## Design Principles
+## Product Principles
 
 - Keep the conversation primary; navigation and configuration should remain available without competing for attention.
 - Show essential context at the point of action, especially workspace, model, permission, privacy, and error state.

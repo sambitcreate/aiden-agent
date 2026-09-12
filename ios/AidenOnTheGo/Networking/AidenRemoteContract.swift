@@ -1682,6 +1682,7 @@ struct AidenRemoteContractFixture: Decodable {
     let pairingExchange: PairingExchange
     let server: AidenServer
     let chat: AidenChat
+    let chatSummaries: AidenChatSummaryPage
     let botSummary: AidenBotSummary
     let botList: AidenBotList
     let botDetail: AidenBotDetail
@@ -1727,6 +1728,7 @@ struct AidenRemoteContractFixture: Decodable {
         _ = try pairingExchange.validated(against: pairingBootstrap)
         server = try values.decode(AidenServer.self, forKey: .server)
         chat = try values.decode(AidenChat.self, forKey: .chat)
+        chatSummaries = try values.decode(AidenChatSummaryPage.self, forKey: .chatSummaries)
         botSummary = try values.decode(AidenBotSummary.self, forKey: .botSummary)
         botList = try values.decode(AidenBotList.self, forKey: .botList)
         botDetail = try values.decode(AidenBotDetail.self, forKey: .botDetail)
@@ -1865,6 +1867,8 @@ struct AidenRemoteContractFixture: Decodable {
         ]
         guard protocolVersion == AidenRemoteProtocol.version,
               server.protocolVersion == AidenRemoteProtocol.version,
+              server.supportsChatSummaries,
+              !chatSummaries.summaries.isEmpty,
               server.instanceId == pairingBootstrap.instanceId,
               pairingExchange.capabilities == server.capabilities,
               legacyNonNegotiating.pairingExchange.instanceId == pairingBootstrap.instanceId,
@@ -1965,7 +1969,7 @@ struct AidenRemoteContractFixture: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case contractRevision, protocolVersion, capabilities, health
-        case pairingBootstrap, pairingExchange, server, chat
+        case pairingBootstrap, pairingExchange, server, chat, chatSummaries
         case botSummary, botList, botDetail, botAvatar, botCreate, botIdentity
         case botArchive, botRestore, botConversation, botConversations, botConversationQuery
         case botChatCreate, botCapabilityCatalog, botPolicy, botPolicyUpdate
@@ -2001,6 +2005,7 @@ extension String {
 private enum AidenBotPrivateResponseScope {
     case root(String)
     case botClassifiedChat
+    case chatList
     case sharedFixture
 }
 
@@ -2010,23 +2015,49 @@ private protocol AidenBotPrivateResponseScoped {
 
 /// Bot response DTOs remain additively extensible, but additive data must not
 /// become a side channel for Mac-only authority, context, or credential
-/// material. Keep this validator scoped to Bot responses so the pairing
-/// contract's known `credential`, `secret`, and `endpoint` fields remain valid.
+/// material. Keep this validator scoped to Bot and transcript-free summary
+/// responses so the pairing contract's known credential fields remain valid.
 private enum AidenBotPrivateResponseValidator {
+    private static let chatSummaryForbiddenKeys: Set<String> = [
+        "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
+        "botid", "providerid", "modelid", "preview",
+    ]
+
+    private static let childProjectionBases = [
+        "children", "subagents", "subagent", "child",
+    ]
+
+    // Keep this list aligned with the server's private child-projection
+    // segmentation. It intentionally recognizes schema compounds without
+    // treating a generic `agent` substring as private.
+    private static let childProjectionPartBytes: [[UInt8]] = [
+        "lifecycles", "histories", "snapshots", "messages", "controls", "projections",
+        "generations", "workspaces", "milestones", "interrupted", "completed", "authority",
+        "projection", "generation", "workspace", "terminal", "execution", "warnings",
+        "finished", "updated", "started", "lifecycle", "history", "snapshot", "message",
+        "counts", "states", "results", "reports", "subagents", "children", "milestone",
+        "notices", "activities", "activity", "markdown", "context", "revision", "version",
+        "latest", "timed", "failed", "parent", "retry", "models", "turns", "tools",
+        "tokens", "items", "count", "state", "control", "result", "report", "subagent",
+        "child", "notice", "warning", "preview", "model", "group", "label", "role",
+        "depth", "text", "error", "total", "item", "turn", "tool", "token", "tasks",
+        "runs", "task", "run", "chat", "at", "out", "of", "ids", "id",
+    ].map { Array($0.utf8) }
+
     private static let normalizedPrivateKeys: Set<String> = {
         var keys: Set<String> = [
             "credential", "credentials", "secret", "secrets", "apikey", "token",
             "accesstoken", "refreshtoken", "header", "headers", "endpoint", "path",
             "prompt", "instructions", "openinggreeting", "argument", "arguments", "args",
             "toolargument", "toolarguments", "toolargs", "result", "results", "toolresult",
-            "toolresults", "reasoning", "reasoningcontent",
+            "toolresults", "reasoning", "reasoningcontent", "subagentprojectionnotices",
         ]
         keys.formUnion(AidenRemoteProtocol.forbiddenWireKeys.map(normalize))
         return keys
     }()
 
     private static let fixtureBotRoots: Set<String> = [
-        "chat", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
+        "chat", "chatSummaries", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
         "botIdentity", "botArchive", "botRestore", "botConversation", "botConversations",
         "botConversationQuery", "botChatCreate", "botCapabilityCatalog", "botPolicy",
         "botPolicyUpdate", "botChatSubset", "botChatSubsetUpdate", "botFavorites",
@@ -2046,10 +2077,12 @@ private enum AidenBotPrivateResponseValidator {
         case let .root(root):
             try validate(value, root: root, path: [])
         case .botClassifiedChat:
-            guard let object = value as? [String: Any], object["botId"] is String else {
-                return
+            try validateChildProjectionFields(value)
+            if let object = value as? [String: Any], object["botId"] is String {
+                try validate(value, root: "chat", path: [])
             }
-            try validate(value, root: "chat", path: [])
+        case .chatList:
+            try validateChildProjectionFields(value)
         case .sharedFixture:
             guard let object = value as? [String: Any] else {
                 throw AidenRemoteContractError.invalidJSON
@@ -2065,7 +2098,10 @@ private enum AidenBotPrivateResponseValidator {
     private static func validate(_ value: Any, root: String, path: [String]) throws {
         if let object = value as? [String: Any] {
             for (key, child) in object {
-                if normalizedPrivateKeys.contains(normalize(key)),
+                let normalizedKey = normalize(key)
+                if (normalizedPrivateKeys.contains(normalizedKey)
+                    || isPrivateChildProjectionKey(normalizedKey)
+                    || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path) {
                     throw AidenRemoteContractError.unsafePayloadField(key)
                 }
@@ -2078,6 +2114,43 @@ private enum AidenBotPrivateResponseValidator {
                 try validate(child, root: root, path: path + ["[]"])
             }
         }
+    }
+
+    private static func validateChildProjectionFields(_ value: Any) throws {
+        if let object = value as? [String: Any] {
+            for (key, child) in object {
+                if isPrivateChildProjectionKey(normalize(key)) {
+                    throw AidenRemoteContractError.unsafePayloadField(key)
+                }
+                try validateChildProjectionFields(child)
+            }
+            return
+        }
+        if let array = value as? [Any] {
+            for child in array {
+                try validateChildProjectionFields(child)
+            }
+        }
+    }
+
+    private static func isPrivateChildProjectionKey(_ normalized: String) -> Bool {
+        if normalized.hasPrefix("subagentrun") { return true }
+        for base in childProjectionBases {
+            if normalized == base { return true }
+            guard normalized.hasPrefix(base) else { continue }
+            let remainder = Array(normalized.dropFirst(base.count).utf8)
+            var reachable = Set([0])
+            for offset in remainder.indices where reachable.contains(offset) {
+                for part in childProjectionPartBytes {
+                    let end = offset + part.count
+                    guard end <= remainder.count,
+                          remainder[offset..<end].elementsEqual(part) else { continue }
+                    reachable.insert(end)
+                }
+            }
+            if reachable.contains(remainder.count) { return true }
+        }
+        return false
     }
 
     private static func normalize(_ key: String) -> String {
@@ -2115,6 +2188,20 @@ private enum AidenBotPrivateResponseValidator {
 extension AidenChat: AidenBotPrivateResponseScoped {
     fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
         .botClassifiedChat
+    }
+}
+
+struct AidenChatListResponse: Decodable {
+    let chats: [AidenChat]
+}
+
+extension AidenChatListResponse: AidenBotPrivateResponseScoped {
+    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .chatList }
+}
+
+extension AidenChatSummaryPage: AidenBotPrivateResponseScoped {
+    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
+        .root("chatSummaries")
     }
 }
 

@@ -14,19 +14,19 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places New Agent above Scheduled beneath search", () => {
+test("sidebar places primary actions above the unified workspace outline", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const sidebarBody = between(sidebar, "<Sidebar", "</Sidebar>");
+  const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
-  const workspaceIndex = sidebarBody.indexOf("Workspace switcher");
+  const workspaceIndex = sidebarBody.indexOf("Workspaces");
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
   assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
   assert.ok(
     scheduledIndex < workspaceIndex,
-    "Scheduled should stay above the workspace switcher and chat list",
+    "Scheduled should stay above the unified workspace and chat list",
   );
 });
 
@@ -38,11 +38,14 @@ test("new agent uses the same sidebar row style as scheduled", () => {
   assert.doesNotMatch(section, /variant="accent"/u);
 });
 
-test("newAgent creates a chat in the active workspace", () => {
+test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
+  assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
+  assert.match(sidebar, /createChatDraft\(workspaceId\)/u);
+  assert.doesNotMatch(sidebar, /chatsApi\.create\(/u);
   assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
-  assert.match(sidebar, /if \(!activeId \|\| appendReconciliationRequired\) return;/u);
-  assert.match(sidebar, /chatsApi\.create\(\{ workspaceId: activeId \}\)/u);
+  assert.match(sidebar, /if \(!activeId\) return;/u);
+  assert.match(sidebar, /await newAgentInWorkspace\(activeId\)/u);
   assert.match(
     sidebar,
     /navigate\(\{ to: "\/chat\/\$chatId", params: \{ chatId: created\.id \} \}\)/u,
@@ -154,14 +157,92 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
   assert.doesNotMatch(pane, /\bnewChat\b/u);
 });
 
-test("workspace menu middle-truncates folder paths", () => {
+test("workspace outline and recent view are alternate projections, not duplicate lists", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u);
+  assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
+  assert.match(sidebar, /projectSidebarWorkspaces\(workspaces, chats\.data \?\? \[\], search\)/u);
+  assert.match(sidebar, /organization === "workspace" \? \(/u);
+  assert.match(sidebar, /Recent only/u);
+  assert.match(sidebar, /expandedWorkspaceIds\.has\(group\.workspace\.id\)/u);
+  assert.match(sidebar, /onClick=\{\(\) => toggleWorkspace\(group\.workspace\.id\)\}/u);
+  assert.doesNotMatch(
+    between(sidebar, "const toggleWorkspace", "const revealWorkspace"),
+    /chatsApi\.create|navigate\(/u,
+  );
+  assert.match(sidebar, /title="New chat"[\s\S]{0,400}newAgentInWorkspace/u);
+  assert.match(sidebar, /isReady: workspaceRegistryReady/u);
+  assert.match(sidebar, /if \(!workspaceRegistryReady\) return;/u);
+  assert.match(sidebar, /chats\.isLoading/u);
+  assert.match(sidebar, /chats\.isError/u);
+  assert.match(sidebar, /Open latest chat/u);
+  const latestChatAction = between(sidebar, "Open latest chat", "</DropdownMenuItem>");
+  assert.doesNotMatch(latestChatAction, /enterWorkspace|chatsApi\.create/u);
+});
+
+test("chat shortcuts follow the rows rendered by the active organization", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  assert.match(sidebar, /const renderedChats = React\.useMemo/u);
+  assert.match(sidebar, /expandedWorkspaceIds\.has\(group\.workspace\.id\)/u);
+  assert.match(sidebar, /group\.chats\.slice\(0, COLLAPSED_WORKSPACE_CHAT_LIMIT\)/u);
   assert.match(
     sidebar,
-    /sublabel=\{\s*w\.folderPath \? truncatePathMiddle\(w\.folderPath\) : undefined\s*\}/u,
+    /const shortcutGroups = React\.useMemo\(\(\) => groupChats\(renderedChats\)/u,
   );
-  assert.match(sidebar, /title=\{w\.folderPath \?\? undefined\}/u);
+  assert.match(sidebar, /createSidebarChatShortcutAssignments\(shortcutGroups\)/u);
+});
+
+test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  assert.match(sidebar, /useWorkspacePathPreferences/u);
+  assert.match(source("../lib/workspace-path-display.ts"), /function workspaceSecondaryLabel/u);
+  assert.match(
+    sidebar,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
+  );
+  assert.match(sidebar, /Target: \{deletingWorktree\.folderPath \?\? deletingWorktree\.name\}/u);
+  assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
+});
+
+test("sidebar overflow menus open beyond the sidebar's right edge", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const overflowMenu = between(
+    sidebar,
+    "function SidebarOverflowMenu",
+    "\n}\n\nfunction updateRestartError",
+  );
+
+  assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
+  assert.match(overflowMenu, /Math\.ceil\(sidebarBounds\.right - triggerBounds\.right\) \+ 8/u);
+  assert.match(
+    overflowMenu,
+    /triggerBounds\.bottom > window\.innerHeight \/ 2 \? "end" : "start"/u,
+  );
+  assert.match(overflowMenu, /triggerBounds\.bottom - \(window\.innerHeight - viewportPadding\)/u);
+  assert.match(overflowMenu, /viewportPadding - triggerBounds\.top/u);
+  assert.match(overflowMenu, /alignOffset=\{contentAlignOffset\}/u);
+  assert.match(overflowMenu, /window\.addEventListener\("resize", positionOutsideSidebar\)/u);
+  assert.match(overflowMenu, /window\.removeEventListener\("resize", positionOutsideSidebar\)/u);
+  assert.match(overflowMenu, /side="right"/u);
+  assert.match(overflowMenu, /align=\{contentAlign\}/u);
+  assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
+  assert.match(overflowMenu, /maxHeight: contentMaxHeight, overflowY: "auto"/u);
+  assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
+  assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
+  assert.match(
+    sidebar,
+    /ariaLabel=\{`Actions for \$\{workspaceAccessibleName\(group\.workspace, pathPreferences, workspaces\)\}`\}/u,
+  );
+});
+
+test("sidebar organizer icons retain contrast on the highlighted accent surface", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const organizer = between(
+    sidebar,
+    "const sidebarOrganizationMenu",
+    "const workspaceCreationMenu",
+  );
+
+  assert.equal(organizer.match(/group-data-\[highlighted\]:text-accent-foreground/gu)?.length, 2);
 });
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
@@ -180,7 +261,7 @@ test("managed worktrees expose only the recovery-aware delete action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(
     sidebar,
-    /active\.managedWorktree[\s\S]+Delete worktree…[\s\S]+!active\.managedWorktree[\s\S]+Remove “\{active\.name\}”/u,
+    /group\.workspace\.managedWorktree[\s\S]+Delete worktree…[\s\S]+!group\.workspace\.managedWorktree[\s\S]+Remove “\{group\.workspace\.name\}”/u,
   );
 });
 
@@ -249,7 +330,7 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   const settings = source("../main/settings-view.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
-  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-5xl/u);
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
@@ -258,7 +339,12 @@ test("allocated composer and settings widths drive their compact layouts", () =>
 
 test("environment inline handoff uses the same animated spacer pattern", () => {
   const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(panel, /environment-panel absolute z-30/u);
+  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
+  assert.match(
+    panel,
+    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
+  );
   assert.match(
     panel,
     /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
@@ -288,6 +374,7 @@ test("shared controls use theme fills for text entry and focus states", () => {
   const button = between(ui, "export const Button =", "});");
   const input = between(ui, "export const Input =", "});");
   const textarea = between(ui, "export const Textarea =", "type TextProps");
+  const selectTrigger = between(ui, "export const SelectTrigger =", "export const SelectContent =");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
   assert.match(button, /focus-visible:bg-accent-hover/u);
@@ -297,9 +384,12 @@ test("shared controls use theme fills for text entry and focus states", () => {
     assert.doesNotMatch(control, /focus:border-focus-ring/u);
     assert.doesNotMatch(control, /focus:ring-/u);
   }
+  assert.match(selectTrigger, /focus:bg-input/u);
+  assert.doesNotMatch(selectTrigger, /focus-visible:ring-/u);
+  assert.match(source("../styles.css"), /outline: 2px solid var\(--focus-ring\) !important/u);
+  assert.doesNotMatch(selectTrigger, /focus:border-focus-ring/u);
   assert.match(ui, /focus-within:bg-control/u);
   assert.doesNotMatch(ui, /focus-within:border-focus-ring/u);
-  assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
 });
 

@@ -229,7 +229,7 @@ function DiffViewer({ diff }: { diff: GitFileDiff }) {
   return (
     <div className="code-font-sized h-full overflow-auto bg-background font-mono leading-[18px] select-text">
       {diff.truncated ? (
-        <div className="sticky top-0 z-10 border-b border-support-warning/25 bg-popover px-3 py-2 font-sans text-small text-support-warning">
+        <div className="sticky top-0 z-10 bg-popover px-3 py-2 font-sans text-small text-support-warning">
           This large diff is truncated.
         </div>
       ) : null}
@@ -242,7 +242,7 @@ function DiffViewer({ diff }: { diff: GitFileDiff }) {
               "grid min-h-[18px] grid-cols-[42px_42px_minmax(320px,1fr)]",
               line.kind === "addition" && "bg-support-green/[0.09]",
               line.kind === "deletion" && "bg-support-red/[0.09]",
-              line.kind === "hunk" && "my-1 bg-accent/[0.08] text-accent",
+              line.kind === "hunk" && "my-1 bg-status-accent-surface text-status-accent",
               line.kind === "meta" && "text-tertiary",
             )}
           >
@@ -343,7 +343,7 @@ function ReviewFileContent({
             >
               <span
                 className={cn(
-                  "grid size-5 shrink-0 place-items-center rounded-md bg-control text-[10px] font-semibold",
+                  "grid size-5 shrink-0 place-items-center rounded-md bg-control text-mini font-semibold",
                   (file.status === "added" || file.status === "untracked") && "text-support-green",
                   (file.status === "deleted" || file.status === "conflicted") && "text-support-red",
                 )}
@@ -399,7 +399,7 @@ function ReviewFileContent({
           ) : diff.data ? (
             <div className="flex h-full min-h-0 flex-col">
               {diff.error ? (
-                <div className="shrink-0 border-b border-support-warning/25 bg-support-warning/[0.06] px-3 py-2 text-small text-support-warning">
+                <div className="shrink-0 bg-status-warning-surface px-3 py-2 text-small text-status-warning">
                   Diff refresh failed. Showing the last snapshot.
                 </div>
               ) : null}
@@ -501,7 +501,7 @@ function WorkingChangesPanel({
         />
       ) : review.data && files.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-          <span className="grid size-9 place-items-center rounded-full bg-support-green/10 text-support-green">
+          <span className="grid size-9 place-items-center rounded-full bg-status-green-surface text-status-green">
             <Check className="size-4.5" />
           </span>
           <Text variant="strong" as="p">Working tree is clean</Text>
@@ -512,7 +512,7 @@ function WorkingChangesPanel({
       ) : (
         <>
           {reviewError ? (
-            <div className="shrink-0 border-b border-support-warning/25 bg-support-warning/[0.06] px-3 py-2 text-small text-support-warning">
+            <div className="shrink-0 bg-status-warning-surface px-3 py-2 text-small text-status-warning">
               Refresh failed. Showing the last review snapshot.
             </div>
           ) : null}
@@ -645,7 +645,7 @@ function CompareBranchPanel({
       ) : null}
 
       {branchesError && targets.length > 0 ? (
-        <div className="shrink-0 border-b border-support-warning/25 bg-support-warning/[0.06] px-3 py-2 text-small text-support-warning">
+        <div className="shrink-0 bg-status-warning-surface px-3 py-2 text-small text-status-warning">
           Branch refresh failed. Showing the last local branch list.
         </div>
       ) : null}
@@ -678,7 +678,7 @@ function CompareBranchPanel({
         </div>
       ) : comparison.data && comparison.data.files.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-          <span className="grid size-9 place-items-center rounded-full bg-support-green/10 text-support-green">
+          <span className="grid size-9 place-items-center rounded-full bg-status-green-surface text-status-green">
             <Check className="size-4.5" aria-hidden="true" />
           </span>
           <Text variant="strong" as="p">
@@ -693,7 +693,7 @@ function CompareBranchPanel({
       ) : comparison.data ? (
         <>
           {comparisonError ? (
-            <div className="shrink-0 border-b border-support-warning/25 bg-support-warning/[0.06] px-3 py-2 text-small text-support-warning">
+            <div className="shrink-0 bg-status-warning-surface px-3 py-2 text-small text-status-warning">
               Refresh failed. Showing the last comparison snapshot.
             </div>
           ) : null}
@@ -750,7 +750,7 @@ export function ReviewPanel({
                 requestAnimationFrame(() => document.querySelector<HTMLElement>(`#environment-review-${modes[nextIndex]}-tab`)?.focus());
               }}
               className={cn(
-                "h-7 rounded-[9px] px-2.5 text-small-strong outline-none transition-colors focus-visible:outline-none",
+                "h-7 rounded-menu px-2.5 text-small-strong outline-none transition-colors focus-visible:outline-none",
                 mode === nextMode
                   ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
                   : "text-secondary hover:text-primary focus-visible:bg-list-selection",

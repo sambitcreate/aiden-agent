@@ -47,6 +47,85 @@ test("starts one title request only after chat initialization succeeds", async (
   ]);
 });
 
+test("remembers the attended provider/model selection when both are present", async () => {
+  const remembered: Array<{ providerId: string; model: string }> = [];
+  const started = await startGenerationAndMaybeTitle(
+    {
+      start: async () => true,
+      startTitle: () => undefined,
+      rememberSelection: (providerId, model) => remembered.push({ providerId, model }),
+    },
+    "stream-1",
+    params,
+  );
+
+  assert.equal(started, true);
+  assert.deepEqual(remembered, [{ providerId: "openai-codex", model: "gpt-5.4" }]);
+});
+
+test("does not remember a selection when providerId is empty", async () => {
+  let rememberCalls = 0;
+  await startGenerationAndMaybeTitle(
+    {
+      start: async () => true,
+      startTitle: () => undefined,
+      rememberSelection: () => {
+        rememberCalls += 1;
+      },
+    },
+    "stream-1",
+    { ...params, providerId: "" },
+  );
+
+  assert.equal(rememberCalls, 0);
+});
+
+test("does not remember a selection when model is empty", async () => {
+  let rememberCalls = 0;
+  await startGenerationAndMaybeTitle(
+    {
+      start: async () => true,
+      startTitle: () => undefined,
+      rememberSelection: () => {
+        rememberCalls += 1;
+      },
+    },
+    "stream-1",
+    { ...params, model: "" },
+  );
+
+  assert.equal(rememberCalls, 0);
+});
+
+test("remembers the selection even when chat initialization is declined", async () => {
+  const remembered: Array<{ providerId: string; model: string }> = [];
+  const started = await startGenerationAndMaybeTitle(
+    {
+      start: async () => false,
+      startTitle: () => undefined,
+      rememberSelection: (providerId, model) => remembered.push({ providerId, model }),
+    },
+    "stream-1",
+    params,
+  );
+
+  assert.equal(started, false);
+  assert.deepEqual(remembered, [{ providerId: "openai-codex", model: "gpt-5.4" }]);
+});
+
+test("an absent rememberSelection callback changes nothing", async () => {
+  const started = await startGenerationAndMaybeTitle(
+    {
+      start: async () => true,
+      startTitle: () => undefined,
+    },
+    "stream-1",
+    params,
+  );
+
+  assert.equal(started, true);
+});
+
 test("only an explicit visible user Stop origin is acceptance evidence", () => {
   assert.equal(isExplicitUserStop("user_stop"), true);
   for (const origin of ["lifecycle", "navigation", "unmount", "stop", "", null, undefined]) {

@@ -194,10 +194,11 @@ test("an empty timeline renders nothing at all", () => {
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={null} />), "");
 });
 
-test("the ticker rises by exactly one row and dissolves under a fade", () => {
+test("the ticker preserves rows and only fades new content", () => {
   const css = styles();
-  assert.match(css, /@keyframes aiden-activity-stack-shift\s*\{[^}]*translateY\(1\.5rem\)/u);
-  assert.match(css, /@keyframes aiden-activity-row-in\s*\{[^}]*blur\(2px\)/u);
+  assert.doesNotMatch(css, /aiden-activity-stack-shift/u);
+  assert.match(css, /animation: aiden-activity-row-in 120ms ease-out/u);
+  assert.doesNotMatch(css.slice(css.indexOf("@keyframes aiden-activity-row-in"), css.indexOf("@keyframes aiden-environment-summary-in")), /blur|transform/u);
   assert.match(
     css,
     /\.activity-feed-window\[data-masked="true"\]\s*\{[^}]*mask-image:\s*linear-gradient/u,
