@@ -1,3 +1,4 @@
+import { prepareDesignStudioExport, parseDesignStudioExportRequest, designStudioHandoffPacket } from "../services/design-studio-export-service.js";
 import { resolvePrototypeGraph, verifyPrototype, playPrototype } from "../services/design-prototype-service.js";
 import type { DesignPrototypeEdgeV1 } from "../../renderer/shared/design-prototype.js";
 import { prepareDesignLanguageProposal } from "../services/design-language-proposal-service.js";
@@ -715,6 +716,58 @@ export function registerDesignerHandlers(): void {
       if (!current) throw error;
       return { status: "conflict" as const, current };
     }
+  });
+
+  const studioBundle = async (owner: ReturnType<typeof ownerFor>, value: unknown) => {
+    const request=parseDesignStudioExportRequest(value);
+    const project=await designProjectStore.get(request.projectId);
+    if(!project)throw new Error("This Design Project is unavailable.");
+    const bundle=await prepareDesignStudioExport(project,request,{
+      source:(chatId,mediaId)=>generativeUiArtifactStore.committedRecoverySourceFor(chatId,mediaId),
+      reference:id=>designReferenceAssetStore.read(id),
+      validateLanguage:async()=>{
+        if(project.workspaceId)await workspaceEnvironmentApplicationService.run(owner,project.workspaceId,resolved=>currentDesignLanguageModelContext(project,resolved.folderPath));
+        else await currentDesignLanguageModelContext(project);
+      },
+    });
+    if(owner.isDestroyed())throw new Error("The renderer document is no longer active.");
+    return bundle;
+  };
+  ipcMain.handle("designer:previewStudioExport",async(event,value:unknown)=>(await studioBundle(ownerFor(event),value)).preview);
+  ipcMain.handle("designer:exportStudioBundle",async(event,value:unknown)=>{
+    const owner=ownerFor(event);
+    const input=exactRecord(value,new Set(["request","reviewDigest"]));
+    let bundle=await studioBundle(owner,input.request);
+    if(bundle.preview.reviewDigest!==input.reviewDigest)throw new Error("The reviewed project changed. Preview it again.");
+    const parent=BrowserWindow.fromWebContents(event.sender);
+    if(!parent||parent.isDestroyed())throw new Error("The export window is unavailable.");
+    const result=await dialog.showSaveDialog(parent,{title:"Export reviewed Design Project",defaultPath:bundle.preview.fileName,filters:[{name:"ZIP archive",extensions:["zip"]}],properties:["createDirectory","showOverwriteConfirmation"]});
+    if(result.canceled||!result.filePath)return {status:"cancelled"};
+    bundle=await studioBundle(owner,input.request);
+    if(bundle.preview.reviewDigest!==input.reviewDigest)throw new Error("The reviewed project changed. Preview it again.");
+    await writeDesignProjectExport(result.filePath,bundle.bytes);
+    return {status:"saved",fileName:bundle.preview.fileName};
+  });
+  ipcMain.handle("designer:beginStudioHandoff",async(event,value:unknown)=>{
+    const owner=ownerFor(event);
+    const input=exactRecord(value,new Set(["request","reviewDigest","sourceWorkspaceId","targetDigest","kind","acknowledged","operationId"]));
+    const bundle=await studioBundle(owner,input.request);
+    if(bundle.preview.reviewDigest!==input.reviewDigest)throw new Error("The reviewed project changed. Preview it again.");
+    if(typeof input.acknowledged!=="boolean")throw new Error("Invalid handoff acknowledgement.");
+    const sourceId=string(input.sourceWorkspaceId,"workspace",128);
+    const packet=await designStudioHandoffPacket(bundle);
+    let target;
+    if(input.kind==="managed-worktree"){
+      const preview=await designHandoffApplicationService.previewManagedTarget(sourceId);
+      if(preview.previewDigest!==input.targetDigest)throw new Error("The workspace changed. Review it again.");
+      target={kind:"managed-worktree" as const,source:preview.source,previewDigest:preview.previewDigest,expectedCommittedHead:preview.expectedCommittedHead,dirtyCheckout:preview.dirtyCheckout,...(preview.dirtyCheckout&&input.acknowledged?{dirtyCheckoutAcknowledgement:preview.requiredDirtyCheckoutAcknowledgement!}:{})};
+    }else if(input.kind==="existing-workspace"){
+      const preview=await designHandoffApplicationService.previewExistingTarget(sourceId);
+      if(preview.previewDigest!==input.targetDigest||!input.acknowledged)throw new Error("Review and acknowledge the existing workspace target.");
+      target={kind:"existing-workspace" as const,target:preview.target,previewDigest:preview.previewDigest,strongWarningAcknowledgement:preview.requiredStrongWarningAcknowledgement};
+    }else throw new Error("Invalid handoff target.");
+    if(owner.isDestroyed())throw new Error("The renderer document is no longer active.");
+    return designHandoffApplicationService.begin({operationId:string(input.operationId,"handoff operation",128),packet,target});
   });
 
   ipcMain.handle("designer:savePrototype", async (event,inputValue:unknown) => {

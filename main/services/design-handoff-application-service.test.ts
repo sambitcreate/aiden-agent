@@ -176,6 +176,7 @@ test("managed handoff uses confirmed committed HEAD, discloses dirt, installs as
   assert.equal((await app.service.contextForChat("chat:handoff"))?.source.revisionId, "design:one");
   assert.equal((await app.service.linksForProject("project:one"))[0]?.taskId, "chat:handoff");
   assert.deepEqual(app.calls, [
+    "verify-packet",
     "create-workspace",
     "set-ask",
     "create-chat",
@@ -337,4 +338,11 @@ test("explicit existing workspace needs the strong acknowledgement and is never 
   assert.equal(result.record.workspace?.managed, false);
   assert.ok(app.workspaces.has("workspace:existing"));
   assert.equal(app.calls.includes("create-workspace"), false);
+});
+
+test("invalid complete context is rejected before any handoff effects are created",async(t)=>{
+  const app=await fixture({verifyPacket:async()=>{throw new Error("Complete context exceeds byte limit");}});t.after(app.cleanup);
+  const preview=await app.service.previewManagedTarget("workspace:source");
+  await assert.rejects(app.service.begin({operationId:"handoff:too-large",packet:packet(),target:{kind:"managed-worktree",source:preview.source,previewDigest:preview.previewDigest,expectedCommittedHead:preview.expectedCommittedHead,dirtyCheckout:preview.dirtyCheckout,dirtyCheckoutAcknowledgement:DESIGN_HANDOFF_DIRTY_CHECKOUT_ACKNOWLEDGEMENT}}),/byte limit/u);
+  assert.deepEqual(app.calls,[]);assert.equal(await app.effects.get("handoff:too-large"),null);assert.equal(app.chats.size,0);
 });

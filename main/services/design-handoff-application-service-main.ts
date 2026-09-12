@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { buildDesignHandoffContext } from "./design-handoff-packet-authority.js";
+import { currentDesignLanguageModelContext } from "./design-language-service.js";
 import { logger } from "../platform.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { configStore } from "./config-store.js";
@@ -8,7 +9,6 @@ import { DesignHandoffJournalStore } from "./design-handoff-journal-store.js";
 import { designProjectStore } from "./design-project-store-main.js";
 import { designReferenceAssetStore } from "./design-reference-asset-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
-import { isUsablePublishedDesignSource } from "./design-generation-context.js";
 import { gitPushCapability, gitReview } from "./git.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
@@ -60,39 +60,19 @@ export const designHandoffApplicationService = createDesignHandoffApplicationSer
       if (!project || project.revision !== packet.projectRevision) {
         throw new Error("The Design Project changed before handoff publication.");
       }
-      const artboard = project.canvas.nodes.find(
-        (node) =>
-          node.kind === "artboard" &&
-          node.canonicalOrigin === "generated-artifact" &&
-          node.lineageId === packet.source.lineageId &&
-          node.artifactMediaIds?.includes(packet.source.revisionId),
-      );
-      if (!artboard)
-        throw new Error("The selected Design revision is no longer part of this project.");
       if (
         packet.referenceAssetIds.some((assetId) => !project.referenceAssetIds.includes(assetId))
       ) {
         throw new Error("The Design handoff references an asset outside this project.");
       }
-      const availableAssets = new Set((await designReferenceAssetStore.list()).map(({ id }) => id));
-      if (packet.referenceAssetIds.some((assetId) => !availableAssets.has(assetId))) {
-        throw new Error("A Design handoff reference asset is unavailable.");
-      }
-      const source = await generativeUiArtifactStore.committedRecoverySourceFor(
-        project.chatId,
-        packet.source.revisionId,
-      );
-      if (!source) throw new Error("The selected Design source revision is unavailable.");
-      if (!isUsablePublishedDesignSource(project, source)) {
-        throw new Error("The selected Design source revision is damaged and must be repaired.");
-      }
-      const bytes = Buffer.from(source.html, "utf8");
-      const hash = createHash("sha256").update(bytes).digest("hex");
-      if (bytes.byteLength !== packet.source.byteSize || hash !== packet.source.sha256) {
-        throw new Error(
-          "The selected Design source revision no longer matches the confirmed handoff.",
-        );
-      }
+      await buildDesignHandoffContext(packet, project, {
+        referenceFor: async (id) => (await designReferenceAssetStore.read(id))?.bytes,
+        sourceFor: (chatId, mediaId) => generativeUiArtifactStore.committedRecoverySourceFor(chatId, mediaId),
+        validateLanguage: async (sourceProject) => {
+          const workspace = sourceProject.workspaceId ? await configStore.getWorkspace(sourceProject.workspaceId) : undefined;
+          return currentDesignLanguageModelContext(sourceProject, workspace?.folderPath);
+        },
+      });
     },
     logError: (area, message, error) => logger.error(area, message, error),
   },

@@ -6,7 +6,7 @@ import {
   DESIGN_HANDOFF_EXISTING_WORKSPACE_ACKNOWLEDGEMENT,
   type DesignHandoffLinkResult,
   type DesignHandoffJournalRecordV1,
-  type DesignHandoffPacketV1,
+  type DesignHandoffPacket,
   type DesignHandoffTarget,
   type DesignHandoffTargetPreview,
   type DesignHandoffWorkspaceResult,
@@ -127,7 +127,7 @@ export interface DesignHandoffApplicationDependencies {
     owner: HandoffChatOwner,
   ): Promise<ResolvedHandoffChat>;
   removeChat(chatId: string, assertCurrent: (chat: ResolvedHandoffChat) => void): Promise<void>;
-  verifyPacket(packet: DesignHandoffPacketV1): Promise<void>;
+  verifyPacket(packet: DesignHandoffPacket): Promise<void>;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -592,12 +592,13 @@ export function createDesignHandoffApplicationService(options: {
       };
     },
 
-    begin(input: BeginDesignHandoffInput): Promise<DesignHandoffRunResult> {
-      return coordinator.begin({
-        operationId: input.operationId,
-        packet: parseDesignHandoffPacket(input.packet),
-        target: parseDesignHandoffTarget(input.target),
-      });
+    async begin(input: BeginDesignHandoffInput): Promise<DesignHandoffRunResult> {
+      const packet = parseDesignHandoffPacket(input.packet);
+      const target = parseDesignHandoffTarget(input.target);
+      // Admission must reject an oversized or stale context before creating a
+      // workspace, chat, journal entry, or any other handoff effect.
+      await dependencies.verifyPacket(packet);
+      return coordinator.begin({ operationId: input.operationId, packet, target });
     },
 
     cancel(operationId: string): Promise<DesignHandoffRunResult> {
@@ -632,7 +633,7 @@ export function createDesignHandoffApplicationService(options: {
       return { results, failures };
     },
 
-    contextForChat(chatId: string): Promise<DesignHandoffPacketV1 | null> {
+    contextForChat(chatId: string): Promise<DesignHandoffPacket | null> {
       return effects.contextForChat(chatId);
     },
 

@@ -35,6 +35,21 @@ export interface DesignHandoffPacketV1 {
   }>;
 }
 
+export interface DesignHandoffReviewedScopeV2 {
+  brief: string;
+  chosenDirections: Array<{ setId: string; mediaId: string }>;
+  screens: Array<{ lineageId: string; revisionId: string; sha256: string; byteSize: number }>;
+  designLanguageHash?: string;
+  prototype?: { graphHash: string; status: "static" | "unverified" | "verified" | "stale" | "broken"; nodeCount: number; edgeCount: number };
+  accessibilityNotes: string;
+}
+export interface DesignHandoffPacketV2 extends Omit<DesignHandoffPacketV1, "version"> {
+  version: 2;
+  reviewedScope: DesignHandoffReviewedScopeV2;
+  reviewDigest: string;
+}
+export type DesignHandoffPacket = DesignHandoffPacketV1 | DesignHandoffPacketV2;
+
 export interface DesignHandoffTargetPreview {
   workspaceId: string;
   workspaceLabel: string;
@@ -94,7 +109,7 @@ export interface DesignHandoffJournalRecordV1 {
   operationId: string;
   revision: number;
   stage: DesignHandoffStage;
-  packet: DesignHandoffPacketV1;
+  packet: DesignHandoffPacket;
   target: DesignHandoffTarget;
   workspace?: DesignHandoffWorkspaceResult;
   chat?: DesignHandoffChatResult;
@@ -208,7 +223,7 @@ function parsePreview(value: unknown): DesignHandoffTargetPreview {
   };
 }
 
-export function parseDesignHandoffPacket(value: unknown): DesignHandoffPacketV1 {
+function parseDesignHandoffPacketV1(value: unknown): DesignHandoffPacketV1 {
   const input = record(value, "handoff packet");
   exact(input, ["version", "projectId", "projectRevision", "source", "referenceAssetIds", "designDecisions", "responsiveStates"], "handoff packet");
   if (input.version !== DESIGN_HANDOFF_PACKET_VERSION) fail("Unsupported handoff packet version.");
@@ -260,6 +275,46 @@ export function parseDesignHandoffPacket(value: unknown): DesignHandoffPacketV1 
     designDecisions,
     responsiveStates,
   };
+}
+
+function safeReviewedText(value: unknown, name: string, maximum: number): string {
+  if (value === "") return "";
+  const text = safeText(value, name, maximum);
+  if (Buffer.byteLength(text, "utf8") > maximum || /[<>`]|(?:https?|file|data|javascript):|(?:^|\s)(?:\/|~\/|\.{1,2}\/|[a-z]:\\)|\\|(?:(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|authorization)\s*[:=]\s*\S+|bearer\s+[A-Za-z0-9._~+/-]{16,}|sk-[A-Za-z0-9]{16,}|AKIA[A-Z0-9]{16})|(?:ignore|override|disregard)\s+(?:all\s+)?(?:previous|prior|system|developer)\b|[\u202a-\u202e\u2066-\u2069\ufeff]/iu.test(text)) fail(`${name} contains unsafe text.`);
+  return text;
+}
+export function parseDesignHandoffReviewedScope(value: unknown): DesignHandoffReviewedScopeV2 {
+  const scope = record(value, "reviewed scope");
+  exact(scope, ["brief", "chosenDirections", "screens", "accessibilityNotes", ...(scope.designLanguageHash !== undefined ? ["designLanguageHash"] : []), ...(scope.prototype !== undefined ? ["prototype"] : [])], "reviewed scope");
+  if (!Array.isArray(scope.screens) || !scope.screens.length || scope.screens.length > 20 || !Array.isArray(scope.chosenDirections) || scope.chosenDirections.length > 32) fail("Reviewed scope exceeds its bounds.");
+  const screens = scope.screens.map(value => { const screen = record(value, "reviewed screen"); exact(screen, ["lineageId", "revisionId", "sha256", "byteSize"], "reviewed screen"); const revisionId = safeId(screen.revisionId, "screen revision"); if (!revisionId.startsWith("design:")) fail("Reviewed screen must be a Design revision."); return {lineageId:safeId(screen.lineageId,"screen lineage"),revisionId,sha256:sha256(screen.sha256,"screen hash"),byteSize:integer(screen.byteSize,"screen bytes",512*1024)}; });
+  if (screens.some(screen=>screen.byteSize===0) || screens.reduce((total,screen)=>total+screen.byteSize,0)>512*1024 || new Set(screens.map(screen=>screen.revisionId)).size!==screens.length || new Set(screens.map(screen=>screen.lineageId)).size!==screens.length) fail("Reviewed screen identities or total size are invalid.");
+  const chosenDirections = scope.chosenDirections.map(value=>{const chosen=record(value,"chosen direction");exact(chosen,["setId","mediaId"],"chosen direction");const mediaId=safeId(chosen.mediaId,"chosen media");if(!screens.some(screen=>screen.revisionId===mediaId))fail("Chosen direction is outside the reviewed screens.");return {setId:safeId(chosen.setId,"chosen set"),mediaId};});
+  if(new Set(chosenDirections.map(item=>item.setId)).size!==chosenDirections.length)fail("Chosen direction sets are duplicated.");
+  let prototype: DesignHandoffReviewedScopeV2["prototype"];
+  if(scope.prototype!==undefined){const raw=record(scope.prototype,"prototype summary");exact(raw,["graphHash","status","nodeCount","edgeCount"],"prototype summary");if(!["static","unverified","verified","stale","broken"].includes(raw.status as string))fail("Invalid prototype status.");prototype={graphHash:sha256(raw.graphHash,"prototype hash"),status:raw.status as NonNullable<typeof prototype>["status"],nodeCount:integer(raw.nodeCount,"prototype nodes",20),edgeCount:integer(raw.edgeCount,"prototype edges",40)};if(!prototype.nodeCount)fail("Prototype must include nodes.");}
+  return {brief:safeReviewedText(scope.brief,"reviewed brief",4096),chosenDirections,screens,...(scope.designLanguageHash!==undefined?{designLanguageHash:sha256(scope.designLanguageHash,"language hash")}:{}),...(prototype?{prototype}:{}),accessibilityNotes:safeReviewedText(scope.accessibilityNotes,"accessibility notes",4096)};
+}
+function normalizedV2WithoutDigest(value: Omit<DesignHandoffPacketV2,"reviewDigest">): Omit<DesignHandoffPacketV2,"reviewDigest"> {
+  const {reviewedScope,version:_version,...common}=value;
+  const base=parseDesignHandoffPacketV1({...common,version:1});
+  const scope=parseDesignHandoffReviewedScope(reviewedScope);
+  const primary=scope.screens.find(screen=>screen.lineageId===base.source.lineageId&&screen.revisionId===base.source.revisionId&&screen.sha256===base.source.sha256&&screen.byteSize===base.source.byteSize);
+  if(!primary)fail("Primary source is outside the reviewed screen scope.");
+  return {...base,version:2,reviewedScope:scope};
+}
+export function designHandoffReviewDigest(value: Omit<DesignHandoffPacketV2,"reviewDigest">): string {
+  return createHash("sha256").update(JSON.stringify(normalizedV2WithoutDigest(value))).digest("hex");
+}
+export function parseDesignHandoffPacket(value: unknown): DesignHandoffPacket {
+  const input=record(value,"handoff packet");
+  if(input.version===1)return parseDesignHandoffPacketV1(input);
+  if(input.version!==2)fail("Unsupported handoff packet version.");
+  exact(input,["version","projectId","projectRevision","source","referenceAssetIds","designDecisions","responsiveStates","reviewedScope","reviewDigest"],"handoff packet");
+  const {reviewDigest,...rest}=input;
+  const normalized=normalizedV2WithoutDigest(rest as unknown as Omit<DesignHandoffPacketV2,"reviewDigest">);
+  if(sha256(reviewDigest,"review digest")!==designHandoffReviewDigest(normalized))fail("Reviewed handoff digest does not match its scope.");
+  return {...normalized,reviewDigest:sha256(reviewDigest,"review digest")};
 }
 
 export function parseDesignHandoffTarget(value: unknown): DesignHandoffTarget {

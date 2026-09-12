@@ -389,10 +389,12 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /durable named projects stored locally on this Mac/u);
   assert.match(featurePresentation, /Explore 2–4 directions/u);
   assert.match(featurePresentation, /project Design Language/u);
+  assert.match(featurePresentation, /verify prototype links/u);
+  assert.match(featurePresentation, /reviewed Screen bundle/u);
   assert.match(featurePresentation, /refine one exact Screen revision/u);
   assert.match(featurePresentation, /Preview, Code, and History/u);
   assert.match(featurePresentation, /Continue in workspace/u);
-  assert.match(featurePresentation, /every source change reviewed/u);
+  assert.match(featurePresentation, /exact selected scope/u);
   assert.match(featurePresentation, /Browser & Annotations/u);
   assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
   assert.match(featurePresentation, /Incognito is temporary/u);

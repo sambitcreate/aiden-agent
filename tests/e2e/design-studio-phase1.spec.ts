@@ -51,6 +51,11 @@ test("Design Studio exposes a coherent keyboard-accessible blank workbench", asy
   await expect(language.locator("summary").first()).toHaveText("Design Language · Calm interface");
   await language.getByRole("button", { name: "Detach", exact: true }).click();
   await expect(language.locator("summary").first()).toHaveText("Design Language · None applied");
+  const exportPanel = page.locator('details[aria-label="Review project export"]');
+  await exportPanel.locator("summary").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(exportPanel.getByLabel("Export Project Brief")).toBeVisible();
+  await expect(exportPanel.getByRole("button", { name: "Preview project bundle", exact: true })).toBeDisabled();
   const prototype = page.locator('details[aria-label="Project prototype"]');
   await prototype.locator("summary").first().focus();
   await page.keyboard.press("Enter");

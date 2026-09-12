@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–5 complete; Phase 6 implementation in progress
+Status: Active — Phases 1–6 complete; final regression and delivery validation in progress
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -23,7 +23,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 - [x] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
 - [x] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
 - [x] Phase 5 — bounded prototype graph and host verification
-- [ ] Phase 6 — project export and handoff V2
+- [x] Phase 6 — project export and handoff V2
 - [ ] Final — combined review, full CI, packaged acceptance, and PR delivery
 
 Each phase requires focused implementation tests, two independent GPT-6 Astra reviews at medium reasoning effort (correctness/edge cases and integration/UI/UX where applicable), remediation, and rerun verification before the next phase begins.
@@ -53,6 +53,13 @@ Each phase requires focused implementation tests, two independent GPT-6 Astra re
 - Both GPT-6 Astra medium reviewers cleared the phase after fixing arbitrary start ordering, synthetic verification, and overly broad form Enter handling.
 - Live Electron acceptance exercises trusted click, keyboard, submit, and change routes; rejects occlusion, readonly controls, forged messages, network and popup requests; checks Cancel/Reset behavior and terminates runaway guest scripts. The Studio keyboard workbench test also passes.
 - 433 Generative UI tests, 42 recovery tests, 12 V2 policy tests, and nine browser scenarios passed before final review fixes; final focused graph/store/UI tests (49), host/service tests, type-check, lint, build, and both Electron acceptance scenarios passed after remediation.
+
+### Phase 6 review and verification
+
+- Explicit selected Screen/reference scope produces a deterministic V2 ZIP with exact sources, PROJECT.md, DESIGN.md, and optional prototype graph. Recomputed digests reject changed reviews before export and handoff.
+- V2 handoff journals retain V1 recovery compatibility and record reviewed brief, selected sources, chosen directions, language hash, prototype summary, responsive intent, and accessibility notes. Shared authority revalidates every source and binding before effects and model use.
+- Both GPT-6 Astra medium reviewers cleared the phase after narrowing credential detection and sharing the complete context byte-budget check before any handoff effect. Independent rereviews passed 10 and 22 focused tests; runtime focused coverage passed 39 tests.
+- Combined Generative UI suite passed 444 tests plus 42 recovery tests, 12 policy tests, and nine browser scenarios before final remediation; final focused export/contract tests, onboarding, type-check, lint, build, and rebuilt Studio Electron acceptance passed. Final combined regression remains tracked below.
 
 ## Product and vocabulary contract
 

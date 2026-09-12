@@ -1,3 +1,4 @@
+import type { DesignStudioExportRequest, DesignStudioExportPreview } from "../shared/design-studio-export";
 import type { DesignPrototypeEdgeV1 } from "../shared/design-prototype";
 import type { DesignLanguageProposalInput, DesignLanguageProposal } from "../shared/design-language-proposals";
 import type { DesignGenerationRequestV1, DesignGenerationIntentV1 } from "../shared/design-generation";
@@ -779,6 +780,9 @@ export const designerApi = {
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
     invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  previewStudioExport:(request:DesignStudioExportRequest)=>invoke<DesignStudioExportPreview>("designer:previewStudioExport",request),
+  exportStudioBundle:(input:{request:DesignStudioExportRequest;reviewDigest:string})=>invoke<{status:"saved"|"cancelled";fileName?:string}>("designer:exportStudioBundle",input),
+  beginStudioHandoff:(input:{request:DesignStudioExportRequest;reviewDigest:string;sourceWorkspaceId:string;targetDigest:string;kind:"managed-worktree"|"existing-workspace";acknowledged:boolean;operationId:string})=>invoke<DesignHandoffRunResultV1>("designer:beginStudioHandoff",input),
   savePrototype: (input:{projectId:string;expectedRevision:number;entryMediaId:string;mediaIds:string[];edges:DesignPrototypeEdgeV1[]}) => invoke<DesignProjectSnapshotV1>("designer:savePrototype",input),
   verifyPrototype: (input:{projectId:string;expectedRevision:number}) => invoke<{project:DesignProjectSnapshotV1;error?:string}>("designer:verifyPrototype",input),
   playPrototype: (input:{projectId:string}) => invoke<{windowId:number}>("designer:playPrototype",input),

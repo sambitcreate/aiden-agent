@@ -2,7 +2,7 @@ import { DataStore } from "./data-store.js";
 import {
   type DesignHandoffChatResult,
   type DesignHandoffLinkResult,
-  type DesignHandoffPacketV1,
+  type DesignHandoffPacket,
   type DesignHandoffWorkspaceResult,
   parseDesignHandoffPacket,
 } from "./design-handoff-contract.js";
@@ -29,7 +29,7 @@ export interface DesignHandoffEffectRecordV1 extends DesignHandoffEffectIdentity
   chatAttempted: boolean;
   chat?: DesignHandoffChatResult;
   chatRolledBack: boolean;
-  context?: DesignHandoffPacketV1;
+  context?: DesignHandoffPacket;
   contextRolledBack: boolean;
   linkage?: DesignHandoffLinkResult;
   createdAt: number;
@@ -185,7 +185,7 @@ function parseRecord(value: unknown): DesignHandoffEffectRecordV1 | undefined {
   const workspace = input.workspace === undefined ? undefined : parseWorkspace(input.workspace);
   const chat = input.chat === undefined ? undefined : parseChat(input.chat);
   const linkage = input.linkage === undefined ? undefined : parseLink(input.linkage);
-  let context: DesignHandoffPacketV1 | undefined;
+  let context: DesignHandoffPacket | undefined;
   try {
     context = input.context === undefined ? undefined : parseDesignHandoffPacket(input.context);
   } catch {
@@ -423,7 +423,7 @@ export class DesignHandoffEffectStore {
 
   installContext(
     operationId: string,
-    packet: DesignHandoffPacketV1,
+    packet: DesignHandoffPacket,
   ): Promise<DesignHandoffEffectRecordV1> {
     const parsed = parseDesignHandoffPacket(packet);
     return this.mutate(operationId, (record) => {
@@ -480,7 +480,7 @@ export class DesignHandoffEffectStore {
     });
   }
 
-  async contextForChat(chatId: string): Promise<DesignHandoffPacketV1 | null> {
+  async contextForChat(chatId: string): Promise<DesignHandoffPacket | null> {
     this.requireInitialized();
     const document = parseDocument(await this.data.load());
     if (!document) throw new Error("The design handoff effect ledger is unavailable.");

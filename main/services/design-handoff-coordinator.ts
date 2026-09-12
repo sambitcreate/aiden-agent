@@ -3,7 +3,7 @@ import {
   type DesignHandoffChatResult,
   type DesignHandoffJournalRecordV1,
   type DesignHandoffLinkResult,
-  type DesignHandoffPacketV1,
+  type DesignHandoffPacket,
   type DesignHandoffStage,
   type DesignHandoffTarget,
   type DesignHandoffWorkspaceResult,
@@ -39,11 +39,11 @@ export interface DesignHandoffEffectPorts {
     operationId: string,
     workspace: DesignHandoffWorkspaceResult,
     chat: DesignHandoffChatResult,
-    packet: DesignHandoffPacketV1,
+    packet: DesignHandoffPacket,
   ): Promise<void>;
   publishProjectLink(
     operationId: string,
-    packet: DesignHandoffPacketV1,
+    packet: DesignHandoffPacket,
     workspace: DesignHandoffWorkspaceResult,
     chat: DesignHandoffChatResult,
   ): Promise<DesignHandoffLinkResult>;
@@ -55,7 +55,7 @@ export interface DesignHandoffEffectPorts {
 
 export interface BeginDesignHandoffInput {
   operationId: string;
-  packet: DesignHandoffPacketV1;
+  packet: DesignHandoffPacket;
   target: DesignHandoffTarget;
 }
 

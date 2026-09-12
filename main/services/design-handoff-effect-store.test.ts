@@ -106,3 +106,20 @@ test("effect rollback is idempotent and refuses to erase published identity", as
   assert.equal(record?.chatRolledBack, true);
   assert.equal(record?.workspaceRolledBack, true);
 });
+
+test("V2 effect context survives publication and restart without collapsing to its primary source", async (t) => {
+  const { designHandoffReviewDigest } = await import("./design-handoff-contract.js");
+  const directory = await mkdtemp(join(tmpdir(), "aiden-handoff-v2-effects-"));
+  t.after(async () => (await import("node:fs/promises")).rm(directory, { recursive: true, force: true }));
+  const store = new DesignHandoffEffectStore({ root: () => directory, now: () => 1 });
+  await store.initialize(); await store.ensure(identity); await store.markWorkspaceAttempted(identity.operationId);
+  await store.recordWorkspace(identity.operationId, { workspaceId:"workspace:managed",workspaceLabel:"Managed",branchLabel:identity.branchIntent,managed:true,createdFromHead:"c".repeat(40) });
+  await store.setChatIntent(identity.operationId,"Reviewed handoff"); await store.recordChat(identity.operationId,{chatId:"chat:reviewed",taskId:"chat:reviewed"});
+  const primary={lineageId:packet.source.lineageId,revisionId:packet.source.revisionId,sha256:packet.source.sha256,byteSize:packet.source.byteSize};
+  const v2={...packet,version:2 as const,reviewedScope:{brief:"Reviewed implementation",chosenDirections:[],screens:[primary,{...primary,lineageId:"lineage:two",revisionId:"design:two"}],accessibilityNotes:"Review focus"}};
+  const reviewed={...v2,reviewDigest:designHandoffReviewDigest(v2)};
+  await store.installContext(identity.operationId,reviewed);
+  await store.publish(identity.operationId,{projectId:packet.projectId,workspaceId:"workspace:managed",chatId:"chat:reviewed",taskId:"chat:reviewed",branchLabel:identity.branchIntent});
+  const restarted=new DesignHandoffEffectStore({root:()=>directory});await restarted.initialize();
+  assert.deepEqual(await restarted.contextForChat("chat:reviewed"),reviewed);
+});

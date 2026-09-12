@@ -132,3 +132,17 @@ test("recoverable listing excludes published and rolled-back operations", async 
   await store.replace("rolled", 1, { ...rolling, revision: 2, stage: "rolled-back", updatedAt: 3 });
   assert.deepEqual((await store.listRecoverable()).map(({ operationId }) => operationId), ["active"]);
 });
+
+test("V2 reviewed packets retain their digest and complete scope across journal restart", async (t) => {
+  const { designHandoffReviewDigest } = await import("./design-handoff-contract.js");
+  const directory = await mkdtemp(join(tmpdir(), "aiden-handoff-v2-"));
+  t.after(async () => (await import("node:fs/promises")).rm(directory, { recursive: true, force: true }));
+  const record = prepared("handoff:v2");
+  const source = { ...record.packet.source, revisionId: "design:reviewed" };
+  const base = { ...record.packet, version: 2 as const, source, reviewedScope: { brief: "Implement the reviewed screen", chosenDirections: [], screens: [{ lineageId: source.lineageId, revisionId: source.revisionId, sha256: source.sha256, byteSize: source.byteSize }], accessibilityNotes: "Keyboard checks required" } };
+  record.packet = { ...base, reviewDigest: designHandoffReviewDigest(base) };
+  const first = new DesignHandoffJournalStore(() => directory);
+  await first.create(record);
+  const restarted = new DesignHandoffJournalStore(() => directory);
+  assert.deepEqual((await restarted.get(record.operationId))?.packet, record.packet);
+});

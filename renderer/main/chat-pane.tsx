@@ -1,3 +1,4 @@
+import { DesignStudioExportPanel } from "../components/design-studio-export-panel";
 import { DesignPrototypePanel } from "../components/design-prototype-panel";
 import { DesignLanguagePanel } from "../components/design-language-panel";
 import { DesignGenerationControls, DEFAULT_DESIGN_EXPLORE } from "../components/design-generation-controls";
@@ -2926,6 +2927,18 @@ export function ChatPane({
               disabled={isGenerating || isStartingGeneration || detachedGenerationDraining || Boolean(designProjectReconciliation)}
               selectedMediaId={designTargets.length === 1 ? designTargets[0]?.mediaId : undefined}
               onProjectChange={updateDesignProject}
+              prepareProject={async () => {
+                const snapshot = await designPersistenceBarrierRef.current?.();
+                if (!snapshot) throw new Error("Wait for the Design canvas to finish saving.");
+                return snapshot.project;
+              }}
+            /> : null}
+            {presentation === "design" && currentDesignProject ? <DesignStudioExportPanel
+              key={`export:${chatId}`}
+              project={currentDesignProject}
+              disabled={isGenerating || isStartingGeneration || detachedGenerationDraining || Boolean(designProjectReconciliation)}
+              screenTitles={Object.fromEntries(designArtifacts.map(entry=>[entry.artifact.mediaId,entry.artifact.title]))}
+              workspaces={workspaces}
               prepareProject={async () => {
                 const snapshot = await designPersistenceBarrierRef.current?.();
                 if (!snapshot) throw new Error("Wait for the Design canvas to finish saving.");
