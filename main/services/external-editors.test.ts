@@ -4,6 +4,8 @@ import {
   buildOpenApplicationArguments,
   launchApplicationBundle,
   openFolderInExternalEditor,
+  linuxExecutableSearchPaths,
+  resolveInstalledLinuxEditors,
   resolveInstalledEditorApplications,
   type OpenFolderInEditorDependencies,
   type ResolvedExternalEditor,
@@ -13,7 +15,7 @@ const cursor: ResolvedExternalEditor = {
   id: "cursor",
   label: "Cursor",
   appPath: "/Applications/Cursor.app",
-  bundleId: "com.todesktop.230313mzl4w4u92",
+  launch: { kind: "bundle", bundleId: "com.todesktop.230313mzl4w4u92" },
   iconDataUrl: "data:image/png;base64,icon",
 };
 
@@ -95,25 +97,27 @@ test("rejects missing and non-directory workspace folders", async () => {
 
 test("launches with fixed open arguments and never interprets the folder as shell syntax", async () => {
   const folderPath = "/tmp/workspace; touch should-not-exist";
-  assert.deepEqual(buildOpenApplicationArguments(cursor.bundleId, folderPath), [
+  assert.equal(cursor.launch.kind, "bundle");
+  if (cursor.launch.kind !== "bundle") throw new Error("Expected a macOS bundle fixture.");
+  assert.deepEqual(buildOpenApplicationArguments(cursor.launch.bundleId, folderPath), [
     "-b",
-    cursor.bundleId,
+    cursor.launch.bundleId,
     folderPath,
   ]);
 
   let invocation: { file: string; args: readonly string[] } | undefined;
-  await launchApplicationBundle(cursor.bundleId, folderPath, async (file, args) => {
+  await launchApplicationBundle(cursor.launch.bundleId, folderPath, async (file, args) => {
     invocation = { file, args };
   });
   assert.deepEqual(invocation, {
     file: "/usr/bin/open",
-    args: ["-b", cursor.bundleId, folderPath],
+    args: ["-b", cursor.launch.bundleId, folderPath],
   });
 });
 
 test("refreshes availability before launching the selected editor", async () => {
   let forcedRefresh = false;
-  let launched: { bundleId: string; folderPath: string } | undefined;
+  let launched: { editorId: string; folderPath: string } | undefined;
   await openFolderInExternalEditor(
     "/tmp/workspace",
     "cursor",
@@ -122,16 +126,55 @@ test("refreshes availability before launching the selected editor", async () => 
         forcedRefresh = forceRefresh;
         return [cursor];
       },
-      launchApplication: async (bundleId, folderPath) => {
-        launched = { bundleId, folderPath };
+      launchApplication: async (editor, folderPath) => {
+        launched = { editorId: editor.id, folderPath };
       },
     }),
   );
   assert.equal(forcedRefresh, true);
   assert.deepEqual(launched, {
-    bundleId: cursor.bundleId,
+    editorId: cursor.id,
     folderPath: "/tmp/workspace",
   });
+});
+
+test("Linux editor lookup includes distro, Snap, user, and Toolbox command locations", () => {
+  assert.deepEqual(linuxExecutableSearchPaths("/custom/bin:/usr/bin", "/home/aiden"), [
+    "/custom/bin",
+    "/usr/bin",
+    "/usr/local/bin",
+    "/snap/bin",
+    "/home/aiden/.local/bin",
+    "/home/aiden/.local/share/JetBrains/Toolbox/scripts",
+  ]);
+});
+
+test("Linux editor lookup recognizes common Flatpak application IDs", async () => {
+  const definitions = [
+    {
+      id: "vscode",
+      label: "VS Code",
+      bundleIds: [],
+      applicationNames: [],
+      priority: 1,
+    },
+  ];
+  const resolved = await resolveInstalledLinuxEditors(definitions, [], {
+    executablePath: "/usr/bin/flatpak",
+    applicationIds: new Set(["com.visualstudio.code"]),
+  });
+  assert.deepEqual(resolved, [
+    {
+      id: "vscode",
+      label: "VS Code",
+      appPath: "/usr/bin/flatpak",
+      launch: {
+        kind: "flatpak",
+        executablePath: "/usr/bin/flatpak",
+        applicationId: "com.visualstudio.code",
+      },
+    },
+  ]);
 });
 
 test("rejects an editor that disappeared after discovery", async () => {

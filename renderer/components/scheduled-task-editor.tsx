@@ -286,7 +286,7 @@ export function ScheduledTaskEditor({
       open={open}
       onOpenChange={onOpenChange}
       title={draft.id ? "Edit scheduled task" : "Create scheduled task"}
-      description="Aiden runs this task on your Mac while the app is open."
+      description="Aiden runs this task on your device while the app is open."
       size="large"
       busy={busy}
       confirmLabel={reviewing ? (draft.id ? "Save task" : "Create task") : "Review task"}
@@ -307,7 +307,7 @@ export function ScheduledTaskEditor({
             <Text as="p">{draft.permission === "full" ? "Full access · Runs without asking you each time." : "Read-only · Can inspect information without making changes."}</Text>
             <Text as="p" color="secondary">{workspaces.find((workspace) => workspace.id === draft.workspaceId)?.name ?? "No selected workspace"} · {selectedMcpIds.length ? selectedMcpIds.map((id) => visibleMcpServers.find((server) => server.id === id)?.name ?? "Unavailable connection").join(", ") : "No connections"} · Web search {draft.webSearchEnabled ? "on" : "off"}</Text>
           </Field>
-          <Field label="Keep this Mac awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this Mac for the task to run. Results appear in the task’s chat.</Text></Field>
+          <Field label="Keep this device awake" orientation="vertical"><Text as="p" color="secondary">Aiden must be open on this device for the task to run. Results appear in the task’s chat.</Text></Field>
           {saveError ? <Callout color="red" role="alert">{saveError}</Callout> : null}
         </FieldSet>
       ) : <>

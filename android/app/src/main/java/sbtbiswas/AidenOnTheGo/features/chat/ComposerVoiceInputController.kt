@@ -198,7 +198,7 @@ class ComposerVoiceInputController(private val context: Context) {
 
     private fun startMac(client: AidenRemoteClient?, session: Long) {
         if (client == null) {
-            fail("Connect to your paired Mac before using Mac transcription.", session, AidenDiagnosticCode.NETWORK)
+            fail("Connect to your paired desktop before using desktop transcription.", session, AidenDiagnosticCode.NETWORK)
             return
         }
         state = ComposerVoiceInputState.PREPARING
@@ -208,18 +208,18 @@ class ComposerVoiceInputController(private val context: Context) {
                 val status = client.speechStatus()
                 ensureActive()
                 if (!isCurrent(session)) return@launch
-                if (!status.engine.ready) throw IllegalStateException(status.engine.error ?: "The Mac speech engine is unavailable.")
+                if (!status.engine.ready) throw IllegalStateException(status.engine.error ?: "The desktop speech engine is unavailable.")
                 val selected = status.models.firstOrNull { it.id == status.selectedModelId && it.installed }
                     ?: status.models.firstOrNull { it.installed && it.recommended }
                     ?: status.models.firstOrNull { it.installed }
-                    ?: throw IllegalStateException("Download a Mac speech model in Settings before using this option.")
+                    ?: throw IllegalStateException("Download a desktop speech model in Settings before using this option.")
                 if (status.selectedModelId != selected.id) client.selectSpeechModel(selected.id)
                 ensureActive()
                 if (!isCurrent(session)) return@launch
                 activeModelId = selected.id
                 beginMacRecording(session)
             } catch (error: Exception) {
-                if (isCurrent(session)) fail(error.message ?: "Mac transcription is unavailable.", session, AidenDiagnosticCode.NETWORK)
+                if (isCurrent(session)) fail(error.message ?: "Desktop transcription is unavailable.", session, AidenDiagnosticCode.NETWORK)
             } finally {
                 if (isCurrent(session)) preparationJob = null
             }
@@ -294,7 +294,7 @@ class ComposerVoiceInputController(private val context: Context) {
         val client = activeClient
         val modelId = activeModelId
         if (client == null || modelId == null) {
-            fail("Mac transcription stopped because the connection changed.", session, AidenDiagnosticCode.NETWORK)
+            fail("Desktop transcription stopped because the connection changed.", session, AidenDiagnosticCode.NETWORK)
             return
         }
         state = ComposerVoiceInputState.TRANSCRIBING
@@ -307,7 +307,7 @@ class ComposerVoiceInputController(private val context: Context) {
                 updateTranscript(result.text, session)
                 clearSession(session)
             } catch (error: Exception) {
-                if (isCurrent(session)) fail(error.message ?: "The Mac could not transcribe this recording.", session, AidenDiagnosticCode.NETWORK)
+                if (isCurrent(session)) fail(error.message ?: "The paired desktop could not transcribe this recording.", session, AidenDiagnosticCode.NETWORK)
             } finally {
                 if (isCurrent(session)) transcriptionJob = null
             }

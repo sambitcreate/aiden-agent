@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
 import { DISABLED_APP_CAPABILITIES, parseAppCapabilities } from "../lib/app-capabilities.js";
 import {
   availableEnvironmentPanelTabs,
@@ -36,18 +37,17 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false });
-  assert.deepEqual(parseAppCapabilities({ subagents: false }), {
-    subagents: false,
+test("fresh renderer capabilities fail closed until main explicitly enables features", () => {
+  assert.deepEqual(parseAppCapabilities(undefined), DISABLED_APP_CAPABILITIES);
+  assert.deepEqual(parseAppCapabilities({ subagents: "1", platform: "plan9" }), {
+    ...DISABLED_APP_CAPABILITIES,
   });
-  assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
-    subagents: false,
-  });
-  assert.deepEqual(parseAppCapabilities({ subagents: true }), {
+  assert.deepEqual(parseAppCapabilities({ subagents: true, platform: "linux" }), {
+    ...DISABLED_APP_CAPABILITIES,
+    platform: "linux",
     subagents: true,
   });
+  assert.equal(parseAppCapabilities({ bots: true }).bots, true);
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser"]);
 });
@@ -260,14 +260,18 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
-  assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
+  assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
+  assert.match(appHandler, /const host = hostPlatformCapabilities\(\)/u);
+  assert.match(appHandler, /bots: host\.bots/u);
+  assert.match(appHandler, /computerUse: host\.computerUse/u);
+  assert.match(appHandler, /dictationHoldToTalk: host\.dictationHoldToTalk/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
   assert.match(bootstrap, /refresh=\{refreshAppCapabilities\}/u);
   const capabilityProvider = source("../lib/app-capabilities.tsx");
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
-  assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
+  assert.match(capabilityProvider, /if \(!cancelled && request === revision\) setCurrent\(next\)/u);
   assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
   assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
@@ -275,6 +279,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
   assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
+  assert.match(
+    pane,
+    /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
+  );
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
@@ -606,4 +614,47 @@ test("chip focus survives live-to-persisted replacement by run identity", () => 
     /element\.dataset\.subagentChipRunId === returnSubagentRunIdRef\.current/u,
   );
   assert.match(environment, /\[data-subagent-detail-heading\]/u);
+});
+
+
+test("dictation settings match host support even with a saved hold preference", () => {
+  assert.equal(parseAppCapabilities({ platform: "linux", dictationHoldToTalk: false }).dictationHoldToTalk, false);
+  assert.equal(parseAppCapabilities({ platform: "darwin", dictationHoldToTalk: true }).dictationHoldToTalk, true);
+  assert.equal(parseAppCapabilities({ dictationHoldToTalk: "true" }).dictationHoldToTalk, false);
+  const source = readFileSync(new URL("./settings/dictation-shortcut-settings.tsx", import.meta.url), "utf8");
+  assert.match(source, /const holdToTalk = capabilities\.dictationHoldToTalk && settings\.data\?\.dictationHoldToTalk === true/u);
+  assert.match(source, /canChooseHold \? \([\s\S]*?<RadioGroupItem value="hold"/u);
+  assert.match(source, /dictationHoldToTalk: canChooseHold && value === "hold"/u);
+  assert.match(source, /value=\{holdToTalk \? "hold" : "toggle"\}/u);
+  assert.match(source, /Press the global dictation shortcut once to start and again to stop\./u);
+});
+
+test("Linux main capabilities enable existing Bot surfaces without enabling Apple integrations", () => {
+  const capabilities = parseAppCapabilities(hostPlatformCapabilities("linux"));
+  assert.equal(capabilities.bots, true);
+  assert.equal(capabilities.computerUse, false);
+  assert.equal(capabilities.dictationHoldToTalk, false);
+  assert.equal(capabilities.appleFoundationModels, false);
+});
+
+test("app update controls require an explicit main-owned runtime capability", () => {
+  assert.equal(parseAppCapabilities({ platform: "linux" }).appUpdates, false);
+  assert.equal(parseAppCapabilities({ platform: "linux", appUpdates: "true" }).appUpdates, false);
+  assert.equal(parseAppCapabilities({ platform: "linux", appUpdates: true }).appUpdates, true);
+  const handler = source("../../main/handlers/app.ts");
+  assert.match(handler, /appUpdates: supportsAppUpdates\(\)/u);
+});
+
+
+test("Linux hold setup is distinct from an active desktop binding", () => {
+  const setup = parseAppCapabilities({ platform: "linux", dictationHoldSetup: true, dictationHoldToTalk: false });
+  assert.equal(setup.dictationHoldSetup, true);
+  assert.equal(setup.dictationHoldToTalk, false);
+  assert.equal(parseAppCapabilities({ dictationHoldSetup: "true", dictationHoldTrigger: 7 }).dictationHoldSetup, false);
+  assert.equal(parseAppCapabilities({ dictationHoldTrigger: 7 }).dictationHoldTrigger, null);
+  assert.equal(parseAppCapabilities({ dictationHoldTrigger: "Desktop shortcut" }).dictationHoldTrigger, "Desktop shortcut");
+  const settings = source("./settings/dictation-shortcut-settings.tsx");
+  assert.match(settings, /capabilities\.dictationHoldToTalk \|\| capabilities\.dictationHoldSetup/u);
+  assert.match(settings, /disabled=\{holdBusy\}/u);
+  assert.match(settings, /desktop assign a hold shortcut for this session/u);
 });

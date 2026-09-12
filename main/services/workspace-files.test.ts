@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
+  linuxRecoveryUse,
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
@@ -194,3 +195,17 @@ test("workspace editor rejects traversal and binary files", async (t) => {
   await assert.rejects(readWorkspaceFile(root, "../outside.txt"), /outside the workspace/);
   await assert.rejects(readWorkspaceFile(root, "binary.dat"), /binary/);
 });
+
+test(
+  "Linux recovery inspection detects current-user open descriptors",
+  { skip: process.platform !== "linux" || !process.getuid },
+  async (t) => {
+    const root = await workspace(t);
+    const file = path.join(root, "recovery.txt");
+    await fs.writeFile(file, "original");
+    const handle = await fs.open(file, "r");
+    assert.equal(await linuxRecoveryUse(file), "open");
+    await handle.close();
+    assert.equal(await linuxRecoveryUse(file), "clear");
+  },
+);

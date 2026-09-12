@@ -1,6 +1,6 @@
 # rpiv-advisor integration
 
-Status: Implemented (2026-08-30)
+Status: Complete (2026-08-30)
 
 ## Objective
 

@@ -427,7 +427,7 @@ struct AidenBotProfileView: View {
                 .accessibilityHint(
                     detail.health == .ready
                         ? "Opens this Bot’s persistent conversation."
-                        : "Repair this Bot’s access on the paired Mac before starting its conversation."
+                        : "Repair this Bot’s access on the paired desktop before starting its conversation."
                 )
             }
 

@@ -12,7 +12,7 @@ interface MemoryFile {
   counter: number;
 }
 
-function memoryStorageFactory(files: Map<string, MemoryFile>) {
+function memoryStorageFactory(files: Map<string, MemoryFile>, generationFields = 9) {
   return (directory: string): SubagentRunStoreStorage => {
     const file = files.get(directory) ?? { generation: "missing", counter: 0 };
     files.set(directory, file);
@@ -37,7 +37,7 @@ function memoryStorageFactory(files: Map<string, MemoryFile>) {
       async write(expected, contents) {
         if (expected !== file.generation) throw new Error("destination changed");
         file.counter += 1;
-        file.generation = Array.from({ length: 9 }, () => file.counter.toString(16)).join("-");
+        file.generation = Array.from({ length: generationFields }, () => file.counter.toString(16)).join("-");
         file.contents = Buffer.from(contents, "utf8");
         return file.generation;
       },
@@ -95,3 +95,25 @@ test("production V2 startup migrates once and never falls back after canonical c
   v2File!.contents = Buffer.from("{corrupt", "utf8");
   await assert.rejects(store.get("run-any"), /unreadable evidence/u);
 });
+
+for (const generationFields of [7, 9]) {
+  test(`production deletion advances and reloads the ${generationFields}-field native checkpoint`, async () => {
+    const files = new Map<string, MemoryFile>();
+    const options = {
+      resolveUserDataDirectory: async () => "/private/aiden-user-data",
+      storageFactory: memoryStorageFactory(files, generationFields),
+      now: () => 100,
+    };
+    const store = createProductionSubagentRunStore(options);
+    await store.initialize();
+    await store.deleteChat("legacy-empty");
+    assert.deepEqual(await store.pendingChatDeletions(), ["legacy-empty"]);
+    const restarted = createProductionSubagentRunStore(options);
+    await restarted.initialize();
+    assert.deepEqual(await restarted.pendingChatDeletions(), ["legacy-empty"]);
+    await restarted.completeChatDeletion("legacy-empty");
+    const afterCompletion = createProductionSubagentRunStore(options);
+    await afterCompletion.initialize();
+    assert.deepEqual(await afterCompletion.pendingChatDeletions(), []);
+  });
+}

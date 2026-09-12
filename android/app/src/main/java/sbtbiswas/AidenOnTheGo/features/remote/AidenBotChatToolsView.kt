@@ -201,7 +201,7 @@ class AidenBotChatToolsModel(
     fun readOnlyMessage(connected: Boolean, canWriteBots: Boolean, hostAllowsMutations: Boolean): String? {
         if (bot?.health == AidenBotHealth.ARCHIVED) return "Archived bots are read-only until restored."
         if (bot?.health == AidenBotHealth.DEGRADED || bot?.health == AidenBotHealth.UNAVAILABLE) {
-            return "This bot's access needs repair on your Mac before it can work."
+            return "This bot's access needs repair on your paired desktop before it can work."
         }
         if (!connected) return "Offline — reconnect to change this chat's access."
         if (!canWriteBots) return "This phone can view Bot access but is not approved to change it."

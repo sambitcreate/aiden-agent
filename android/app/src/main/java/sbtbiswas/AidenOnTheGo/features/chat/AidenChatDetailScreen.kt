@@ -308,7 +308,7 @@ fun AidenChatDetailScreen(
                 ) {
                     pendingApproval?.let { approval ->
                         val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresMacConfirmation = AidenApprovalPresentation.requiresMacConfirmation(approval)
+                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -353,10 +353,10 @@ fun AidenChatDetailScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
-                                } else if (requiresMacConfirmation) {
+                                } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your Mac. You can deny it here.",
+                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )

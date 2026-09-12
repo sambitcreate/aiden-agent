@@ -51,7 +51,7 @@ function displayName(source: Workspace, branch: string, requested?: string): str
 
 /**
  * Shared renderer/remote orchestration for Aiden-owned Git worktrees. All
- * filesystem and Git-admin identity is reloaded from persisted Mac state.
+ * filesystem and Git-admin identity is reloaded from persisted desktop state.
  */
 export function createWorkspaceWorktreeApplicationService(
   dependencies: WorkspaceWorktreeApplicationDependencies,

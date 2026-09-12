@@ -12,6 +12,7 @@ import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority
 import {
   createSubagentShellBrokerV2,
   createSubagentShellTool,
+  subagentShellProfile,
   type SubagentShellBrokerV2Input,
 } from "./subagent-shell.js";
 import { subagentWorkspaceRevisionV2 } from "./subagent-workspace-write.js";
@@ -169,7 +170,20 @@ test("shell tool is exact and inert until the main-owned broker wraps it", () =>
   const created = createSubagentShellTool();
   assert.equal(created.tool.name, "run_command");
   assert.deepEqual(created.binding, { toolName: "run_command" });
-  assert.match(created.tool.description, /full macOS-user host authority/u);
+  assert.match(created.tool.description, /full host-user authority/u);
+});
+
+test("shell approvals identify the platform-correct native interpreter", () => {
+  assert.deepEqual(subagentShellProfile("darwin"), {
+    executable: "/bin/zsh",
+    arguments: ["-f", "-c"],
+    display: "/bin/zsh -f -c",
+  });
+  assert.deepEqual(subagentShellProfile("linux"), {
+    executable: "/bin/sh",
+    arguments: ["-c"],
+    display: "/bin/sh -c",
+  });
 });
 
 test("exact multiline approval is durable before one helper dispatch", async (t) => {

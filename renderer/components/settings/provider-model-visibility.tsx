@@ -84,7 +84,7 @@ export function ProviderModelVisibility({ provider }: { provider: Provider }) {
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
             Hidden models stay configured and keep working in existing chats, but disappear from
-            model pickers on this Mac and paired Aiden clients.
+            model pickers on this device and paired Aiden clients.
           </Text>
         </div>
         {!policyHidden ? (

@@ -10,7 +10,10 @@ import {
   serializePendingProviderCredentialRotation,
   type PendingProviderCredentialRotationV1,
 } from "./provider-credential-rotation-core.js";
-import { sameProviderConnection } from "./provider-key-policy.js";
+import {
+  providerTransitionNeedsCredentialAccess,
+  sameProviderConnection,
+} from "./provider-key-policy.js";
 import { secrets } from "./secrets.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { StoredProvider } from "./types.js";
@@ -83,8 +86,13 @@ export function saveProviderWithCredentialRotation(
   return mutatePortableConfigAndSync(() =>
     serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-      await reconcilePendingProviderCredentialRotationNow();
       const previous = await configStore.getProvider(provider.id);
+      if (!providerTransitionNeedsCredentialAccess(previous, provider)) {
+        // A fresh Linux desktop may intentionally have no keyring session.
+        // Keyless local providers neither read nor write the secret backend.
+        return configStore.saveProvider(provider, isCurrent);
+      }
+      await reconcilePendingProviderCredentialRotationNow();
       const connectionChanged = Boolean(previous && !sameProviderConnection(previous, provider));
       const hasStoredKey = await secrets.hasKey(provider.id);
       const { previousKey, mismatched } = providerCredentialState(
@@ -221,16 +229,27 @@ export function reconcileExternalProviderCredentialChanges(
   current: StoredProvider[],
 ): Promise<void> {
   return serialized(async () => {
+    const previousById = new Map(previous.map((provider) => [provider.id, provider]));
+    const currentById = new Map(current.map((provider) => [provider.id, provider]));
+    const transitions = [...new Set([...previousById.keys(), ...currentById.keys()])]
+      .map((providerId) => ({
+        providerId,
+        before: previousById.get(providerId),
+        after: currentById.get(providerId),
+      }))
+      .filter(({ before, after }) =>
+        after ? !sameProviderConnection(before, after) : Boolean(before),
+      )
+      .filter(({ before, after }) =>
+        providerTransitionNeedsCredentialAccess(before, after),
+      );
+    if (transitions.length === 0) return;
+
     // The watcher already selected `current` from one authoritative reload.
     // Pending recovery must use that cached projection rather than consuming a
     // second disk edit behind the transition the watcher is about to commit.
     await reconcilePendingProviderCredentialRotationNow(false, false);
-    const previousById = new Map(previous.map((provider) => [provider.id, provider]));
-    const currentById = new Map(current.map((provider) => [provider.id, provider]));
-    for (const providerId of new Set([...previousById.keys(), ...currentById.keys()])) {
-      const before = previousById.get(providerId);
-      const after = currentById.get(providerId);
-      if (before && after && sameProviderConnection(before, after)) continue;
+    for (const { providerId, after } of transitions) {
       // External config writes cannot participate in the encrypted-store queue.
       // Preserve the exact bound key in a bounded quarantine slot instead of
       // irreversibly deleting it from a potentially stale before/after pair.

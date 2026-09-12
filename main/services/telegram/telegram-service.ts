@@ -77,6 +77,7 @@ import {
 } from "./telegram-bot-bindings.js";
 import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
 import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
+import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -88,6 +89,7 @@ async function getProfileSettings(profile: string) {
 async function revokeTelegramBotNoticeForCurrentOwner(
   profile: string,
 ): Promise<void> {
+  if (!hostPlatformCapabilities().bots) return;
   const ownerUserId = (await getProfileSettings(profile)).telegramAllowedUserId;
   if (ownerUserId === undefined) return;
   await botApplicationService.revokeNoticeAudience(

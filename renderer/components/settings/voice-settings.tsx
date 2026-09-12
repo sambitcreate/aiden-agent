@@ -16,6 +16,7 @@ import {
   Text,
   toast,
 } from "../ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { GeminiUsageScope, VoiceProvider } from "../../lib/types";
@@ -32,6 +33,7 @@ import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
 
 export function VoiceSettings() {
+  const { platform } = useAppCapabilities();
   const qc = useQueryClient();
   const settings = useSettings();
   const providers = useProviders();
@@ -119,7 +121,7 @@ export function VoiceSettings() {
           label="Where should your voice be processed?"
           description={
             provider === "local"
-              ? "Transcribes on this Mac after an on-device model is downloaded."
+              ? "Transcribes on this device after an on-device model is downloaded."
               : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`
           }
         >
@@ -130,7 +132,7 @@ export function VoiceSettings() {
             <SelectContent>
               <SelectItem value="openai">Online · OpenAI</SelectItem>
               <SelectItem value="gemini">Online · Google Gemini</SelectItem>
-              <SelectItem value="local">On this Mac · Private</SelectItem>
+              <SelectItem value="local">{platform === "darwin" ? "On this Mac · Private" : "On this device · Private"}</SelectItem>
             </SelectContent>
           </Select>
           {provider === "gemini" ? (

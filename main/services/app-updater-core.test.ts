@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   AppUpdateController,
+  AppUpdateInstallHandoff,
   appUpdateRetryDelay,
   configureAppUpdater,
   shouldEnableAppUpdates,
@@ -326,4 +327,25 @@ test("production updater awaits downloads and exposes a sender-scoped retry entr
   assert.match(service, /appUpdateRetryDelay\(this\.retryAttempt\)/u);
   assert.match(handler, /event\.sender\.id !== mainWindow\.webContents\.id/u);
   assert.match(handler, /appUpdateService\.checkNow\(false\)/u);
+});
+
+test("Linux install handoff reports swallowed installer failure so protected shutdown can quit", () => {
+  const handoff = new AppUpdateInstallHandoff();
+  let quitScheduled = false;
+  const upstreamQuitAndInstall = (install: () => boolean): void => {
+    // Model BaseUpdater: install catches doInstall errors, while quitAndInstall
+    // returns void and schedules quit only when install actually returned true.
+    const installed = handoff.recordInstall(() => {
+      try { return install(); } catch { return false; }
+    });
+    if (installed) quitScheduled = true;
+  };
+  for (const install of [() => false, () => { throw new Error("checksum changed"); }, () => { throw new Error("disk failure"); }, () => { throw new Error("inode changed"); }]) {
+    assert.equal(handoff.run(() => upstreamQuitAndInstall(install)), false);
+    assert.equal(quitScheduled, false);
+  }
+  assert.equal(handoff.run(() => upstreamQuitAndInstall(() => true)), true);
+  assert.equal(quitScheduled, true);
+  // A duplicate or early-return call must not reuse a previous success.
+  assert.equal(handoff.run(() => {}), false);
 });

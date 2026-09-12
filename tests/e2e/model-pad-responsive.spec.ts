@@ -89,6 +89,7 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
               const grid = canvas.parentElement!;
               return {
                 square: Math.abs(bounds.width - bounds.height) <= 1,
+                minimumSize: bounds.width >= 160 && bounds.height >= 160,
                 fitsWidth: bounds.left >= 0 && bounds.right <= innerWidth,
                 fitsHeight: bounds.height <= innerHeight,
                 fitsContainer: bounds.width <= grid.clientWidth + 1,
@@ -104,6 +105,7 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
         )
         .toEqual({
           square: true,
+          minimumSize: true,
           fitsWidth: true,
           fitsHeight: true,
           fitsContainer: true,

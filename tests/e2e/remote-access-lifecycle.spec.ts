@@ -69,7 +69,7 @@ test("guided phone setup asks once, enables access, and survives closing the mai
 
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await page.getByRole("button", { name: "Connect a device", exact: true }).click();
-  const review = page.getByRole("dialog", { name: "Connect your phone to this Mac?" });
+  const review = page.getByRole("dialog", { name: `Connect your phone to this ${process.platform === "darwin" ? "Mac" : "computer"}?` });
   await expect(review).toBeVisible();
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await review.getByRole("button", { name: "Cancel", exact: true }).click();

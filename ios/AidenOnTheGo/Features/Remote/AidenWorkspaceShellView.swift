@@ -2013,7 +2013,7 @@ private struct AidenWorkspacesDirectoryView: View {
                     searchText.isEmpty ? "No Workspaces" : "No Matching Workspaces",
                     systemImage: searchText.isEmpty ? "folder" : "magnifyingglass",
                     description: Text(searchText.isEmpty
-                        ? "Create a workspace or add a Mac folder to get started."
+                        ? "Create a workspace or add a desktop folder to get started."
                         : "Try a different search term.")
                 )
                 .listRowBackground(Color.clear)
@@ -2063,7 +2063,7 @@ private struct AidenWorkspacesDirectoryView: View {
                     }
 
                     Button { isShowingFolderBrowser = true } label: {
-                        Label("Add Mac Folder", systemImage: "folder.badge.plus")
+                        Label("Add Desktop Folder", systemImage: "folder.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -2101,7 +2101,7 @@ private struct AidenWorkspacesDirectoryView: View {
             }
             .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
-            Text("Creates a workspace registry entry without a Mac folder. You can add a folder later from Aiden Agent.")
+            Text("Creates a workspace registry entry without a desktop folder. You can add a folder later from Aiden Agent.")
         }
         .confirmationDialog(
             "Create a managed scratch workspace?",
@@ -2121,7 +2121,7 @@ private struct AidenWorkspacesDirectoryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Aiden Agent will create and manage the worktree on your Mac.")
+            Text("Aiden Agent will create and manage the worktree on your desktop.")
         }
         .alert(
             "Rename Workspace",
@@ -2156,7 +2156,7 @@ private struct AidenWorkspacesDirectoryView: View {
                     || coordinator.isMutating
             )
         } message: {
-            Text("This updates the workspace name in Aiden Agent on your Mac and paired clients. It does not rename the folder on disk.")
+            Text("This updates the workspace name in Aiden Agent on your desktop and paired clients. It does not rename the folder on disk.")
         }
         .alert(
             "Archive on This Device?",
@@ -2176,7 +2176,7 @@ private struct AidenWorkspacesDirectoryView: View {
                 workspacePendingFirstArchive = nil
             }
         } message: {
-            Text("This hides the workspace and its chats only on this iPhone or iPad. It stays available in Aiden Agent on your Mac and on other devices.")
+            Text("This hides the workspace and its chats only on this iPhone or iPad. It stays available in Aiden Agent on your desktop and on other devices.")
         }
         .alert(
             "Remove from Aiden Agent?",
@@ -2204,7 +2204,7 @@ private struct AidenWorkspacesDirectoryView: View {
             }
             .disabled(coordinator.connectionState != .connected || coordinator.isMutating)
         } message: {
-            Text("This unregisters the workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your Mac, but its chats will no longer be listed. Delete the folder separately in Finder if you no longer need it.")
+            Text("This unregisters the workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your desktop, but its chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
         }
     }
 
@@ -2581,7 +2581,7 @@ private struct AidenWorkspaceSettingsView: View {
                     } footer: {
                         Text(workspace.isManagedWorktree
                              ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
-                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your Mac, but its chats will no longer be listed.")
+                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your desktop, but its chats will no longer be listed.")
                     }
                 }
             }
@@ -2642,7 +2642,7 @@ private struct AidenWorkspaceSettingsView: View {
             } message: {
                 Text(workspace.isManagedWorktree
                      ? "This destructive Git operation is performed by Aiden Agent using its persisted worktree ownership record."
-                     : "The folder, its files, and chats remain on your Mac, but the chats will no longer be listed. Delete the folder separately in Finder if you no longer need it.")
+                     : "The folder, its files, and chats remain on your desktop, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
@@ -2933,7 +2933,7 @@ private struct AidenUsageView: View {
                 .foregroundStyle(palette.accent)
                 .frame(width: 28)
 
-            Text("Privacy-safe aggregates are recorded by Aiden Agent on your Mac. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
+            Text("Privacy-safe aggregates are recorded by Aiden Agent on your desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3133,7 +3133,7 @@ private struct AidenAppSettingsView: View {
             Form {
                 Section("Aiden Agent") {
                     LabeledContent(
-                        "Connected Mac",
+                        "Connected desktop",
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
                     Button {
@@ -3188,7 +3188,7 @@ private struct AidenAppSettingsView: View {
                         NavigationLink {
                             AidenMacTranscriptionSettingsView(coordinator: coordinator)
                         } label: {
-                            Label("Mac speech model", systemImage: "desktopcomputer")
+                            Label("Desktop speech model", systemImage: "desktopcomputer")
                         }
                     }
                 } header: {
@@ -3196,7 +3196,7 @@ private struct AidenAppSettingsView: View {
                 } footer: {
                     Text(
                         voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired Mac, and not retained. Text appears after you stop recording."
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired desktop, and not retained. Text appears after you stop recording."
                             : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                     )
                 }
@@ -3298,13 +3298,13 @@ private struct AidenMacTranscriptionSettingsView: View {
                     }
                 }
             } else if isLoading {
-                ProgressView("Loading Mac speech models…")
+                ProgressView("Loading desktop speech models…")
             }
             if let errorMessage {
                 Section { Text(errorMessage).foregroundStyle(.red) }
             }
         }
-        .navigationTitle("Mac Transcription")
+        .navigationTitle("Desktop Transcription")
         .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .task(id: downloadPollKey) {
@@ -3642,7 +3642,7 @@ private struct AidenFolderBrowserView: View {
                     }
                 }
             }
-            .navigationTitle("Add Mac Folder")
+            .navigationTitle("Add Desktop Folder")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

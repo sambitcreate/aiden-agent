@@ -127,7 +127,7 @@ export function MemorySettings() {
       </FieldSet>
       <Text as="p" variant="small" color="secondary" className="text-pretty">
         Turning memory off stops memory tools, prompt context, and new indexing. Existing approved
-        facts stay on this Mac and become available again if you turn it back on.
+        facts stay on this device and become available again if you turn it back on.
       </Text>
 
       <FieldSet title="Workspaces">

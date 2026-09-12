@@ -1,4 +1,8 @@
-#include <CommonCrypto/CommonDigest.h>
+#ifndef __APPLE__
+#define _GNU_SOURCE
+#endif
+
+#include "../shared/aiden-platform.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -6,7 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
 #include <sys/acl.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
@@ -21,6 +27,8 @@
 #define MAX_NAME_ATTEMPTS 32
 #define SHA256_HEX_BYTES 64
 #define MAX_PROVENANCE_BYTES 256
+#define MAX_LINUX_XATTR_NAMES_BYTES 4096
+#define MAX_LINUX_XATTR_VALUE_BYTES 65536
 #define STAGING_PREFIX ".aiden-subagent-file-"
 #define PROVENANCE_XATTR "com.apple.provenance"
 #define UNTRUSTED_READ_FLAGS                                                \
@@ -71,17 +79,7 @@ static int exclusive_regular(const struct stat *identity) {
 
 static int same_read_identity(const struct stat *left,
                               const struct stat *right) {
-  return S_ISREG(left->st_mode) && S_ISREG(right->st_mode) &&
-         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
-         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
-         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
-         left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
-}
-
-static int same_identity(const struct stat *left, const struct stat *right) {
+#ifdef __APPLE__
   return exclusive_regular(left) && exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
@@ -90,11 +88,40 @@ static int same_identity(const struct stat *left, const struct stat *right) {
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
          same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim) &&
+         same_timestamp(left->st_ctim, right->st_ctim);
+#endif
+}
+
+static int same_identity(const struct stat *left, const struct stat *right) {
+#ifdef __APPLE__
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
+         left->st_size == right->st_size &&
+         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
+         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim) &&
+         same_timestamp(left->st_ctim, right->st_ctim);
+#endif
 }
 
 /* renameatx_np may update ctime while preserving the underlying inode. */
 static int same_renamed_identity(const struct stat *left,
                                  const struct stat *right) {
+#ifdef __APPLE__
   return exclusive_regular(left) && exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
@@ -102,6 +129,13 @@ static int same_renamed_identity(const struct stat *left,
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return exclusive_regular(left) && exclusive_regular(right) &&
+         left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
+         left->st_gid == right->st_gid && left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim);
+#endif
 }
 
 static int same_file_object(const struct stat *left,
@@ -112,14 +146,21 @@ static int same_file_object(const struct stat *left,
 
 static int same_preserved_metadata(const struct stat *left,
                                    const struct stat *right) {
+#ifdef __APPLE__
   return (left->st_mode & (S_IFMT | 07777)) ==
              (right->st_mode & (S_IFMT | 07777)) &&
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
          left->st_flags == right->st_flags;
+#else
+  return (left->st_mode & (S_IFMT | 07777)) ==
+             (right->st_mode & (S_IFMT | 07777)) &&
+         left->st_uid == right->st_uid && left->st_gid == right->st_gid;
+#endif
 }
 
 static int same_renamed_entry(const struct stat *left,
                               const struct stat *right) {
+#ifdef __APPLE__
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_nlink == right->st_nlink &&
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
@@ -127,6 +168,13 @@ static int same_renamed_entry(const struct stat *left,
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+#else
+  return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+         left->st_mode == right->st_mode && left->st_nlink == right->st_nlink &&
+         left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
+         left->st_size == right->st_size &&
+         same_timestamp(left->st_mtim, right->st_mtim);
+#endif
 }
 
 /*
@@ -139,7 +187,11 @@ static int read_supported_xattrs(int descriptor,
                                  size_t *value_length, int *present) {
   *value_length = 0;
   *present = 0;
+#ifdef __APPLE__
   ssize_t names_length = flistxattr(descriptor, NULL, 0, 0);
+#else
+  ssize_t names_length = flistxattr(descriptor, NULL, 0);
+#endif
   if (names_length < 0)
     return -1;
   if (names_length == 0)
@@ -149,16 +201,22 @@ static int read_supported_xattrs(int descriptor,
   char *names = malloc((size_t)names_length);
   if (names == NULL)
     return -1;
-  ssize_t read_names =
-      flistxattr(descriptor, names, (size_t)names_length, 0);
+#ifdef __APPLE__
+  ssize_t read_names = flistxattr(descriptor, names, (size_t)names_length, 0);
+#else
+  ssize_t read_names = flistxattr(descriptor, names, (size_t)names_length);
+#endif
   int valid = read_names == names_length;
   size_t offset = 0;
   int count = 0;
   while (valid && offset < (size_t)names_length) {
     size_t remaining = (size_t)names_length - offset;
     size_t name_length = strnlen(names + offset, remaining);
-    if (name_length == remaining ||
-        strcmp(names + offset, PROVENANCE_XATTR) != 0) {
+    if (name_length == remaining
+#ifdef __APPLE__
+        || strcmp(names + offset, PROVENANCE_XATTR) != 0
+#endif
+    ) {
       valid = 0;
       break;
     }
@@ -166,8 +224,19 @@ static int read_supported_xattrs(int descriptor,
     offset += name_length + 1;
   }
   free(names);
-  if (!valid || count != 1)
+  if (!valid
+#ifdef __APPLE__
+      || count != 1
+#endif
+  )
     return 0;
+#ifndef __APPLE__
+  /* Linux xattrs are copied and compared in full during staging. The
+   * provenance fields are a macOS wire detail and remain absent here. */
+  (void)value;
+  (void)count;
+  return 1;
+#else
   ssize_t length =
       fgetxattr(descriptor, PROVENANCE_XATTR, NULL, 0, 0, 0);
   if (length < 0)
@@ -181,9 +250,11 @@ static int read_supported_xattrs(int descriptor,
   *value_length = (size_t)length;
   *present = 1;
   return 1;
+#endif
 }
 
 static int supported_metadata(int descriptor, const struct stat *identity) {
+#ifdef __APPLE__
   if (identity->st_flags != 0)
     return 0;
   unsigned char provenance[MAX_PROVENANCE_BYTES];
@@ -204,9 +275,198 @@ static int supported_metadata(int descriptor, const struct stat *identity) {
   if (entry_result == 0)
     return 0;
   return entry_error == EINVAL ? 1 : -1;
+#else
+  (void)identity;
+  unsigned char provenance[MAX_PROVENANCE_BYTES];
+  size_t provenance_length;
+  int provenance_present;
+  return read_supported_xattrs(descriptor, provenance, &provenance_length,
+                               &provenance_present);
+#endif
 }
 
+#ifndef __APPLE__
+static int linux_xattr_names(int descriptor, char **names,
+                             size_t *names_length) {
+  ssize_t length = flistxattr(descriptor, NULL, 0);
+  if (length < 0)
+    return -1;
+  if (length > MAX_LINUX_XATTR_NAMES_BYTES)
+    return 0;
+  char *result = malloc(length == 0 ? 1 : (size_t)length);
+  if (result == NULL)
+    return -1;
+  if (length > 0 && flistxattr(descriptor, result, (size_t)length) != length) {
+    free(result);
+    return -1;
+  }
+  *names = result;
+  *names_length = (size_t)length;
+  return 1;
+}
+
+static int linux_xattr_value(int descriptor, const char *name,
+                             unsigned char **value, size_t *value_length) {
+  ssize_t length = fgetxattr(descriptor, name, NULL, 0);
+  if (length < 0)
+    return errno == ENODATA ? 0 : -1;
+  if (length > MAX_LINUX_XATTR_VALUE_BYTES)
+    return -2;
+  unsigned char *result = malloc(length == 0 ? 1 : (size_t)length);
+  if (result == NULL)
+    return -1;
+  if (length > 0 &&
+      fgetxattr(descriptor, name, result, (size_t)length) != length) {
+    free(result);
+    return -1;
+  }
+  *value = result;
+  *value_length = (size_t)length;
+  return 1;
+}
+
+static int linux_named_xattr_matches(int left, int right, const char *name) {
+  unsigned char *left_value = NULL;
+  unsigned char *right_value = NULL;
+  size_t left_length = 0;
+  size_t right_length = 0;
+  int left_result = linux_xattr_value(left, name, &left_value, &left_length);
+  int right_result =
+      linux_xattr_value(right, name, &right_value, &right_length);
+  int matches = left_result == 1 && right_result == 1 &&
+                left_length == right_length &&
+                memcmp(left_value, right_value, left_length) == 0;
+  free(left_value);
+  free(right_value);
+  if (left_result < 0 || right_result < 0)
+    return left_result == -2 || right_result == -2 ? 0 : -1;
+  return matches ? 1 : 0;
+}
+
+static int linux_xattrs_match(int left, int right) {
+  char *left_names = NULL;
+  char *right_names = NULL;
+  size_t left_length = 0;
+  size_t right_length = 0;
+  int left_result = linux_xattr_names(left, &left_names, &left_length);
+  int right_result = linux_xattr_names(right, &right_names, &right_length);
+  if (left_result != 1 || right_result != 1) {
+    free(left_names);
+    free(right_names);
+    return left_result == 0 || right_result == 0 ? 0 : -1;
+  }
+  size_t offset = 0;
+  int matches = 1;
+  size_t left_count = 0;
+  while (matches && offset < left_length) {
+    size_t name_length = strnlen(left_names + offset, left_length - offset);
+    if (name_length == left_length - offset ||
+        linux_named_xattr_matches(left, right, left_names + offset) != 1) {
+      matches = 0;
+      break;
+    }
+    left_count += 1;
+    offset += name_length + 1;
+  }
+  offset = 0;
+  size_t right_count = 0;
+  while (matches && offset < right_length) {
+    size_t name_length = strnlen(right_names + offset, right_length - offset);
+    if (name_length == right_length - offset) {
+      matches = 0;
+      break;
+    }
+    right_count += 1;
+    offset += name_length + 1;
+  }
+  free(left_names);
+  free(right_names);
+  return matches && left_count == right_count ? 1 : 0;
+}
+
+static int linux_copy_xattrs(int source, int destination) {
+  char *source_names = NULL;
+  size_t source_names_length = 0;
+  int source_result =
+      linux_xattr_names(source, &source_names, &source_names_length);
+  if (source_result != 1) {
+    free(source_names);
+    return source_result;
+  }
+  size_t offset = 0;
+  while (offset < source_names_length) {
+    const char *name = source_names + offset;
+    size_t name_length = strnlen(name, source_names_length - offset);
+    if (name_length == source_names_length - offset) {
+      free(source_names);
+      return 0;
+    }
+    int matches = linux_named_xattr_matches(source, destination, name);
+    if (matches < 0) {
+      free(source_names);
+      return -1;
+    }
+    if (matches == 0) {
+      unsigned char *value = NULL;
+      size_t value_length = 0;
+      int value_result =
+          linux_xattr_value(source, name, &value, &value_length);
+      if (value_result != 1 ||
+          fsetxattr(destination, name, value, value_length, 0) != 0) {
+        free(value);
+        free(source_names);
+        return value_result == -2 ? 0 : -1;
+      }
+      free(value);
+    }
+    offset += name_length + 1;
+  }
+
+  char *destination_names = NULL;
+  size_t destination_names_length = 0;
+  int destination_result = linux_xattr_names(
+      destination, &destination_names, &destination_names_length);
+  if (destination_result != 1) {
+    free(source_names);
+    free(destination_names);
+    return destination_result;
+  }
+  offset = 0;
+  while (offset < destination_names_length) {
+    const char *name = destination_names + offset;
+    size_t name_length = strnlen(name, destination_names_length - offset);
+    if (name_length == destination_names_length - offset) {
+      free(source_names);
+      free(destination_names);
+      return 0;
+    }
+    unsigned char *ignored = NULL;
+    size_t ignored_length = 0;
+    int exists = linux_xattr_value(source, name, &ignored, &ignored_length);
+    free(ignored);
+    if (exists == 0 && fremovexattr(destination, name) != 0 &&
+        errno != ENODATA) {
+      free(source_names);
+      free(destination_names);
+      return -1;
+    }
+    if (exists < 0) {
+      free(source_names);
+      free(destination_names);
+      return exists == -2 ? 0 : -1;
+    }
+    offset += name_length + 1;
+  }
+  free(source_names);
+  free(destination_names);
+  return linux_xattrs_match(source, destination);
+}
+#endif
+
 static int copy_supported_xattrs(int source, int destination) {
+#ifndef __APPLE__
+  return linux_copy_xattrs(source, destination);
+#else
   unsigned char source_value[MAX_PROVENANCE_BYTES];
   unsigned char destination_value[MAX_PROVENANCE_BYTES];
   size_t source_length;
@@ -229,9 +489,13 @@ static int copy_supported_xattrs(int source, int destination) {
     return -1;
   }
   return 1;
+#endif
 }
 
 static int matching_supported_xattrs(int left, int right) {
+#ifndef __APPLE__
+  return linux_xattrs_match(left, right);
+#else
   unsigned char left_value[MAX_PROVENANCE_BYTES];
   unsigned char right_value[MAX_PROVENANCE_BYTES];
   size_t left_length;
@@ -249,11 +513,15 @@ static int matching_supported_xattrs(int left, int right) {
                   memcmp(left_value, right_value, left_length) == 0)
              ? 1
              : 0;
+#endif
 }
 
 static int matches_expected_provenance(const struct Transaction *transaction,
                                        int descriptor) {
-  unsigned char value[MAX_PROVENANCE_BYTES];
+  // Linux intentionally reports the macOS provenance wire field as absent.
+  // Initialize the buffer so GCC can prove the short-circuited memcmp is safe
+  // under -O2 -Wmaybe-uninitialized as well as Clang.
+  unsigned char value[MAX_PROVENANCE_BYTES] = {0};
   size_t length;
   int present;
   if (read_supported_xattrs(descriptor, value, &length, &present) != 1)
@@ -1504,14 +1772,19 @@ static int serve(int root_fd, const char *root_path) {
 }
 
 static int parse_identity(const char *value, uint64_t *result) {
-  if (value == NULL || value[0] == '\0' || value[0] == '-')
+  if (value == NULL || value[0] == '\0')
     return -1;
-  errno = 0;
-  char *end = NULL;
-  unsigned long long parsed = strtoull(value, &end, 10);
-  if (errno != 0 || end == value || *end != '\0')
-    return -1;
-  *result = (uint64_t)parsed;
+  uint64_t parsed = 0;
+  for (const unsigned char *cursor = (const unsigned char *)value;
+       *cursor != '\0'; cursor += 1) {
+    if (*cursor < '0' || *cursor > '9')
+      return -1;
+    uint64_t digit = (uint64_t)(*cursor - '0');
+    if (parsed > (UINT64_MAX - digit) / 10U)
+      return -1;
+    parsed = parsed * 10U + digit;
+  }
+  *result = parsed;
   return 0;
 }
 

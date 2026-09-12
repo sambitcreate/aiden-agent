@@ -770,7 +770,7 @@ export class AidenRemoteChatService {
     if (result.imageArtifactRecoveryUnavailable) {
       throw new AidenRemoteServiceError(
         "operation_in_progress",
-        "This chat is waiting for image-artifact storage repair on the Mac.",
+        "This chat is waiting for image-artifact storage repair on the desktop.",
         409,
         true,
       );

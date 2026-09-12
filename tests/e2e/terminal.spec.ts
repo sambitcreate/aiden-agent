@@ -25,7 +25,7 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   await expect(drawer.locator(".ghostty-input")).toBeFocused();
   // With no selection, Cmd+C still belongs to macOS; it must not prefix the
   // next shell command with a literal "c" through Ghostty's key encoder.
-  await page.keyboard.press("Meta+C");
+  await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+C`);
   await page.keyboard.type("echo $((314159+271828)); pwd");
   await page.keyboard.press("Enter");
 

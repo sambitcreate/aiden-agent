@@ -140,7 +140,7 @@ import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-comma
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
 import type {
   AidenRemoteConnectionMode,
-  AidenRemotePairingBootstrapView,
+  AidenRemoteBeginPairingResult,
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import {
@@ -346,7 +346,7 @@ export const scheduleApi = {
 export const profileApi = {
   get: () => invoke<Profile>("profile:get"),
   setName: (name: string) => invoke<Profile>("profile:setName", name),
-  shareImage: (dataUrl: string) => invoke<void>("profile:shareImage", dataUrl),
+  shareImage: (dataUrl: string) => invoke<boolean>("profile:shareImage", dataUrl),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────
@@ -488,7 +488,7 @@ export const telegramApi = {
 export const aidenRemoteApi = {
   setupPairing: (transport: "lan" | "tailscale", expected: {
     instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode;
-  }) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
+  }) => invoke<AidenRemoteBeginPairingResult>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
@@ -507,7 +507,7 @@ export const aidenRemoteApi = {
   takeOverTailscale: (token: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleTakeOver", token),
   beginPairing: (transport: "lan" | "tailscale") =>
-    invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
+    invoke<AidenRemoteBeginPairingResult>("remote:beginPairing", transport),
   closePairing: (pairingSessionId: string) =>
     invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>

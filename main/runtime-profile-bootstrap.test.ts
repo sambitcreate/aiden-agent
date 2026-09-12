@@ -5,12 +5,21 @@ import test from "node:test";
 test("runtime identity is configured before the main module can take its lock", () => {
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const graphicsFlags = bootstrap.indexOf("applyLinuxGraphicsFlags()");
   const configure = bootstrap.indexOf("configureRuntimeProfile()");
   const loadMain = bootstrap.indexOf('await import("./index.js")');
 
-  assert.ok(configure >= 0 && loadMain > configure);
+  assert.ok(graphicsFlags >= 0 && configure > graphicsFlags && loadMain > configure);
   assert.match(main, /app\.requestSingleInstanceLock\(\)/u);
   assert.doesNotMatch(main, /app\.setName\(/u);
+});
+
+test("Linux Wayland launches disable Chromium Vulkan before the main module loads", () => {
+  const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+  const flags = readFileSync(new URL("./linux-graphics-flags.ts", import.meta.url), "utf8");
+  assert.match(bootstrap, /applyLinuxGraphicsFlags\(\)/u);
+  assert.match(flags, /appendSwitch\("disable-features", disableVulkanFeature\(app\.commandLine\.getSwitchValue\("disable-features"\)\)\)/u);
+  assert.doesNotMatch(flags, /disableHardwareAcceleration/u);
 });
 
 test("the Electron build enters through the profile bootstrap", () => {
@@ -49,7 +58,7 @@ test("development shortcut registration is gated without removing in-app menu ac
 test("visible main-process branding derives from the configured app name", () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(main, /title: app\.getName\(\)/u);
-  assert.match(main, /label: app\.getName\(\)/u);
+  assert.match(main, /appName: app\.getName\(\)/u);
   assert.match(main, /app\.dock\?\.setBadge\("DEV"\)/u);
 });
 
@@ -69,6 +78,40 @@ test("optional background services cannot close an already visible desktop windo
   assert.match(
     main.slice(scheduleStart, updaterStart),
     /try \{[\s\S]*?await telegramService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
+});
+
+test("Apple Foundation Models status probes remain behind the host capability policy", () => {
+  const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const chatTitle = readFileSync(
+    new URL("./services/chat-title.ts", import.meta.url),
+    "utf8",
+  );
+  const titleProviders = readFileSync(
+    new URL("./handlers/title-providers.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    main,
+    /function refreshFoundationModelsStatus[\s\S]*?if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\) return;[\s\S]*?foundationModelsConnection\.status/u,
+  );
+  assert.doesNotMatch(
+    main,
+    /app\.on\("activate", \(\) => \{\s*void foundationModelsConnection\.status/u,
+  );
+  assert.match(
+    chatTitle,
+    /!hostPlatformCapabilities\(\)\.appleFoundationModels\s+\? null\s+: await foundationModelsConnection\.status/u,
+  );
+  assert.match(
+    chatTitle,
+    /generateFoundationModelsRename[\s\S]*?if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\)/u,
+  );
+  assert.equal(
+    titleProviders.match(
+      /if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\) return null;/gu,
+    )?.length,
+    2,
   );
 });
 

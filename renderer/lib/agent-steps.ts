@@ -31,7 +31,7 @@ const VERBS: Record<string, VerbPair> = {
   web_search: { active: "Searching the web", complete: "Searched the web" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
-  computer_use: { active: "Using Mac", complete: "Used Mac" },
+  computer_use: { active: "Using computer", complete: "Used computer" },
   browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
   browser_status: { active: "Checking browser", complete: "Checked browser" },
   browser_open: { active: "Opening browser", complete: "Opened browser" },
@@ -195,7 +195,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     changes ? `${running ? "editing" : "edited"} ${plural(changes, "file")}` : "",
     commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
     web ? plural(web, "web search", "web searches") : "",
-    mac ? plural(mac, "Mac action") : "",
+    mac ? plural(mac, "Computer Use action") : "",
     compactions ? (running ? "compacting context" : "compacted context") : "",
     other ? plural(other, "tool call") : "",
   ].filter(Boolean);

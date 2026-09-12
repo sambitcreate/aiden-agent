@@ -246,7 +246,7 @@ final class AidenBotChatToolsModel {
     func readOnlyMessage(coordinator: AidenRemoteCoordinator, hostAllowsMutations: Bool) -> String? {
         if bot?.health == .archived { return "Archived bots are read-only until restored." }
         if bot?.health == .degraded || bot?.health == .unavailable {
-            return "This bot's access needs repair on your Mac before it can work."
+            return "This bot's access needs repair on your paired desktop before it can work."
         }
         if coordinator.connectionState != .connected { return "Offline — reconnect to change this chat's access." }
         if coordinator.installationStore.activeInstallation?.canWriteBots != true {
@@ -593,7 +593,7 @@ struct AidenBotChatAccessSheetView: View {
             if model.draft?.mode == .custom {
                 optionSection(
                     title: "Connections",
-                    description: "Connected apps and services already configured on your Mac.",
+                    description: "Connected apps and services already configured on your paired desktop.",
                     options: catalog.connections,
                     keyPath: \.connectionIDs,
                     ceiling: bot.access.custom.map { Set($0.connectionIds) }
@@ -611,7 +611,7 @@ struct AidenBotChatAccessSheetView: View {
                     .disabled(!canChangeDraft)
                 optionSection(
                     title: "Other abilities",
-                    description: "Additional capabilities enabled for this bot on your Mac.",
+                    description: "Additional capabilities enabled for this bot on your paired desktop.",
                     options: catalog.otherCapabilities,
                     keyPath: \.otherCapabilityIDs,
                     ceiling: bot.access.custom.map { Set($0.otherCapabilityIds) }
@@ -664,7 +664,7 @@ struct AidenBotChatAccessSheetView: View {
                 ContentUnavailableView(
                     "Access Unavailable",
                     systemImage: "lock.trianglebadge.exclamationmark",
-                    description: Text(model.errorMessage ?? "Reconnect to your Mac to load this chat's access.")
+                    description: Text(model.errorMessage ?? "Reconnect to your paired desktop to load this chat's access.")
                 )
             }
         }
@@ -713,7 +713,7 @@ struct AidenBotChatAccessSheetView: View {
     ) -> some View {
         Section {
             if options.isEmpty {
-                Text("None configured on this Mac").foregroundStyle(palette.secondary)
+                Text("None configured on the paired desktop").foregroundStyle(palette.secondary)
             } else {
                 ForEach(options) { option in
                     Toggle(isOn: optionBinding(
@@ -937,7 +937,7 @@ final class AidenBotConversationFilesModel {
         guard coordinator.isCurrent(grant.context) else { return }
         if case AidenRemoteClientError.server(_, let body) = error,
            body.code.rawValue == "revision_conflict" {
-            errorMessage = "This file changed on the Mac. Reload it before saving again."
+            errorMessage = "This file changed on the paired desktop. Reload it before saving again."
         } else if error is AidenRemoteClientError {
             errorMessage = "Files access changed. Return to the chat and open Files again."
         } else {
@@ -1104,8 +1104,8 @@ private struct AidenBotConversationFileEditorView: View {
                     } else if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the Mac") {
-                                Button("Reload from Mac") {
+                            if message.contains("changed on the paired desktop") {
+                                Button("Reload from desktop") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }

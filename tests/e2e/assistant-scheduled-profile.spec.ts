@@ -35,17 +35,11 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await taskSearch.fill("definitely-not-a-schedule");
   await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
-  // Drive the native value setter and input event directly. Empty Playwright
-  // fill can leave this controlled search unchanged on hosted Electron, while
-  // native select+Backspace can lose its selection. Keyboard navigation is
-  // covered independently.
-  await taskSearch.evaluate((element: HTMLInputElement) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
-    setter.call(element, "");
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const clearTaskSearch = page.getByRole("button", { name: "Clear scheduled task search" });
+  await clearTaskSearch.click();
   await expect(taskSearch).toHaveValue("");
+  await expect(taskSearch).toBeFocused();
+  await expect(clearTaskSearch).toHaveCount(0);
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Active", exact: true })).toHaveAttribute(

@@ -241,6 +241,11 @@ export async function runSubagentShellProductionInert(input: {
     helperErrorBytes += chunk.length;
     if (helperErrorBytes > 16 * 1024) child.kill("SIGKILL");
   });
+  // A helper that rejects its pinned root may close stdin before this process
+  // finishes the small control write. Its exit status remains authoritative;
+  // contain the resulting stream EPIPE so it cannot escape as an uncaught
+  // exception ahead of the verified close outcome.
+  child.stdin.on("error", () => undefined);
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve, reject) => {
       child.once("error", reject);

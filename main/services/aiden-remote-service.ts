@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
@@ -22,7 +23,7 @@ import type {
   AidenRemoteStateRegistry,
 } from "./aiden-remote-state.js";
 import type { AidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
-import { fetchTlsServerSpkiSha256 } from "./aiden-remote-tls-identity.js";
+import { fetchTlsServerSpkiSha256, classifyAidenRemoteTlsEndpointFailure } from "./aiden-remote-tls-identity.js";
 import type {
   AidenRemoteTailscaleController,
   AidenTailscaleConnectionStatus,
@@ -116,6 +117,7 @@ export function aidenRemoteBonjourServiceName(
 export interface AidenRemoteServiceOptions {
   state: AidenRemoteStateRegistry;
   appVersion: string;
+  botCapabilitiesSupported?: () => boolean;
   hostname?: string;
   loadTlsIdentity(): Promise<AidenRemoteTlsIdentity>;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
@@ -234,7 +236,7 @@ export interface AidenRemoteServiceStatus {
   tailscaleConnected: boolean;
   tailscaleInstalled: boolean;
   tailscaleRouteState: AidenTailscaleRouteState;
-  tailscaleErrorCode?: AidenTailscaleConnectionStatus["errorCode"];
+  tailscaleErrorCode?: AidenTailscaleConnectionStatus["errorCode"] | "permission_denied";
   pairedDeviceCount: number;
   approvedRootCount: number;
   errorCode?: "remote_port_in_use";
@@ -376,6 +378,92 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
   }
 }
 
+export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublisher {
+  private bonjour: Bonjour | null = null;
+  private generation = 0;
+
+  constructor(
+    private readonly log: (entry: AidenRemoteServiceLogEntry) => void = () => undefined,
+  ) {}
+
+  async start(
+    input: { instanceId: string; displayName: string; port: number },
+    onUnexpectedFailure: (error: Error) => void,
+  ): Promise<void> {
+    this.stop();
+    const generation = ++this.generation;
+    let ready = false;
+    let failed = false;
+    let rejectStartup: (error: Error) => void = () => undefined;
+    const startupFailure = new Promise<never>((_resolve, reject) => {
+      rejectStartup = reject;
+    });
+    const fail = (value: unknown) => {
+      if (failed || this.generation !== generation) return;
+      failed = true;
+      const error = value instanceof Error ? value : new Error(String(value));
+      this.log({
+        level: "warn",
+        event: "bonjour_failed",
+        details: { message: error.message },
+      });
+      if (!ready) rejectStartup(error);
+      else onUnexpectedFailure(error);
+    };
+    const bonjour = new Bonjour(undefined, fail);
+    this.bonjour = bonjour;
+    const service = bonjour.publish({
+      name: aidenRemoteBonjourServiceName(input.displayName, input.instanceId),
+      type: "aiden-agent",
+      protocol: "tcp",
+      port: input.port,
+      txt: { v: "1", instance: input.instanceId },
+    });
+    const readySignal = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Local discovery did not become ready in time.")),
+        3_000,
+      );
+      timer.unref();
+      service.once("up", () => {
+        clearTimeout(timer);
+        if (this.generation !== generation) {
+          reject(new Error("Local discovery was stopped before it became ready."));
+          return;
+        }
+        ready = true;
+        resolve();
+      });
+    });
+    await Promise.race([readySignal, startupFailure]).catch((error: unknown) => {
+      this.stop();
+      throw error;
+    });
+  }
+
+  stop(): void {
+    this.generation += 1;
+    const bonjour = this.bonjour;
+    this.bonjour = null;
+    bonjour?.destroy();
+  }
+}
+
+export function aidenRemoteBonjourBackend(
+  platform: NodeJS.Platform = process.platform,
+): "dns-sd" | "node" {
+  return platform === "darwin" ? "dns-sd" : "node";
+}
+
+export function createAidenRemoteBonjourPublisher(
+  log: (entry: AidenRemoteServiceLogEntry) => void = () => undefined,
+  platform: NodeJS.Platform = process.platform,
+): AidenRemoteBonjourPublisher {
+  return aidenRemoteBonjourBackend(platform) === "dns-sd"
+    ? new DnsSdAidenRemoteBonjourPublisher(log)
+    : new NodeAidenRemoteBonjourPublisher(log);
+}
+
 export class AidenRemoteService {
   private lanServer: HttpsServer | null = null;
   private tailscaleServer: HttpServer | null = null;
@@ -386,6 +474,7 @@ export class AidenRemoteService {
   private activeState: AidenRemoteStateDocument | null = null;
   private lastError: string | undefined;
   private lastErrorCode: "remote_port_in_use" | undefined;
+  private tailscalePermissionDenied = false;
   private setupInFlight = false;
   private operationTail: Promise<void> = Promise.resolve();
   private settleRemoteApi: (() => Promise<void>) | undefined;
@@ -425,6 +514,7 @@ export class AidenRemoteService {
         undefined,
         this.options.notifyPairingChanged,
         () => this.activeState?.displayName ?? state.displayName,
+        this.options.botCapabilitiesSupported,
       );
       const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
       this.settleRemoteApi = workspaceApi?.settle;
@@ -694,6 +784,10 @@ export class AidenRemoteService {
     this.tailscaleServer?.close();
   }
 
+  keepsApplicationAlive(): boolean {
+    return this.lanServer !== null || this.tailscaleServer !== null;
+  }
+
   async setEnabled(enabled: boolean): Promise<void> {
     return this.serialized(() => this.setEnabledInternal(enabled));
   }
@@ -724,6 +818,7 @@ export class AidenRemoteService {
     await this.options.state.setEnabled(false);
     this.lastError = undefined;
     this.lastErrorCode = undefined;
+    this.tailscalePermissionDenied = false;
     if (disconnectError) throw disconnectError;
   }
 
@@ -769,6 +864,7 @@ export class AidenRemoteService {
       await this.disconnectTailscaleInternal(current);
     }
     await this.options.state.setConnectionMode(connectionMode);
+    if (connectionMode === "lan") this.tailscalePermissionDenied = false;
     if (current.enabled) {
       if (!this.activeState || !this.lanServer || !this.tailscaleServer) {
         await this.startConfigured({ ...current, connectionMode });
@@ -830,7 +926,14 @@ export class AidenRemoteService {
   }
 
   async connectTailscale(): Promise<void> {
-    return this.serialized(() => this.connectTailscaleInternal());
+    return this.serialized(async () => {
+      try {
+        await this.connectTailscaleInternal();
+      } catch (error) {
+        if (error instanceof Error && error.message === "tailscale_permission_denied") return;
+        throw error;
+      }
+    });
   }
 
   private async connectTailscaleInternal(): Promise<void> {
@@ -853,11 +956,19 @@ export class AidenRemoteService {
       );
       ownership = undefined;
     }
-    await this.options.tailscale.connect(
-      target,
-      ownership,
-      (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
-    );
+    try {
+      await this.options.tailscale.connect(
+        target,
+        ownership,
+        (nextOwnership) => this.options.state.commitTailscaleOutcome(nextOwnership),
+      );
+      this.tailscalePermissionDenied = false;
+    } catch (error) {
+      if (error instanceof Error && error.message === "tailscale_permission_denied") {
+        this.tailscalePermissionDenied = true;
+      }
+      throw error;
+    }
   }
 
   async reviewTailscaleTakeover(): Promise<AidenTailscaleTakeoverReview> {
@@ -987,9 +1098,13 @@ export class AidenRemoteService {
       }
       if (!status.dnsName) throw new Error("Tailscale does not report a stable DNS name.");
       endpoint = `https://${status.dnsName}${AIDEN_REMOTE_BASE_PATH}`;
-      serverSpkiSha256 = await (
-        this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
-      )(status.dnsName, 443);
+      try {
+        serverSpkiSha256 = await (
+          this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
+        )(status.dnsName, 443);
+      } catch (error) {
+        throw classifyAidenRemoteTlsEndpointFailure(error);
+      }
     }
     const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
     try {
@@ -1026,7 +1141,7 @@ export class AidenRemoteService {
         // Changing a saved transport can strand existing devices. Keep that an
         // explicit advanced operation, rather than silently choosing both.
         if (mode !== current.connectionMode && (current.devices.length || current.tailscaleOwnership)) {
-          throw new Error("This Mac already has a saved connection. Use its current method, or review Connection settings before changing it.");
+          throw new Error("This computer already has a saved connection. Use its current method, or review Connection settings before changing it.");
         }
         if (["finishing", "awaiting_scan"].includes(this.pairingStatus()?.state ?? "")) {
           throw new Error("A phone connection is already open. Finish or close it before adding another device.");
@@ -1207,7 +1322,11 @@ export class AidenRemoteService {
       tailscaleConnected,
       tailscaleInstalled: tailscaleStatus.installed,
       tailscaleRouteState,
-      ...(tailscaleErrorCode ? { tailscaleErrorCode } : {}),
+      ...(this.tailscalePermissionDenied && !tailscaleConnected && !tailscaleErrorCode
+        ? { tailscaleErrorCode: "permission_denied" as const }
+        : tailscaleErrorCode
+          ? { tailscaleErrorCode }
+          : {}),
       pairedDeviceCount: state.devices.length,
       approvedRootCount: state.approvedRoots.length,
       ...(this.lastErrorCode ? { errorCode: this.lastErrorCode } : {}),

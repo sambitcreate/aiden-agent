@@ -25,12 +25,17 @@ export async function resolveNodePtySpawnHelperPaths(
   packageDir: string,
   readDirectory: (directory: string) => Promise<readonly string[]> = fs.readdir,
 ): Promise<string[]> {
-  const prebuildsDir = path.join(resolveNodePtyDiskPackageDir(packageDir), "prebuilds");
+  const diskPackageDir = resolveNodePtyDiskPackageDir(packageDir);
+  const compiledHelper = path.join(diskPackageDir, "build", "Release", "spawn-helper");
+  const prebuildsDir = path.join(diskPackageDir, "prebuilds");
   let entries: readonly string[];
   try {
     entries = await readDirectory(prebuildsDir);
   } catch {
-    return [];
+    return [compiledHelper];
   }
-  return entries.map((entry) => path.join(prebuildsDir, entry, "spawn-helper"));
+  return [
+    compiledHelper,
+    ...entries.map((entry) => path.join(prebuildsDir, entry, "spawn-helper")),
+  ];
 }

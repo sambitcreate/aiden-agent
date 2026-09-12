@@ -18,3 +18,9 @@ test("built-in providers show readiness beside the name without duplicating setu
   assert.doesNotMatch(statusBadge, /Set up/u);
   assert.match(builtinRows, /provider\.hasKey \? "Manage" : "Set up"/u);
 });
+
+test("an imported on-device title preference remains explicit on unsupported hosts", () => {
+  assert.match(source, /const titleProviderId = settings\.data\?\.chatTitleProviderId \?\? "automatic"/u);
+  assert.match(source, /<SelectItem value="apple-foundation-models" disabled>On-device only \(unavailable\)<\/SelectItem>/u);
+  assert.match(source, /Choose Automatic or Selected chat model to allow your selected model to generate titles/u);
+});

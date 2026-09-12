@@ -171,6 +171,33 @@ real preload bridge, use System Events to click the real native button by its
 exact accessibility label, and verify a post-start diagnostic event plus
 `uploadToServer: false`.
 
+## Linux desktop reconciliation
+
+- A long-lived platform branch can contain hundreds of duplicated feature commits while the platform port itself is one checkpoint. Preserve both histories in a merge commit, but build the result from the latest shared tree plus that checkpoint's intent; a normal textual merge lets stale parallel history overwrite newer features and multiplies conflicts.
+- A Linux Electron artifact with native Node modules cannot be truthfully accepted from a macOS build host. Build and inspect it on native x64/arm64 Linux runners, then install the generated DEB/RPM and smoke the executable; cross-target metadata checks alone do not prove the active `node-pty`, Sherpa ONNX, or C-helper layout.
+- Remote Access E2E must not assume Aiden's default private port is globally unused. Assert disabled state through the test process's own IPC snapshot, then derive the committed health-check port from that same installation after enablement so another running Aiden profile cannot create a false pass or failure.
+- Native Linux acceptance can look green while exercising stale macOS-built outputs or skipping behind a Darwin-only guard. The Linux suite must build both production and test helpers, run the real adapter-to-helper boundary, and launch a freshly installed package from an empty XDG profile.
+- A native generation token derived from `stat` is platform-shaped: Linux has no birth-time fields and emits seven components, while macOS emits nine. Validate those two exact wire shapes at the TypeScript boundary instead of assuming the macOS token or accepting every intermediate field count.
+- Compiling native helpers on a new distro can silently raise the package's glibc floor even when the Electron shell still launches. Inspect every packaged helper, `.node`, and `.so` symbol table and fail packaging above the declared baseline; avoid C-library parsers whose symbol version was retargeted by newer libc headers when a bounded local parser is straightforward.
+- Debian virtual packages can satisfy an unversioned `libasound2` dependency with an OSS compatibility shim that lacks Electron's required ALSA symbols. Use a versioned `libasound2t64 | libasound2` alternative so apt selects the real ALSA implementation on both time64 and older Debian families.
+- The legacy arm64 AppImage launcher links against the unversioned development name `libz.so`, so a normal desktop with only `libz.so.1` silently fails before Electron starts. Pin electron-builder's static AppImage runtime and execute the release artifact on a clean target-architecture system; installing `zlib` development files would only hide the defect.
+- A packaged dependency can retain Mach-O and PE files with a `.node` suffix beside the active Linux prebuild. Native compatibility verification must identify ELF magic before invoking `objdump`; the suffix alone is not an operating-system contract.
+- macOS-to-Linux Docker source transfers can materialize AppleDouble `._*` metadata sidecars. Playwright must ignore those names explicitly or it will parse a `._*.spec.ts` binary sidecar as JavaScript even though the real tests and application build are healthy.
+- A hermetic Electron E2E fixture can preserve `PATH` and locale yet still discard the display transport established by `xvfb-run`. On Linux, pass through only the X11/Wayland connection variables (`DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and `XDG_SESSION_TYPE`); when checking the child, account for the exact non-secret desktop/accessibility variables Chromium/GTK inject after launch while continuing to reject ambient credential variables.
+- electron-builder's RPM post-install script changes `chrome-sandbox` from the archived `0755` mode to `4755` when user namespaces are unavailable, so a clean `rpm --verify` reports one expected mode difference in containers. Accept only that exact line after separately proving `4755:root:root`; any additional RPM verification output remains fatal.
+- Fail-closed Linux secret storage must not make keyless local providers unusable. A keyless-to-keyless provider transition cannot expose or bind a secret, so save and portable-config reconciliation may bypass the secret backend for that exact case; any transition from or to a keyed connection still requires credential reconciliation.
+- Electron's conventional Linux `window-all-closed` quit policy conflicts with an explicitly enabled background Remote Access listener. Let a synchronously observed running listener own application lifetime after the last window closes; normal Linux last-window close still quits when no background service is active, and an explicit Quit still performs the complete shutdown drain.
+- A freshly authenticated Linux Tailscale daemon lets an unprivileged desktop app read status but rejects Serve writes until `sudo tailscale set --operator=$USER` is granted once. Recognize that exact CLI rejection only after confirming the Serve fingerprint stayed unchanged, then surface the remediation instead of collapsing it into an uncertain mutation.
+- Probing a Linux Tailscale node's own MagicDNS HTTPS name from that same OrbStack VM can time out even while another tailnet peer reaches it immediately. Hold the scoped route open and probe from a separate peer when accepting the iOS network direction; always verify the temporary handler and listener are gone afterward.
+- Darwin can deliver or coalesce a directory's already-queued creation notification after `fs.watch` registration. Before a watcher integration test acquires the lease whose invalidation it means to observe, establish a quiet baseline so a rapid follow-up edit is the event under test rather than a registration race.
+- Playwright's `fill("")` and `clear()` use the same select-and-delete path as a manual text-clearing test, so swapping among those APIs does not avoid an intermittent Electron/Xvfb deletion miss. When the product benefits from it, expose an accessible clear action and exercise that real user path while retaining an exact empty-value assertion.
+
+## Linux parity audit — 2026-09-11
+
+- The documented `.memory/` directory is absent in this checkout; used checked-in Linux documentation and plans for project context.
+- Linux support PR #71 is historically green but currently conflicts with main; stacked fixes PR #89 is separate and has failing verification/Linux jobs. Pulling the support branch alone does not include those fixes.
+- PR #89 hosted logs pinpoint TS2322 at `main/services/aiden-remote-service.ts:1181`: returned `permission_denied` is missing from the service status `tailscaleErrorCode` union, blocking macOS and both Linux verification jobs.
+
 ## Pi journal promotion recovery
 
 A promoted v4 journal may legitimately retain a `.v3-backup` after its migration
@@ -429,3 +456,94 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+- Phase 2 merge has 31 conflicts spanning shared features and Linux integrations; resolve by intent and inspect automatic merges, because branch histories duplicate prior feature work.
+
+- Package conflict resolution dropped the Linux-only `bonjour-service` dependency; restored the exact pinned version before rerunning remote tests.
+- Linux mobile revision-conflict text said "changed on the paired desktop" while recovery UI searched "changed on the desktop"; aligned the guard and added coverage.
+
+- Linux ARM64 Xvfb exposed hidden browser annotation-preview and recording startup timeouts despite macOS Electron passing; keep real target-platform interaction tests as an integration gate.
+
+- Current main AGENTS file still carried the older release-only models.dev wording. Reconciled it to the root user-provided manual-action policy alongside the source restoration; cache reads remain offline and runtime limits stay bundled.
+
+- 2026-09-12: libsecret low-level D-Bus encoding/path declarations require SECRET_API_SUBJECT_TO_CHANGE; strict native compilation caught the missing declaration before runtime verification.
+
+- 2026-09-12: Real Linux Settings acceptance exposed a stale “This Mac settings” test assertion; use the existing platform label. Node coverage injects NODE_V8_COVERAGE into fake helpers despite explicit spawn env, so assert and account for the instrumentation field.
+- 2026-09-12: Reusing a container snapshot with Xvfb state stalled xvfb-run readiness; a fresh explicit display restored the bounded Electron test.
+
+- 2026-09-12: ARM64 OrbStack recording reproduces outside Aiden; renderer SIGILL at cntd matches libyuv fab11704 (SME without SVE on Apple ARM). Environment disable flags are excluded from Chromium builds; requires an upstream-fixed Electron binary. Debugger used an isolated SYS_PTRACE container.
+
+- 2026-09-12: electron-updater quitAndInstall swallows installer failures; Linux handoff must track actual install result so protected shutdown still quits on failure. Real AppImage mount acceptance required fuse3 plus /dev/fuse and SYS_ADMIN in an isolated container.
+
+- 2026-09-12: Portal hold review caught ordinary shortcut reconciliation reclaiming its chord and async Settings writes lacking commit-time revision fencing. Fixed both with regression tests. Hosted x64 revealed native chrome leaves573px content in600px window, exposing ModelPad minimum-size overflow.
+
+- 2026-09-12: Linux empty-chat migration correctly preserved candidates because V2 subagent storage rejected native seven-field generations. Shared strict seven/nine-field validation fixes deletion/restart without weakening evidence requirements.
+
+- 2026-09-12: OrbStack kernel exposes capability,landlock,yama,bpf without SELinux. Fedora userspace in this host cannot validate enforcing SELinux admission; require a separately booted SELinux-capable kernel.
+
+- 2026-09-12: Providers header action group exceeded narrow Linux content by17px; max-width allows its existing wrap. Migration E2E seeded index while Electron could normalize/write it; moved disk setup after verified shutdown. Native setSize also precedes renderer resize, so geometry tests now await content width.
+
+- 2026-09-12: Isolated Fedora VM setup: Homebrew QEMU installation could not resolve a capstone bottle on macOS27; checking the official UTM bundle as a bounded alternative.
+
+- 2026-09-12: Fedora RPM CI reached the new portal suite but lacked dbus-run-session. Fedora44 provides it in dbus-daemon; add that explicit prerequisite rather than skip native acceptance.
+
+- 2026-09-12: Real GNOME50GlobalShortcuts rejected direct helperlaunch with NotAllowed: An app id is required. Privatebusmock didnotmodelhostRegistry registration; add fixedAidenDesktopID registration beforeportalrequests and validate realcompositor.
+
+- 2026-09-12: Fedora44 SELinux development interfaces expose dev_rw_null, not dev_read_write_null. Prototype base-policy compile failed safely and cleanup completed; checked installed interface before retry.
+
+- 2026-09-12: Scoped SELinux deny also blocks the root runner's unconfined-domain /proc reads. Keep the deny intact; native holder verifies its own domain before exposing its synthetic socket, while root uses service liveness for hardened restart evidence.
+
+- 2026-09-12: Fedora stock dontaudit suppresses unconfined reads of domain-labeled /proc files. SELinux probe now records this explicit evidence limit, requires exact-PID enforcing AVCs for file/socket, and avoids global -DB. Appended audit-byte capture avoids ausearch recent-window ambiguity.
+
+- 2026-09-12: GNOME 50.4 delivered Ctrl+D activation without release when Control was released first; plain F8 delivered both. Portal results expose only a human-readable description, so safe binding detection cannot use the requested accelerator. Keep GNOME hold unavailable until reliable release behavior can be established.
+
+- 2026-09-12: SELinux delegation probe could not use systemd-run --pipe because dbus-broker rejected forwarding SSH-origin descriptors. Dedicated synthetic report files avoid that unrelated path. An outgoing exec also hit fd/use denial on its executable before main; record this as a launch-policy limitation, and test fork/domain-change inheritance separately rather than count a failed launch as isolation.
+
+- 2026-09-12: Electron role overlay initially failed CIL set-expression compilation; corrected syntax and removed the temporary base module before retrying. The fixture now denies main execute_no_trans and explicitly transitions its shell/bin test commands, avoiding an Electron-only role check.
+
+- 2026-09-12: Fedora domtrans_pattern did not grant the target domain entrypoint permission. The first Electron role test failed zygote exec; loaded-policy inspection identified the missing child entrypoint. Added explicit fixture entrypoint declarations without disabling the sandbox. Stock policy reports memfd_class=0, so ordinary file-exec checks do not claim complete anonymous-memory execution coverage.
+
+- 2026-09-12: Electron zygote sets NoNewPrivs before exec. A diagnostic without the execute_no_trans subtraction launched but left zygote descendants in main_t, correctly failing role verification. Kernel-source review identified the dedicated main-to-child process2 nnp_transition permission; the next run restores execute_no_trans denial and tests that narrow transition grant. Extra GTK image-loader descendants also need inventory coverage.
+
+- 2026-09-12: With the narrow NNP transition grant, observed Electron children entered child_t and GUI/network/commands worked. The verifier still rejected a systemd cgroup snapshot that omitted main/Node processes despite live receipts. Treat cgroup membership as incomplete inventory; collect the dedicated fixture domains and pin processes with pidfds before cleanup. Desktop scope migration remains a production-containment concern.
+
+- 2026-09-12: Combined Electron IPC fixture needed matching Fedora nodejs22-devel N-API headers. The normal guest package transaction also updated OpenSSL 3.5.5 to 3.5.8; Electron and Node versions remained unchanged. Record this environment change with the next VM evidence.
+
+- 2026-09-12: Combined Electron IPC fixture initially lacked socket getopt permission for SO_PEERSEC label inspection. Added metadata access while retaining the protected read/write denial; subsequent actual-main/Node-utility IPC cells passed with one sender creating all four pairs.
+
+- 2026-09-12: Denying the native IPC sender access to its own executable caused startup failure after transition. Keep its required execute/map permission while denying outsider entry; final run 4 passed all cells and cleanup.
+
+- 2026-09-12: electron-builder mutates Linux payloads after afterPack: targets add update configuration, package-type and AppArmor files, and package installation can change chrome-sandbox mode. An inventory generated in afterPack would be stale. Inventory must cover the finalized extracted payload rather than exclude these files.
+
+- 2026-09-12: Fedora SSH became unavailable between phases; UTM reported the dedicated VM stopped. Restarted the existing VM before new acceptance and will recheck enforcing/session prerequisites. Earlier receipts remain scoped to their recorded runs.
+
+- 2026-09-12: UTM restart via its saved shortcut stalled before QEMU launch and timed out. Reopened the existing VM bundle with the verified mounted UTM app through Finder, then started it normally. SSH returned; SELinux is enforcing and GNOME session 3 resumed.
+
+- 2026-09-12: Broad runtime import searches matched generated browser scripts with extremely long lines. Subsequent source inspection excludes generated/injected files and caps line width to keep evidence readable.
+
+- 2026-09-12: Native staging cleanup initially combined O_PATH with the shared O_NONBLOCK flag. Unlike older open calls, openat2 rejects that combination; kernel 6.19 source confirms EINVAL. Separate metadata-open flags and cover failure cleanup before acceptance.
+
+- 2026-09-12: The real RPM contains a directory named `shared` that Fedora labels `container_ro_file_t` through a filename transition even beneath a `var_lib_t` staging store. Synthetic trees missed this. The stager must set and restore an exact creation context around fresh destination objects instead of accepting arbitrary transitioned labels or globally relabeling the host.
+
+- 2026-09-12: Native managed-payload tests link libselinux and are registered in Linux contracts. Ubuntu CI/release therefore need `libselinux1-dev`; the Fedora contract container needs `libselinux-devel` plus its Rust toolchain explicitly rather than relying on runner state.
+
+- 2026-09-12: Both phase-17 reviewers found that temporary-generation `mkdirat` happened just before a fallible descriptor reopen and before cleanup was armed. A reopen failure could leave a private `.staging-*` directory. Make creation transactional and inject the post-mkdir/pre-open failure in the root suite.
+
+- 2026-09-12: Fedora native staging tests required cargo/rust/rust-std-static 1.98.1, acl 2.4.0 (libacl upgraded from 2.3.2), libgit2 1.9.7, libssh2 1.11.1 and llhttp 9.3.1. Transaction retained in /tmp/aiden-phase17-dnf.log; SELinux remains enforcing.
+- 2026-09-12: The disposable Fedora UTM bundle lost its application association after suspension, so opening it stalled until Finder explicitly selected the verified mounted UTM 4.7.5 app and resumed the suspended VM. Confirm SSH and `getenforce` before rerunning root acceptance.
+
+- 2026-09-12: Opening an untrusted source pathname for reading before fstat could touch a raced device. The stager now classifies through O_PATH first, then reopens only its own pinned regular-file descriptor through fixed procfs, with identity checks. Strict caller-path resolution remains separate from that intentional self-descriptor operation.
+- 2026-09-12: The existing release workflow already builds Linux packages on both native architectures, but the latest public release predates that work and contains only arm64 macOS assets. Keep the standalone installer-build workflow non-publishing and make Intel Mac selection fail explicitly until a signed x64 artifact has passed release acceptance.
+- 2026-09-12: An absolute `sysctl` path made Rosetta selection hard to exercise with the installer's command-level fixture. Keep standard discovery commands on the controlled `PATH`; reserve absolute paths for macOS verification and installation tools whose identity matters.
+- 2026-09-12: Initial cross-platform installer tests covered selection but exposed two trust gaps on inspection: `/etc/os-release` matching omitted the `=` delimiter, and macOS download-only returned before Apple verification. Cover the real token shape and authenticate platform artifacts before every success exit.
+- 2026-09-12: The standalone installer test passed under Node while scoped ESLint still rejected implicit Node globals. Import `process` and `Buffer` explicitly so the registered release suite and lint use the same module contract.
+- 2026-09-12: OrbStack's `orb run` parser rejects a standalone `--` separator. Use `orb run -p -w ABSOLUTE_PATH sh ./install.sh ...`; the real Ubuntu plan then selected the x64 DEB filename.
+- 2026-09-12: Real signed-DMG download-only acceptance passed but macOS 27 deprecated `hdiutil attach`. Use `diskutil image attach --readOnly --nobrowse --mountPoint` for attachment while retaining bounded detach cleanup.
+- 2026-09-12: Both installer reviewers found the root-owned Mac staging directory could not be inspected by the caller, its predictable backup path could collide, fresh-install verification lacked rollback, and the AppImage used a predictable followed staging path. Use one exclusive transaction directory per install, expose the root-owned Mac directory as traverse-only for verification, track promotion independently of backup existence, and reject non-regular destinations.
+- 2026-09-12: Linux AppImage promotion uses GNU `mv -T` and `ln -T` to make a raced directory fail instead of changing destination semantics. The macOS-hosted Linux fixture must emulate those Linux flags rather than silently weakening the production command.
+- 2026-09-12: Shell cleanup traps can run between an external move and the next assignment. Arm rollback state before every filesystem mutation, and retain the private transaction directory if restoring the prior app fails.
+- 2026-09-12: A missing-tool fixture that retains `/usr/bin` is host-dependent because Ubuntu Actions preinstalls `gh`. Build a closed fixture PATH from explicit tool symlinks so the absence assertion means the same thing on macOS and Linux.
+- 2026-09-12: Closing a fixture PATH also hides the shell executable from Node's process launcher. Invoke the known `/bin/sh` directly while keeping commands inside the test process constrained to the fixture tools.
+- 2026-09-12: Green Pullfrog status can coexist with newly posted or older unresolved review threads. Query GraphQL `reviewThreads` at the exact head and triage every unresolved comment before closure.
+- 2026-09-12: A minimal native-helper transfer to the Fedora fixture must include `native/shared/aiden-platform.h`; the source-relative include is not supplied by the JavaScript build wrapper.
+- 2026-09-12: The first SELinux metadata regression changed only UID, so a GID mismatch produced the expected conflict before label copying. Matching both identities showed Fedora permits `bin_t` preservation; use a denied file capability to exercise the fail-closed copy path.

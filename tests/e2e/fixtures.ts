@@ -82,6 +82,13 @@ const APP_ENV_PASSTHROUGH = [
   "TZ",
   "USER",
 ] as const;
+const LINUX_DISPLAY_ENV_PASSTHROUGH = [
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_TYPE",
+] as const;
 const PI_AMBIENT_AUTH_ENV_NAMES = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_BEARER_TOKEN_BEDROCK",
@@ -96,7 +103,20 @@ const PI_AMBIENT_AUTH_ENV_NAMES = new Set([
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
 ]);
-const OS_INJECTED_ENV_NAMES = new Set(["__CF_USER_TEXT_ENCODING"]);
+const OS_INJECTED_ENV_NAMES = new Set([
+  "__CF_USER_TEXT_ENCODING",
+  // Chromium/GTK add these inside the launched Linux process even when they
+  // are absent from electron.launch's explicit environment.
+  ...(process.platform === "linux"
+    ? [
+        "CHROME_DESKTOP",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "FC_FONTATIONS",
+        "GDK_BACKEND",
+        "NO_AT_BRIDGE",
+      ]
+    : []),
+]);
 const CREDENTIAL_ENV_NAME =
   /(?:^|_)(?:API_KEY|ACCESS_KEY(?:_ID)?|TOKEN|CREDENTIALS?|SECRET(?:_ACCESS)?_KEY|PASSWORD)$/u;
 
@@ -139,7 +159,8 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
-  relaunch: () => Promise<Page>;
+  /** Mutate startup fixtures only after the previous Electron process has exited. */
+  relaunch: (beforeLaunch?: () => Promise<void>) => Promise<Page>;
 };
 
 type AidenE2eOptions = {
@@ -384,7 +405,11 @@ async function closeMockLmStudio(mock: MockLmStudio): Promise<void> {
 
 function isolatedAppEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
-  for (const key of APP_ENV_PASSTHROUGH) {
+  const passthrough =
+    process.platform === "linux"
+      ? [...APP_ENV_PASSTHROUGH, ...LINUX_DISPLAY_ENV_PASSTHROUGH]
+      : APP_ENV_PASSTHROUGH;
+  for (const key of passthrough) {
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
   }
@@ -805,10 +830,11 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
-        relaunch: async () => {
+        relaunch: async (beforeLaunch) => {
           const previous = app;
           app = undefined;
           await closeAiden(previous);
+          await beforeLaunch?.();
           return launch();
         },
       };

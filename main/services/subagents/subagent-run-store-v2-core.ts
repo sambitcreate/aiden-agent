@@ -20,6 +20,7 @@ import {
 } from "./subagent-run-store-core.js";
 import {
   createNativeSubagentRunStoreStorage,
+  isSubagentRunStoreGeneration as safeGeneration,
   SubagentRunStoreStorageError,
   type SubagentRunStoreGeneration,
   type SubagentRunStoreStorage,
@@ -125,9 +126,7 @@ function positiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
-function safeGeneration(value: unknown): value is SubagentRunStoreGeneration {
-  return value === "missing" || (typeof value === "string" && /^[0-9a-f]+(?:-[0-9a-f]+){8}$/u.test(value));
-}
+
 
 function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
   if (

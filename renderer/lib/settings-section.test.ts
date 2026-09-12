@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  availableSettingsDestinations,
   parseSettingsSearch,
   parseSettingsSection,
   SETTINGS_DESTINATIONS,
 } from "./settings-section.js";
+
+test("capability-aware settings destinations hide Computer Use everywhere", () => {
+  assert.equal(
+    availableSettingsDestinations({ computerUse: false }).some(
+      (destination) => destination.id === "computerUse",
+    ),
+    false,
+  );
+  assert.equal(
+    availableSettingsDestinations({ computerUse: true }).some(
+      (destination) => destination.id === "computerUse",
+    ),
+    true,
+  );
+});
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
   assert.equal(parseSettingsSection("modelData"), "modelData");

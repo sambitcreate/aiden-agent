@@ -309,6 +309,18 @@ test("production spawn-helper discovery reads only the unpacked ASAR directory",
 
   assert.deepEqual(reads, [unpackedPrebuilds]);
   assert.deepEqual(helpers, [
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "node-pty",
+      "build",
+      "Release",
+      "spawn-helper",
+    ),
     path.join(unpackedPrebuilds, "darwin-arm64", "spawn-helper"),
     path.join(unpackedPrebuilds, "darwin-x64", "spawn-helper"),
   ]);
@@ -333,7 +345,19 @@ test("spawn-helper discovery handles node_modules.asar and absent prebuilds", as
     throw new Error("missing");
   });
 
-  assert.deepEqual(helpers, []);
+  assert.deepEqual(helpers, [
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "node_modules.asar.unpacked",
+      "node-pty",
+      "build",
+      "Release",
+      "spawn-helper",
+    ),
+  ]);
   assert.deepEqual(reads, [
     path.join(
       "/Applications",

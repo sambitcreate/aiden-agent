@@ -2,13 +2,14 @@
   "name": "aiden-agent",
   "version": "0.40.0",
   "private": true,
-  "description": "A macOS AI workspace agent for local and hosted models",
+  "description": "A desktop AI workspace agent for local and hosted models",
   "keywords": [
     "ai-agent",
     "developer-tools",
     "electron",
     "lm-studio",
     "local-ai",
+    "linux",
     "macos",
     "mcp",
     "ollama",
@@ -20,6 +21,8 @@
     "url": "https://github.com/sambitcreate/aiden-agent/issues"
   },
   "author": "Sambit Biswas",
+  "license": "MIT",
+  "desktopName": "com.sambitcreate.aiden-agent.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/sambitcreate/aiden-agent.git"
@@ -27,10 +30,10 @@
   "type": "module",
   "main": "build/main/index.js",
   "scripts": {
-    "build": "npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && vite build && node scripts/verify-gemini-live-worklet.mjs && node scripts/verify-ghostty-terminal-assets.mjs && npm run build:electron",
+    "build": "npm run build:global-shortcuts-portal && npm run build:secret-service-authority && npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && vite build && node scripts/verify-gemini-live-worklet.mjs && node scripts/verify-ghostty-terminal-assets.mjs && npm run build:electron",
     "computer-use:vendor": "node scripts/vendor-cua-driver.mjs",
-    "build:native": "npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --required",
-    "build:native:optional": "npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --optional",
+    "build:native": "npm run build:global-shortcuts-portal && npm run build:secret-service-authority && npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --required",
+    "build:native:optional": "npm run build:global-shortcuts-portal && npm run build:secret-service-authority && npm run build:worktree-remover && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --optional",
     "build:bot-inbox-writer": "node scripts/build-bot-inbox-writer.mjs",
     "build:subagent-file-mutator": "node scripts/build-subagent-file-mutator.mjs",
     "build:subagent-shell-runner": "node scripts/build-subagent-shell-runner.mjs",
@@ -39,7 +42,7 @@
     "build:electron": "node scripts/patch-pi-oauth-branding.mjs && node scripts/build-electron.mjs",
     "dev": "npm run build:native:optional && npm run build:electron && concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
-    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/prepare-macos-dev-runtime.mjs --run",
+    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && node scripts/run-development-runtime.mjs",
     "dev:brand": "node scripts/prepare-macos-dev-runtime.mjs",
     "lint": "eslint .",
     "postinstall": "node scripts/patch-electron-builder-keychain.mjs && node scripts/patch-pi-oauth-branding.mjs && node scripts/vendor-generative-ui-libs.mjs",
@@ -58,7 +61,7 @@
     "ios:asc-monitor": "node scripts/ios-asc-monitor.mjs",
     "ios:activitykit-process-proof": "node scripts/ios-live-activity-process-proof.mjs",
     "test:ios-release": "ruby ios/ci/select_testflight_build_number_test.rb && node --test scripts/check-ios-testflight-policy.test.mjs scripts/check-ios-app-store-metadata.test.mjs scripts/check-ios-shipping-target.test.mjs scripts/ios-asc-monitor.test.mjs scripts/ios-live-activity-process-proof.test.mjs",
-    "test:branding": "tsx --test main/runtime-mode.test.ts main/runtime-profile-core.test.ts main/runtime-profile-bootstrap.test.ts main/services/app-updater-core.test.ts && node --test scripts/prepare-ci-release.test.mjs scripts/prepare-macos-dev-runtime.test.mjs scripts/check-release-consumers.test.mjs scripts/check-ci-policy.test.mjs scripts/patch-pi-oauth-branding.test.mjs scripts/patch-electron-builder-keychain.test.mjs scripts/publish-github-release.test.mjs",
+    "test:branding": "tsx --test main/runtime-mode.test.ts main/runtime-profile-core.test.ts main/runtime-profile-bootstrap.test.ts main/linux-wayland-vulkan-core.test.ts main/services/app-updater-core.test.ts main/services/app-updater-linux.test.ts && node --test scripts/prepare-ci-release.test.mjs scripts/prepare-macos-dev-runtime.test.mjs scripts/check-release-consumers.test.mjs scripts/check-ci-policy.test.mjs scripts/install.test.mjs scripts/patch-pi-oauth-branding.test.mjs scripts/patch-electron-builder-keychain.test.mjs scripts/publish-github-release.test.mjs scripts/prepare-linux-update-feed.test.mjs",
     "test:scheduled": "tsx --test main/handlers/scheduled-tasks-parse.test.ts main/services/assistant/mcp-tool.test.ts main/services/assistant/tool-loop-guard.test.ts main/services/mcp-selection.test.ts main/services/scheduled-settings-core.test.ts main/services/schedule-guard.test.ts main/services/schedule-notification.test.ts main/services/schedule-service-core.test.ts main/services/schedule-store.test.ts main/services/schedule-script.test.ts main/services/schedule-tool.test.ts renderer/components/scheduled-task-editor.test.tsx renderer/lib/scheduled-task-view.test.ts",
     "test:artificial-analysis": "tsx --test main/services/artificial-analysis-cache.test.ts main/services/artificial-analysis-runtime-core.test.ts main/services/artificial-analysis-catalog-core.test.ts main/services/provider-model-info-core.test.ts renderer/lib/settings-section.test.ts",
     "test:model-insights": "tsx --test main/services/openrouter-benchmark.test.ts main/services/models.test.ts main/services/provider-model-info-core.test.ts main/handlers/ipc-contract.test.ts",
@@ -70,6 +73,7 @@
     "test:todo": "tsx --test main/services/rpiv-todo/*.test.ts renderer/shared/todo.test.ts renderer/components/todo-panel.test.tsx main/services/generation-timeline.test.ts main/handlers/ipc-contract.test.ts main/handlers/chats.test.ts renderer/lib/ipc-stream.test.ts",
     "test:btw": "tsx --test main/services/rpiv-btw/*.test.ts renderer/shared/btw.test.ts renderer/components/btw-card.test.tsx",
     "test:advisor": "tsx --test renderer/shared/advisor.test.ts main/services/advisor-context.test.ts main/services/advisor-attempt-store.test.ts main/services/advisor-runtime.test.ts main/services/advisor-integration.test.ts",
+    "test:pi-extensions": "npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor",
     "test:generative-ui": "tsx --test main/services/generative-ui-html.test.ts main/services/generative-ui-extension.test.ts main/services/generative-ui-artifact-store.test.ts main/services/generative-ui-host-libraries.test.ts main/services/generative-ui-protocol.test.ts renderer/shared/chat-artifacts.test.ts renderer/shared/generative-ui.test.ts && node --test scripts/vendor-generative-ui-libs.test.mjs && playwright test --config=playwright.generative-ui.config.ts --fail-on-flaky-tests",
     "test:google-provider": "tsx --test main/services/anthropic-provider.test.ts main/services/google-provider.test.ts main/services/model-runtime-core.test.ts main/services/models.test.ts main/services/provider-config-migration-core.test.ts main/services/chat-store-core.test.ts main/services/empty-chat-migration.test.ts main/services/chat-first-message-commit.test.ts main/services/schedule-store.test.ts renderer/lib/google-provider-migration.test.ts",
     "test:config-recovery": "tsx --test main/services/mcp-oauth-client-metadata.test.ts main/services/secret-map-core.test.ts main/services/provider-credential-rotation-core.test.ts main/services/legacy-pi-credential-migration-core.test.ts main/services/mcp-credential-cleanup-core.test.ts main/services/mcp-oauth-operation.test.ts main/services/mcp-oauth-session.test.ts main/services/mcp-oauth-store-core.test.ts",
@@ -106,9 +110,9 @@
     "pi-upgrade:advance": "node --import tsx scripts/pi-upgrade-advance.mjs",
     "pretest:bots": "npm run build:bot-inbox-writer && node scripts/build-bot-inbox-writer.mjs --test && node --test scripts/bot-inbox-writer.test.mjs && tsx --test main/services/bot-share-image-tool.test.ts main/services/bot-inbound-attachment-inbox.test.ts main/services/vision-analysis-tool.test.ts",
     "test:telegram": "tsx --test main/services/telegram/telegram-profile-mutation-fence.test.ts main/services/telegram/telegram-controls.test.ts main/services/telegram/telegram-inbound.test.ts main/services/telegram/telegram-outbound.test.ts main/services/telegram/telegram-queue.test.ts main/services/telegram/telegram-markdown.test.ts main/services/telegram/telegram-bot-api.test.ts main/services/telegram/telegram-turn.test.ts main/services/telegram/telegram-session.test.ts main/services/telegram/telegram-service-core.test.ts main/services/telegram/telegram-workspace-core.test.ts main/services/telegram/telegram-activity.test.ts main/services/telegram/telegram-profile-config.test.ts main/services/telegram/telegram-extension-registry.test.ts main/services/telegram/telegram-thread-store.test.ts main/services/telegram/telegram-ownership.test.ts main/services/telegram/telegram-agent-tools.test.ts main/services/telegram/telegram-bot-binding-store.test.ts main/services/telegram/telegram-bot-chat-lifecycle.test.ts main/services/telegram/telegram-bot-binding-reconciliation.test.ts main/services/telegram/telegram-bot-binding-validation.test.ts main/services/telegram/telegram-bot-binding-authority.test.ts renderer/lib/telegram-workspace-options.test.ts",
-    "test:bots": "tsx --test main/services/telegram/telegram-bot-chat-lifecycle.test.ts main/services/telegram/telegram-bot-binding-reconciliation.test.ts main/services/telegram/telegram-bot-binding-validation.test.ts main/services/telegram/telegram-bot-binding-authority.test.ts main/services/bot-avatar-generator-core.test.ts main/services/bot-avatar-operation-registry.test.ts main/services/bot-avatar-store.test.ts main/services/bot-store-core.test.ts main/services/bot-chat-store.test.ts main/services/bot-mutation-gate.test.ts main/services/bot-inbox-projection.test.ts main/services/bot-system-prompt.test.ts main/services/bot-generation-preparation.test.ts main/services/bot-inbound-attachment-home.test.ts main/services/bot-file-tool-router.test.ts main/services/bot-tool-authority.test.ts main/services/bot-capability-store-core.test.ts main/services/bot-capability-store.test.ts main/services/bot-capability-state-checkpoint.test.ts main/services/bot-capability-keychain-anchor.test.ts main/services/bot-capability-lease.test.ts main/services/bot-runtime-inventory-lease.test.ts main/services/bot-runtime-inventory-publication.test.ts main/services/bot-runtime-authority.test.ts main/services/bot-capability-catalog-core.test.ts main/services/bot-capability-bindings.test.ts main/services/bot-capability-key-store.test.ts main/services/bot-capability-migration-seal.test.ts main/services/bot-capability-incarnation-store.test.ts main/services/bot-capability-inventory-ports.test.ts main/services/bot-capability-production-shape.test.ts main/services/bot-mcp-inventory.test.ts main/services/bot-skill-inventory.test.ts main/services/bot-skill-content-watcher.test.ts main/services/bot-managed-workspace-core.test.ts main/services/bot-lifecycle-journal-core.test.ts main/services/bot-application-service.test.ts main/handlers/bot-params.test.ts main/handlers/bots.contract.test.ts renderer/main/bots-view.test.tsx renderer/lib/model-picker-data.test.ts renderer/lib/command-system-core.test.ts renderer/shared/bot-capabilities.test.ts",
+    "test:bots": "tsx --test main/services/telegram/telegram-bot-chat-lifecycle.test.ts main/services/telegram/telegram-bot-binding-reconciliation.test.ts main/services/telegram/telegram-bot-binding-validation.test.ts main/services/telegram/telegram-bot-binding-authority.test.ts main/services/bot-avatar-generator-core.test.ts main/services/bot-avatar-operation-registry.test.ts main/services/bot-avatar-store.test.ts main/services/bot-store-core.test.ts main/services/bot-chat-store.test.ts main/services/bot-mutation-gate.test.ts main/services/bot-inbox-projection.test.ts main/services/bot-system-prompt.test.ts main/services/bot-generation-preparation.test.ts main/services/bot-inbound-attachment-home.test.ts main/services/bot-file-tool-router.test.ts main/services/bot-tool-authority.test.ts main/services/bot-capability-store-core.test.ts main/services/bot-capability-store.test.ts main/services/bot-capability-state-checkpoint.test.ts main/services/bot-capability-keychain-anchor.test.ts main/services/bot-capability-secret-service-anchor.test.ts main/services/bot-capability-lease.test.ts main/services/bot-runtime-inventory-lease.test.ts main/services/bot-runtime-inventory-publication.test.ts main/services/bot-runtime-authority.test.ts main/services/bot-capability-catalog-core.test.ts main/services/bot-capability-bindings.test.ts main/services/bot-capability-key-store.test.ts main/services/bot-capability-migration-seal.test.ts main/services/bot-capability-incarnation-store.test.ts main/services/bot-capability-inventory-ports.test.ts main/services/bot-capability-production-shape.test.ts main/services/bot-mcp-inventory.test.ts main/services/bot-skill-inventory.test.ts main/services/bot-skill-content-watcher.test.ts main/services/bot-managed-workspace-core.test.ts main/services/bot-lifecycle-journal-core.test.ts main/services/bot-application-service.test.ts main/handlers/bot-params.test.ts main/handlers/bots.contract.test.ts renderer/main/bots-view.test.tsx renderer/lib/model-picker-data.test.ts renderer/lib/command-system-core.test.ts renderer/shared/bot-capabilities.test.ts",
     "test:bots:coverage": "node scripts/run-registered-tests-with-coverage.mjs test:bots",
-    "test:voice": "tsx --test main/services/transcription-core.test.ts main/services/gemini-live-transcription-core.test.ts main/services/dictation-coordinator.test.ts main/services/dictation-paste.test.ts main/services/parakeet-protocol.test.ts main/services/parakeet-process-core.test.ts main/services/parakeet-transcription-lane.test.ts renderer/shared/voice-models.test.ts renderer/shared/gemini-usage-scope.test.ts renderer/components/settings/gemini-voice-setup.test.tsx renderer/lib/accessibility-permission-core.test.ts renderer/lib/accessibility-refresh.test.ts renderer/lib/dictation-operation-gate.test.ts renderer/lib/gemini-recorded-retry.test.ts renderer/lib/live-pcm-capture.test.ts renderer/lib/voice-recorder-core.test.ts renderer/lib/wav-audio.test.ts",
+    "test:voice": "tsx --test main/services/dictation-hold-settings.test.ts main/services/linux-dictation-portal.test.ts main/services/transcription-core.test.ts main/services/gemini-live-transcription-core.test.ts main/services/dictation-coordinator.test.ts main/services/dictation-paste.test.ts main/services/parakeet-protocol.test.ts main/services/parakeet-process-core.test.ts main/services/parakeet-transcription-lane.test.ts renderer/shared/voice-models.test.ts renderer/shared/gemini-usage-scope.test.ts renderer/components/settings/gemini-voice-setup.test.tsx renderer/lib/accessibility-permission-core.test.ts renderer/lib/accessibility-refresh.test.ts renderer/lib/dictation-operation-gate.test.ts renderer/lib/gemini-recorded-retry.test.ts renderer/lib/live-pcm-capture.test.ts renderer/lib/voice-recorder-core.test.ts renderer/lib/wav-audio.test.ts",
     "test:diagnostics": "tsx --test main/services/diagnostics-contract.test.ts main/services/diagnostic-health.test.ts main/services/diagnostic-journal.test.ts main/services/diagnostic-support.test.ts main/services/dev-log.test.ts main/services/process-diagnostics.test.ts main/services/renderer-crash-recovery.test.ts main/services/renderer-diagnostic-rate.test.ts main/services/subagents/subagent-runtime-diagnostics.test.ts renderer/components/settings/diagnostics-settings.test.tsx && node --test scripts/diagnostic-policy.test.mjs",
     "diagnostics:failure-receipt": "node scripts/write-diagnostic-failure-receipt.mjs",
     "test": "tsx --test main/services/mcp-oauth-client-metadata.test.ts main/handlers/assistant-parse.test.ts main/services/assistant/system-prompt.test.ts main/services/chat-activity-core.test.ts main/services/chat-generation-start.test.ts main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/empty-chat-migration.test.ts main/services/chat-first-message-commit.test.ts main/services/codex-provider.test.ts main/services/coding-tools.test.ts main/services/config-store-core.test.ts main/services/computer-use/computer-use-foundation.test.ts main/services/computer-use/computer-use-tool.test.ts main/services/computer-use/generation-gate.test.ts main/services/computer-use/safety.test.ts main/services/computer-use/settings-core.test.ts main/services/computer-use/status-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/terminal.test.ts main/services/terminal-history.test.ts main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/secret-map-core.test.ts main/services/dev-log.test.ts main/services/process-diagnostics.test.ts main/services/dictation-coordinator.test.ts main/services/dictation-paste.test.ts main/services/dictation-cleanup-core.test.ts main/services/dictation-hotkey.test.ts main/services/dictation-key-state.test.ts main/services/dictation-keycode.test.ts main/services/parakeet-protocol.test.ts main/services/parakeet-process-core.test.ts main/services/foundation-models-connection.test.ts main/services/foundation-models-connection-core.test.ts main/services/gemini-context-cache.test.ts main/services/generation-bound-connection-cache.test.ts main/services/generation-context.test.ts main/services/generation-messages.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/model-runtime-core.test.ts main/services/models.test.ts main/services/mcp-oauth-operation.test.ts main/services/mcp-oauth-session.test.ts main/services/mcp-presets.test.ts renderer/shared/plugin-catalog.test.ts main/services/pi-credential-store-core.test.ts main/services/pi-provider-contract.test.ts main/services/profile-share-core.test.ts main/services/profile-share-files.test.ts main/services/profile.test.ts main/services/provider-auth-flow-core.test.ts main/services/provider-auth-owner.test.ts main/services/provider-key-policy.test.ts main/services/provider-list-core.test.ts main/services/provider-artwork-core.test.ts main/services/provider-artwork.test.ts main/services/quit-barrier.test.ts main/services/scratch-workspace.test.ts main/services/skills-discovery.test.ts main/services/tool-approval.test.ts main/services/local-runtime-status.test.ts main/services/usage-store-core.test.ts main/services/workspace-files.test.ts main/windows/pill-window-security.test.ts renderer/components/assistant/use-assistant-chat.test.ts renderer/components/assistant/assistant-ui.test.tsx renderer/components/activity-feed.test.tsx renderer/components/environment-subagents-contract.test.ts renderer/components/subagents-panel.test.tsx renderer/components/chat-sidebar.test.tsx renderer/components/composer.test.tsx renderer/lib/chat-message-queue.test.ts renderer/lib/chat-draft.test.ts renderer/main/chat-transition.test.tsx renderer/components/usage/profile-share-card.test.tsx renderer/lib/accessibility-refresh.test.ts renderer/lib/agent-activity.test.ts renderer/lib/chat-activity.test.ts renderer/lib/assistant-dock.test.ts renderer/lib/assistant-motion-contract.test.ts renderer/lib/dialog-motion-contract.test.ts renderer/lib/scrollbar-gutter-contract.test.ts renderer/lib/text-entry-focus-contract.test.ts renderer/lib/chat-deletion-cache.test.ts renderer/lib/chat-terminal-sync.test.ts renderer/lib/ipc-stream.test.ts renderer/lib/chat-title-reveal.test.ts renderer/lib/codex-auth-session.test.ts renderer/lib/codex-provider-cache.test.ts renderer/lib/composer-placeholder.test.ts renderer/lib/computer-use-notice.test.ts renderer/lib/dictation-operation-gate.test.ts renderer/lib/media-recorder-stop.test.ts renderer/lib/dictation-vad.test.ts renderer/lib/dictation-sounds.test.ts renderer/lib/editor-preference.test.ts renderer/lib/environment-panel-layout.test.ts renderer/lib/subagent-view-state.test.ts renderer/lib/truncate-path.test.ts renderer/lib/mcp-preset-state.test.ts renderer/components/settings/mcp-settings.test.tsx renderer/components/settings/mcp-preset-icons.test.ts renderer/lib/model-display.test.ts renderer/lib/model-picker-data.test.ts renderer/lib/profile-share-data.test.ts renderer/lib/sidebar-chat-shortcuts.test.ts renderer/lib/usage-profile-data.test.ts renderer/shared/appearance.test.ts renderer/components/interface-polish.test.tsx renderer/shared/provider-deployment.test.ts main/handlers/ipc-contract.test.ts main/handlers/chat.parse.test.ts main/handlers/voice-codec.test.ts main/handlers/phase2-parse.test.ts scripts/apple-developer-tools.test.mjs scripts/check-macos-release.test.mjs scripts/computer-use-packaged-acceptance.test.mjs scripts/configure-electron-fuses.test.mjs scripts/model-snapshot-core.test.mjs scripts/prepare-macos-dev-runtime.test.mjs scripts/prepare-macos-package-output.test.mjs scripts/run-macos-distribution.test.mjs scripts/sign-macos.test.mjs scripts/hide-dmg-support-files.test.mjs scripts/update-model-capabilities.test.mjs scripts/vendor-cua-driver.test.mjs scripts/verify-macos-package.test.mjs && npm run test:telegram && npm run test:worktree-remover:native && npm run test:computer-use:native && npm run test:settings-design",
@@ -124,6 +128,8 @@
     "format": "oxfmt .",
     "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run generative-ui:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
+    "package:linux": "npm run build && electron-builder --linux dir --config.forceCodeSigning=false --config.directories.output=release/linux-development --publish never",
+    "package:linux:verify": "node scripts/verify-linux-package.mjs release/linux-development",
     "release:preflight": "node scripts/check-macos-release.mjs",
     "release:check-consumers": "node scripts/check-release-consumers.mjs",
     "release:verify": "node scripts/verify-macos-package.mjs --release",
@@ -139,7 +145,17 @@
     "prevcc:evaluate": "npm run build:vcc",
     "vcc:evaluate": "node --import tsx scripts/pi-vcc-evaluation.mjs",
     "test:settings-design": "tsx --test renderer/lib/workspace-path-display.test.ts renderer/components/settings/settings-design.test.tsx renderer/shared/appearance.test.ts renderer/components/chat-sidebar.test.tsx renderer/components/settings/memory-settings.test.tsx",
-    "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx"
+    "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --config.forceCodeSigning=false --config.directories.output=release/linux-distribution --publish never",
+    "test:linux-native": "npm run test:global-shortcuts-portal && npm run build:secret-service-authority && node --test scripts/secret-service-authority.test.mjs && node scripts/build-worktree-remover.mjs && node scripts/build-worktree-remover.mjs --test && node --test scripts/worktree-remover.test.mjs && node scripts/build-bot-inbox-writer.mjs && node scripts/build-bot-inbox-writer.mjs --test && node --test scripts/bot-inbox-writer.test.mjs && node scripts/build-subagent-run-store.mjs && node scripts/build-subagent-run-store.mjs --test && node --test scripts/subagent-run-store.test.mjs && tsx --test main/services/subagents/subagent-run-store-io.test.ts && node scripts/build-subagent-file-mutator.mjs && node scripts/build-subagent-file-mutator.mjs --test && node --test scripts/subagent-file-mutator.test.mjs && node scripts/build-subagent-shell-runner.mjs && node scripts/build-subagent-shell-runner.mjs --test && tsx --test main/services/subagents/subagent-shell-runner-io.test.ts",
+    "test:linux-contracts": "tsx --test main/application-lifecycle-core.test.ts main/desktop-cli-core.test.ts main/linux-wayland-vulkan-core.test.ts main/handlers/bots-platform-contract.test.ts main/services/aiden-remote-platform-contract.test.ts main/services/application-menu-core.test.ts main/services/computer-use/platform.test.ts main/services/dictation-platform.test.ts main/services/external-editors.test.ts main/services/host-platform-capabilities.test.ts main/services/models-dev-live-app-policy.test.ts main/services/profile-share-files.test.ts main/services/provider-key-policy.test.ts main/services/secure-storage-core.test.ts main/services/telegram/telegram-bot-binding-platform.test.ts main/windows/main-window-options.test.ts main/windows/pill-window-platform.test.ts renderer/components/environment-subagents-contract.test.ts renderer/lib/command-system-core.test.ts renderer/shared/keybindings.test.ts && node --test scripts/native-c-build-core.test.mjs scripts/configure-electron-fuses.test.mjs scripts/verify-linux-package.test.mjs scripts/linux-payload-inventory.test.mjs scripts/linux-managed-payload.test.mjs scripts/linux-computer-use-host-preflight.test.mjs scripts/linux-selinux-boundary-probe/verify.test.mjs scripts/linux-selinux-boundary-probe/cleanup.test.mjs scripts/linux-electron-role-probe/verify.test.mjs scripts/linux-electron-role-probe/cleanup.test.mjs scripts/linux-protected-ipc-probe/verify.test.mjs scripts/linux-protected-ipc-probe/cleanup.test.mjs",
+    "test:tailscale-live": "tsx scripts/aiden-remote-tailscale-live-acceptance.ts",
+    "build:secret-service-authority": "node scripts/build-secret-service-authority.mjs",
+    "test:bot-authority": "tsx --test main/services/bot-capability-keychain-anchor.test.ts main/services/bot-capability-secret-service-anchor.test.ts",
+    "test:secret-service-integration": "npm run build:secret-service-authority && node scripts/run-secret-service-integration.mjs",
+    "build:global-shortcuts-portal": "node scripts/build-global-shortcuts-portal.mjs",
+    "test:global-shortcuts-portal": "npm run build:global-shortcuts-portal && node --test scripts/global-shortcuts-portal.test.mjs",
+    "computer-use:linux-host-preflight": "node scripts/linux-computer-use-host-preflight.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
@@ -152,6 +168,7 @@
     "acorn": "8.17.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "bonjour-service": "1.4.4",
     "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -241,6 +258,7 @@
     "asarUnpack": [
       "**/node_modules/sherpa-onnx-node/**",
       "**/node_modules/sherpa-onnx-darwin-*/**",
+      "**/node_modules/sherpa-onnx-linux-*/**",
       "**/node_modules/node-pty/**"
     ],
     "directories": {
@@ -263,14 +281,6 @@
       {
         "from": "resources/app-icon-monochrome.png",
         "to": "app-icon-monochrome.png"
-      },
-      {
-        "from": "resources/computer-use/cua-driver-artifact.json",
-        "to": "computer-use/cua-driver-artifact.json"
-      },
-      {
-        "from": "resources/computer-use/LICENSE.cua-driver.md",
-        "to": "computer-use/LICENSE.cua-driver.md"
       },
       {
         "from": "resources/generative-ui",
@@ -298,6 +308,16 @@
         "Contents/Helpers/aiden-subagent-file-mutator",
         "Contents/Helpers/aiden-subagent-shell-runner",
         "Contents/Helpers/aiden-worktree-remover"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/computer-use/cua-driver-artifact.json",
+          "to": "computer-use/cua-driver-artifact.json"
+        },
+        {
+          "from": "resources/computer-use/LICENSE.cua-driver.md",
+          "to": "computer-use/LICENSE.cua-driver.md"
+        }
       ],
       "extraFiles": [
         {
@@ -337,6 +357,82 @@
         "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation.",
         "NSAppleEventsUsageDescription": "Aiden Agent pastes dictated text into the app you are typing in."
       }
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "linux": {
+      "artifactName": "Aiden-Agent-${version}-${arch}-linux.${ext}",
+      "category": "Development",
+      "description": "A desktop AI workspace agent for local and hosted models",
+      "executableName": "aiden-agent",
+      "icon": "resources/app-icon.png",
+      "maintainer": "Sambit Biswas",
+      "synopsis": "Private AI workspace agent",
+      "syncDesktopName": true,
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/native/aiden-worktree-remover",
+          "to": "Helpers/aiden-worktree-remover"
+        },
+        {
+          "from": "build/native/aiden-bot-inbox-writer",
+          "to": "Helpers/aiden-bot-inbox-writer"
+        },
+        {
+          "from": "build/native/aiden-subagent-run-store",
+          "to": "Helpers/aiden-subagent-run-store"
+        },
+        {
+          "from": "build/native/aiden-subagent-file-mutator",
+          "to": "Helpers/aiden-subagent-file-mutator"
+        },
+        {
+          "from": "build/native/aiden-subagent-shell-runner",
+          "to": "Helpers/aiden-subagent-shell-runner"
+        },
+        {
+          "from": "build/native/aiden-secret-service-authority",
+          "to": "Helpers/aiden-secret-service-authority"
+        },
+        {
+          "from": "build/native/aiden-global-shortcuts-portal",
+          "to": "Helpers/aiden-global-shortcuts-portal"
+        }
+      ]
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2t64 (>= 1.0.17) | libasound2 (>= 1.0.17)"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
+        "at-spi2-core",
+        "(libuuid or libuuid1)",
+        "(libsecret or libsecret-1-0)",
+        "(alsa-lib or libasound2)"
+      ]
     },
     "dmg": {
       "artifactName": "Aiden-Agent-Beta-${version}-${arch}.${ext}",

@@ -177,7 +177,7 @@ test("main test lifecycle builds the native worktree remover before GitService t
 });
 
 test("descriptor remover deletes nested owned entries without following symlinks", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "owned");
   const outside = path.join(value.root, "outside");
   await mkdir(path.join(value.target, "nested"));
@@ -191,7 +191,7 @@ test("descriptor remover deletes nested owned entries without following symlinks
 });
 
 test("descriptor remover preserves a file created after its stable scan", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "late-file");
   await writeFile(path.join(value.target, "original"), "owned\n");
   const marker = path.join(value.root, "after-scan");
@@ -208,7 +208,7 @@ test("descriptor remover preserves a file created after its stable scan", async 
 });
 
 test("descriptor remover preserves a nested file created after its full-tree scan", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "late-nested-file");
   const nested = path.join(value.target, "nested");
   await mkdir(nested);
@@ -230,7 +230,7 @@ test("descriptor remover preserves a nested file created after its full-tree sca
 });
 
 test("entry isolation preserves replacements at the exact removal boundary", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   for (const kind of ["file", "symlink", "directory"]) {
     await t.test(kind, async (subtest) => {
       const value = await fixture(subtest, `entry-swap-${kind}`);
@@ -291,7 +291,7 @@ test("entry isolation preserves replacements at the exact removal boundary", asy
 });
 
 test("descriptor remover never traverses a replacement swapped in before root isolation", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "root-swap");
   await writeFile(path.join(value.target, "owned"), "owned\n");
   const marker = path.join(value.root, "before-root");
@@ -312,7 +312,7 @@ test("descriptor remover never traverses a replacement swapped in before root is
 });
 
 test("descriptor remover authorizes its isolated root and preserves a replacement at the original path", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "root-authorization-swap");
   await writeFile(path.join(value.target, "owned"), "owned\n");
   const marker = path.join(value.root, "after-root-scan");
@@ -332,7 +332,7 @@ test("descriptor remover authorizes its isolated root and preserves a replacemen
 });
 
 test("descriptor remover restores its quarantine when authorization aborts", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "authorization-abort");
   await writeFile(path.join(value.target, "owned"), "owned\n");
 
@@ -345,7 +345,7 @@ test("descriptor remover restores its quarantine when authorization aborts", asy
 });
 
 test("descriptor remover restores its quarantine after a malformed authorization", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "authorization-malformed");
   await writeFile(path.join(value.target, "owned"), "owned\n");
 
@@ -358,7 +358,7 @@ test("descriptor remover restores its quarantine after a malformed authorization
 });
 
 test("descriptor remover resumes an already isolated authorization root", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "authorization-recovery");
   await writeFile(path.join(value.target, "owned"), "owned\n");
   await rename(value.target, value.authorizationTarget);
@@ -372,7 +372,7 @@ test("descriptor remover resumes an already isolated authorization root", async 
 });
 
 test("descriptor remover resumes only the remaining entries from its durable manifest", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "partial-manifest-recovery");
   await writeFile(path.join(value.target, "a-tracked"), "first\n");
   await writeFile(path.join(value.target, "b-tracked"), "second\n");
@@ -401,7 +401,7 @@ test("descriptor remover resumes only the remaining entries from its durable man
 });
 
 test("descriptor remover resumes a crash-durable isolated non-empty directory", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "isolated-directory-recovery");
   const nested = path.join(value.target, "a-nested");
   await mkdir(path.join(nested, "deeper"), { recursive: true });
@@ -432,7 +432,7 @@ test("descriptor remover resumes a crash-durable isolated non-empty directory", 
 });
 
 test("descriptor remover rejects and preserves data injected into an isolated directory", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "isolated-directory-injection");
   const nested = path.join(value.target, "a-nested");
   await mkdir(nested);
@@ -462,7 +462,7 @@ test("descriptor remover rejects and preserves data injected into an isolated di
 });
 
 test("descriptor remover rejects and preserves replacements inside an isolated directory", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "isolated-directory-replacement");
   const nested = path.join(value.target, "a-nested");
   await mkdir(nested);
@@ -486,7 +486,7 @@ test("descriptor remover rejects and preserves replacements inside an isolated d
 });
 
 test("isolated entry deletion preserves source replacements at its atomic capture boundary", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   for (const kind of ["file", "directory"]) {
     await t.test(kind, async (subtest) => {
       const value = await fixture(subtest, `isolated-delete-capture-${kind}`);
@@ -544,7 +544,7 @@ test("isolated entry deletion preserves source replacements at its atomic captur
 });
 
 test("root deletion preserves a replacement at its final atomic capture boundary", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "root-delete-capture");
   await writeFile(path.join(value.target, "authorized"), "authorized original\n");
   const marker = path.join(value.root, "before-root-delete-capture");
@@ -567,7 +567,7 @@ test("root deletion preserves a replacement at its final atomic capture boundary
 });
 
 test("descriptor remover rejects the wrong root identity without changing contents", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "wrong-identity");
   const sentinel = path.join(value.target, "sentinel");
   await writeFile(sentinel, "must survive\n");
@@ -579,8 +579,26 @@ test("descriptor remover rejects the wrong root identity without changing conten
   assert.equal((await lstat(sentinel)).isFile(), true);
 });
 
+test("descriptor remover rejects non-canonical or overflowing identity numbers", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const value = await fixture(t, "malformed-identity");
+  const sentinel = path.join(value.target, "sentinel");
+  await writeFile(sentinel, "must survive\n");
+
+  for (const invalidDevice of ["+1", " 1", "18446744073709551616"]) {
+    assert.deepEqual(
+      await runRemover({
+        ...value,
+        identity: { ...value.identity, dev: invalidDevice },
+      }),
+      { code: 64, stderr: "invalid_input" },
+    );
+  }
+  assert.equal((await lstat(sentinel)).isFile(), true);
+});
+
 test("manifest finalizer resumes every singleton capture stage", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   for (const stage of ["manifest", "finalizing", "deleting"]) {
     await t.test(stage, async (subtest) => {
       const value = await manifestFixture(subtest, `singleton-${stage}`, stage);
@@ -597,7 +615,7 @@ test("manifest finalizer resumes every singleton capture stage", async (t) => {
 });
 
 test("manifest finalizer treats an already absent sidecar as durably complete", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "absent");
   await rm(value.paths.manifest);
 
@@ -609,7 +627,7 @@ test("manifest finalizer treats an already absent sidecar as durably complete", 
 });
 
 test("manifest finalizer preserves conflicting capture stages", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "conflict");
   await writeFile(value.paths.finalizing, value.content, { mode: 0o600 });
 
@@ -623,7 +641,7 @@ test("manifest finalizer preserves conflicting capture stages", async (t) => {
 });
 
 test("manifest finalizer preserves a destination collision", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "destination-collision");
   const marker = path.join(value.root, "before-finalizing");
   const result = runManifestFinalizer(value.root, value.token, value.digest, {
@@ -643,7 +661,7 @@ test("manifest finalizer preserves a destination collision", async (t) => {
 });
 
 test("manifest finalizer preserves a replacement captured after verification", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "source-replacement");
   const marker = path.join(value.root, "before-source-capture");
   const result = runManifestFinalizer(value.root, value.token, value.digest, {
@@ -665,7 +683,7 @@ test("manifest finalizer preserves a replacement captured after verification", a
 });
 
 test("manifest finalizer preserves a deleting-stage replacement at its atomic capture boundary", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "delete-source-replacement", "deleting");
   const marker = path.join(value.root, "before-delete-source-capture");
   const result = runManifestFinalizer(value.root, value.token, value.digest, {
@@ -691,7 +709,7 @@ test("manifest finalizer preserves a deleting-stage replacement at its atomic ca
 });
 
 test("production remover ignores test-only pause controls", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await fixture(t, "production");
   await writeFile(path.join(value.target, "owned"), "owned\n");
   const marker = path.join(value.root, "must-not-exist");
@@ -721,7 +739,7 @@ test("production remover ignores test-only pause controls", async (t) => {
 });
 
 test("production manifest finalizer ignores test-only pause controls", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const value = await manifestFixture(t, "production-controls");
   const marker = path.join(value.root, "must-not-exist");
 

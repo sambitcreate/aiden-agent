@@ -19,7 +19,12 @@ export interface AidenRemoteStatusView {
     | "funnel_conflict"
     | "reconciliation_required"
     | "unavailable";
-  tailscaleErrorCode?: "not_installed" | "not_connected" | "https_unavailable" | "status_unavailable";
+  tailscaleErrorCode?:
+    | "not_installed"
+    | "not_connected"
+    | "https_unavailable"
+    | "status_unavailable"
+    | "permission_denied";
   pairedDeviceCount: number;
   approvedRootCount: number;
   errorCode?: "remote_port_in_use";
@@ -76,4 +81,26 @@ export interface AidenRemotePairingBootstrapView {
   qrPayload: string;
   /** IPC-only 100-bit setup code. It is never exposed through remote status. */
   manualCode: string;
+}
+
+export type AidenRemoteTlsEndpointErrorCode =
+  | "timed_out"
+  | "unreachable"
+  | "untrusted"
+  | "invalid_endpoint";
+
+export interface AidenRemoteTlsEndpointFailure {
+  ok: false;
+  code: AidenRemoteTlsEndpointErrorCode;
+  message: string;
+}
+
+export type AidenRemoteBeginPairingResult =
+  | AidenRemotePairingBootstrapView
+  | AidenRemoteTlsEndpointFailure;
+
+export function isAidenRemoteTlsEndpointFailure(
+  value: AidenRemoteBeginPairingResult,
+): value is AidenRemoteTlsEndpointFailure {
+  return "ok" in value && value.ok === false;
 }

@@ -358,7 +358,7 @@ export const ProfileShareCard = React.forwardRef<
       )}
 
       <text x="72" y="1554" fill={colors.tertiary} fontSize="18">
-        PRIVATE · GENERATED ON THIS MAC · NO PROMPTS OR CHAT CONTENT
+        PRIVATE · GENERATED ON THIS DEVICE · NO PROMPTS OR CHAT CONTENT
       </text>
       <circle cx="1108" cy="1548" r="7" fill={colors.accent} />
       <text x="1090" y="1554" fill={colors.secondary} fontSize="18" textAnchor="end">

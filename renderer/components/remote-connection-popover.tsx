@@ -172,7 +172,7 @@ export function RemoteConnectionPopover({
           ) : !snapshot ? (
             <p className="px-3 py-3 text-small text-secondary">Connection status is unavailable.</p>
           ) : snapshot.devices.length === 0 ? (
-            <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this Mac.</p>
+            <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this desktop.</p>
           ) : (
             <>
               <DeviceGroup label="Active" devices={groups.active} state="active" />

@@ -1,6 +1,6 @@
 # Aiden On The Go
 
-Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS. The Mac owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
+Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Linux. The paired desktop owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
 
 The product and protocol sources of truth are:
 

@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
 import { promisify } from "node:util";
+import type { AidenRemoteTlsEndpointErrorCode } from "../../renderer/shared/aiden-remote.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_OPENSSL_PATH = "/usr/bin/openssl";
@@ -82,6 +83,76 @@ function spkiDigest(value: string | Buffer): string {
   return `sha256/${createHash("sha256").update(spki).digest("base64")}`;
 }
 
+const TLS_PROBE_TIMEOUT_MS = 5_000;
+const UNREACHABLE_SYSTEM_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+]);
+
+export class AidenRemoteTlsEndpointError extends Error {
+  readonly code: AidenRemoteTlsEndpointErrorCode;
+
+  constructor(code: AidenRemoteTlsEndpointErrorCode, message: string) {
+    super(message);
+    this.name = "AidenRemoteTlsEndpointError";
+    this.code = code;
+  }
+}
+
+function errorCode(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("code" in error)) return "";
+  return typeof error.code === "string" ? error.code : "";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyAidenRemoteTlsEndpointFailure(error: unknown): AidenRemoteTlsEndpointError {
+  if (error instanceof AidenRemoteTlsEndpointError) return error;
+  const code = errorCode(error);
+  const message = errorMessage(error);
+  if (code === "ERR_INVALID_ARG" || /TLS endpoint is invalid/u.test(message)) {
+    return new AidenRemoteTlsEndpointError(
+      "invalid_endpoint",
+      "The Tailscale DNS name is invalid.",
+    );
+  }
+  if (/timed out/iu.test(message) || code === "ETIMEDOUT") {
+    return new AidenRemoteTlsEndpointError(
+      "timed_out",
+      "The Tailscale HTTPS endpoint did not respond. Confirm Serve still points at this Aiden profile, then try pairing again.",
+    );
+  }
+  if (
+    UNREACHABLE_SYSTEM_CODES.has(code)
+    || /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ECONNRESET/u.test(message)
+  ) {
+    return new AidenRemoteTlsEndpointError(
+      "unreachable",
+      "Aiden couldn't reach the Tailscale HTTPS endpoint. Confirm Tailscale is connected and the Serve route is current.",
+    );
+  }
+  if (
+    /certificate|UNABLE_TO_VERIFY|CERT_|ERR_TLS|altname|self[- ]signed/iu.test(`${code} ${message}`)
+    || /has no certificate/u.test(message)
+  ) {
+    return new AidenRemoteTlsEndpointError(
+      "untrusted",
+      "The Tailscale HTTPS certificate could not be verified. Check HTTPS on this Tailscale name, then try again.",
+    );
+  }
+  return new AidenRemoteTlsEndpointError(
+    "unreachable",
+    "Aiden couldn't reach the Tailscale HTTPS endpoint. Confirm Tailscale is connected and the Serve route is current.",
+  );
+}
+
 export async function fetchTlsServerSpkiSha256(
   hostname: string,
   port = 443,
@@ -92,9 +163,15 @@ export async function fetchTlsServerSpkiSha256(
     port < 1 ||
     port > 65_535
   ) {
-    throw new Error("Aiden Remote TLS endpoint is invalid.");
+    throw new AidenRemoteTlsEndpointError(
+      "invalid_endpoint",
+      "The Tailscale DNS name is invalid.",
+    );
   }
   return new Promise<string>((resolve, reject) => {
+    const fail = (error: unknown) => {
+      reject(classifyAidenRemoteTlsEndpointFailure(error));
+    };
     const socket = tls.connect({
       host: hostname,
       port,
@@ -102,15 +179,23 @@ export async function fetchTlsServerSpkiSha256(
       rejectUnauthorized: true,
     });
     const timeout = setTimeout(() => {
-      socket.destroy(new Error("Aiden Remote TLS endpoint timed out."));
-    }, 5_000);
+      socket.destroy(new AidenRemoteTlsEndpointError(
+        "timed_out",
+        "The Tailscale HTTPS endpoint did not respond. Confirm Serve still points at this Aiden profile, then try pairing again.",
+      ));
+    }, TLS_PROBE_TIMEOUT_MS);
     socket.once("secureConnect", () => {
       try {
         const certificate = socket.getPeerCertificate(true);
-        if (!certificate.raw?.length) throw new Error("Aiden Remote TLS endpoint has no certificate.");
+        if (!certificate.raw?.length) {
+          throw new AidenRemoteTlsEndpointError(
+            "untrusted",
+            "The Tailscale HTTPS certificate could not be verified. Check HTTPS on this Tailscale name, then try again.",
+          );
+        }
         resolve(spkiDigest(certificate.raw));
       } catch (error) {
-        reject(error);
+        fail(error);
       } finally {
         clearTimeout(timeout);
         socket.end();
@@ -118,7 +203,7 @@ export async function fetchTlsServerSpkiSha256(
     });
     socket.once("error", (error) => {
       clearTimeout(timeout);
-      reject(error);
+      fail(error);
     });
   });
 }

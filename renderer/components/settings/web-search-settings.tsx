@@ -57,6 +57,7 @@ import type {
   WebSearchRouteEntry,
   WebSearchSelection,
 } from "../../lib/types";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 
 type WebSearchProvider = WebSearchProviderRendererMetadata;
 type CredentialMode = WebSearchRouteEntry["credentialMode"];
@@ -759,7 +760,7 @@ function ProviderSetupDialog({
       onOpenChange={onOpenChange}
       returnFocus={returnFocus}
       title={`Set up ${provider.label}`}
-      description="Review what leaves this Mac, then save only the provider details you choose. Setup performs no network request."
+      description="Review what leaves this device, then save only the provider details you choose. Setup performs no network request."
       size="large"
       confirmLabel={busy === "config" ? "Saving…" : "Save provider settings"}
       confirmHidden={!hasConfigFields}
@@ -1121,6 +1122,7 @@ function SettingsSkeleton() {
 export function WebSearchSettings() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const capabilities = useAppCapabilities();
   const webSearch = useWebSearch();
   const [search, setSearch] = React.useState("");
   const [filter, setFilter] = React.useState<WebSearchFilter>("all");
@@ -1484,7 +1486,7 @@ export function WebSearchSettings() {
           <Callout>
             <Text variant="small-strong">Setup is request-free</Text>
             <Text as="p" variant="small" color="secondary">
-              Saving provider details stores them on this Mac. It does not test the connection,
+              Saving provider details stores them on this device. It does not test the connection,
               enable Web Search, or select this provider.
             </Text>
           </Callout>
@@ -2055,17 +2057,19 @@ export function WebSearchSettings() {
               this device and are never passed to the model.
             </Text>
             <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
-              Turning Web Search off preserves routes and credentials. Bots and schedules still
+              Turning Web Search off preserves routes and credentials. {capabilities.bots ? "Bots and schedules" : "Schedules"} still
               require their own explicit Web Search grant.
             </Text>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                variant="transparent"
-                size="small"
-                onClick={() => void navigate({ to: "/bots" })}
-              >
-                Manage Bot grants
-              </Button>
+              {capabilities.bots ? (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  onClick={() => void navigate({ to: "/bots" })}
+                >
+                  Manage Bot grants
+                </Button>
+              ) : null}
               <Button
                 variant="transparent"
                 size="small"

@@ -49,6 +49,14 @@ test("resolves packaged and development helper locations", () => {
     resolveSubagentShellRunnerBinary({ defaultApp: true, cwd: "/workspace" }),
     "/workspace/build/native/aiden-subagent-shell-runner",
   );
+  assert.equal(
+    resolveSubagentShellRunnerBinary({
+      defaultApp: false,
+      resourcesPath: "/opt/Aiden Agent/resources",
+      cwd: "/workspace",
+    }),
+    "/opt/Aiden Agent/Helpers/aiden-subagent-shell-runner",
+  );
 });
 
 test("command exists only in the framed control payload, never helper argv or environment", async () => {
@@ -112,7 +120,7 @@ test("protocol rejects hostile commands and response spoofing", () => {
 });
 
 test("native runner returns zero, nonzero, signal, and no-output outcomes", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   assert.deepEqual(await run(t, "printf hello"), {
     outcome: "exited",
     exitCode: 0,
@@ -132,12 +140,20 @@ test("native runner returns zero, nonzero, signal, and no-output outcomes", asyn
 });
 
 test("native runner uses a secret-free fixed environment and private 0700 directories", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   process.env.AIDEN_PHASE5D_SECRET = "must-not-cross";
   t.after(() => delete process.env.AIDEN_PHASE5D_SECRET);
+  const modeCommand =
+    process.platform === "linux"
+      ? "stat -c '%a' \"$HOME\" \"$TMPDIR\" \"$XDG_CONFIG_HOME\""
+      : "stat -f '%Lp' \"$HOME\" \"$TMPDIR\" \"$XDG_CONFIG_HOME\"";
   const result = await run(
     t,
-    'printf \'%s\\n\' "${AIDEN_PHASE5D_SECRET-unset}" "$PATH" "$LANG"; stat -f \'%Lp\' "$HOME" "$TMPDIR" "$XDG_CONFIG_HOME"; test ! -t 0',
+    [
+      'printf \'%s\\n\' "${AIDEN_PHASE5D_SECRET-unset}" "$PATH" "$LANG"',
+      modeCommand,
+      "test ! -t 0",
+    ].join("; "),
   );
   assert.equal(result.outcome, "exited");
   assert.match(result.stdout, /^unset\n\/usr\/bin:\/bin:\/usr\/sbin:\/sbin\nC\n700\n700\n700\n$/u);
@@ -163,7 +179,7 @@ test("native runner uses a secret-free fixed environment and private 0700 direct
 });
 
 test("timeout, cancellation, output floods, and held pipes clean the occupied group", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   assert.equal((await run(t, "sleep 30", 30)).outcome, "timed_out");
   assert.equal(
     (await run(t, "/usr/bin/yes x & /usr/bin/yes y >&2 & wait", 2_000)).outcome,
@@ -191,7 +207,7 @@ test("timeout, cancellation, output floods, and held pipes clean the occupied gr
 });
 
 test("workspace identity drift is rejected before shell execution", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const rootPath = await workspace(t);
   const root = await pinSubagentShellWorkspaceRoot(rootPath);
   root.inode = (BigInt(root.inode) + 1n).toString();
@@ -211,7 +227,7 @@ test("workspace identity drift is rejected before shell execution", async (t) =>
 });
 
 test("a deliberate setsid double-fork proves the documented containment limit and self-cleans", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
   const fixture = path.join(

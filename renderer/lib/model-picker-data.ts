@@ -310,7 +310,7 @@ function estimatePosition(
       y,
       confidence: "unranked",
       positionSource: entry.isLocal
-        ? "Benchmark unavailable · local speed depends on this Mac"
+        ? "Benchmark unavailable · local speed depends on this device"
         : "Benchmark unavailable · placed near the balanced midpoint",
     };
   }
@@ -320,7 +320,7 @@ function estimatePosition(
     y: clamp(y),
     confidence: "estimated",
     positionSource: entry.isLocal
-      ? "Estimated from model size or variant · speed depends on this Mac"
+      ? "Estimated from model size or variant · speed depends on this device"
       : "Estimated from the model variant name",
   };
 }

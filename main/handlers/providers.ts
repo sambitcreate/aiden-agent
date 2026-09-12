@@ -2,6 +2,8 @@ import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
+import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
+import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
@@ -235,6 +237,12 @@ async function refreshProviderCatalogs(providerIds?: readonly string[], force = 
     errors: projectPiCatalogRefreshErrors(errors),
   };
 }
+
+const linuxHoldSettings = new DictationHoldSettingsTransaction({
+  active: activeLinuxDictationHoldShortcut,
+  bind: bindLinuxDictationHoldShortcut,
+  disable: disableLinuxDictationHoldShortcut,
+});
 
 export function registerProviderHandlers(): void {
   forwardCodexProviderStatusChanges(
@@ -528,13 +536,15 @@ export function registerProviderHandlers(): void {
       next.dictationAccelerator = p.dictationAccelerator;
     if (
       p.chatTitleProviderId === "automatic" ||
-      p.chatTitleProviderId === "apple-foundation-models" ||
+      (p.chatTitleProviderId === "apple-foundation-models" && process.platform === "darwin") ||
       p.chatTitleProviderId === "chat-model"
     ) {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
-    const saved = await configStore.setSettings(next);
+    const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
+      ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
+      : await configStore.setSettings(next);
     if (next.skillsEnabled !== undefined) {
       skillRegistry.invalidate();
       invalidateBotRuntimeInventoryAuthority("skill_configuration");

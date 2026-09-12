@@ -1,3 +1,4 @@
+import { isSubagentRunStoreGeneration as safeGeneration } from "./subagent-run-store-io.js";
 import { createHash } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
@@ -80,12 +81,7 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
-function safeGeneration(value: unknown): value is SubagentRunStoreGeneration {
-  return (
-    value === "missing" ||
-    (typeof value === "string" && /^[0-9a-f]+(?:-[0-9a-f]+){8}$/u.test(value))
-  );
-}
+
 
 function safeTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;

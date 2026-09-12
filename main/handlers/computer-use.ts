@@ -2,6 +2,10 @@ import { ipcMain } from "../platform.js";
 import { computerUseStatus } from "../services/computer-use/status.js";
 import { computerUseSettings } from "../services/computer-use/settings.js";
 import {
+  computerUseSupported,
+  unsupportedComputerUseStatus,
+} from "../services/computer-use/platform.js";
+import {
   rendererDocumentOwner,
   type RendererDocumentOwner,
 } from "../services/renderer-document-owner.js";
@@ -32,14 +36,23 @@ async function ownedStatusRequest<T>(
 }
 
 export function registerComputerUseHandlers(): void {
-  ipcMain.handle("computerUse:status", async (event, force: unknown) =>
-    ownedStatusRequest(event, (_owner, signal) =>
+  ipcMain.handle("computerUse:status", async (event, force: unknown) => {
+    if (!computerUseSupported()) {
+      requestOwner(event);
+      return unsupportedComputerUseStatus();
+    }
+    return ownedStatusRequest(event, (_owner, signal) =>
       computerUseStatus.status({ force: force === true, signal }),
-    ),
-  );
+    );
+  });
 
   ipcMain.handle("computerUse:setEnabled", async (event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Invalid Computer Use setting.");
+    if (!computerUseSupported()) {
+      requestOwner(event);
+      if (enabled) throw new Error("Computer Use is not available on this platform.");
+      return unsupportedComputerUseStatus();
+    }
     return ownedStatusRequest(event, async (owner, signal) => {
       await computerUseSettings.setEnabled(enabled, () => !owner.isDestroyed());
       if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
@@ -47,7 +60,13 @@ export function registerComputerUseHandlers(): void {
     });
   });
 
-  ipcMain.handle("computerUse:requestPermissions", async (event) =>
-    ownedStatusRequest(event, (_owner, signal) => computerUseStatus.requestPermissions({ signal })),
-  );
+  ipcMain.handle("computerUse:requestPermissions", async (event) => {
+    if (!computerUseSupported()) {
+      requestOwner(event);
+      return unsupportedComputerUseStatus();
+    }
+    return ownedStatusRequest(event, (_owner, signal) =>
+      computerUseStatus.requestPermissions({ signal }),
+    );
+  });
 }

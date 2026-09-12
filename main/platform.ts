@@ -23,6 +23,7 @@ import {
   formatDiagnosticConsole,
   writeLegacyDiagnostic,
 } from "./services/diagnostic-journal.js";
+import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 
 type LogValue = unknown;
 
@@ -81,6 +82,7 @@ const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 async function waitForAccessibilityTrust(): Promise<boolean> {
+  if (!hostPlatformCapabilities().accessibilityPaste) return false;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (systemPreferences.isTrustedAccessibilityClient(false)) return true;
     await new Promise<void>((resolve) => setTimeout(resolve, 200));
@@ -115,15 +117,22 @@ export function registerNativeHandlers(): void {
   electronIpcMain.handle(
     "aiden:media:status",
     (_event, mediaType: "microphone" | "camera" | "screen") =>
-      systemPreferences.getMediaAccessStatus(mediaType),
+      process.platform === "darwin"
+        ? systemPreferences.getMediaAccessStatus(mediaType)
+        : "unknown",
   );
   electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
-    systemPreferences.askForMediaAccess(mediaType),
+    process.platform === "darwin"
+      ? systemPreferences.askForMediaAccess(mediaType)
+      : true,
   );
   electronIpcMain.handle("aiden:accessibility:status", () =>
-    systemPreferences.isTrustedAccessibilityClient(false),
+    hostPlatformCapabilities().accessibilityPaste
+      ? systemPreferences.isTrustedAccessibilityClient(false)
+      : false,
   );
   electronIpcMain.handle("aiden:accessibility:request", async (event) => {
+    if (!hostPlatformCapabilities().accessibilityPaste) return false;
     const parent = BrowserWindow.fromWebContents(event.sender);
     parent?.show();
     parent?.focus();
@@ -133,6 +142,7 @@ export function registerNativeHandlers(): void {
     return waitForAccessibilityTrust();
   });
   electronIpcMain.handle("aiden:accessibility:open-settings", async () => {
+    if (!hostPlatformCapabilities().accessibilityPaste) return false;
     await shell.openExternal(ACCESSIBILITY_SETTINGS_URL);
     return true;
   });

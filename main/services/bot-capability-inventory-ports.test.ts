@@ -61,9 +61,12 @@ test("inventory ports project safe exact facts and conservative unavailable conn
           credentialIncarnation: "b".repeat(43),
         })),
     },
-    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: false }),
+    // Simulate a stale preference copied from a supported host. Host policy
+    // must still keep Computer Use out of the effective Bot inventory.
+    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: true }),
     webSearchAvailability: async () => ({ ready: true }),
     subagentsAvailable: () => true,
+    computerUseSupported: () => false,
     shellFingerprint: HASH,
     fullMacScopeFingerprint: HASH,
     botHomeScopeFingerprint: HASH,
@@ -87,6 +90,7 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(skills[0]?.available, true);
   assert.equal(other.find(({ kind }) => kind === "web")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
+  assert.equal(other.find(({ kind }) => kind === "computer_use")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
   assert.match(
     other.find(({ kind }) => kind === "schedules")?.description ?? "",

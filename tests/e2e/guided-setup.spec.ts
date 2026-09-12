@@ -19,11 +19,17 @@ test("onboarding exposes the four primary AI choices and validates custom setup"
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 });
 
-test("computer control explains data access before enabling and cancellation keeps it off", async ({ aiden }) => {
+test("computer control respects platform support and explains access before enabling", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Computer Use", exact: true }).click();
+  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Computer Use", exact: true });
+  if (process.platform !== "darwin") {
+    await expect(computerUse).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "Enable Computer Use beta" })).toHaveCount(0);
+    return;
+  }
+  await computerUse.click();
   const toggle = page.getByRole("switch", { name: "Enable Computer Use beta" });
   await expect(toggle).toHaveAttribute("data-state", "unchecked");
   await toggle.click();

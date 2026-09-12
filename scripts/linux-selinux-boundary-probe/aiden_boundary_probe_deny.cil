@@ -1,0 +1,13 @@
+; Subtract from stock allows, including attribute-derived unconfined access.
+; Every target is dedicated to this disposable fixture.
+(typeattribute aiden_boundary_probe_non_init)
+(typeattributeset aiden_boundary_probe_non_init (and (domain) (not (init_t))))
+(deny aiden_boundary_probe_non_init aiden_boundary_probe_t (process (transition dyntransition)))
+(deny domain aiden_boundary_probe_t (process (dyntransition)))
+(deny unconfined_domain_type aiden_boundary_probe_exec_t (file (execute execute_no_trans entrypoint)))
+(deny unconfined_domain_type aiden_boundary_probe_data_t (file (open read write map relabelfrom relabelto)))
+(deny unconfined_domain_type aiden_boundary_probe_t (file (open read write)))
+(deny unconfined_domain_type aiden_boundary_probe_t (lnk_file (read)))
+(deny unconfined_domain_type aiden_boundary_probe_t (process (ptrace)))
+(deny unconfined_domain_type aiden_boundary_probe_t (fd (use)))
+(deny unconfined_domain_type aiden_boundary_probe_t (unix_stream_socket (connectto read write)))

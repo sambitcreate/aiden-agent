@@ -765,6 +765,7 @@ export class BrowserService {
     workspace.state.tabs.push(state);
     if (show) this.activateTab(tab);
     view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
+    this.hide(tab);
     this.observe(tab);
     view.webContents.setZoomFactor(state.zoom);
     this.emit(workspaceId);
@@ -800,18 +801,38 @@ export class BrowserService {
     }
     tab.attached = undefined;
   }
-  private present(tab: LiveTab, visible: boolean, bounds?: BrowserBounds): void {
-    tab.visible = visible;
-    tab.state.visible = visible;
-    if (bounds) tab.bounds = boundedBounds(bounds);
+  private hide(tab: LiveTab): void {
+    tab.visible = false;
+    tab.state.visible = false;
+    tab.view.setVisible(false);
+    if (process.platform !== "linux") {
+      this.detach(tab);
+      return;
+    }
+    // Linux capturePage needs a native host even for inactive tabs and overlays.
+    // An invisible child keeps its capture surface without receiving user input.
+    if (tab.attached && !tab.attached.isDestroyed()) return;
     this.detach(tab);
-    if (!visible || !tab.bounds) return;
+    let window: BrowserWindow;
+    try {
+      window = this.mainWindow(tab.state.workspaceId);
+    } catch {
+      // Closing the owning window must not turn a hide request into a new window.
+      return;
+    }
+    window.contentView.addChildView(tab.view);
+    tab.attached = window;
+  }
+  private present(tab: LiveTab, visible: boolean, bounds?: BrowserBounds): void {
+    if (bounds) tab.bounds = boundedBounds(bounds);
+    if (!visible || !tab.bounds) {
+      this.hide(tab);
+      return;
+    }
+    this.detach(tab);
     const window = this.mainWindow(tab.state.workspaceId);
     for (const candidate of this.tabs.values())
-      if (candidate !== tab && candidate.attached === window) {
-        this.detach(candidate);
-        candidate.visible = false;
-      }
+      if (candidate !== tab && candidate.attached === window) this.hide(candidate);
     const scale = window.webContents.getZoomFactor();
     const area = window.getContentBounds();
     const b = tab.bounds;
@@ -820,8 +841,11 @@ export class BrowserService {
     const width = Math.max(1, Math.min(Math.round(b.width * scale), area.width - x));
     const height = Math.max(1, Math.min(Math.round(b.height * scale), area.height - y));
     tab.view.setBounds({ x, y, width, height });
+    tab.view.setVisible(true);
     window.contentView.addChildView(tab.view);
     tab.attached = window;
+    tab.visible = true;
+    tab.state.visible = true;
     void this.applyEmulation(tab).catch(() => {});
   }
   private close(tab: LiveTab): void {
@@ -1303,10 +1327,8 @@ export class BrowserService {
   private floating(tab: LiveTab, enabled: boolean, publish = true): void {
     if (tab.state.floating === enabled) return;
     // The renderer supplies bounds for either its sidebar slot or draggable chat overlay.
-    // Keep the same sandboxed guest and detach until the destination slot is measured.
-    this.detach(tab);
-    tab.visible = false;
-    tab.state.visible = false;
+    // Keep the same sandboxed guest hidden until the destination slot is measured.
+    this.hide(tab);
     tab.floatingViewport =
       enabled && tab.state.viewport.mode === "fill"
         ? { ...tab.state.viewport, mode: "responsive" }

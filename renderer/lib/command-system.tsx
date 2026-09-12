@@ -13,6 +13,7 @@ import {
   resolveCommandForKeyEvent,
 } from "./command-system-core";
 import { toast } from "../components/ui";
+import { useAppCapabilities } from "./app-capabilities";
 
 export type CommandPaletteMode = "root" | "chats" | "models" | "providers" | "settings";
 type CommandHandler = () => void | Promise<void>;
@@ -62,6 +63,7 @@ export function CommandSystemProvider({
   applicationModal?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const capabilities = useAppCapabilities();
   const shortcuts = useShortcuts();
   const handlers = React.useRef(new Map<CommandId, CommandHandler[]>());
   const [handlerRevision, setHandlerRevision] = React.useState(0);
@@ -183,7 +185,7 @@ export function CommandSystemProvider({
         repeat: event.repeat,
         defaultPrevented: event.defaultPrevented,
         recording: Boolean(target?.closest("[data-shortcut-recorder='true']")),
-      });
+      }, capabilities.platform);
       if (!commandId) return;
       if (commandId === "commandPalette.toggle" || handlers.current.has(commandId)) {
         event.preventDefault();
@@ -193,7 +195,7 @@ export function CommandSystemProvider({
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [applicationModal, bindings, execute, paletteOpen]);
+  }, [applicationModal, bindings, capabilities.platform, execute, paletteOpen]);
 
   const value = React.useMemo<CommandSystemValue>(
     () => ({

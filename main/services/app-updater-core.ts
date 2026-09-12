@@ -10,6 +10,7 @@ export interface AppUpdaterEnvironment {
   platform: NodeJS.Platform;
   runtimeProfile: "production" | "development";
   updateConfigExists: boolean;
+  linuxAppImageEligible?: boolean;
 }
 
 export interface AppUpdateDriverResult {
@@ -32,8 +33,7 @@ export interface ConfigurableAppUpdater {
 }
 
 export function configureAppUpdater(updater: ConfigurableAppUpdater): void {
-  // Aiden's GitHub release flow intentionally publishes one verified ZIP and
-  // no separate blockmaps. Own the full download so failures and retries are
+  // Own full ZIP/AppImage downloads so failures and retries are
   // observable instead of letting electron-updater start a detached promise.
   updater.autoDownload = false;
   updater.autoInstallOnAppQuit = true;
@@ -73,7 +73,7 @@ export class AppUpdateController {
         listener(this.currentSnapshot);
       } catch {
         // A renderer notification failure must not abort or duplicate the
-        // signed download. Other listeners still receive the state change.
+        // update download. Other listeners still receive the state change.
       }
     }
   }
@@ -198,9 +198,26 @@ export class AppUpdateController {
 
 export function shouldEnableAppUpdates(environment: AppUpdaterEnvironment): boolean {
   return (
-    environment.platform === "darwin" &&
+    (environment.platform === "darwin" || (environment.platform === "linux" && environment.linuxAppImageEligible === true)) &&
     environment.isPackaged &&
     environment.runtimeProfile === "production" &&
     environment.updateConfigExists
   );
+}
+
+/** BaseUpdater.quitAndInstall returns void even when synchronous install fails. */
+export class AppUpdateInstallHandoff {
+  private installed = false;
+
+  recordInstall(install: () => boolean): boolean {
+    this.installed = false;
+    this.installed = install();
+    return this.installed;
+  }
+
+  run(quitAndInstall: () => void): boolean {
+    this.installed = false;
+    quitAndInstall();
+    return this.installed;
+  }
 }

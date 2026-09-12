@@ -9,7 +9,7 @@ const SETTINGS_SECTIONS = [
   "Aiden On The Go",
   "Scheduled tasks",
   "Aiden",
-  "Computer Use",
+  ...(process.platform === "darwin" ? (["Computer Use"] as const) : []),
   "Voice",
   "Keyboard shortcuts",
   "Appearance",
@@ -53,8 +53,8 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
       ).toBeVisible();
       await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
-      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
-      await page.getByText("This Mac settings", { exact: true }).click();
+      await expect(page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true })).toBeVisible();
+      await page.getByText(process.platform === "darwin" ? "This Mac settings" : "This computer settings", { exact: true }).click();
       await expect(
         page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
       ).toHaveAttribute("data-state", "unchecked");
@@ -106,6 +106,10 @@ test("every Settings destination renders and a one-model local inventory stays u
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
+  if (process.platform === "linux") {
+    await expect(page.getByRole("button", { name: "Bots", exact: true })).toBeVisible();
+  }
+
   const modelTrigger = page.getByRole("button", { name: /^Selected model:/u });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settingsNavigation = page.getByRole("navigation", { name: "Settings" });
@@ -119,6 +123,11 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(
     settingsNavigation.getByRole("button", { name: "Providers", exact: true }),
   ).toBeVisible();
+  if (process.platform === "linux") {
+    await expect(
+      settingsNavigation.getByRole("button", { name: "Computer Use", exact: true }),
+    ).toHaveCount(0);
+  }
 
   for (const section of SETTINGS_SECTIONS) {
     const destination = settingsNavigation.getByRole("button", { name: section, exact: true });
@@ -189,6 +198,35 @@ test("every Settings destination renders and a one-model local inventory stays u
       await page.getByRole("button", { name: "Back to Web Search", exact: true }).click();
       await expect(browseProviders).toBeFocused();
     }
+  }
+
+  if (process.platform === "linux") {
+    await settingsNavigation.getByRole("button", { name: "Providers", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Refresh Apple Foundation Models status" }),
+    ).toHaveCount(0);
+
+    await settingsNavigation.getByRole("button", { name: "Appearance", exact: true }).click();
+    await expect(page.getByText("Dock icon", { exact: true })).toHaveCount(0);
+
+    await settingsNavigation.getByRole("button", { name: "Voice", exact: true }).click();
+    await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "On this device · Private", exact: true }).click();
+    await expect(
+      page.getByText(
+        "Completed transcripts are copied to the clipboard so you can paste them into any app.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    const holdChoice = page.getByRole("radio", { name: /Hold to dictate/u });
+    // The development fixture disables global shortcuts; setup must honor that policy.
+    await expect(holdChoice).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Press to toggle/u })).toBeChecked();
+
+    await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open releases", exact: true })).toBeVisible();
   }
 
   const providers = settingsNavigation.getByRole("button", { name: "Providers", exact: true });
