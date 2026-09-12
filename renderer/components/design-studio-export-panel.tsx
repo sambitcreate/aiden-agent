@@ -19,6 +19,17 @@ export function DesignStudioExportPanel({project,disabled,screenTitles,workspace
   const [busy,setBusy]=React.useState(false);
   const [error,setError]=React.useState<string>();
   const [message,setMessage]=React.useState<string>();
+  React.useEffect(()=>{
+    const currentScreens=new Set(project.canvas.nodes.filter(node=>node.kind==="artboard").map(node=>node.activeMediaId));
+    setMediaIds(current=>current.every(id=>currentScreens.has(id))?current:current.filter(id=>currentScreens.has(id)));
+    setReferences(current=>current.every(id=>project.referenceAssetIds.includes(id))?current:current.filter(id=>project.referenceAssetIds.includes(id)));
+    if(project.version!==2||!project.activeDesignLanguage)setLanguage(false);
+    if(project.version!==2||!project.prototype)setPrototype(false);
+    if(project.workspaceId)setWorkspaceId(project.workspaceId);
+    setPreview(current=>current&&current.result.projectRevision!==project.revision?undefined:current);
+    setTarget(undefined);
+    setAcknowledged(false);
+  },[project]);
   const edit=(fn:()=>void)=>{fn();setPreview(undefined);setTarget(undefined);setAcknowledged(false);setMessage(undefined);};
   const act=async(fn:()=>Promise<void>)=>{setBusy(true);setError(undefined);try{await fn();}catch(cause){setError(cause instanceof Error?cause.message:String(cause));}finally{setBusy(false);}};
   return <details className="px-3 py-2" aria-label="Review project export">
