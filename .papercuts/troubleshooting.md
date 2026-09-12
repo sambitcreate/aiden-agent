@@ -429,3 +429,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+## 2026-09-12 — Production provider-failure investigation
+
+- The 0.40.0 production diagnostic log collapsed a concrete OpenCode Go 400 into duplicate `unknown` generation failures; correlate the Pi journal to recover historical provider causes. PR #110 improves future evidence but cannot reconstruct old redacted logs.
+- A renderer exception during final streaming can detach a generation and miss its one-shot terminal payload. The durable run and chat settle correctly, but `chats:settled`/authoritative refetch does not clear the retained detached-stream owner, leaving “Response continues in the background…” and the sidebar activity ring until the renderer restarts.
+- A parallel read-only diagnostic command used a stale worktree path and failed before inspection; validate the active checkout path before dispatching concurrent repository reads.
+- The repository script is `npm run type-check`, not the common `typecheck` spelling; inspect `package.json` before chaining validation commands so a typo does not skip later linting.
