@@ -238,3 +238,33 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
   documentation, platform support, installer scripts, and release workflow.
 - Aiden: Pi agent/tool types, `llm-client.ts`, generic MCP manager, approval UI,
   config/chat persistence, Electron lifecycle, preload allowlists, and packaging.
+
+## Linux managed payload preparation
+
+Linux Computer Use remains disabled while its authenticated launch boundary is
+implemented. `scripts/linux-payload-inventory.mjs` provides a reusable inventory
+check for a finalized, trusted, quiescent payload tree. It records every regular
+file and directory, including file hashes and modes, and rejects links and
+special files. The expected inventory is external to the payload: nothing in the
+payload is excluded from comparison.
+
+```sh
+node scripts/linux-payload-inventory.mjs compute /absolute/staged/payload /absolute/trusted/inventory.json
+node scripts/linux-payload-inventory.mjs verify /absolute/staged/payload /absolute/trusted/inventory.json
+```
+
+Compute an expected inventory only after authenticating the release and completing
+trusted extraction into isolated staging. A future privileged installer must protect
+both the staged tree and expected inventory from hostile writers. Do not regenerate
+an expected inventory from an installation whose integrity is in doubt: that would
+accept its modified files. A matching attacker-supplied inventory proves nothing
+about release identity. See [Linux package provenance](releasing.md#linux-package-provenance).
+
+This is a build/operator utility, not a privileged installer, immutable storage
+mechanism, atomic filesystem security boundary, or live-process authenticator.
+It does not inventory host libraries outside the supplied tree or constrain JIT.
+Ownership, ACLs, extended attributes and SELinux labels are separate installation
+policy checks; this inventory compares paths, types, modes, sizes and file bytes.
+Electron Builder adds files after afterPack, and package installation can alter
+sandbox permissions, so the final intended generation must be inventoried rather
+than assuming an earlier packaging-hook snapshot is complete.

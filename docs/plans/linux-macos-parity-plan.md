@@ -319,8 +319,32 @@ verification remain acceptance gates for a future approved main release.
 
 ## Phase 16: Packaged Linux payload inventory
 
-Next: bind the complete packaged application tree to a deterministic inventory
-inside the attested package, and verify missing, extra and changed entries during
-packaging. This is a reusable input to future root-managed installation; neither
-a self-contained inventory nor root ownership alone authenticates a running
-process. Production Computer Use remains disabled.
+Active: compute and verify a deterministic external inventory of a finalized,
+trusted, quiescent Linux payload tree. Include every file and directory, modes,
+sizes and content hashes; reject links and special files. Keep the inventory
+strictly outside the tree, with no excluded payload entries. The future managed
+installer must derive it from authenticated release bytes and protect its storage.
+This standalone component is not an authentication or race-proof installation
+boundary, and production Computer Use remains disabled.
+
+The initial afterPack proposal was rejected after inspecting electron-builder:
+it adds target-specific files later, while installation may change sandbox mode.
+Finalized extracted payloads must be measured instead of hiding those changes
+with exclusions.
+
+Phase 16 passed both independent Astra medium reviews, 26 focused tests and
+236 Linux contract tests (one platform skip), plus scoped lint. The reusable
+module matched all 316 entries (279 files) from an extracted ARM64 RPM on Fedora
+and rejected eight changes covering Electron, ASAR, snapshot, library, addon,
+mode, extra file and missing file. Restoration matched; SELinux remained enforcing.
+The receipt and module digest are retained in
+`/tmp/aiden-fedora-parity-vm/phase16-receipt.json`. The package is a local fixture
+from an earlier build, not an authenticated release or current app acceptance.
+
+## Phase 17: Native managed-generation staging
+
+Next: copy a supplied finalized payload into fresh root-managed inodes using
+fd-relative traversal, validate the copied bytes against the complete inventory,
+and publish a new generation atomically without replacement. No active pointer
+or execution is part of this phase. Release authentication remains a separate
+mandatory prerequisite for future production admission.

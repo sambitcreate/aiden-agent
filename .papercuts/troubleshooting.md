@@ -512,3 +512,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Combined Electron IPC fixture initially lacked socket getopt permission for SO_PEERSEC label inspection. Added metadata access while retaining the protected read/write denial; subsequent actual-main/Node-utility IPC cells passed with one sender creating all four pairs.
 
 - 2026-09-12: Denying the native IPC sender access to its own executable caused startup failure after transition. Keep its required execute/map permission while denying outsider entry; final run 4 passed all cells and cleanup.
+
+- 2026-09-12: electron-builder mutates Linux payloads after afterPack: targets add update configuration, package-type and AppArmor files, and package installation can change chrome-sandbox mode. An inventory generated in afterPack would be stale. Inventory must cover the finalized extracted payload rather than exclude these files.
+
+- 2026-09-12: Fedora SSH became unavailable between phases; UTM reported the dedicated VM stopped. Restarted the existing VM before new acceptance and will recheck enforcing/session prerequisites. Earlier receipts remain scoped to their recorded runs.
+
+- 2026-09-12: UTM restart via its saved shortcut stalled before QEMU launch and timed out. Reopened the existing VM bundle with the verified mounted UTM app through Finder, then started it normally. SSH returned; SELinux is enforcing and GNOME session 3 resumed.
