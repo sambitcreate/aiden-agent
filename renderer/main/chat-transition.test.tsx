@@ -317,6 +317,25 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
+test("root recovery reconciles missed detached terminals against authoritative activity", () => {
+  const root = source("./root-view.tsx");
+  const recovery = between(
+    root,
+    "const reconcileInactiveOwners = (payload: unknown) => {",
+    "}, [reconcileDetachedLifecycleChat]);",
+  );
+  assert.match(recovery, /parseChatActivitySnapshot\(payload\)/u);
+  assert.match(recovery, /pendingDetachedLifecycleChats\(\)/u);
+  assert.match(recovery, /!activeChatIds\.has\(owner\.chatId\)/u);
+  assert.ok(
+    recovery.indexOf('onNotification("chats:activity-changed"') < recovery.indexOf(".activitySnapshot()"),
+    "Recovery must subscribe before its bootstrap snapshot",
+  );
+  assert.match(root, /captureDetachedLifecycleChat\(owner\)/u);
+  assert.match(root, /clearInactiveDetachedLifecycleChat\(captured, new Set\(snapshot\.activeChatIds\)\)/u);
+  assert.match(root, /subscribeChatSettlements[\s\S]{0,180}reconcileDetachedLifecycleChat\(settlement\)/u);
+});
+
 test("every ordinary new-agent entry opens a draft without eager creation", () => {
   for (const file of ["./chat-layout.tsx", "./root-view.tsx", "./chat-pane.tsx", "../components/chat-sidebar.tsx"]) {
     const implementation = source(file);

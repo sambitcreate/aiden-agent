@@ -19,12 +19,17 @@ import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import {
+  captureDetachedLifecycleChat,
+  clearInactiveDetachedLifecycleChat,
+  type DetachedLifecycleChatReconciliation,
+  pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
   subscribeChatReadReconciliations,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
 } from "../lib/chat-terminal-sync";
+import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
@@ -95,6 +100,26 @@ function RootContent() {
       });
     },
     [queryClient],
+  );
+  const reconcileDetachedLifecycleChat = React.useCallback(
+    (
+      owner:
+        | { chatId: string; workspaceId: string }
+        | DetachedLifecycleChatReconciliation,
+    ) => {
+      const captured = "streamIds" in owner ? owner : captureDetachedLifecycleChat(owner);
+      return (async () => {
+        try {
+          await reconcileChatCacheAfterIdle(owner.chatId);
+          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot());
+          if (!snapshot || !captured) return;
+          clearInactiveDetachedLifecycleChat(captured, new Set(snapshot.activeChatIds));
+        } catch {
+          // Failure is not proof of settlement. Retained activity events retry it.
+        }
+      })();
+    },
+    [reconcileChatCacheAfterIdle],
   );
 
   useCommandHandler(
@@ -255,11 +280,36 @@ function RootContent() {
   React.useEffect(
     () =>
       subscribeChatSettlements(onNotification, (settlement) => {
-        if (isChatCacheDeleted(settlement.chatId)) return;
-        void reconcileChatCacheAfterIdle(settlement.chatId);
+        void reconcileDetachedLifecycleChat(settlement);
       }),
-    [reconcileChatCacheAfterIdle],
+    [reconcileDetachedLifecycleChat],
   );
+
+  React.useEffect(() => {
+    let disposed = false;
+    const reconcileInactiveOwners = (payload: unknown) => {
+      const snapshot = parseChatActivitySnapshot(payload);
+      if (!snapshot) return;
+      const activeChatIds = new Set(snapshot.activeChatIds);
+      for (const owner of pendingDetachedLifecycleChats()) {
+        if (!activeChatIds.has(owner.chatId)) void reconcileDetachedLifecycleChat(owner);
+      }
+    };
+    // Subscribe before the bootstrap snapshot so no transition falls in between.
+    const unsubscribe = onNotification("chats:activity-changed", reconcileInactiveOwners);
+    void chatsApi
+      .activitySnapshot()
+      .then((payload) => {
+        if (!disposed) reconcileInactiveOwners(payload);
+      })
+      .catch(() => {
+        // Future activity or settlement events retry recovery.
+      });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [reconcileDetachedLifecycleChat]);
 
   React.useEffect(() => {
     // ~/.aiden/config.json was edited outside the app. Only the lists sourced
