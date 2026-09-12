@@ -32,7 +32,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 audit_inode="$(stat -c %i /var/log/audit/audit.log)"
 audit_offset="$(stat -c %s /var/log/audit/audit.log)"
-run_started="$(date -u +'%Y-%m-%d %H:%M:%S')"
+run_started="@$(date +%s)"
 uname -a >"$evidence/kernel.txt"
 getenforce >"$evidence/enforcement-before.txt"
 cat /sys/fs/selinux/policy_capabilities/memfd_class >"$evidence/memfd-class.txt"

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, URL } from 'node:url';
 const script = fileURLToPath(new URL('./verify.mjs', import.meta.url));
+const runner = fileURLToPath(new URL('./run.sh', import.meta.url));
 function fixture(change = () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'electron-role-verify-'));
   const context = type => `system_u:system_r:aiden_electron_role_probe_${type}_t:s0`;
@@ -40,6 +41,11 @@ function fixture(change = () => {}) {
   finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 test('accepts complete role candidate evidence', () => assert.equal(fixture(), 0));
+test('journal evidence uses an absolute epoch independent of host timezone', () => {
+  const source = fs.readFileSync(runner, 'utf8');
+  assert.match(source, /run_started="@\$\(date \+%s\)"/u);
+  assert.doesNotMatch(source, /date -u \+['"]%Y-%m-%d/u);
+});
 for (const [name, mutate] of [
   ['main protected token missing', f => f['app.json'].ipc[1].tokenRead = false],
   ['child protected descriptor received', f => f['app.json'].worker.ipc[1].receivedFd = true],

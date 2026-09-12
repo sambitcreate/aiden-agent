@@ -81,7 +81,7 @@ async function rootIdentity(root) {
   return { device: identity.dev.toString(), inode: identity.ino.toString() };
 }
 
-function startHelper(t, root, executable = productionBinary, environment = {}) {
+function startHelper(t, root, executable = productionBinary, environment = {}, uid) {
   let child;
   let output = "";
   const lines = [];
@@ -95,6 +95,7 @@ function startHelper(t, root, executable = productionBinary, environment = {}) {
       executable,
       ["serve", "--root", root, "--device", device, "--inode", inode],
       {
+        ...(uid === undefined ? {} : { uid }),
         env: {
           PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
           LANG: "C",
@@ -892,6 +893,40 @@ test("Linux metadata policy preserves user xattrs and rejects xattr drift", asyn
   assert.equal(await readFile(drift, "utf8"), "original\n");
   assert.equal(await readLinuxUserXattr(drift), "changed");
   await driftHelper.close();
+});
+
+test("enforcing SELinux rejects unprivileged security-label copying without changing the original", async (t) => {
+  if (process.platform !== "linux" || process.getuid?.() !== 0) {
+    t.skip("Root on an enforcing SELinux host is required.");
+    return;
+  }
+  let enforcement;
+  try {
+    ({ stdout: enforcement } = await execFileAsync("/usr/sbin/getenforce"));
+  } catch {
+    t.skip("An enforcing SELinux host is required.");
+    return;
+  }
+  if (enforcement.trim() !== "Enforcing") {
+    t.skip("An enforcing SELinux host is required.");
+    return;
+  }
+  const root = await fixture(t, "aiden-file-mutator-selinux-metadata-");
+  const ordinary = path.join(root, "labelled.txt");
+  await writeFile(ordinary, "original\n");
+  await execFileAsync("/bin/chown", ["-R", "65534:65534", root]);
+  await execFileAsync("/bin/chmod", ["700", root]);
+  await execFileAsync("/usr/bin/chcon", ["-t", "bin_t", ordinary]);
+  const helper = startHelper(t, root, testingBinary, {}, 65534);
+  assert.match(
+    await helper.request(prepareCommand("selinux-label", sha256("original\n"), "labelled.txt", "replacement\n")),
+    /^prepared selinux-label /u,
+  );
+  assert.equal(await helper.request("commit selinux-label"), "error conflict");
+  assert.equal(await readFile(ordinary, "utf8"), "original\n");
+  const { stdout: label } = await execFileAsync("/usr/bin/ls", ["-Z", ordinary]);
+  assert.match(label, /:bin_t:/u);
+  await helper.close();
 });
 
 test("moving a prepared parent directory makes commit roll back", async (t) => {

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { URL } from "node:url";
 
 import { nativeCCompileInvocation } from "./native-c-build-core.mjs";
 
@@ -45,4 +47,18 @@ test("unsupported hosts do not produce misleading native helpers", async () => {
     }),
     null,
   );
+});
+
+test("subagent shell cleanup never enters an unbounded reap", async () => {
+  const source = await readFile(
+    new URL("../native/subagent-shell-runner/main.c", import.meta.url),
+    "utf8",
+  );
+  const cleanup = source.slice(
+    source.indexOf("static bool cleanup_group"),
+    source.indexOf("static int run_shell"),
+  );
+  assert.match(cleanup, /deadline = monotonic_ms\(\) \+ 1000U;/u);
+  assert.doesNotMatch(cleanup, /waitpid\([^;]*,\s*0\)/u);
+  assert.equal((cleanup.match(/waitpid\([^;]*WNOHANG\)/gu) ?? []).length, 2);
 });

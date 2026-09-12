@@ -400,3 +400,20 @@ selection must fail until the release pipeline publishes and validates a signed
 x64 DMG; it must never substitute the arm64 DMG. The standalone Linux workflow
 does not publish releases, and its Actions artifacts are not accepted by the
 release installer. Linux Computer Use production admission remains separate.
+
+## Phase 19: Pull-request closure remediation
+
+Complete after two independent GPT-6 Astra medium reviews. Linux subreaper
+cleanup is bounded, all platform policy tests are registered, and fail-closed
+SELinux security-metadata behavior has an explicit support limit. Portal
+dictation replacement is transactional, and the portal accepts missing
+display text, hold setup is advertised only when desktop metadata is
+discoverable, and Fedora diagnostic journal windows are timezone-independent.
+
+Focused shortcut, portal, native runner and Electron-role tests pass. Linux
+contracts pass 152 tests with two expected platform skips, lint, type checking,
+branding/release tests and the complete repository test suite pass. A root-run
+regression on the Fedora 44 SELinux Enforcing VM confirms that a non-default
+security label fails closed, preserves the original bytes and retains the
+original label. Hosted exact-head validation and automated-review thread closure
+remain the final pull-request delivery gate.

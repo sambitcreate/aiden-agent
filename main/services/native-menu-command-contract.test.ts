@@ -75,3 +75,11 @@ test("startup persists semantic V1 repair before runtime registration can fail",
   const apply = shortcut.indexOf("return applyNow({ ...settings, keybindings })", start);
   assert.ok(start >= 0 && persist > start && apply > persist);
 });
+
+test("portal dictation stays owned until a replacement shortcut registers", () => {
+  const shortcut = readFileSync(new URL("./shortcut.ts", import.meta.url), "utf8");
+  const reconcile = shortcut.indexOf("const result = await reconcileGlobalShortcuts");
+  const failure = shortcut.indexOf("if (!result.ok && result.failedCommandId)", reconcile);
+  const close = shortcut.indexOf("if (releaseLinuxPortal)", failure);
+  assert.ok(reconcile >= 0 && failure > reconcile && close > failure);
+});

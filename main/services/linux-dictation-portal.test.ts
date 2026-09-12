@@ -3,7 +3,7 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
-import { LinuxDictationPortal } from "./linux-dictation-portal.js";
+import { LinuxDictationPortal, linuxDictationDesktopEntryAvailable } from "./linux-dictation-portal.js";
 
 function child() {
   const result = Object.assign(new EventEmitter(), {
@@ -27,6 +27,21 @@ test("portal binds explicitly and deduplicates down/up edges", async () => {
   assert.equal((await bound).triggerDescription, "Ctrl+Space");
   h.send("activated"); h.send("activated"); h.send("deactivated"); h.send("deactivated");
   assert.deepEqual(h.events, ["down", "up"]); h.portal.close();
+});
+test("portal accepts an empty desktop trigger description as unknown display text", async () => {
+  const h = setup();
+  const bound = h.portal.bind();
+  h.children[0].stdout.write('{"type":"bound","triggerDescription":"  "}\n');
+  assert.equal((await bound).triggerDescription, null);
+  assert.equal(h.portal.active, true);
+  h.portal.close();
+});
+test("portal setup availability requires discoverable installed desktop metadata", () => {
+  const visited: string[] = [];
+  const exists = (candidate: string) => { visited.push(candidate); return candidate.startsWith("/home/aiden/"); };
+  assert.equal(linuxDictationDesktopEntryAvailable("/home/aiden", exists), true);
+  assert.equal(visited[visited.length - 1], "/home/aiden/.local/share/applications/com.sambitcreate.aiden-agent.desktop");
+  assert.equal(linuxDictationDesktopEntryAvailable(undefined, () => false), false);
 });
 test("cancelled setup cannot activate from delayed stale process messages", async () => {
   const h = setup(); const first = h.portal.bind();

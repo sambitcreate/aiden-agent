@@ -17,6 +17,24 @@ test("a newer toggle choice prevents delayed portal approval from persisting hol
   assert.equal(active, false);
 });
 
+test("a superseded bind that becomes active after toggle cleanup is disabled", async () => {
+  let finishBind!: () => void;
+  let active = false;
+  let disables = 0;
+  const transaction = new DictationHoldSettingsTransaction({
+    active: () => active,
+    bind: () => new Promise<void>((resolve) => { finishBind = () => { active = true; resolve(); }; }),
+    disable: async () => { disables += 1; active = false; },
+  });
+  const hold = transaction.apply(true, async () => {});
+  const rejected = assert.rejects(hold, /changed during setup/u);
+  await transaction.apply(false, async () => {});
+  finishBind();
+  await rejected;
+  assert.equal(active, false);
+  assert.equal(disables, 2);
+});
+
 test("failed persistence closes newly acquired portal authority", async () => {
   let active = false;
   const transaction = new DictationHoldSettingsTransaction({ active: () => active, bind: async () => { active = true; }, disable: async () => { active = false; } });

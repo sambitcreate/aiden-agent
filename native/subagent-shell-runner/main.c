@@ -288,19 +288,27 @@ static bool cleanup_group(pid_t group, pid_t original_group, pid_t direct_child,
   if (setpgid(0, original_group) != 0) return false;
   (void)kill(-group, SIGKILL);
   int ignored_status;
+  deadline = monotonic_ms() + 1000U;
 #ifndef __APPLE__
   /* As a Linux child subreaper, the helper adopts ordinary orphaned shell
    * descendants. Reap every child that stayed in the occupied process group
    * so a zombie cannot make kill(-group, 0) report a false cleanup failure. */
-  for (;;) {
-    pid_t reaped = waitpid(-group, &ignored_status, 0);
+  while (monotonic_ms() < deadline) {
+    pid_t reaped = waitpid(-group, &ignored_status, WNOHANG);
     if (reaped > 0) continue;
     if (reaped < 0 && errno == EINTR) continue;
-    break;
+    if (reaped < 0 && errno == ECHILD) break;
+    if (reaped < 0) break;
+    usleep(10000);
   }
 #endif
-  while (waitpid(direct_child, &ignored_status, 0) < 0 && errno == EINTR) {}
-  deadline = monotonic_ms() + 1000U;
+  while (monotonic_ms() < deadline) {
+    pid_t reaped = waitpid(direct_child, &ignored_status, WNOHANG);
+    if (reaped == direct_child || (reaped < 0 && errno == ECHILD)) break;
+    if (reaped < 0 && errno == EINTR) continue;
+    if (reaped < 0) break;
+    usleep(10000);
+  }
   while (monotonic_ms() < deadline && process_group_exists(group)) usleep(10000);
   return !process_group_exists(group);
 }

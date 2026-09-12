@@ -130,7 +130,9 @@ chat controls are omitted. Global dictation remains available when the desktop c
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
 in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts
-portal. Setup is explicit for each app session; startup never opens a permission
+portal. Hold setup requires the package's desktop entry to be installed under a
+system or user applications directory; development runs and non-integrated
+AppImages retain toggle dictation. Setup is explicit for each app session; startup never opens a permission
 dialog. The desktop may assign a different trigger, which Aiden displays. If
 the session ends, or shortcuts are edited, Aiden returns to toggle behavior.
 Desktops without this portal keep toggle dictation. Wayland compositors own final
@@ -148,6 +150,13 @@ for update checks, downloads, and restart. Downloads are verified against the
 SHA-512 digest in the architecture-specific GitHub release feed. Updates retain
 the current AppImage filename. Unlike macOS releases, this does not provide Apple
 code-signing verification.
+
+Native subagent file replacement preserves metadata or fails closed. On
+SELinux hosts, a file with a non-default `security.selinux` label or Linux file
+capabilities may require privileges the user-owned helper does not have; Aiden
+leaves the original file unchanged and reports the mutation as unavailable.
+Restore a normal workspace label or apply that privileged metadata outside the
+subagent transaction before retrying.
 
 Install the newer `.deb` or `.rpm` through the package manager that owns the
 installation. Read-only AppImages and extraction-mode launches also use manual

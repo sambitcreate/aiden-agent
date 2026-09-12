@@ -544,3 +544,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Shell cleanup traps can run between an external move and the next assignment. Arm rollback state before every filesystem mutation, and retain the private transaction directory if restoring the prior app fails.
 - 2026-09-12: A missing-tool fixture that retains `/usr/bin` is host-dependent because Ubuntu Actions preinstalls `gh`. Build a closed fixture PATH from explicit tool symlinks so the absence assertion means the same thing on macOS and Linux.
 - 2026-09-12: Closing a fixture PATH also hides the shell executable from Node's process launcher. Invoke the known `/bin/sh` directly while keeping commands inside the test process constrained to the fixture tools.
+- 2026-09-12: Green Pullfrog status can coexist with newly posted or older unresolved review threads. Query GraphQL `reviewThreads` at the exact head and triage every unresolved comment before closure.
+- 2026-09-12: A minimal native-helper transfer to the Fedora fixture must include `native/shared/aiden-platform.h`; the source-relative include is not supplied by the JavaScript build wrapper.

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { linuxDesktopBusEnvironment } from "./linux-desktop-bus-environment.js";
 
@@ -12,6 +13,22 @@ export interface DictationPortalCallbacks {
   activated(): void;
   deactivated(): void;
   lost(): void;
+}
+
+const DESKTOP_ENTRY = "com.sambitcreate.aiden-agent.desktop";
+
+export function linuxDictationDesktopEntryAvailable(
+  home = process.env.HOME,
+  exists: (candidate: string) => boolean = existsSync,
+): boolean {
+  const candidates = [
+    `/usr/local/share/applications/${DESKTOP_ENTRY}`,
+    `/usr/share/applications/${DESKTOP_ENTRY}`,
+  ];
+  if (home && path.isAbsolute(home)) {
+    candidates.push(path.join(home, ".local", "share", "applications", DESKTOP_ENTRY));
+  }
+  return candidates.some(exists);
 }
 
 /** A fresh process owns one explicit desktop permission request and session. */
@@ -28,7 +45,7 @@ export class LinuxDictationPortal {
   ) {}
   get active(): boolean { return this.bound; }
 
-  bind(): Promise<{ triggerDescription: string }> {
+  bind(): Promise<{ triggerDescription: string | null }> {
     this.close();
     const generation = ++this.generation;
     return new Promise((resolve, reject) => {
@@ -62,9 +79,10 @@ export class LinuxDictationPortal {
           try { event = JSON.parse(line); } catch { fail("Invalid desktop shortcut response."); return; }
           if (!event || typeof event !== "object") { fail("Invalid desktop shortcut response."); return; }
           if (event.type === "bound" && !this.bound) {
-            if (typeof event.triggerDescription !== "string" || !event.triggerDescription.trim() || event.triggerDescription.length > 256) { fail("Desktop shortcut did not report its assigned trigger."); return; }
+            if (typeof event.triggerDescription !== "string" || event.triggerDescription.length > 256) { fail("Desktop shortcut did not report its assigned trigger."); return; }
+            const triggerDescription = event.triggerDescription.trim() || null;
             this.bound = true; settled = true; clearTimeout(timer);
-            resolve({ triggerDescription: event.triggerDescription });
+            resolve({ triggerDescription });
           } else if (event.type === "activated" && this.bound) {
             if (!this.pressed) { this.pressed = true; this.callbacks.activated(); }
           } else if (event.type === "deactivated" && this.bound) {
