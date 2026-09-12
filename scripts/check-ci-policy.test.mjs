@@ -53,6 +53,8 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
 
   assert.ok(linuxJob, "Linux package job is missing");
   assert.ok(rpmJob, "Linux RPM job is missing");
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\bdbus-daemon\b/u,
+    "Fedora native portal tests require dbus-run-session from dbus-daemon");
   assert.match(linuxJob, /sha256sum "\$rpm_name" > rpm\.sha256/u);
   const verifier = linuxJob.indexOf("node scripts/verify-linux-package.mjs");
   const upload = linuxJob.indexOf("Upload baseline-verified RPM for Fedora acceptance");

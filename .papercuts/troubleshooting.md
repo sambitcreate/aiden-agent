@@ -482,3 +482,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: OrbStack kernel exposes capability,landlock,yama,bpf without SELinux. Fedora userspace in this host cannot validate enforcing SELinux admission; require a separately booted SELinux-capable kernel.
 
 - 2026-09-12: Providers header action group exceeded narrow Linux content by17px; max-width allows its existing wrap. Migration E2E seeded index while Electron could normalize/write it; moved disk setup after verified shutdown. Native setSize also precedes renderer resize, so geometry tests now await content width.
+
+- 2026-09-12: Isolated Fedora VM setup: Homebrew QEMU installation could not resolve a capstone bottle on macOS27; checking the official UTM bundle as a bounded alternative.
+
+- 2026-09-12: Fedora RPM CI reached the new portal suite but lacked dbus-run-session. Fedora44 provides it in dbus-daemon; add that explicit prerequisite rather than skip native acceptance.

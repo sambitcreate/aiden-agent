@@ -149,3 +149,9 @@ or a claim that Fedora Computer Use currently works.
 - Reproduced the hosted 17px overflow locally; constrained the existing Providers action group to its available width. The unchanged full Settings destination/width matrix passes on Linux. Resize checks now wait for the renderer to observe native content width.
 - Migration E2E no longer writes the index while Electron can rewrite it. All seed mutations run after verified shutdown and before relaunch, with prelaunch index/journal assertions. Production migration is unchanged. Linux draft suite passed 5/5.
 - Both GPT-6 Astra medium source reviews cleared. macOS focused regressions passed 8/8; E2E TypeScript and focused lint passed. The next hosted run remains a validation gate.
+
+## Phase 8: Fedora CI prerequisite repair
+
+- Hosted b637bfdc passed shared verification, macOS Electron, Linux x64, Linux ARM64 and Android. Fedora RPM failed before portal execution because dbus-run-session was absent.
+- Fedora44 package query identifies dbus-daemon as the provider. Added it to the existing CI prerequisites and extended the CI policy regression. Both Astra medium reviews cleared; six policy tests and the native portal suite on a real Fedora44 container passed.
+- Independently booted a new isolated Fedora44 ARM64 UTM VM with kernel 6.19.10-300.fc44.aarch64 and SELinux Enforcing. This removes the OrbStack kernel limitation for future testing; GNOME setup and launch-boundary acceptance are still pending.
