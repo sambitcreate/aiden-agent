@@ -436,3 +436,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Video input is not supported by Aiden's chat attachment transport. The capability option must describe server support without advertising video uploads.
 - Review found capability consumers outside the desktop/native picker (Bot inventory and Telegram) and assistant artifact images in raw history; added projection and role-aware image-limit regressions.
 - Frozen runtime contribution snapshots require a copied tool policy; added a real harness test covering base and extension tools.
+- Hosted verify hit a pre-existing Git cancellation fixture race: a short marker poll expired while push was still running, then cleanup removed its wrapper. Replaced delay/count coordination with a bounded marker handshake and awaited cancellation cleanup.

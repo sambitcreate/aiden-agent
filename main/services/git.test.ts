@@ -1434,7 +1434,7 @@ test("GitService does not mutate upstream configuration after a cancelled push r
       "const args = process.argv.slice(2);",
       "const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
       "if (result.error) throw result.error;",
-      "if (args[0] === 'push' && result.status === 0) { writeFileSync(marker, 'pushed\\n'); setTimeout(() => process.exit(0), 2000); }",
+      "if (args[0] === 'push' && result.status === 0) { writeFileSync(marker, 'pushed\\n'); setInterval(() => {}, 1000); }",
       "else process.exit(result.status ?? 1);",
       "",
     ].join("\n"),
@@ -1443,7 +1443,7 @@ test("GitService does not mutate upstream configuration after a cancelled push r
   const service = new GitService({
     cacheTtlMs: 0,
     gitBinary: wrapper,
-    pushTimeoutMs: 5_000,
+    pushTimeoutMs: 30_000,
   });
   const capability = await service.pushCapability(repository);
   const controller = new AbortController();
@@ -1460,26 +1460,24 @@ test("GitService does not mutate upstream configuration after a cancelled push r
     controller.signal,
   );
 
-  let pushed = false;
-  for (let attempt = 0; attempt < 150; attempt += 1) {
-    try {
-      await fs.access(marker);
-      pushed = true;
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+  // Observe rejection immediately; fixture cleanup must not race a live push.
+  void operation.catch(() => {});
+  try {
+    // Wait for the actual remote mutation, not a scheduler-dependent polling count.
+    await waitForFile(marker, 15_000);
+    controller.abort();
+    const result = await operation;
+    assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
+    assert.equal(result.upstreamSet, false);
+    assert.equal(await git(remote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
+    assert.equal(
+      await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
+      "",
+    );
+  } finally {
+    controller.abort();
+    await operation.catch(() => {});
   }
-  assert.equal(pushed, true);
-  controller.abort();
-  const result = await operation;
-  assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
-  assert.equal(result.upstreamSet, false);
-  assert.equal(await git(remote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
-  assert.equal(
-    await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
-    "",
-  );
 });
 
 test("GitService rechecks cancellation after post-push branch reads before setting upstream", async (t) => {
