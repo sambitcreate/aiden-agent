@@ -349,7 +349,7 @@ export function ProvidersSettings() {
             Connect models to Aiden and manage the providers you already use.
           </Text>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
           <Button
             variant="muted"
             size="small"

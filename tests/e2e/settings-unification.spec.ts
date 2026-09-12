@@ -120,13 +120,22 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
 }) => {
   test.setTimeout(180_000);
   const { page, app } = aiden;
+  const resize = async (width: number, height: number) => {
+    const contentWidth = await app.evaluate(({ BrowserWindow }, size) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setSize(size.width, size.height);
+      return window.getContentBounds().width;
+    }, { width, height });
+    // Native setSize returns before the renderer receives its resize event.
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(contentWidth);
+  };
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const navigation = page.getByRole("navigation", { name: "Settings" });
   const destinations = await navigation.getByRole("button").allTextContents();
   for (const destination of destinations) {
     // Navigate with the sidebar exposed, then test the compact content allocation.
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await resize(1280, 800);
     const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
     if (await showSidebar.isVisible()) await showSidebar.click();
     await navigation.getByRole("button", { name: destination.trim(), exact: true }).click();
@@ -137,10 +146,7 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
       await page.getByText("Advanced Telegram settings", { exact: true }).click();
     }
     for (const width of [1280, 600, 390]) {
-      await app.evaluate(
-        ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 650),
-        width,
-      );
+      await resize(width, 650);
       await expect
         .configure({ soft: true })
         .poll(

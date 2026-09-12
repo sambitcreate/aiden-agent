@@ -143,3 +143,9 @@ or a claim that Fedora Computer Use currently works.
 
 - Phase 5 prerequisite diagnostic: 29 tests passed; both GPT-6 Astra medium reviewers cleared. Local OrbStack container correctly reports missing SELinux/session prerequisites. This completes the diagnostic subphase only; enforced launch-boundary implementation is still pending.
 - Hosted phase 4 run 34675055415: shared verification, macOS Electron and Linux ARM64 passed. Linux x64 now reaches 52 passing tests but Providers overflows by 17px at 390px; empty-chat migration passed on retry. Android emulator package installation failed with a broken pipe. Fedora RPM remains gated on x64.
+
+## Phase 6: Narrow Providers and migration fixture repair
+
+- Reproduced the hosted 17px overflow locally; constrained the existing Providers action group to its available width. The unchanged full Settings destination/width matrix passes on Linux. Resize checks now wait for the renderer to observe native content width.
+- Migration E2E no longer writes the index while Electron can rewrite it. All seed mutations run after verified shutdown and before relaunch, with prelaunch index/journal assertions. Production migration is unchanged. Linux draft suite passed 5/5.
+- Both GPT-6 Astra medium source reviews cleared. macOS focused regressions passed 8/8; E2E TypeScript and focused lint passed. The next hosted run remains a validation gate.
