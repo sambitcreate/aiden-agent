@@ -1,7 +1,9 @@
 // Transactional global shortcut manager. The renderer/shared command catalog is
 // authoritative for defaults, validation, display, menu accelerators, and IPC.
 
-import { globalShortcut, logger } from "../platform.js";
+import { existsSync } from "node:fs";
+import { LinuxDictationPortal, resolveDictationPortalHelper } from "./linux-dictation-portal.js";
+import { globalShortcut, ipcMain, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import { DataStoreCorruptWriteError } from "./data-store.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
@@ -21,6 +23,8 @@ import {
 } from "../../renderer/shared/keybindings.js";
 import {
   reconcileGlobalShortcuts,
+  excludePortalDictationShortcut,
+  canBindPortalDictationShortcut,
   type RegisteredGlobalShortcut,
 } from "./shortcut-registration-core.js";
 import {
@@ -96,6 +100,9 @@ function globalStatuses(
     if (!binding || !globalShortcutsEnabled) {
       return { commandId: definition.id, binding, state: "disabled" };
     }
+    if (definition.id === "dictation.toggle" && activeLinuxDictationHoldShortcut()) {
+      return { commandId: definition.id, binding: null, state: "active", message: `Desktop shortcut: ${linuxHoldTriggerDescription ?? "configured by your desktop"}` };
+    }
     const active = registered.get(definition.id)?.accelerator === binding;
     return {
       commandId: definition.id,
@@ -127,8 +134,15 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
   const canonicalSettings = { ...settings, keybindings: overrides };
   const bindings = effectiveBindings(overrides);
   validateEffectiveBindings(bindings);
+  const previousBinding = lastAppliedSettings ? effectiveBindings(canonicalKeybindings(lastAppliedSettings))["dictation.toggle"] : null;
+  if (activeLinuxDictationHoldShortcut() && (!currentRuntimeProfile().globalShortcutsEnabled || recordingSuspended || !bindings["dictation.toggle"] || bindings["dictation.toggle"] !== previousBinding)) {
+    linuxDictationPortal.close();
+    linuxHoldTriggerDescription = null;
+    notifyLinuxDictationLoss();
+    announceLinuxDictationShortcut();
+  }
 
-  const desired = COMMANDS.filter((definition) => definition.global).map((definition) => ({
+  const desired = excludePortalDictationShortcut(COMMANDS.filter((definition) => definition.global).map((definition) => ({
     commandId: definition.id,
     accelerator:
       currentRuntimeProfile().globalShortcutsEnabled &&
@@ -137,7 +151,7 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
         ? bindings[definition.id]
         : null,
     handler: handlers.get(definition.id) ?? (() => undefined),
-  }));
+  })), activeLinuxDictationHoldShortcut());
 
   const result = await reconcileGlobalShortcuts(
     {
@@ -287,6 +301,9 @@ export async function applyShortcutFromSettings(): Promise<KeybindingSnapshot> {
 }
 
 export function disposeShortcut(): void {
+  linuxDictationPortal.close();
+  linuxHoldTriggerDescription = null;
+  linuxReleaseListeners.clear();
   for (const item of registered.values()) {
     try {
       globalShortcut.unregister(nativeAccelerator(item.accelerator));
@@ -298,4 +315,92 @@ export function disposeShortcut(): void {
   lastUnavailable.clear();
   recordingSuspended = false;
   lastAppliedSettings = null;
+}
+
+let linuxSessionLost: (() => void) | null = null;
+export function initLinuxDictationSessionLost(handler: () => void): void { linuxSessionLost = handler; }
+function notifyLinuxDictationLoss(): void {
+  for (const listener of [...linuxReleaseListeners]) listener.failed();
+  linuxSessionLost?.();
+}
+
+let linuxHoldTriggerDescription: string | null = null;
+let linuxPortalPressed = false;
+const linuxReleaseListeners = new Set<{ release: () => void; failed: () => void }>();
+const linuxDictationPortal = new LinuxDictationPortal({
+  activated: () => {
+    linuxPortalPressed = true;
+    handlers.get("dictation.toggle")?.();
+  },
+  deactivated: () => {
+    linuxPortalPressed = false;
+    for (const listener of [...linuxReleaseListeners]) listener.release();
+  },
+  lost: () => {
+    linuxPortalPressed = false;
+    linuxHoldTriggerDescription = null;
+    notifyLinuxDictationLoss();
+    void applyShortcutFromSettings().catch((error) => logger.warn("shortcut", "Could not restore dictation toggle shortcut.", error));
+    announceLinuxDictationShortcut();
+  },
+});
+
+function announceLinuxDictationShortcut(): void {
+  if (lastAppliedSettings) ipcMain.broadcast("shortcut:changed", shortcutSnapshot(lastAppliedSettings));
+}
+export function linuxDictationHoldSetupAvailable(): boolean {
+  const binding = lastAppliedSettings ? effectiveBindings(canonicalKeybindings(lastAppliedSettings))["dictation.toggle"] : null;
+  return process.platform === "linux" &&
+    canBindPortalDictationShortcut(currentRuntimeProfile().globalShortcutsEnabled, binding, recordingSuspended) &&
+    existsSync(resolveDictationPortalHelper());
+}
+export function activeLinuxDictationHoldShortcut(): boolean {
+  return process.platform === "linux" && linuxDictationPortal.active;
+}
+export function linuxDictationHoldTriggerDescription(): string | null {
+  return linuxHoldTriggerDescription;
+}
+export function subscribeLinuxDictationRelease(release: () => void, failed: () => void): (() => void) | null {
+  if (!activeLinuxDictationHoldShortcut()) return null;
+  const listener = { release, failed };
+  linuxReleaseListeners.add(listener);
+  // A quick release may precede asynchronous settings and cold pill startup.
+  if (!linuxPortalPressed) queueMicrotask(() => { if (linuxReleaseListeners.has(listener)) release(); });
+  return () => { linuxReleaseListeners.delete(listener); };
+}
+
+/** Explicit user action only. Startup restores the ordinary toggle, never prompts. */
+export function bindLinuxDictationHoldShortcut(): Promise<{ triggerDescription: string }> {
+  return transactions.run(async () => {
+    if (process.platform !== "linux") throw new Error("Desktop portal shortcuts require Linux.");
+    const settings = await configStore.getSettings();
+    const binding = effectiveBindings(canonicalKeybindings(settings))["dictation.toggle"];
+    if (!canBindPortalDictationShortcut(currentRuntimeProfile().globalShortcutsEnabled, binding, recordingSuspended)) {
+      throw new Error("Enable the dictation global shortcut before setting up hold-to-talk.");
+    }
+    if (activeLinuxDictationHoldShortcut()) return { triggerDescription: linuxHoldTriggerDescription! };
+    const previous = registered.get("dictation.toggle");
+    if (previous) {
+      globalShortcut.unregister(nativeAccelerator(previous.accelerator));
+      registered.delete("dictation.toggle");
+    }
+    try {
+      const result = await linuxDictationPortal.bind();
+      linuxHoldTriggerDescription = result.triggerDescription;
+      announceLinuxDictationShortcut();
+      return result;
+    } catch (error) {
+      if (lastAppliedSettings) await applyNow(lastAppliedSettings).catch(() => undefined);
+      throw error;
+    }
+  });
+}
+export function disableLinuxDictationHoldShortcut(): Promise<void> {
+  // Cancel a pending portal prompt before entering the registration queue.
+  linuxDictationPortal.close();
+  linuxPortalPressed = false;
+  linuxHoldTriggerDescription = null;
+  notifyLinuxDictationLoss();
+  announceLinuxDictationShortcut();
+  return transactions.run(async () => { if (lastAppliedSettings) await applyNow(lastAppliedSettings); });
 }

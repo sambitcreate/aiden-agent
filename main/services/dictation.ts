@@ -15,6 +15,8 @@ import { dictationPlatformBehavior } from "./dictation-platform.js";
 import { pasteTranscript, runAtomicMacPaste, type PasteDeps } from "./dictation-paste.js";
 import { DictationCoordinator } from "./dictation-coordinator.js";
 
+import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
+
 let lastPressAt = 0;
 
 function livePasteDeps(): PasteDeps {
@@ -55,10 +57,12 @@ const coordinator = new DictationCoordinator({
   clearTimer: (timer) => clearTimeout(timer),
   logError: (message, error) => logger.error("dictation", message, error),
   isHoldToTalk: async () =>
-    dictationPlatformBehavior().holdToTalk &&
-    (await configStore.getSettings()).dictationHoldToTalk === true,
+    activeLinuxDictationHoldShortcut() ||
+    (dictationPlatformBehavior().holdToTalk &&
+      (await configStore.getSettings()).dictationHoldToTalk === true),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
   cleanupTranscript: cleanupDictationTranscript,
+  ...(process.platform === "linux" ? { startReleaseWatch: subscribeLinuxDictationRelease } : {}),
   getHoldKeyCode: async () => {
     if (!dictationPlatformBehavior().holdToTalk) return null;
     const settings = await configStore.getSettings();
@@ -71,10 +75,14 @@ const coordinator = new DictationCoordinator({
       : null,
 });
 
+// A portal can disappear before the queued press has installed its release watcher.
+// Queue cancellation behind that press so no recording survives lost ownership.
+initLinuxDictationSessionLost(() => { void coordinator.cancel(); });
+
 /** Hotkey callback (fire-and-forget). Debounced against OS key chatter. */
 export function toggleDictation(): void {
   const now = Date.now();
-  if (!shouldAcceptDictationPress(lastPressAt, now)) return;
+  if (!activeLinuxDictationHoldShortcut() && !shouldAcceptDictationPress(lastPressAt, now)) return;
   lastPressAt = now;
   void coordinator.press();
 }

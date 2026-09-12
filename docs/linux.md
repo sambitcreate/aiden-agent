@@ -103,7 +103,12 @@ Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
-macOS Accessibility auto-paste transaction. Wayland compositors own final
+macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
+in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts
+portal. Setup is explicit for each app session; startup never opens a permission
+dialog. The desktop may assign a different trigger, which Aiden displays. If
+the session ends, or shortcuts are edited, Aiden returns to toggle behavior.
+Desktops without this portal keep toggle dictation. Wayland compositors own final
 placement of the dictation pill, so exact bottom-center positioning may vary.
 
 Provider inventories may refresh only from the provider services the user has

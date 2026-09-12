@@ -1,4 +1,5 @@
 import * as React from "react";
+import { shortcutApi } from "./ipc";
 
 export interface AppCapabilities {
   platform: "darwin" | "linux" | "other";
@@ -9,6 +10,8 @@ export interface AppCapabilities {
   dockIcon: boolean;
   accessibilityPaste: boolean;
   dictationHoldToTalk: boolean;
+  dictationHoldSetup: boolean;
+  dictationHoldTrigger: string | null;
   nativeShare: boolean;
   appleFoundationModels: boolean;
 }
@@ -22,6 +25,8 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   dockIcon: false,
   accessibilityPaste: false,
   dictationHoldToTalk: false,
+  dictationHoldSetup: false,
+  dictationHoldTrigger: null,
   nativeShare: false,
   appleFoundationModels: false,
 });
@@ -41,6 +46,8 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,
     dictationHoldToTalk: record.dictationHoldToTalk === true,
+    dictationHoldSetup: record.dictationHoldSetup === true,
+    dictationHoldTrigger: typeof record.dictationHoldTrigger === "string" ? record.dictationHoldTrigger.slice(0, 128) : null,
     nativeShare: record.nativeShare === true,
     appleFoundationModels: record.appleFoundationModels === true,
   };
@@ -64,18 +71,25 @@ export function AppCapabilitiesProvider({
     if (!refresh) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let revision = 0;
     const update = async () => {
+      const request = ++revision;
       try {
         const next = await refresh();
-        if (!cancelled) setCurrent(next);
+        if (!cancelled && request === revision) setCurrent(next);
       } catch {
-        if (!cancelled) timer = setTimeout(() => void update(), 1_000);
+        if (!cancelled && request === revision) timer = setTimeout(() => void update(), 1_000);
       }
     };
     void update();
+    const onFocus = () => void update();
+    window.addEventListener("focus", onFocus);
+    const unsubscribe = shortcutApi.onChanged(onFocus);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+      unsubscribe();
     };
   }, [refresh]);
 

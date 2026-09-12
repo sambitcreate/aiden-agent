@@ -19,6 +19,7 @@
 import { supportsAppUpdates } from "../services/app-updater.js";
 import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
+import { activeLinuxDictationHoldShortcut, linuxDictationHoldSetupAvailable, linuxDictationHoldTriggerDescription } from "../services/shortcut.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 
@@ -40,7 +41,9 @@ export const appHandlers = {
         computerUse: host.computerUse,
         dockIcon: host.dockIcon,
         accessibilityPaste: host.accessibilityPaste,
-        dictationHoldToTalk: host.dictationHoldToTalk,
+        dictationHoldToTalk: host.dictationHoldToTalk || activeLinuxDictationHoldShortcut(),
+        dictationHoldSetup: linuxDictationHoldSetupAvailable(),
+        dictationHoldTrigger: linuxDictationHoldTriggerDescription(),
         nativeShare: host.nativeShare,
         appleFoundationModels: host.appleFoundationModels,
       },

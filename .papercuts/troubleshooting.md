@@ -474,3 +474,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: ARM64 OrbStack recording reproduces outside Aiden; renderer SIGILL at cntd matches libyuv fab11704 (SME without SVE on Apple ARM). Environment disable flags are excluded from Chromium builds; requires an upstream-fixed Electron binary. Debugger used an isolated SYS_PTRACE container.
 
 - 2026-09-12: electron-updater quitAndInstall swallows installer failures; Linux handoff must track actual install result so protected shutdown still quits on failure. Real AppImage mount acceptance required fuse3 plus /dev/fuse and SYS_ADMIN in an isolated container.
+
+- 2026-09-12: Portal hold review caught ordinary shortcut reconciliation reclaiming its chord and async Settings writes lacking commit-time revision fencing. Fixed both with regression tests. Hosted x64 revealed native chrome leaves573px content in600px window, exposing ModelPad minimum-size overflow.

@@ -366,7 +366,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Choose shortcut behavior in Voice settings. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",

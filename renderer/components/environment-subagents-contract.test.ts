@@ -271,7 +271,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(bootstrap, /refresh=\{refreshAppCapabilities\}/u);
   const capabilityProvider = source("../lib/app-capabilities.tsx");
   assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
-  assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
+  assert.match(capabilityProvider, /if \(!cancelled && request === revision\) setCurrent\(next\)/u);
   assert.match(environment, /const tab = normalizeEnvironmentPanelTab\(/u);
   assert.match(environment, /surfaceState\.toolsTab, subagentsEnabled/u);
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
@@ -623,8 +623,8 @@ test("dictation settings match host support even with a saved hold preference", 
   assert.equal(parseAppCapabilities({ dictationHoldToTalk: "true" }).dictationHoldToTalk, false);
   const source = readFileSync(new URL("./settings/dictation-shortcut-settings.tsx", import.meta.url), "utf8");
   assert.match(source, /const holdToTalk = capabilities\.dictationHoldToTalk && settings\.data\?\.dictationHoldToTalk === true/u);
-  assert.match(source, /capabilities\.dictationHoldToTalk \? \([\s\S]*?<RadioGroupItem value="hold"/u);
-  assert.match(source, /dictationHoldToTalk: capabilities\.dictationHoldToTalk && value === "hold"/u);
+  assert.match(source, /canChooseHold \? \([\s\S]*?<RadioGroupItem value="hold"/u);
+  assert.match(source, /dictationHoldToTalk: canChooseHold && value === "hold"/u);
   assert.match(source, /value=\{holdToTalk \? "hold" : "toggle"\}/u);
   assert.match(source, /Press the global dictation shortcut once to start and again to stop\./u);
 });
@@ -643,4 +643,18 @@ test("app update controls require an explicit main-owned runtime capability", ()
   assert.equal(parseAppCapabilities({ platform: "linux", appUpdates: true }).appUpdates, true);
   const handler = source("../../main/handlers/app.ts");
   assert.match(handler, /appUpdates: supportsAppUpdates\(\)/u);
+});
+
+
+test("Linux hold setup is distinct from an active desktop binding", () => {
+  const setup = parseAppCapabilities({ platform: "linux", dictationHoldSetup: true, dictationHoldToTalk: false });
+  assert.equal(setup.dictationHoldSetup, true);
+  assert.equal(setup.dictationHoldToTalk, false);
+  assert.equal(parseAppCapabilities({ dictationHoldSetup: "true", dictationHoldTrigger: 7 }).dictationHoldSetup, false);
+  assert.equal(parseAppCapabilities({ dictationHoldTrigger: 7 }).dictationHoldTrigger, null);
+  assert.equal(parseAppCapabilities({ dictationHoldTrigger: "Desktop shortcut" }).dictationHoldTrigger, "Desktop shortcut");
+  const settings = source("./settings/dictation-shortcut-settings.tsx");
+  assert.match(settings, /capabilities\.dictationHoldToTalk \|\| capabilities\.dictationHoldSetup/u);
+  assert.match(settings, /disabled=\{holdBusy\}/u);
+  assert.match(settings, /desktop assign a hold shortcut for this session/u);
 });

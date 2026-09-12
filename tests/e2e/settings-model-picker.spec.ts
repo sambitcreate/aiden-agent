@@ -220,6 +220,11 @@ test("every Settings destination renders and a one-model local inventory stays u
       ),
     ).toBeVisible();
 
+    const holdChoice = page.getByRole("radio", { name: /Hold to dictate/u });
+    // The development fixture disables global shortcuts; setup must honor that policy.
+    await expect(holdChoice).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Press to toggle/u })).toBeChecked();
+
     await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
     await expect(page.getByRole("link", { name: "Open releases", exact: true })).toBeVisible();
   }

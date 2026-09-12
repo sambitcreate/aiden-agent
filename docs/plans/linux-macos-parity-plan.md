@@ -68,3 +68,15 @@ A minimal visible-canvas Electron reproduction crashes at the ARM SVE instructio
 - Implement atomic replacement with failure preservation and test disposable files before enabling installation. Both Astra medium reviewers cleared final changes after fixing swallowed installer failures during restart handoff.
 
 - Phase 3b validation: 19 updater tests, 27 release/branding script tests, 30 About/capability tests passed; full lint and TypeScript passed. ARM64 distributions built and verified. A real FUSE-mounted disposable AppImage passed runtime eligibility, atomic replacement, and replacement executable launch/version acceptance. Feed generation/verification passed against real package bytes. Future-version GitHub download and full production restart remain a release acceptance check.
+
+## Phase 3c: Linux hold dictation (complete implementation)
+
+- Explicit Voice Settings choice creates a desktop-owned GlobalShortcuts portal session; no permission prompts on startup. The displayed trigger comes from the compositor. Session loss, binding changes, disabled policy, and recorder suspension restore toggle ownership.
+- Native helper fences portal owner/request/session/shortcut signals. Main fences helper generations, early release and recording operations. Persistence commits use the latest Settings revision.
+- Both Astra medium reviews cleared after fixes for duplicate toggle registration and stale Settings persistence.
+- Nine native private-D-Bus cases, 87 voice tests, onboarding, Linux Settings Electron, TypeScript, full lint, ARM64 package build/verifier passed. Full desktop command passed 5,946 tests, 3 skipped, zero failures.
+- Real GNOME/KDE shortcut assignment and physical press/release acceptance remain external to the mock and Xvfb tests. Linux transcript delivery remains clipboard-only.
+
+## Phase 4: Hosted acceptance repair (active)
+
+Hosted CI at cedcc841 passed shared verification, macOS Electron, Android, and Linux ARM64. Linux x64 passed packaging/keyring but failed three Electron cases: legacy empty-chat migration, unsupported Computer Use setup expectation, and Model Pad minimum-height fit with Linux window chrome. Repair and rerun before final acceptance; Fedora RPM job depends on x64 success.

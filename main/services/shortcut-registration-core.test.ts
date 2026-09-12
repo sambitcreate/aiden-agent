@@ -3,6 +3,8 @@ import test from "node:test";
 import type { CommandId } from "../../renderer/shared/keybindings";
 import {
   reconcileGlobalShortcuts,
+  excludePortalDictationShortcut,
+  canBindPortalDictationShortcut,
   type RegisteredGlobalShortcut,
   type ShortcutRegistrationPort,
 } from "./shortcut-registration-core";
@@ -96,4 +98,33 @@ test("recorder suspension releases every owned shortcut and restores them afterw
   ]);
   assert.equal(restored.ok, true);
   assert.deepEqual([...active].sort(), ["Command+Alt+A", "Command+Alt+Space"]);
+});
+
+test("an unrelated settings reconciliation preserves exclusive portal dictation ownership", async () => {
+  const { active, port } = fakePort();
+  active.add("Command+Alt+Space");
+  const current = new Map<CommandId, RegisteredGlobalShortcut>([
+    ["composer.focus", registered("composer.focus", "Command+Alt+Space")],
+  ]);
+  const desired = [
+    registered("composer.focus", "Command+Alt+Space"),
+    registered("dictation.toggle", "Command+Shift+D"),
+    registered("assistant.open", "Command+Alt+A"),
+  ];
+  const portalOwned = await reconcileGlobalShortcuts(port, current, excludePortalDictationShortcut(desired, true));
+  assert.equal(portalOwned.ok, true);
+  assert.equal(portalOwned.registered.has("dictation.toggle"), false);
+  assert.deepEqual([...active].sort(), ["Command+Alt+A", "Command+Alt+Space"]);
+  const fallback = await reconcileGlobalShortcuts(port, portalOwned.registered, excludePortalDictationShortcut(desired, false));
+  assert.equal(fallback.ok, true);
+  assert.equal(active.has("Command+Shift+D"), true);
+});
+
+test("portal setup cannot bypass disabled runtime policy, disabled binding, or chord recording", () => {
+  assert.equal(canBindPortalDictationShortcut(false, "Command+Shift+D", false), false);
+  assert.equal(canBindPortalDictationShortcut(true, null, false), false);
+  assert.equal(canBindPortalDictationShortcut(true, undefined, false), false);
+  assert.equal(canBindPortalDictationShortcut(true, "", false), false);
+  assert.equal(canBindPortalDictationShortcut(true, "Command+Shift+D", true), false);
+  assert.equal(canBindPortalDictationShortcut(true, "Command+Shift+D", false), true);
 });
