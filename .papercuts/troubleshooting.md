@@ -432,4 +432,3 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Production provider 400s are untriageable from `logs/aiden.log` alone: the real error text survives only in `userData/pi-compaction-sessions/*.jsonl` (per-message `errorMessage`), because the diagnostic journal strips provider messages outside the development profile. Check the journals before assuming a classification.
 - `@earendil-works/pi-ai` transports merge `model.headers` into every outgoing request and merge `options.headers` last — a per-conversation header can be attached once at runtime-model resolution instead of threading it through each call site.
-- `subagent-artifacts/*_output.md` under `~/.pi/agent/sessions/<repo>/` holds full subagent reports when workflow returns arrive truncated in the completion notification.

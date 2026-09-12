@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer, type Server } from "node:http";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { resolveModelRuntimeWith, withPinnedBotProviderAuth } from "./model-runtime-core.js";
 import {
   OPENCODE_SESSION_HEADER,
@@ -182,28 +183,47 @@ test("the attributed model's header reaches the outgoing HTTP request", async ()
   const address = server.address();
   assert.ok(address && typeof address === "object");
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-  const streams = openAICompletionsApi();
   const context = {
     systemPrompt: "",
     messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: Date.now() }],
   };
-  const attributed = withOpenCodeSessionAttribution(
-    model({ provider: "opencode-go", baseUrl }),
-    "chat-wire",
-  );
-  const control = model({ provider: "concentrate", baseUrl, headers: undefined });
-  for (const candidate of [attributed, control]) {
-    try {
-      await streams
-        .streamSimple(candidate, context, { apiKey: "test-key" })
-        .result();
-    } catch {
-      // The stub server rejects every request; only the headers matter.
+  // OpenCode Go models ship on three transports; pin the header on each so a
+  // pi-ai change that stops merging model.headers fails loudly per transport.
+  const transports: Array<{
+    name: string;
+    api: Api;
+    streamSimple: ReturnType<typeof openAICompletionsApi>["streamSimple"];
+  }> = [
+    { name: "openai-completions", api: "openai-completions", streamSimple: openAICompletionsApi().streamSimple },
+    { name: "openai-responses", api: "openai-responses", streamSimple: openAIResponsesApi().streamSimple },
+    { name: "anthropic-messages", api: "anthropic-messages", streamSimple: anthropicMessagesApi().streamSimple },
+  ];
+  for (const transport of transports) {
+    received.length = 0;
+    const attributed = withOpenCodeSessionAttribution(
+      model({ provider: "opencode-go", api: transport.api, baseUrl }),
+      "chat-wire",
+    );
+    const control = model({ provider: "concentrate", api: transport.api, baseUrl });
+    for (const candidate of [attributed, control]) {
+      try {
+        await transport.streamSimple(candidate, context, { apiKey: "test-key" }).result();
+      } catch {
+        // The stub server rejects every request; only the headers matter.
+      }
     }
+    assert.equal(
+      received[0]?.[OPENCODE_SESSION_HEADER],
+      "chat-wire",
+      `${transport.name}: attributed request must carry the session header`,
+    );
+    assert.equal(
+      received[1]?.[OPENCODE_SESSION_HEADER],
+      undefined,
+      `${transport.name}: unrelated provider must not carry the session header`,
+    );
   }
   server.close();
-  assert.equal(received[0]?.[OPENCODE_SESSION_HEADER], "chat-wire");
-  assert.equal(received[1]?.[OPENCODE_SESSION_HEADER], undefined);
 });
 
 const NATIVE_MODEL: Model<Api> = model();
