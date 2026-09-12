@@ -1,10 +1,11 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–6 complete; final regression and delivery validation in progress
+Status: Complete — Phases 1–6 implemented, independently reviewed, and locally validated
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
-Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
-Research notes: [Stitch product and interaction findings](../../stitch-ideas.md)
+Delivery: [PR #85](https://github.com/sambitcreate/aiden-agent/pull/85); hosted CI status is authoritative on the PR.
+Predecessor: [Design Workspace Durable Projects and Handoff](design-workspace-claude-alignment-plan.md)
+Research notes: [Stitch product and interaction findings](../../../stitch-ideas.md)
 
 ## Objective
 
@@ -24,7 +25,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 - [x] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
 - [x] Phase 5 — bounded prototype graph and host verification
 - [x] Phase 6 — project export and handoff V2
-- [ ] Final — combined review, full CI, packaged acceptance, and PR delivery
+- [x] Final — combined review, full local regression, signed development-package acceptance, and PR preparation
 
 Each phase requires focused implementation tests, two independent GPT-6 Astra reviews at medium reasoning effort (correctness/edge cases and integration/UI/UX where applicable), remediation, and rerun verification before the next phase begins.
 
@@ -60,6 +61,14 @@ Each phase requires focused implementation tests, two independent GPT-6 Astra re
 - V2 handoff journals retain V1 recovery compatibility and record reviewed brief, selected sources, chosen directions, language hash, prototype summary, responsive intent, and accessibility notes. Shared authority revalidates every source and binding before effects and model use.
 - Both GPT-6 Astra medium reviewers cleared the phase after narrowing credential detection and sharing the complete context byte-budget check before any handoff effect. Independent rereviews passed 10 and 22 focused tests; runtime focused coverage passed 39 tests.
 - Combined Generative UI suite passed 444 tests plus 42 recovery tests, 12 policy tests, and nine browser scenarios before final remediation; final focused export/contract tests, onboarding, type-check, lint, build, and rebuilt Studio Electron acceptance passed. Final combined regression remains tracked below.
+
+### Final local acceptance
+
+- Full npm regression passed, including all 1,598 tests in the final suite. The final export-state fix additionally passed its mounted-browser regression and both Astra medium rereviews.
+- Final type checks, lint, production build, 10 browser scenarios, and two Electron Design scenarios passed. Existing iOS generic-hardware test compilation and Android unit/test compilation evidence is recorded above.
+- Developer ID signed development package passed hardened-package verification and isolated launch/restart acceptance: V2 creation, reviewed Design Language save/apply, persistence after restart, detach, and empty-export rejection. An Apple timestamp-service failure during rebuilding was retried without changing signing requirements.
+- Final combined reviews were clear after reconciling export state across Refine, Detach, and Connect App. Completed handoff replay remains idempotent after later source changes.
+- This completes source implementation and local automated acceptance. Hosted exact-head CI is tracked on PR #85. Notarized distribution, VoiceOver operator acceptance, physical-device behavior, and credentialed live-model acceptance are separate release/operator gates and are not claimed here.
 
 ## Product and vocabulary contract
 
