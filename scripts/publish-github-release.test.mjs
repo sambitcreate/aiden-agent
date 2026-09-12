@@ -8,6 +8,8 @@ import { URL } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 
+import { prepareLinuxUpdateFeed } from "./prepare-linux-update-feed.mjs";
+
 const execFileAsync = promisify(execFile);
 const publisher = new URL("./publish-github-release.sh", import.meta.url);
 
@@ -87,6 +89,8 @@ async function fixture(initialState) {
     writeFile(path.join(distribution, "Aiden-Agent-0.30.1-aarch64-linux.rpm"), "rpm"),
     writeFile(path.join(distribution, "latest-mac.yml"), "version: 0.30.1\n"),
   ]);
+  await prepareLinuxUpdateFeed(distribution, "x64", "0.30.1");
+  await prepareLinuxUpdateFeed(distribution, "arm64", "0.30.1");
   const ghPath = path.join(bin, "gh");
   const statePath = path.join(root, "state.json");
   await writeFile(ghPath, fakeGhSource, "utf8");
@@ -151,6 +155,8 @@ test("reconciles transient lookup, create, and publish failures without replacin
       "Aiden-Agent-0.30.1-aarch64-linux.rpm",
       "SHA256SUMS",
       "latest-mac.yml",
+      "latest-linux.yml",
+      "latest-linux-arm64.yml",
     ].sort(),
   );
 });
@@ -200,4 +206,13 @@ test("fails closed when an ambiguous create resolves to a foreign release", asyn
   assert.equal(state.createCalls, 1);
   assert.equal(state.uploadCalls, 0);
   assert.equal(state.editCalls, 0);
+});
+
+test("rejects mismatched Linux update feeds before creating a release", async () => {
+  const setup = await fixture({});
+  await writeFile(path.join(setup.distribution, "latest-linux-arm64.yml"), "version: 0.30.1\n");
+  await assert.rejects(execFileAsync("bash", [publisher.pathname, setup.distribution], { env: setup.env }), /does not match/u);
+  const state = JSON.parse(await readFile(setup.statePath, "utf8"));
+  assert.equal(state.createCalls, 0);
+  assert.equal(state.uploadCalls, 0);
 });

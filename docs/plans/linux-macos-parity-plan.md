@@ -39,7 +39,7 @@ After every phase, two independent GPT-6 Astra reviewers at medium effort review
 | Bots and Bot Telegram routes | Linux Secret Service authority implemented; two source reviews cleared | Native keyring, ARM64 packaging and Linux Settings acceptance passed; hosted multi-distro gates remain |
 | Dictation capture/transcription | Available; toggle shortcut and clipboard delivery | Desktop-owned release events and safe paste when available, X11/Wayland acceptance |
 | Computer Use | Gated off; broker and process trust require macOS | Linux capture/input/accessibility backend and equivalent lifecycle/security boundary |
-| Updates | Package replacement / release link | Respect DEB/RPM ownership; define supported AppImage/update delivery |
+| Updates | Eligible mounted AppImages support verified downloads and atomic replacement; DEB/RPM remain package-manager owned | Future published-version download/restart acceptance |
 | Apple-only services | Apple Foundation Models and Dock integration unavailable by platform | Preserve local model alternatives and native Linux desktop behavior |
 
 Full parity is not claimed by the shared-feature merge. Native implementation and target desktop acceptance remain required.
@@ -59,3 +59,12 @@ Full parity is not claimed by the shared-feature merge. Native implementation an
 ### ARM64 recording diagnosis
 
 A minimal visible-canvas Electron reproduction crashes at the ARM SVE instruction `cntd` on this OrbStack host (SME present, SVE absent). This matches upstream libyuv [fab11704](https://chromium.googlesource.com/libyuv/libyuv/+/fab11704cda62ff2d6b5e308b741e759ae816035). Chromium ignores libyuv environment-disable variables. No Aiden recorder change is justified by current evidence; acceptance needs an Electron build containing the upstream fix. This is specific to the tested CPU feature combination, not evidence that all ARM64 recording fails.
+
+## Phase 3b: AppImage update delivery (complete)
+
+- Add runtime eligibility for writable mounted production AppImages, preserving package-manager updates for DEB/RPM and manual replacement for extracted/read-only images.
+- Reuse About update controls through a main-provided capability; preserve Darwin behavior and avoid Linux signing claims.
+- Generate architecture-specific minimal AppImage feeds from exact release bytes; verify hashes again before publishing any release assets.
+- Implement atomic replacement with failure preservation and test disposable files before enabling installation. Both Astra medium reviewers cleared final changes after fixing swallowed installer failures during restart handoff.
+
+- Phase 3b validation: 19 updater tests, 27 release/branding script tests, 30 About/capability tests passed; full lint and TypeScript passed. ARM64 distributions built and verified. A real FUSE-mounted disposable AppImage passed runtime eligibility, atomic replacement, and replacement executable launch/version acceptance. Feed generation/verification passed against real package bytes. Future-version GitHub download and full production restart remain a release acceptance check.

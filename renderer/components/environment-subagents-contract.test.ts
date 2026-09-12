@@ -636,3 +636,11 @@ test("Linux main capabilities enable existing Bot surfaces without enabling Appl
   assert.equal(capabilities.dictationHoldToTalk, false);
   assert.equal(capabilities.appleFoundationModels, false);
 });
+
+test("app update controls require an explicit main-owned runtime capability", () => {
+  assert.equal(parseAppCapabilities({ platform: "linux" }).appUpdates, false);
+  assert.equal(parseAppCapabilities({ platform: "linux", appUpdates: "true" }).appUpdates, false);
+  assert.equal(parseAppCapabilities({ platform: "linux", appUpdates: true }).appUpdates, true);
+  const handler = source("../../main/handlers/app.ts");
+  assert.match(handler, /appUpdates: supportsAppUpdates\(\)/u);
+});

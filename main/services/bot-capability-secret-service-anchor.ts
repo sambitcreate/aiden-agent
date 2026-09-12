@@ -19,7 +19,7 @@ export function secretServiceAuthorityEnvironment(source: NodeJS.ProcessEnv = pr
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
   const runtimeDir = source.XDG_RUNTIME_DIR;
   if (runtimeDir && runtimeDir.length <= 4096 && path.isAbsolute(runtimeDir) &&
-      !/[\x00-\x1f\x7f]/u.test(runtimeDir) && path.normalize(runtimeDir) === runtimeDir) {
+      Array.from(runtimeDir).every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127) && path.normalize(runtimeDir) === runtimeDir) {
     env.XDG_RUNTIME_DIR = runtimeDir;
   }
   const bus = source.DBUS_SESSION_BUS_ADDRESS;

@@ -271,6 +271,7 @@ jobs:
           set -euo pipefail
           npm run dist:linux
           node scripts/verify-linux-package.mjs release/linux-distribution
+          node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
           dpkg --verify aiden-agent
           ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"

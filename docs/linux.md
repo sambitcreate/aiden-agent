@@ -113,10 +113,15 @@ Settings may refresh that cache; startup and ordinary reads stay offline.
 
 ## Updates and troubleshooting
 
-Linux builds do not apply macOS-style in-app updates. Install the newer `.deb`
-or `.rpm` over the existing package, replace the AppImage, or follow the package
-manager that owns the installation. Settings → About links directly to the
-release page.
+Writable production AppImages mounted by their launcher use Settings → About
+for update checks, downloads, and restart. Downloads are verified against the
+SHA-512 digest in the architecture-specific GitHub release feed. Updates retain
+the current AppImage filename. Unlike macOS releases, this does not provide Apple
+code-signing verification.
+
+Install the newer `.deb` or `.rpm` through the package manager that owns the
+installation. Read-only AppImages and extraction-mode launches also use manual
+replacement. Settings → About links to GitHub Releases for these installations.
 
 If a global shortcut is unavailable, check the desktop's shortcut portal or
 conflicts with another application and assign another chord under Settings →

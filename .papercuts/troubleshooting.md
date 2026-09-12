@@ -472,3 +472,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-12: Reusing a container snapshot with Xvfb state stalled xvfb-run readiness; a fresh explicit display restored the bounded Electron test.
 
 - 2026-09-12: ARM64 OrbStack recording reproduces outside Aiden; renderer SIGILL at cntd matches libyuv fab11704 (SME without SVE on Apple ARM). Environment disable flags are excluded from Chromium builds; requires an upstream-fixed Electron binary. Debugger used an isolated SYS_PTRACE container.
+
+- 2026-09-12: electron-updater quitAndInstall swallows installer failures; Linux handoff must track actual install result so protected shutdown still quits on failure. Real AppImage mount acceptance required fuse3 plus /dev/fuse and SYS_ADMIN in an isolated container.

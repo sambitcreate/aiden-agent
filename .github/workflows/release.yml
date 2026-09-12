@@ -220,6 +220,7 @@ jobs:
           npm run models:refresh
           npm run dist:linux
           node scripts/verify-linux-package.mjs release/linux-distribution
+          node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
           dpkg --verify aiden-agent
           ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
@@ -266,6 +267,7 @@ jobs:
             release/linux-distribution/*.AppImage
             release/linux-distribution/*.deb
             release/linux-distribution/*.rpm
+            release/linux-distribution/latest-linux*.yml
           if-no-files-found: error
           retention-days: 2
 

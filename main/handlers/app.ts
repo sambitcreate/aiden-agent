@@ -16,6 +16,7 @@
  * ```
  */
 
+import { supportsAppUpdates } from "../services/app-updater.js";
 import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
@@ -35,6 +36,7 @@ export const appHandlers = {
         platform: host.platform,
         subagents: subagentsEnabled(),
         bots: host.bots,
+        appUpdates: supportsAppUpdates(),
         computerUse: host.computerUse,
         dockIcon: host.dockIcon,
         accessibilityPaste: host.accessibilityPaste,

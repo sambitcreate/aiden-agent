@@ -115,6 +115,10 @@ else
   fi
 fi
 
+for update_arch in x64 arm64; do
+  node "$(dirname "$0")/prepare-linux-update-feed.mjs" "$distribution_dir" "$update_arch" "$RELEASE_VERSION" --verify
+done
+
 cd "$distribution_dir"
 shopt -s nullglob
 dmg_assets=( *.dmg )
@@ -175,7 +179,7 @@ shasum -a 256 -- \
   "${appimage_assets[@]}" \
   "${deb_assets[@]}" \
   "${rpm_assets[@]}" \
-  latest-mac.yml > SHA256SUMS
+  latest-mac.yml latest-linux.yml latest-linux-arm64.yml > SHA256SUMS
 website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
 printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
 
@@ -186,6 +190,8 @@ release_assets=(
   "${deb_assets[@]}"
   "${rpm_assets[@]}"
   latest-mac.yml
+  latest-linux.yml
+  latest-linux-arm64.yml
   SHA256SUMS
   "$website_dmg"
 )
@@ -196,6 +202,8 @@ expected_asset_names=(
   "${deb_assets[@]}"
   "${rpm_assets[@]}"
   latest-mac.yml
+  latest-linux.yml
+  latest-linux-arm64.yml
   SHA256SUMS
   "$(basename "$website_dmg")"
 )

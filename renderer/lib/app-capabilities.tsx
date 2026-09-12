@@ -4,6 +4,7 @@ export interface AppCapabilities {
   platform: "darwin" | "linux" | "other";
   subagents: boolean;
   bots: boolean;
+  appUpdates: boolean;
   computerUse: boolean;
   dockIcon: boolean;
   accessibilityPaste: boolean;
@@ -16,6 +17,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   platform: "other",
   subagents: false,
   bots: false,
+  appUpdates: false,
   computerUse: false,
   dockIcon: false,
   accessibilityPaste: false,
@@ -34,6 +36,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
         : "other",
     subagents: record.subagents === true,
     bots: record.bots === true,
+    appUpdates: record.appUpdates === true,
     computerUse: record.computerUse === true,
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,
