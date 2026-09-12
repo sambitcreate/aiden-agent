@@ -794,7 +794,17 @@ test("duplicate remaps complete artifact history, assets, nodes, and lineage", a
   });
   source = await store.saveDesignLanguage({projectId:source.id,expectedRevision:source.revision,document:{version:1,name:"Copied language",guidance:"",tokens:{colors:{},spacing:{},typography:{},radii:{}}},provenance:{kind:"derived",lineageId:"lineage:checkout",mediaId:"design:checkout-b",contentHash:"a".repeat(64)}});
   source = await store.applyDesignLanguage({projectId:source.id,expectedRevision:source.revision,languageId:source.designLanguages![0]!.id});
+  source = await store.savePrototype({projectId:source.id,expectedRevision:source.revision,graph:{version:1,entryMediaId:"design:checkout-b",nodes:[{lineageId:"lineage:checkout",mediaId:"design:checkout-b",contentHash:"b".repeat(64)}],edges:[{id:"edge:self",fromMediaId:"design:checkout-b",toMediaId:"design:checkout-b",selector:"#again",trigger:"click",transition:"none"}]}});
+  source = await store.recordPrototypeVerification({projectId:source.id,expectedRevision:source.revision,graphHash:source.prototype!.contentHash,evidence:{verifiedAt:1,passedEdgeIds:["edge:self"]}});
   const copy = await store.duplicate({ id: source.id, expectedRevision: source.revision });
+  assert.equal(copy.prototype!.verification,undefined);
+  assert.equal(copy.prototype!.nodes[0]!.mediaId,"design:copy-b");
+  assert.equal(copy.prototype!.entryMediaId,"design:copy-b");
+  assert.equal(copy.prototype!.nodes[0]!.lineageId,copy.canvas.nodes[0]!.lineageId);
+  assert.equal(copy.prototype!.nodes[0]!.contentHash,"b".repeat(64));
+  assert.equal(copy.prototype!.edges[0]!.fromMediaId,"design:copy-b");
+  assert.equal(copy.prototype!.edges[0]!.toMediaId,"design:copy-b");
+  assert.notEqual(copy.prototype!.contentHash,source.prototype!.contentHash);
   assert.equal(copy.designLanguages!.length,1);
   assert.notEqual(copy.designLanguages![0]!.id,source.designLanguages![0]!.id);
   assert.equal(copy.designLanguages![0]!.contentHash,source.designLanguages![0]!.contentHash);
@@ -1664,4 +1674,44 @@ test("duplicate fails closed when a derived language source cannot be remapped",
   assert.equal(rolledBack,true);
   assert.deepEqual((await store.get(source.id))!.designLanguages![0]!.provenance,provenance);
   assert.equal(await store.getByChatId("chat:missing-copy"),undefined);
+});
+
+test("Prototype saves exact sources, verifies with CAS, and becomes stale or broken after repair", async t => {
+  const {designPrototypeStatus}=await import("./design-prototype-core.js");
+  const root=await temporaryRoot(t);const store=new DesignProjectStore({root:()=>root});await store.initialize();
+  let project=await store.create({chatId:"chat:prototype",title:"Prototype",connectionState:"prototype-only",canvas:canvas(),referenceAssetIds:["asset:reference-a"]});
+  const graph={version:1 as const,entryMediaId:"design:checkout-b",nodes:[{lineageId:"lineage:checkout",mediaId:"design:checkout-b",contentHash:"b".repeat(64)}],edges:[{id:"edge:self",fromMediaId:"design:checkout-b",toMediaId:"design:checkout-b",trigger:"click" as const,selector:"#again",transition:"none" as const}]};
+  await assert.rejects(store.savePrototype({projectId:project.id,expectedRevision:project.revision,graph:{...graph,entryMediaId:"design:checkout-a",nodes:[{...graph.nodes[0]!,mediaId:"design:checkout-a"}],edges:[]}}),/sources changed/);
+  project=await store.savePrototype({projectId:project.id,expectedRevision:project.revision,graph});
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"unverified");
+  await assert.rejects(store.recordPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash:"c".repeat(64),evidence:{verifiedAt:1,passedEdgeIds:["edge:self"]}}),/graph changed/);
+  await assert.rejects(store.recordPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash:project.prototype!.contentHash,evidence:{verifiedAt:1,passedEdgeIds:[]}}),/Invalid/);
+  project=await store.recordPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash:project.prototype!.contentHash,evidence:{verifiedAt:1,passedEdgeIds:["edge:self"]}});
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"verified");
+  const restarted=new DesignProjectStore({root:()=>root});await restarted.initialize();assert.deepEqual(await restarted.get(project.id),project);
+  const oldRevision=project.revision;
+  project=await store.setActiveRevision({id:project.id,expectedRevision:project.revision,lineageId:"lineage:checkout",mediaId:"design:checkout-a"});
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"stale");
+  await assert.rejects(store.recordPrototypeVerification({projectId:project.id,expectedRevision:oldRevision,graphHash:project.prototype!.contentHash,evidence:{verifiedAt:2,passedEdgeIds:["edge:self"]}}),DesignProjectRevisionConflictError);
+  await assert.rejects(store.recordPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash:project.prototype!.contentHash,evidence:{verifiedAt:2,passedEdgeIds:["edge:self"]}}),/sources changed/);
+  project=await store.removeMissingGeneratedRevision({projectId:project.id,expectedRevision:project.revision,lineageId:"lineage:checkout",missingMediaId:"design:checkout-b",expectedActiveMediaId:"design:checkout-a"});
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"broken");
+});
+
+
+test("failed Prototype re-verification clears prior success with exact CAS", async t => {
+  const {designPrototypeStatus}=await import("./design-prototype-core.js");
+  const root=await temporaryRoot(t);const store=new DesignProjectStore({root:()=>root});await store.initialize();
+  let project=await store.create({chatId:"chat:clear-proof",title:"Proof",connectionState:"prototype-only",canvas:canvas(),referenceAssetIds:["asset:reference-a"]});
+  project=await store.savePrototype({projectId:project.id,expectedRevision:project.revision,graph:{version:1,entryMediaId:"design:checkout-b",nodes:[{lineageId:"lineage:checkout",mediaId:"design:checkout-b",contentHash:"a".repeat(64)}],edges:[{id:"edge:self",fromMediaId:"design:checkout-b",toMediaId:"design:checkout-b",selector:"#again",trigger:"click",transition:"none"}]}});
+  const graphHash=project.prototype!.contentHash;
+  project=await store.recordPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash,evidence:{verifiedAt:1,passedEdgeIds:["edge:self"]}});
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"verified");
+  await assert.rejects(store.clearPrototypeVerification({projectId:project.id,expectedRevision:project.revision-1,graphHash}),DesignProjectRevisionConflictError);
+  await assert.rejects(store.clearPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash:"f".repeat(64)}),/graph changed/);
+  project=await store.clearPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash});
+  assert.equal(project.prototype!.verification,undefined);
+  assert.equal(designPrototypeStatus(project.prototype!,project.canvas),"unverified");
+  assert.equal((await store.clearPrototypeVerification({projectId:project.id,expectedRevision:project.revision,graphHash})).revision,project.revision);
+  const restarted=new DesignProjectStore({root:()=>root});await restarted.initialize();assert.deepEqual(await restarted.get(project.id),project);
 });

@@ -51,6 +51,12 @@ test("Design Studio exposes a coherent keyboard-accessible blank workbench", asy
   await expect(language.locator("summary").first()).toHaveText("Design Language · Calm interface");
   await language.getByRole("button", { name: "Detach", exact: true }).click();
   await expect(language.locator("summary").first()).toHaveText("Design Language · None applied");
+  const prototype = page.locator('details[aria-label="Project prototype"]');
+  await prototype.locator("summary").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(prototype.getByLabel("Prototype start Screen")).toBeVisible();
+  await expect(prototype.getByRole("button", { name: "Save prototype", exact: true })).toBeDisabled();
+  await expect(prototype.getByRole("button", { name: "Play prototype", exact: true })).toBeDisabled();
   await page.getByRole("complementary", { name: "Design Project conversation" }).getByRole("button", { name: "Hide", exact: true }).click();
 
   await page.getByLabel("Add reference images to canvas").setInputFiles({

@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–4 complete; Phase 5 implementation in progress
+Status: Active — Phases 1–5 complete; Phase 6 implementation in progress
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -22,7 +22,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 - [x] Phase 2 — Project V2, title policy, per-screen surface semantics, and migration
 - [x] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
 - [x] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
-- [ ] Phase 5 — bounded prototype graph and host verification
+- [x] Phase 5 — bounded prototype graph and host verification
 - [ ] Phase 6 — project export and handoff V2
 - [ ] Final — combined review, full CI, packaged acceptance, and PR delivery
 
@@ -46,6 +46,13 @@ Each phase requires focused implementation tests, two independent GPT-6 Astra re
 - Immutable project-local language snapshots, strict canonical DESIGN.md, static derivation, workspace freshness, explicit reviewed apply/merge, and exact generation binding are implemented.
 - Both GPT-6 Astra medium reviews passed after correcting duplication to retain workspace freshness provenance and remap derived source identities. Missing derived sources roll back duplication.
 - 423 Generative UI/service/component tests, 42 recovery tests, 12 V2 policy tests, nine browser scenarios, onboarding tests, type-check, lint, build, and Electron describe/review/save/apply/detach acceptance passed.
+
+### Phase 5 review and verification
+
+- Exact revision graphs now have an explicit start Screen, bounded interaction selectors, source hashes, and main-owned verification evidence. Failed rechecks clear old success; duplicate remaps sources and clears verification.
+- Both GPT-6 Astra medium reviewers cleared the phase after fixing arbitrary start ordering, synthetic verification, and overly broad form Enter handling.
+- Live Electron acceptance exercises trusted click, keyboard, submit, and change routes; rejects occlusion, readonly controls, forged messages, network and popup requests; checks Cancel/Reset behavior and terminates runaway guest scripts. The Studio keyboard workbench test also passes.
+- 433 Generative UI tests, 42 recovery tests, 12 V2 policy tests, and nine browser scenarios passed before final review fixes; final focused graph/store/UI tests (49), host/service tests, type-check, lint, build, and both Electron acceptance scenarios passed after remediation.
 
 ## Product and vocabulary contract
 

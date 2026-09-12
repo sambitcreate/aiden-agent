@@ -1,3 +1,5 @@
+import { normalizeDesignPrototypeInput, designPrototypeContentHash, normalizeDesignPrototypeVerification, designPrototypeStatus } from "./design-prototype-core.js";
+import type { DesignPrototypeInputV1, DesignPrototypeGraphV1 } from "../../renderer/shared/design-prototype.js";
 import { normalizeDesignLanguageDocument, normalizeDesignLanguageProvenance, designLanguageContentHash, MAX_DESIGN_LANGUAGE_HISTORY } from "./design-language-core.js";
 import type { DesignLanguageDocumentV1, DesignLanguageProvenanceV1 } from "../../renderer/shared/design-language.js";
 import { parseDesignGenerationRequestV1, parseDesignGenerationMemberV1, type DesignGenerationRequestV1, type DesignGenerationMemberV1, type DesignGenerationIntentV1, type DesignDirectionSetV1 } from "../../renderer/shared/design-generation.js";
@@ -1135,6 +1137,57 @@ export class DesignProjectStore {
     });
   }
 
+  async savePrototype(input: {projectId: string; expectedRevision: number; graph: DesignPrototypeInputV1}): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const graph = normalizeDesignPrototypeInput(input.graph);
+    const contentHash = designPrototypeContentHash(graph);
+    return this.data.update(database => {
+      const {index, project} = requireCurrent(database, projectId, expectedRevision);
+      const prototype: DesignPrototypeGraphV1 = {...graph,contentHash,revision:(project.prototype?.revision ?? 0)+1};
+      const status = designPrototypeStatus(prototype,project.canvas);
+      if (status === "broken" || status === "stale") throw new DesignProjectConflictError("Prototype sources changed before saving.");
+      if (project.prototype?.contentHash === contentHash) return clone(project);
+      const updated = requireSnapshot({...project,prototype,revision:project.revision+1,updatedAt:monotonicTimestamp(this.now,project.updatedAt)});
+      database.projects[index]=updated;database.revision+=1;return clone(updated);
+    });
+  }
+
+  /** Main-only evidence produced by isolated guest checks, never renderer input. */
+  async recordPrototypeVerification(input: {projectId: string; expectedRevision: number; graphHash: string; evidence: {verifiedAt: number; passedEdgeIds: string[]}}): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    return this.data.update(database => {
+      const {index, project} = requireCurrent(database,projectId,expectedRevision);
+      const prototype=project.prototype;
+      if (!prototype || prototype.contentHash !== input.graphHash) throw new DesignProjectConflictError("Prototype graph changed during verification.");
+      const status=designPrototypeStatus(prototype,project.canvas);
+      if (status === "broken" || status === "stale") throw new DesignProjectConflictError("Prototype sources changed during verification.");
+      const verification=normalizeDesignPrototypeVerification({...input.evidence,graphHash:input.graphHash},prototype,input.graphHash);
+      const updated=requireSnapshot({...project,prototype:{...prototype,verification},revision:project.revision+1,updatedAt:monotonicTimestamp(this.now,project.updatedAt)});
+      database.projects[index]=updated;database.revision+=1;return clone(updated);
+    });
+  }
+
+  /** Clear earlier success after a fresh main-owned verifier fails. */
+  async clearPrototypeVerification(input: {projectId: string; expectedRevision: number; graphHash: string}): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    return this.data.update(database => {
+      const {index,project}=requireCurrent(database,projectId,expectedRevision);
+      if (!project.prototype || project.prototype.contentHash !== input.graphHash) {
+        throw new DesignProjectConflictError("Prototype graph changed during verification.");
+      }
+      if (!project.prototype.verification) return clone(project);
+      const {verification:_previous, ...prototype}=project.prototype;
+      const updated=requireSnapshot({...project,prototype,revision:project.revision+1,updatedAt:monotonicTimestamp(this.now,project.updatedAt)});
+      database.projects[index]=updated;database.revision+=1;return clone(updated);
+    });
+  }
+
   async saveDesignLanguage(input: {
     projectId: string; expectedRevision: number;
     document: DesignLanguageDocumentV1; provenance: DesignLanguageProvenanceV1;
@@ -1591,12 +1644,22 @@ export class DesignProjectStore {
       });
       const activeLanguageIndex = source.designLanguages?.findIndex(language => language.id === source.activeDesignLanguage?.id) ?? -1;
       const copiedActiveLanguage = copiedLanguages[activeLanguageIndex];
+      const copiedPrototype = source.prototype ? (() => {
+        const nodes = source.prototype.nodes.map(node => {
+          const mediaId = artifactMap.get(node.mediaId);
+          if (!mediaId || !source.canvas.nodes.some(candidate => candidate.kind === "artboard" && candidate.lineageId === node.lineageId && candidate.artifactMediaIds.includes(node.mediaId))) throw new DesignProjectConflictError("Cannot duplicate Prototype with an unavailable source.");
+          return {...node,lineageId:remappedLineageId(targetProjectId,node.lineageId),mediaId};
+        });
+        const graph = normalizeDesignPrototypeInput({version:1,entryMediaId:artifactMap.get(source.prototype.entryMediaId),nodes,edges:source.prototype.edges.map(edge=>({...edge,fromMediaId:artifactMap.get(edge.fromMediaId),toMediaId:artifactMap.get(edge.toMediaId)}))});
+        return {...graph,revision:1,contentHash:designPrototypeContentHash(graph)};
+      })() : undefined;
       const duplicate = requireSnapshot({
         ...source,
         id: targetProjectId,
         generationIntents: [],
         directionSets: [],
         designLanguages: copiedLanguages,
+        prototype: copiedPrototype,
         activeDesignLanguage: copiedActiveLanguage ? {id:copiedActiveLanguage.id, revision:copiedActiveLanguage.revision, contentHash:copiedActiveLanguage.contentHash} : undefined,
         revision: 1,
         title: targetTitle,

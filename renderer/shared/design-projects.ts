@@ -1,3 +1,4 @@
+import type { DesignPrototypeGraphV1 } from "./design-prototype";
 import type { DesignLanguageSnapshotV1, DesignLanguageBindingV1 } from "./design-language";
 import type { DesignGenerationIntentV1, DesignDirectionSetV1 } from "./design-generation";
 export type DesignProjectConnectionState = "prototype-only" | "connected";
@@ -116,6 +117,7 @@ export interface DesignProjectCanvasV2 {
 }
 
 export interface DesignProjectSnapshotV2 {
+  prototype?: DesignPrototypeGraphV1;
   designLanguages?: DesignLanguageSnapshotV1[];
   activeDesignLanguage?: DesignLanguageBindingV1;
   generationIntents?: DesignGenerationIntentV1[];

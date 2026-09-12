@@ -1,3 +1,5 @@
+import { resolvePrototypeGraph, verifyPrototype, playPrototype } from "../services/design-prototype-service.js";
+import type { DesignPrototypeEdgeV1 } from "../../renderer/shared/design-prototype.js";
 import { prepareDesignLanguageProposal } from "../services/design-language-proposal-service.js";
 import { deriveDesignLanguageFromScreen, importWorkspaceDesignLanguage, currentDesignLanguageModelContext } from "../services/design-language-service.js";
 import { exportDesignLanguageMarkdown } from "../services/design-language-core.js";
@@ -713,6 +715,42 @@ export function registerDesignerHandlers(): void {
       if (!current) throw error;
       return { status: "conflict" as const, current };
     }
+  });
+
+  ipcMain.handle("designer:savePrototype", async (event,inputValue:unknown) => {
+    const owner=ownerFor(event);
+    const input=exactRecord(inputValue,new Set(["projectId","expectedRevision","entryMediaId","mediaIds","edges"]));
+    const project=await designProjectStore.get(projectId(input.projectId));
+    if(!project)throw new Error("This Design Project is unavailable.");
+    const graph=await resolvePrototypeGraph(project,{entryMediaId:input.entryMediaId as string,mediaIds:input.mediaIds as string[],edges:input.edges as DesignPrototypeEdgeV1[]});
+    return designProjectLifecycle.runProjectMutation(()=>{
+      if(owner.isDestroyed())throw new Error("The renderer document is no longer active.");
+      return designProjectStore.savePrototype({projectId:project.id,expectedRevision:projectRevision(input.expectedRevision),graph});
+    });
+  });
+  ipcMain.handle("designer:verifyPrototype", async(event,inputValue:unknown)=>{
+    const owner=ownerFor(event);
+    const input=exactRecord(inputValue,new Set(["projectId","expectedRevision"]));
+    const project=await designProjectStore.get(projectId(input.projectId));
+    if(!project?.prototype)throw new Error("Save a prototype first.");
+    const expectedRevision=projectRevision(input.expectedRevision);
+    if(project.revision!==expectedRevision)throw new DesignProjectRevisionConflictError(project.revision);
+    let evidence:{verifiedAt:number;passedEdgeIds:string[]}|undefined;
+    let failure:string|undefined;
+    try {evidence=await verifyPrototype(project);}catch(error){failure=error instanceof Error?error.message:String(error);}
+    return designProjectLifecycle.runProjectMutation(async()=>{
+      if(owner.isDestroyed())throw new Error("The renderer document is no longer active.");
+      const scope={projectId:project.id,expectedRevision,graphHash:project.prototype!.contentHash};
+      const updated=evidence?await designProjectStore.recordPrototypeVerification({...scope,evidence}):await designProjectStore.clearPrototypeVerification(scope);
+      return {project:updated,...(failure?{error:failure}:{})};
+    });
+  });
+  ipcMain.handle("designer:playPrototype",async(event,inputValue:unknown)=>{
+    const owner=ownerFor(event);
+    const input=exactRecord(inputValue,new Set(["projectId"]));
+    const project=await designProjectStore.get(projectId(input.projectId));
+    if(!project)throw new Error("This Design Project is unavailable.");
+    return playPrototype(project,owner);
   });
 
   const languageProposal = async (owner: ReturnType<typeof ownerFor>, inputValue: unknown) => {

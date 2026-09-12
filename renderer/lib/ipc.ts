@@ -1,3 +1,4 @@
+import type { DesignPrototypeEdgeV1 } from "../shared/design-prototype";
 import type { DesignLanguageProposalInput, DesignLanguageProposal } from "../shared/design-language-proposals";
 import type { DesignGenerationRequestV1, DesignGenerationIntentV1 } from "../shared/design-generation";
 import type { CompactionEngine } from "../shared/compaction";
@@ -778,6 +779,9 @@ export const designerApi = {
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
     invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  savePrototype: (input:{projectId:string;expectedRevision:number;entryMediaId:string;mediaIds:string[];edges:DesignPrototypeEdgeV1[]}) => invoke<DesignProjectSnapshotV1>("designer:savePrototype",input),
+  verifyPrototype: (input:{projectId:string;expectedRevision:number}) => invoke<{project:DesignProjectSnapshotV1;error?:string}>("designer:verifyPrototype",input),
+  playPrototype: (input:{projectId:string}) => invoke<{windowId:number}>("designer:playPrototype",input),
   previewDesignLanguage: (input: DesignLanguageProposalInput) => invoke<DesignLanguageProposal>("designer:previewDesignLanguage", input),
   saveDesignLanguage: (input: {proposal:DesignLanguageProposalInput;expectedRevision:number;expectedHash:string}) => invoke<DesignProjectSnapshotV1>("designer:saveDesignLanguage", input),
   applyDesignLanguage: (input: {projectId:string;expectedRevision:number;languageId:string}) => invoke<DesignProjectSnapshotV1>("designer:applyDesignLanguage", input),
