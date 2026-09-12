@@ -1,3 +1,4 @@
+import { reconcileDesignGenerationAppend } from "../services/design-generation-append.js";
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
@@ -593,6 +594,7 @@ export function registerChatHistoryHandlers(): void {
       turnId,
       skillReference,
       designPreflight,
+      designGeneration,
       retainedBytes,
     } = parsed;
     const owner = rendererDocumentOwner(
@@ -715,7 +717,35 @@ export function registerChatHistoryHandlers(): void {
           return designProjectAppendService.runGenerationAppend(
             owner,
             designPreflight,
-            (designIsCurrent) => append(undefined, designIsCurrent),
+            async (designIsCurrent) => {
+              try {
+                if (designGeneration) {
+                  if (!isCurrent() || !designIsCurrent()) throw new Error("This Design turn expired before it could be saved.");
+                  await designProjectStore.beginGeneration({
+                    projectId: designPreflight.projectId,
+                    expectedRevision: designPreflight.projectRevision,
+                    turnId: userMessageId,
+                    request: designGeneration,
+                  });
+                }
+                return await append(undefined, designIsCurrent);
+              } catch (error) {
+                if (designGeneration) {
+                  try {
+                    // The append has settled, and this callback still holds the
+                    // lifecycle lane. Re-read durable chat state before pruning.
+                    await reconcileDesignGenerationAppend({
+                      projectId: designPreflight.projectId,
+                      readChat: () => chatStore.get(chatId),
+                      reconcile: (input) => designProjectStore.reconcileGenerationIntents(input),
+                    });
+                  } catch {
+                    // Preserve uncertain outcomes for startup reconciliation.
+                  }
+                }
+                throw error;
+              }
+            },
           );
         };
         const chat = skillReference

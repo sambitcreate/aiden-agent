@@ -319,3 +319,13 @@ test("V2 DataStore policy reads V1 safely and writes canonical V2 on the next mu
   assert.equal(persisted.revision, 10);
   assert.ok(parseDesignProjectDatabaseV2(persisted));
 });
+
+test("generation requests reject malformed values and untrusted keys", async () => {
+  const {parseDesignGenerationRequestV1,parseDesignGenerationRecordsV1}=await import("../../renderer/shared/design-generation.js");
+  const valid={version:1,operation:"explore",count:3,creativeRange:"bold",aspects:["layout","color"]};
+  assert.deepEqual(parseDesignGenerationRequestV1(valid),valid);
+  for (const patch of [{count:1},{count:5},{aspects:["layout","layout"]},{aspects:["javascript"]},{creativeRange:"random"},{base:{lineageId:"lineage:a",mediaId:"https://example.com"}},{projectId:"project:injected"}]) assert.equal(parseDesignGenerationRequestV1({...valid,...patch}),undefined);
+  assert.equal(parseDesignGenerationRequestV1({version:1,operation:"refine"}),undefined);
+  assert.equal(parseDesignGenerationRecordsV1(null,[]),undefined);
+  assert.equal(parseDesignGenerationRecordsV1([{id:"intent:a",turnId:"turn:a",createdAt:1,request:{version:1,operation:"refine",base:{lineageId:"lineage:a",mediaId:"design:a"}}}],[]),undefined);
+});

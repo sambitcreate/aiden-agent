@@ -1,3 +1,4 @@
+import { parseDesignGenerationRequestV1, type DesignGenerationRequestV1 } from "../../renderer/shared/design-generation.js";
 import type { Attachment } from "../services/types.js";
 import type { SkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
 import { parseSkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
@@ -23,6 +24,7 @@ const META_KEYS = new Set([
   "model",
   "providerId",
   "designPreflight",
+  "designGeneration",
   "skillInvocation",
   "turnId",
 ]);
@@ -40,6 +42,7 @@ export interface ParsedChatAppend {
   turnId: string;
   skillReference?: SkillInvocationV1;
   designPreflight?: DesignProjectGenerationPreflightV1;
+  designGeneration?: DesignGenerationRequestV1;
   retainedBytes: number;
 }
 
@@ -200,6 +203,8 @@ export function parseChatAppend(
       ? undefined
       : parseSkillInvocationV1(metaRecord.skillInvocation);
   const designPreflight = parseDesignPreflight(metaRecord.designPreflight);
+  const designGeneration = metaRecord.designGeneration === undefined ? undefined : parseDesignGenerationRequestV1(metaRecord.designGeneration);
+  if (metaRecord.designGeneration !== undefined && (!designGeneration || !designPreflight)) throw new Error("Invalid Design generation intent.");
   if (skillReference && designPreflight) {
     throw new Error("Design turns cannot invoke a workspace skill.");
   }
@@ -220,6 +225,7 @@ export function parseChatAppend(
       "utf8",
     ) + 64;
   }
+  if (designGeneration) retainedBytes += Buffer.byteLength(JSON.stringify(designGeneration), "utf8");
   if (!Number.isSafeInteger(retainedBytes))
     throw new Error("Invalid chat message payload.");
 
@@ -235,6 +241,7 @@ export function parseChatAppend(
     turnId,
     skillReference,
     designPreflight,
+    designGeneration,
     retainedBytes,
   };
 }

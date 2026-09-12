@@ -1,3 +1,5 @@
+import { DesignGenerationProvenance } from "./design-generation-controls";
+import type { DesignGenerationRequestV1 } from "../shared/design-generation";
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -620,6 +622,7 @@ export function DesignWorkspaceCanvas({
   onSelectedImagesChange,
   onContextOrderChange,
   onRequestComposerFocus,
+  onGenerationRequest,
   onProjectChange,
   onPersistenceBarrierChange,
 }: {
@@ -644,6 +647,7 @@ export function DesignWorkspaceCanvas({
   onSelectedImagesChange: (images: Attachment[]) => void;
   onContextOrderChange: (keys: string[]) => void;
   onRequestComposerFocus: () => void;
+  onGenerationRequest: (request: DesignGenerationRequestV1) => void;
   onProjectChange: (project: DesignProjectSnapshotV1) => void;
   onPersistenceBarrierChange?: (
     barrier: (() => Promise<DesignProjectPersistenceSnapshotV1 | undefined>) | undefined,
@@ -3100,10 +3104,12 @@ export function DesignWorkspaceCanvas({
   const refineFromSelectedRevision = React.useCallback(() => {
     const selected = designPrimaryScreenSelection(selectionStateRef.current);
     if (!selected) return;
+    const revision = designDisplayedScreenRevision(selected);
+    onGenerationRequest({ version: 1, operation: "refine", base: { lineageId: selected.lineageId, mediaId: revision.mediaId } });
     setInspectorOpen(false);
     setCanvasAnnouncement("Historical revision selected as the exact Refine starting point.");
     onRequestComposerFocus();
-  }, [onRequestComposerFocus]);
+  }, [onRequestComposerFocus, onGenerationRequest]);
   const designerActionSummaries: DesignProjectDesignerActionSummary[] = designerActions.map(
     (action) => ({
       id: action.id,
@@ -3195,7 +3201,7 @@ export function DesignWorkspaceCanvas({
         <CanvasToolRail
           mode={mode}
           onModeChange={setMode}
-          onExplore={onRequestComposerFocus}
+          onExplore={() => { onGenerationRequest({ version: 1, operation: "explore", count: 2, creativeRange: "balanced", aspects: [] }); onRequestComposerFocus(); }}
           onRefine={onRequestComposerFocus}
           canRefine={false}
           onExport={() => undefined}
@@ -3306,6 +3312,9 @@ export function DesignWorkspaceCanvas({
         mode={mode}
         onModeChange={setMode}
         onExplore={() => {
+          const selected = designPrimaryScreenSelection(selectionStateRef.current);
+          const revision = selected ? designDisplayedScreenRevision(selected) : undefined;
+          onGenerationRequest({ version: 1, operation: "explore", count: 2, creativeRange: "balanced", aspects: [], ...(selected && revision ? { base: { lineageId: selected.lineageId, mediaId: revision.mediaId } } : {}) });
           commitSelection(EMPTY_DESIGN_WORKBENCH_SELECTION);
           onSelectedImagesChange([]);
           onSourceSelectionChange(undefined);
@@ -4074,6 +4083,7 @@ export function DesignWorkspaceCanvas({
                   The live sandbox preview remains on the canvas so inspection never mounts a second
                   executable document.
                 </Text>
+                {selectedMediaId ? <DesignGenerationProvenance projectId={savedProject.id} mediaId={selectedMediaId} /> : null}
               </div>
             }
             findQuery={inspectorFind}

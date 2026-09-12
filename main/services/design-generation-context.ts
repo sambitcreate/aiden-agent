@@ -1,3 +1,4 @@
+import type { DesignGenerationIntentV1, DesignDirectionSetV1 } from "../../renderer/shared/design-generation.js";
 import {
   sameChatHtmlArtifactDescriptor,
   type ChatHtmlArtifactV1,
@@ -80,4 +81,14 @@ export function requireCommittedDesignContextHtml(
     throw new Error("A selected Design canvas item is damaged. Repair it before continuing.");
   }
   return source.html;
+}
+
+/** Resolve remaining outputs from durable membership; retry prose never determines quota. */
+export function designGenerationOutputCount(intent: DesignGenerationIntentV1, sets: readonly DesignDirectionSetV1[]): number {
+  if (intent.request.operation === "refine") return 1;
+  const set = sets.find((candidate) => candidate.id === intent.directionSetId);
+  if (!set || set.archived || set.actualCount !== set.members.length) throw new Error("The direction set is unavailable.");
+  const remaining = set.requestedCount - set.actualCount;
+  if (remaining < 1 || remaining > 4) throw new Error("This direction set has no missing outputs.");
+  return remaining;
 }

@@ -1,6 +1,6 @@
 # Stitch-Inspired Design Studio Plan
 
-Status: Active — Phases 1–2 complete; current-main integration underway before Phase 3
+Status: Active — Phases 1–3 complete; Phase 4 implementation in progress
 Date: 2026-09-03
 Branch: `feature/stitch-design-studio`
 Predecessor: [Design Workspace Durable Projects and Handoff](completed/design-workspace-claude-alignment-plan.md)
@@ -20,7 +20,7 @@ Preserve Aiden's main-owned storage, immutable revisions, semantic compare-and-s
 
 - [x] Phase 1 — coherent selection, canvas recovery, inspector layout, terminology, and responsive workbench
 - [x] Phase 2 — Project V2, title policy, per-screen surface semantics, and migration
-- [ ] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
+- [x] Phase 3 — durable generation intents, Explore, single-screen Refine, direction sets, and cancellation recovery
 - [ ] Phase 4 — project-local Design Language and hardened deterministic `DESIGN.md`
 - [ ] Phase 5 — bounded prototype graph and host verification
 - [ ] Phase 6 — project export and handoff V2
@@ -33,7 +33,13 @@ Each phase requires focused implementation tests, two independent GPT-6 Astra re
 - Working branch: `feature/stitch-design-studio-f397`, based on `615d58a0` and tracking the existing Studio branch.
 - Prerequisite integration: merge current `main` (`a4c85c6d`) while preserving Design and current desktop/native behavior. Twenty-four conflicting files require resolution.
 - Review gates apply to integration and each remaining Phase 3–6. Signed package and hosted CI evidence must be reported separately from local tests.
-- Integration reviews: both independent GPT-6 Astra medium reviewers reported no actionable findings. Local verification passed type-check, lint, build, Design recovery/policy, 396 Generative UI tests, nine browser scenarios, and Design Studio Electron acceptance. Android unit tests/test compilation and generic iOS hardware app/test compilation passed; physical-device acceptance remains separate. Full npm regression is running.
+- Integration committed as `1a338f6f`; both independent GPT-6 Astra medium reviewers reported no actionable findings. Local verification passed type-check, lint, build, Design recovery/policy, 396 Generative UI tests, nine browser scenarios, and Design Studio Electron acceptance. Android unit tests/test compilation and generic iOS hardware app/test compilation passed; physical-device acceptance remains separate. Full npm regression reached 1,598 final-suite tests with one timing-dependent Git fixture failure; deterministic cancellation fixed it in `313965cc`, and all 97 Git tests passed.
+
+### Phase 3 review and verification
+
+- Both GPT-6 Astra medium reviewers identified missing-count retry and orphan-intent append failures. Both fixes passed independent re-review.
+- Main now resolves retry count from saved membership, and confirmed absent user turns are reconciled under the project lifecycle lane. Uncertain writes and published provenance are retained.
+- Tests: 408 Generative UI/service/component tests, 42 recovery tests, 12 V2 policy tests, nine browser scenarios, 51 chat/composer integration tests, and 51 onboarding tests passed. Final type-check, lint, build, and rebuilt Electron acceptance passed.
 
 ## Product and vocabulary contract
 

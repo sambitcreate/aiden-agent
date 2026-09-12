@@ -87,7 +87,9 @@ export function projectOwnsLiveDesignCandidateSource(
     (node) =>
       node.kind === "artboard" &&
       node.lineageId === ownership.lineageId &&
-      node.activeMediaId === ownership.baseMediaId &&
+      node.activeMediaId === (ownership.generationIntentId
+        ? (project.version === 2 ? project.generationIntents?.find((intent) => intent.id === ownership.generationIntentId)?.expectedCurrentMediaId : undefined)
+        : ownership.baseMediaId) &&
       node.artifactMediaIds?.includes(ownership.baseMediaId) === true,
   );
   return owners.length === 1;

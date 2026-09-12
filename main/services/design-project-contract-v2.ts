@@ -1,3 +1,4 @@
+import { parseDesignGenerationRecordsV1 } from "../../renderer/shared/design-generation.js";
 import type {
   DesignProjectCanvas,
   DesignProjectCanvasNodeV1,
@@ -39,6 +40,7 @@ export const MAX_DESIGN_PROJECT_STORE_BYTES_V2 =
   MAX_DESIGN_PROJECT_STORE_BYTES + MAX_DESIGN_PROJECTS * V2_METADATA_HEADROOM_PER_PROJECT;
 
 const SNAPSHOT_V2_KEYS = new Set([
+  "generationIntents", "directionSets",
   "version",
   "id",
   "revision",
@@ -104,7 +106,7 @@ function legacySnapshot(value: Record<string, unknown>): Record<string, unknown>
   }
   const canvas = value.canvas as Record<string, unknown>;
   if (!exactKeys(canvas, CANVAS_KEYS) || !Array.isArray(canvas.nodes)) return undefined;
-  const { titlePolicy: _titlePolicy, ...legacyValue } = value;
+  const { titlePolicy: _titlePolicy, generationIntents: _intents, directionSets: _sets, ...legacyValue } = value;
   return {
     ...legacyValue,
     version: 1,
@@ -179,7 +181,10 @@ export function parseDesignProjectSnapshotV2(value: unknown): DesignProjectSnaps
   if (!common) return undefined;
   const parsedCanvas = parseDesignProjectCanvasV2(snapshot.canvas);
   if (!parsedCanvas) return undefined;
+  const generations = parseDesignGenerationRecordsV1(snapshot.generationIntents === undefined ? [] : snapshot.generationIntents, snapshot.directionSets === undefined ? [] : snapshot.directionSets);
+  if (!generations) return undefined;
   const parsed: DesignProjectSnapshotV2 = {
+    ...(snapshot.generationIntents !== undefined || snapshot.directionSets !== undefined ? generations : {}),
     ...common,
     version: DESIGN_PROJECT_SNAPSHOT_VERSION_V2,
     titlePolicy,

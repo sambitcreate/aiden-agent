@@ -1,3 +1,4 @@
+import { parseDesignGenerationRequestV1, parseDesignGenerationMemberV1, type DesignGenerationRequestV1, type DesignGenerationMemberV1, type DesignGenerationIntentV1, type DesignDirectionSetV1 } from "../../renderer/shared/design-generation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DataStore } from "./data-store.js";
@@ -1132,6 +1133,124 @@ export class DesignProjectStore {
     });
   }
 
+  async beginGeneration(input: { projectId: string; expectedRevision: number; turnId: string; request: DesignGenerationRequestV1 }): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    const turnId = requireIdentity(input.turnId, "turn identity");
+    const expectedRevision = requireRevision(input.expectedRevision);
+    const request = parseDesignGenerationRequestV1(input.request);
+    if (!request) throw new DesignProjectConflictError("Invalid Design generation request.");
+    return this.data.update(database => {
+      const {index, project} = requireCurrent(database, projectId, expectedRevision);
+      const existing = project.generationIntents?.find(i => i.turnId === turnId);
+      if (existing) {
+        if (!isDeepStrictEqual(existing.request, request)) throw new DesignProjectConflictError("Generation turn already has a different intent.");
+        return clone(project);
+      }
+      if (request.base && !project.canvas.nodes.some(n => n.kind === "artboard" && n.lineageId === request.base!.lineageId && n.artifactMediaIds.includes(request.base!.mediaId))) throw new DesignProjectRevisionConflictError(project.revision);
+      const intent: DesignGenerationIntentV1 = {id: randomUUID(), turnId, request, published: false, createdAt: monotonicTimestamp(this.now), ...(request.base ? {expectedCurrentMediaId: project.canvas.nodes.find(n=>n.kind === "artboard" && n.lineageId===request.base!.lineageId)!.activeMediaId} : {})};
+      const directionSets = clone(project.directionSets ?? []);
+      if (request.operation === "explore") {
+        if (request.retryDirectionSetId) {
+          const set = directionSets.find(s => s.id === request.retryDirectionSetId);
+          const source = project.generationIntents?.find(i => i.id === set?.sourceIntentId);
+          const { retryDirectionSetId: _, ...originalRequest } = request;
+          if (!set || set.archived || set.status === "complete" || !source || !isDeepStrictEqual(source.request, originalRequest)) throw new DesignProjectConflictError("Direction set cannot be retried with this intent.");
+          intent.directionSetId = set.id;
+        } else {
+          intent.directionSetId = randomUUID();
+          directionSets.push({id:intent.directionSetId, sourceIntentId:intent.id,requestedCount:request.count,actualCount:0,members:[],archived:false,status:"partial"});
+        }
+      }
+      const updated = requireSnapshot({...project, generationIntents:[...(project.generationIntents ?? []),intent], directionSets, revision:project.revision+1, updatedAt:monotonicTimestamp(this.now, project.updatedAt)});
+      database.projects[index]=updated; database.revision+=1; return clone(updated);
+    });
+  }
+
+  /**
+   * Caller must hold the chat lifecycle lane with no append active and provide
+   * IDs from a successful durable chat read. An uncertain read is not absence.
+   * Published facts and legacy intents without publication evidence are retained.
+   */
+  async reconcileGenerationIntents(input: {
+    projectId: string;
+    persistedUserMessageIds: readonly string[];
+  }): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId = requireIdentity(input.projectId, "identity");
+    if (!Array.isArray(input.persistedUserMessageIds)) {
+      throw new DesignProjectConflictError("Durable user message identities are required.");
+    }
+    const persisted = new Set(input.persistedUserMessageIds.map(id =>
+      requireIdentity(id, "persisted user message identity"),
+    ));
+    return this.data.update(database => {
+      const index = database.projects.findIndex(project => project.id === projectId);
+      const project = database.projects[index];
+      if (!project) throw new DesignProjectNotFoundError();
+      const intents = project.generationIntents ?? [];
+      const sets = project.directionSets ?? [];
+      const publishedSetIds = new Set(sets.filter(set => set.members.length > 0).map(set => set.id));
+      const retainedIds = new Set(intents.filter(intent =>
+        persisted.has(intent.turnId) || intent.published !== false ||
+        (intent.directionSetId !== undefined && publishedSetIds.has(intent.directionSetId)),
+      ).map(intent => intent.id));
+      // Surviving retries reference immutable source intents even if the source
+      // user turn itself is absent. Retain each dependency and its empty set.
+      for (const intent of intents) {
+        if (!retainedIds.has(intent.id) || !intent.directionSetId) continue;
+        const source = sets.find(set => set.id === intent.directionSetId)?.sourceIntentId;
+        if (source) retainedIds.add(source);
+      }
+      const generationIntents = intents.filter(intent => retainedIds.has(intent.id));
+      if (generationIntents.length === intents.length) return clone(project);
+      const directionSets = sets.filter(set => set.members.length > 0 ||
+        generationIntents.some(intent => intent.directionSetId === set.id));
+      const updated = requireSnapshot({
+        ...project,
+        generationIntents,
+        directionSets,
+        revision: project.revision + 1,
+        updatedAt: monotonicTimestamp(this.now, project.updatedAt),
+      });
+      database.projects[index] = updated;
+      database.revision += 1;
+      return clone(updated);
+    });
+  }
+
+  async chooseDirection(input: {projectId: string; expectedRevision: number; directionSetId: string; member: DesignGenerationMemberV1}): Promise<DesignProjectSnapshotV2> {
+    const member = parseDesignGenerationMemberV1(input.member);
+    if (!member) throw new DesignProjectConflictError("Invalid direction member.");
+    return this.updateDirectionSet(input, (set, project) => {
+      if (!project.canvas.nodes.some(n=>n.kind === "artboard" && n.lineageId === member.lineageId && n.artifactMediaIds.includes(member.mediaId))) throw new DesignProjectConflictError("Direction revision is no longer available.");
+      if (!set.members.some(m => isDeepStrictEqual(m, member))) throw new DesignProjectConflictError("Direction is not a member of this set.");
+      set.chosen = member;
+    });
+  }
+
+  async archiveDirectionSet(input: {projectId: string; expectedRevision: number; directionSetId: string; archived: boolean}): Promise<DesignProjectSnapshotV2> {
+    if (typeof input.archived !== "boolean") throw new DesignProjectConflictError("Invalid archive state.");
+    return this.updateDirectionSet(input, set => {set.archived=input.archived;});
+  }
+
+  private async updateDirectionSet(input: {projectId: string; expectedRevision: number; directionSetId: string}, update: (set: DesignDirectionSetV1, project: DesignProjectSnapshotV2) => void): Promise<DesignProjectSnapshotV2> {
+    this.requireAvailable();
+    const projectId=requireIdentity(input.projectId,"identity");
+    const expectedRevision=requireRevision(input.expectedRevision);
+    const setId=requireIdentity(input.directionSetId,"direction set identity");
+    return this.data.update(database => {
+      const {index,project}=requireCurrent(database,projectId,expectedRevision);
+      const sets=clone(project.directionSets ?? []);
+      const set=sets.find(s=>s.id===setId);
+      if (!set) throw new DesignProjectConflictError("Direction set was not found.");
+      update(set, project);
+      if (isDeepStrictEqual(sets,project.directionSets)) return clone(project);
+      const updated=requireSnapshot({...project,directionSets:sets,revision:project.revision+1,updatedAt:monotonicTimestamp(this.now,project.updatedAt)});
+      database.projects[index]=updated;database.revision+=1;return clone(updated);
+    });
+  }
+
   /**
    * Publish immutable generated bytes into their main-owned project lineages.
    * This mutation is semantic-CAS: a revision may advance only while its exact
@@ -1199,7 +1318,30 @@ export class DesignProjectStore {
           }
         }
       }
-      let changed = false;
+      const generationIntents = clone(project.generationIntents ?? []);
+      const directionSets = clone(project.directionSets ?? []);
+      for (const revision of input.revisions) {
+        const intentId = revision.ownership.generationIntentId;
+        if (!intentId) continue;
+        const intent = generationIntents.find(i => i.id === intentId);
+        if (!intent) throw new DesignProjectConflictError("Generation intent was not found.");
+        intent.published = true;
+        if (intent.request.operation === "refine") {
+          if (revision.ownership.kind !== "revision" || revision.ownership.lineageId !== intent.request.base.lineageId || revision.ownership.baseMediaId !== intent.request.base.mediaId) throw new DesignProjectConflictError("Revision does not match refinement intent.");
+        } else {
+          if (revision.ownership.kind !== "new-artboard") throw new DesignProjectConflictError("Explore must create independent directions.");
+          const set = directionSets.find(s => s.id === intent.directionSetId);
+          if (!set) throw new DesignProjectConflictError("Direction set was not found.");
+          const member = {lineageId:revision.ownership.lineageId,mediaId:revision.mediaId};
+          if (!set.members.some(m=>isDeepStrictEqual(m,member))) {
+            if (set.archived || set.members.length >= set.requestedCount || set.members.some(m=>m.lineageId===member.lineageId || m.mediaId===member.mediaId)) throw new DesignProjectConflictError("Direction set member limit or identity conflict.");
+            if (intent.request.base && !project.canvas.nodes.some(n=>n.kind === "artboard" && n.lineageId === intent.request.base!.lineageId && n.activeMediaId === intent.expectedCurrentMediaId)) throw new DesignProjectRevisionConflictError(project.revision);
+            set.members.push(member);set.actualCount=set.members.length;set.status=set.actualCount===set.requestedCount?"complete":"partial";
+          }
+        }
+      }
+      let changed = !isDeepStrictEqual(directionSets, project.directionSets ?? []) ||
+        !isDeepStrictEqual(generationIntents, project.generationIntents ?? []);
       const nodes = clone(project.canvas.nodes);
       const successfulScreenCountBefore = nodes.filter((node) => node.kind === "artboard").length;
       let firstCreatedScreen:
@@ -1219,7 +1361,7 @@ export class DesignProjectStore {
         if (revision.ownership.kind === "revision") {
           if (
             !lineage ||
-            lineage.activeMediaId !== revision.ownership.baseMediaId ||
+            lineage.activeMediaId !== (revision.ownership.generationIntentId ? project.generationIntents?.find(i=>i.id===revision.ownership.generationIntentId)?.expectedCurrentMediaId : revision.ownership.baseMediaId) ||
             lineage.artifactMediaIds?.includes(revision.ownership.baseMediaId) !== true
           ) {
             throw new DesignProjectRevisionConflictError(project.revision);
@@ -1265,6 +1407,8 @@ export class DesignProjectStore {
       const updated = requireSnapshot({
         ...project,
         ...titleState,
+        ...(project.directionSets ? {directionSets} : {}),
+        ...(project.generationIntents ? {generationIntents} : {}),
         revision: project.revision + 1,
         updatedAt: monotonicTimestamp(this.now, project.updatedAt),
         canvas: { ...project.canvas, nodes },
@@ -1380,6 +1524,8 @@ export class DesignProjectStore {
       const duplicate = requireSnapshot({
         ...source,
         id: targetProjectId,
+        generationIntents: [],
+        directionSets: [],
         revision: 1,
         title: targetTitle,
         titlePolicy: { state: "manual" },

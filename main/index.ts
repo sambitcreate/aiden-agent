@@ -1,3 +1,4 @@
+import { reconcileDesignGenerationAppend } from "./services/design-generation-append.js";
 import {
   app,
   BrowserWindow,
@@ -1742,6 +1743,21 @@ if (!ownsSingleInstanceLock) {
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      if (designProjectAvailability.available) {
+        await designProjectLifecycle.runProjectMutation(async () => {
+          for (const project of await designProjectStore.list()) {
+            try {
+              await reconcileDesignGenerationAppend({
+                projectId: project.id,
+                readChat: () => chatStore.get(project.chatId),
+                reconcile: (input) => designProjectStore.reconcileGenerationIntents(input),
+              });
+            } catch (error) {
+              logger.warn("design-project", "Could not reconcile Design generation intents; preserving uncertain turns.", error);
+            }
+          }
+        });
+      }
       if (displayImageArtifactAvailability.available) {
         try {
           const startupChats = (

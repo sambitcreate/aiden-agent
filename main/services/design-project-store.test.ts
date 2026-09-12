@@ -1486,3 +1486,101 @@ test("corrupt and unsafe stores stay unavailable without overwriting original by
     });
   }
 });
+
+test("generation intent and partial direction sets survive restart, retries are bounded and atomic", async t => {
+  const root=await temporaryRoot(t);
+  const store=new DesignProjectStore({root:()=>root}); await store.initialize();
+  let project=await store.create({chatId:"chat:directions",title:"Directions",connectionState:"prototype-only"});
+  const request={version:1,operation:"explore",count:2,creativeRange:"balanced",aspects:["layout"]} as const;
+  const begin=()=>store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:one",request:{...request,aspects:[...request.aspects]}});
+  project=await begin();
+  assert.equal(project.canvas.nodes.length,0);
+  const unchanged=await begin(); assert.equal(unchanged.revision,project.revision);
+  const intent=project.generationIntents![0]!;
+  const revision={mediaId:"design:direction-one",ownership:{version:1,kind:"new-artboard",projectId:project.id,lineageId:"lineage:direction-one",generationIntentId:intent.id}} as const;
+  project=await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[revision]});
+  assert.equal(project.directionSets![0]!.status,"partial");
+  const restarted=new DesignProjectStore({root:()=>root}); await restarted.initialize();
+  assert.deepEqual(await restarted.get(project.id),project);
+  const idempotent=await restarted.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[revision]});
+  assert.equal(idempotent.revision,project.revision);
+  project=await restarted.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:retry",request:{...request,aspects:[...request.aspects],retryDirectionSetId:intent.directionSetId}});
+  const retry=project.generationIntents![1]!;
+  project=await restarted.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:"design:direction-two",ownership:{...revision.ownership,lineageId:"lineage:direction-two",generationIntentId:retry.id}}]});
+  assert.equal(project.directionSets![0]!.actualCount,2);
+  assert.equal(project.directionSets![0]!.status,"complete");
+  await assert.rejects(restarted.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:"design:direction-three",ownership:{...revision.ownership,lineageId:"lineage:direction-three",generationIntentId:retry.id}}]}),DesignProjectConflictError);
+  project=await restarted.chooseDirection({projectId:project.id,expectedRevision:project.revision,directionSetId:intent.directionSetId!,member:{lineageId:revision.ownership.lineageId,mediaId:revision.mediaId}});
+  await assert.rejects(restarted.archiveDirectionSet({projectId:project.id,expectedRevision:project.revision-1,directionSetId:intent.directionSetId!,archived:true}),DesignProjectRevisionConflictError);
+  project=await restarted.archiveDirectionSet({projectId:project.id,expectedRevision:project.revision,directionSetId:intent.directionSetId!,archived:true});
+  assert.equal(project.directionSets![0]!.archived,true);
+});
+
+test("historical refine records exact base and compares captured current revision", async t=>{
+  const root=await temporaryRoot(t);const store=new DesignProjectStore({root:()=>root});await store.initialize();
+  let project=await store.create({chatId:"chat:historical",title:"Historical",connectionState:"prototype-only",canvas:canvas(),referenceAssetIds:["asset:reference-a"]});
+  await assert.rejects(store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:bad",request:{version:1,operation:"refine",base:{lineageId:"lineage:checkout",mediaId:"design:missing"}}}),DesignProjectRevisionConflictError);
+  project=await store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:historical",request:{version:1,operation:"refine",base:{lineageId:"lineage:checkout",mediaId:"design:checkout-a"}}});
+  const intent=project.generationIntents![0]!;assert.equal(intent.expectedCurrentMediaId,"design:checkout-b");
+  project=await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:"design:checkout-c",ownership:{version:1,kind:"revision",projectId:project.id,lineageId:"lineage:checkout",baseMediaId:"design:checkout-a",generationIntentId:intent.id}}]});
+  assert.equal(project.canvas.nodes[0]!.activeMediaId,"design:checkout-c");
+  await assert.rejects(store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:"design:checkout-d",ownership:{version:1,kind:"revision",projectId:project.id,lineageId:"lineage:checkout",baseMediaId:"design:checkout-a",generationIntentId:intent.id}}]}),DesignProjectRevisionConflictError);
+});
+
+test("generation reconciliation prunes only absent unpublished intents after restart", async t => {
+  const root = await temporaryRoot(t);
+  let store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  let project = await store.create({ chatId: "chat:reconcile", title: "Reconcile", connectionState: "prototype-only", canvas: canvas(), referenceAssetIds: ["asset:reference-a"] });
+  const request = { version: 1, operation: "explore", count: 2, creativeRange: "balanced", aspects: [] } as const;
+  const begin = async (turnId: string, retryDirectionSetId?: string) => {
+    project = await store.beginGeneration({ projectId: project.id, expectedRevision: project.revision, turnId, request: { ...request, aspects: [], ...(retryDirectionSetId ? { retryDirectionSetId } : {}) } });
+    return project.generationIntents![project.generationIntents!.length - 1]!;
+  };
+  await begin("turn:absent");
+  await begin("turn:present");
+  const source = await begin("turn:source-absent");
+  await begin("turn:retry-present", source.directionSetId);
+  const partial = await begin("turn:partial-absent");
+  project = await store.publishGeneratedRevisions({ projectId: project.id, chatId: project.chatId, revisions: [{ mediaId: "design:partial", ownership: { version: 1, kind: "new-artboard", projectId: project.id, lineageId: "lineage:partial", generationIntentId: partial.id } }] });
+  project = await store.beginGeneration({ projectId: project.id, expectedRevision: project.revision, turnId: "turn:refine-absent", request: { version: 1, operation: "refine", base: { lineageId: "lineage:checkout", mediaId: "design:checkout-b" } } });
+  project = await store.beginGeneration({ projectId: project.id, expectedRevision: project.revision, turnId: "turn:refine-published", request: { version: 1, operation: "refine", base: { lineageId: "lineage:checkout", mediaId: "design:checkout-b" } } });
+  const refine = project.generationIntents![project.generationIntents!.length - 1]!;
+  project = await store.publishGeneratedRevisions({ projectId: project.id, chatId: project.chatId, revisions: [{ mediaId: "design:refined", ownership: { version: 1, kind: "revision", projectId: project.id, lineageId: "lineage:checkout", baseMediaId: "design:checkout-b", generationIntentId: refine.id } }] });
+  store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  assert.deepEqual(await store.get(project.id), project);
+  const persistedUserMessageIds = ["turn:present", "turn:retry-present"];
+  project = await store.reconcileGenerationIntents({ projectId: project.id, persistedUserMessageIds });
+  assert.deepEqual(project.generationIntents!.map(intent => intent.turnId), ["turn:present", "turn:source-absent", "turn:retry-present", "turn:partial-absent", "turn:refine-published"]);
+  assert.equal(project.directionSets!.length, 3);
+  assert.equal(project.directionSets!.find(set => set.id === partial.directionSetId)!.actualCount, 1);
+  assert.equal(project.canvas.nodes.find(node => node.lineageId === "lineage:checkout")!.activeMediaId, "design:refined");
+  const unchanged = await store.reconcileGenerationIntents({ projectId: project.id, persistedUserMessageIds });
+  assert.equal(unchanged.revision, project.revision);
+  const restarted = new DesignProjectStore({ root: () => root });
+  await restarted.initialize();
+  assert.deepEqual(await restarted.get(project.id), project);
+  // Once the retry is absent too, its empty source/set can be removed together.
+  const cleaned = await restarted.reconcileGenerationIntents({ projectId: project.id, persistedUserMessageIds: ["turn:present"] });
+  assert.equal(cleaned.generationIntents!.some(intent => intent.id === source.id), false);
+  assert.equal(cleaned.directionSets!.some(set => set.id === source.directionSetId), false);
+});
+
+test("generation reconciliation retains legacy publication uncertainty", async t => {
+  const root = await temporaryRoot(t);
+  const store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  let project = await store.create({ chatId: "chat:legacy-intent", title: "Legacy", connectionState: "prototype-only" });
+  project = await store.beginGeneration({ projectId: project.id, expectedRevision: project.revision, turnId: "turn:legacy", request: { version: 1, operation: "explore", count: 2, creativeRange: "close", aspects: [] } });
+  const filename = join(root, "design-projects.json");
+  const database = JSON.parse(await readFile(filename, "utf8"));
+  delete database.projects[0].generationIntents[0].published;
+  await writeFile(filename, JSON.stringify(database));
+  const restarted = new DesignProjectStore({ root: () => root });
+  await restarted.initialize();
+  const retained = await restarted.reconcileGenerationIntents({ projectId: project.id, persistedUserMessageIds: [] });
+  assert.equal(retained.generationIntents!.length, 1);
+  assert.equal(retained.directionSets!.length, 1);
+  assert.equal(retained.revision, project.revision);
+});

@@ -26,6 +26,7 @@ export type DesignGeneratedRevisionOwnershipV1 =
       version: typeof DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION;
       kind: "new-artboard";
       projectId: string;
+      generationIntentId?: string;
       lineageId: string;
       presentation?: DesignScreenPresentationV2;
     }
@@ -33,6 +34,7 @@ export type DesignGeneratedRevisionOwnershipV1 =
       version: typeof DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION;
       kind: "revision";
       projectId: string;
+      generationIntentId?: string;
       lineageId: string;
       baseMediaId: string;
     };
@@ -83,6 +85,7 @@ export function parseDesignGeneratedRevisionOwnershipV1(
     record.version !== DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION ||
     (record.kind !== "new-artboard" && record.kind !== "revision") ||
     !isDesignProjectOpaqueId(record.projectId) ||
+    (record.generationIntentId !== undefined && !isDesignProjectOpaqueId(record.generationIntentId)) ||
     !isDesignProjectOpaqueId(record.lineageId) ||
     !artifact.mediaId.startsWith("design:")
   ) {
@@ -94,9 +97,9 @@ export function parseDesignGeneratedRevisionOwnershipV1(
         ? undefined
         : normalizeDesignScreenPresentationV2(record.presentation);
     if (
-      (keys.length !== 4 && keys.length !== 5) ||
+      (keys.length < 4 || keys.length > 6) ||
       keys.some(
-        (key) => !["version", "kind", "projectId", "lineageId", "presentation"].includes(key),
+        (key) => !["version", "kind", "projectId", "lineageId", "presentation", "generationIntentId"].includes(key),
       ) ||
       (record.presentation !== undefined && !presentation) ||
       artifact.revisionOfMediaId !== undefined ||
@@ -108,14 +111,15 @@ export function parseDesignGeneratedRevisionOwnershipV1(
       version: DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
       kind: "new-artboard",
       projectId: record.projectId,
+      ...(typeof record.generationIntentId === "string" ? { generationIntentId: record.generationIntentId } : {}),
       lineageId: record.lineageId,
       ...(presentation ? { presentation } : {}),
     };
   }
   if (
-    keys.length !== 5 ||
+    (keys.length !== 5 && keys.length !== 6) ||
     keys.some(
-      (key) => !["version", "kind", "projectId", "lineageId", "baseMediaId"].includes(key),
+      (key) => !["version", "kind", "projectId", "lineageId", "baseMediaId", "generationIntentId"].includes(key),
     ) ||
     !isDesignProjectOpaqueId(record.baseMediaId) ||
     !record.baseMediaId.startsWith("design:") ||
@@ -127,6 +131,7 @@ export function parseDesignGeneratedRevisionOwnershipV1(
     version: DESIGN_GENERATED_REVISION_OWNERSHIP_VERSION,
     kind: "revision",
     projectId: record.projectId,
+    ...(typeof record.generationIntentId === "string" ? { generationIntentId: record.generationIntentId } : {}),
     lineageId: record.lineageId,
     baseMediaId: record.baseMediaId,
   };

@@ -1,3 +1,4 @@
+import type { DesignGenerationIntentV1, DesignDirectionSetV1 } from "./design-generation";
 export type DesignProjectConnectionState = "prototype-only" | "connected";
 /** Storage namespace for backing conversations; never a filesystem authority. */
 export const DESIGN_PROJECT_CHAT_WORKSPACE_ID = "design-projects";
@@ -114,6 +115,8 @@ export interface DesignProjectCanvasV2 {
 }
 
 export interface DesignProjectSnapshotV2 {
+  generationIntents?: DesignGenerationIntentV1[];
+  directionSets?: DesignDirectionSetV1[];
   version: 2;
   id: string;
   revision: number;

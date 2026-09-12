@@ -1,3 +1,4 @@
+import { parseDesignGenerationMemberV1 } from "../../renderer/shared/design-generation.js";
 import { BrowserWindow, dialog, ipcMain, logger, shell } from "../platform.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -709,6 +710,40 @@ export function registerDesignerHandlers(): void {
       return { status: "conflict" as const, current };
     }
   });
+
+  ipcMain.handle("designer:generationProvenance", async (event, inputValue: unknown) => {
+    ownerFor(event);
+    const input = exactRecord(inputValue, new Set(["projectId", "mediaId"]));
+    const project = await designProjectStore.get(projectId(input.projectId));
+    const mediaId = projectId(input.mediaId);
+    if (!project || !project.canvas.nodes.some((node) => node.kind === "artboard" && node.artifactMediaIds.includes(mediaId))) throw new Error("This Screen revision is unavailable.");
+    const source = await generativeUiArtifactStore.committedRecoverySourceFor(project.chatId, mediaId);
+    if (!source || source.designOwnership?.projectId !== project.id) throw new Error("This Screen revision is unavailable.");
+    return project.generationIntents?.find((intent) => intent.id === source.designOwnership?.generationIntentId) ?? null;
+  });
+
+  for (const operation of ["chooseDirection", "archiveDirectionSet"] as const) {
+    ipcMain.handle(`designer:${operation}`, async (event, inputValue: unknown) => {
+      ownerFor(event);
+      const input = exactRecord(inputValue, new Set(["projectId", "expectedRevision", "directionSetId", operation === "chooseDirection" ? "member" : "archived"]));
+      const requestedProjectId = projectId(input.projectId);
+      const common = { projectId: requestedProjectId, expectedRevision: projectRevision(input.expectedRevision), directionSetId: projectId(input.directionSetId) };
+      const member = operation === "chooseDirection" ? parseDesignGenerationMemberV1(input.member) : undefined;
+      if (operation === "chooseDirection" && !member) throw new Error("Invalid Design direction.");
+      if (operation === "archiveDirectionSet" && typeof input.archived !== "boolean") throw new Error("Invalid Design archive state.");
+      try {
+        const project = await designProjectLifecycle.runProjectMutation(() => operation === "chooseDirection"
+          ? designProjectStore.chooseDirection({ ...common, member: member! })
+          : designProjectStore.archiveDirectionSet({ ...common, archived: input.archived as boolean }));
+        return { status: "updated" as const, project };
+      } catch (error) {
+        if (!(error instanceof DesignProjectRevisionConflictError)) throw error;
+        const current = await designProjectStore.get(requestedProjectId);
+        if (!current) throw error;
+        return { status: "conflict" as const, current };
+      }
+    });
+  }
 
   ipcMain.handle("designer:setActiveRevision", async (event, inputValue: unknown) => {
     ownerFor(event);

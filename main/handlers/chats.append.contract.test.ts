@@ -118,6 +118,7 @@ test("renderer append parser projects an exact bounded envelope", () => {
     turnId: "turn-1",
     skillReference: undefined,
     designPreflight: undefined,
+    designGeneration: undefined,
     retainedBytes: 273,
   });
 
@@ -307,4 +308,15 @@ test("append admission charges encoded image representation and metadata", () =>
     parsed.retainedBytes >=
       data.length + Buffer.byteLength("providermodel", "utf8"),
   );
+});
+
+test("Design generation requests require preflight and reject renderer authority claims", () => {
+  const message = { role: "user", content: "Explore layouts" };
+  const designGeneration = { version: 1, operation: "explore", count: 2, creativeRange: "balanced", aspects: ["layout"] };
+  const designPreflight = { projectId: "project:one", projectRevision: 1, chatId: "chat-one", connectionState: "prototype-only" };
+  const meta = { turnId: "turn-one", designPreflight, designGeneration };
+  assert.deepEqual(parseChatAppend("chat-one", message, meta).designGeneration, designGeneration);
+  assert.throws(() => parseChatAppend("chat-one", message, { turnId: "turn-one", designGeneration }), /Design generation intent/u);
+  assert.throws(() => parseChatAppend("chat-one", message, { ...meta, designGeneration: { ...designGeneration, generationIntentId: "forged" } }), /Design generation intent/u);
+  assert.throws(() => parseChatAppend("chat-one", message, { ...meta, designGeneration: { ...designGeneration, count: 5 } }), /Design generation intent/u);
 });

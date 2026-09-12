@@ -1,3 +1,4 @@
+import { migrateDesignProjectSnapshotV1ToV2 } from "./design-project-contract-v2.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -168,6 +169,14 @@ test("live candidate preview authority is pending-only and exact to its project 
     },
   };
   assert.equal(isUsableLiveDesignCandidateSource(base, revision), true);
+  const historical = migrateDesignProjectSnapshotV1ToV2(project("design:newer", "lineage:live"));
+  assert.ok(historical);
+  historical.canvas.nodes[0]!.artifactMediaIds!.push("design:base");
+  historical.generationIntents = [{ id: "intent:historical", turnId: "turn:historical", createdAt: 1, request: { version: 1, operation: "refine", base: { lineageId: "lineage:live", mediaId: "design:base" } }, expectedCurrentMediaId: "design:newer" }];
+  const historicalCandidate = { ...revision, designOwnership: { ...revision.designOwnership, generationIntentId: "intent:historical" } };
+  assert.equal(isUsableLiveDesignCandidateSource(historical, historicalCandidate), true);
+  historical.canvas.nodes[0]!.activeMediaId = "design:concurrent";
+  assert.equal(isUsableLiveDesignCandidateSource(historical, historicalCandidate), false);
   assert.equal(
     isUsableLiveDesignCandidateSource(project("design:newer", "lineage:live"), revision),
     false,

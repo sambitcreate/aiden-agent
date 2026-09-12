@@ -320,6 +320,7 @@ import { designProjectStore } from "./design-project-store-main.js";
 import {
   isUsablePublishedDesignSource,
   latestActiveDesignArtifact,
+  designGenerationOutputCount,
   projectOwnsDesignMedia,
   requireCommittedDesignContextHtml,
 } from "./design-generation-context.js";
@@ -721,6 +722,8 @@ async function prepareGeneration(
   const designProject = designWorkspace
     ? await designProjectStore.getByChatId(params.chatId)
     : undefined;
+  const currentDesignUser = [...chat.messages].reverse().find((message) => message.role === "user");
+  const designIntent = designProject?.generationIntents?.find((intent) => intent.turnId === currentDesignUser?.id);
   const repositoryFreeDesign = designProject?.connectionState === "prototype-only";
   if (
     !designWorkspace &&
@@ -1437,7 +1440,18 @@ async function prepareGeneration(
           NonNullable<ChatStartParams["designContext"]>["targets"][number]["selection"]
         >;
       }> = [];
-      if (selectedTargets) {
+      if (designIntent) {
+        const base = designIntent.request.base;
+        if (base) {
+          const node = designProject?.canvas.nodes.find((node) => node.lineageId === base.lineageId && node.artifactMediaIds?.includes(base.mediaId));
+          const exactArtifact = chat.messages.flatMap((message) => message.role === "assistant" ? message.htmlArtifacts ?? [] : []).find((artifact) => artifact.mediaId === base.mediaId && isDesignHtmlArtifact(artifact));
+          if (!node || !exactArtifact) throw new Error("The exact Design generation base is unavailable. Select it again and retry.");
+          if (designIntent.request.operation === "refine" && node.activeMediaId !== designIntent.expectedCurrentMediaId) throw new Error("The Design refinement base changed before generation. Select it again and retry.");
+          const selection = selectedTargets?.find((target) => target.mediaId === base.mediaId && target.artifactId === exactArtifact.id)?.selection;
+          resolvedDesigns.push({ artifact: exactArtifact, ...(selection ? { selection } : {}) });
+          if (designIntent.request.operation === "refine") designRevisionAnchor = base.mediaId;
+        }
+      } else if (selectedTargets) {
         for (const target of selectedTargets) {
           if (!projectOwnsDesignMedia(designProject, target.mediaId)) {
             throw new Error(
@@ -1511,6 +1525,7 @@ async function prepareGeneration(
         designSystemContext = await currentDesignSystemModelContext(designProject, folderPath);
       }
     }
+    const designOutputCount = designIntent ? designGenerationOutputCount(designIntent, designProject?.directionSets ?? []) : undefined;
     let designRevisionMediaId: string | undefined;
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
       workspaceRoot: folderPath,
@@ -1519,9 +1534,15 @@ async function prepareGeneration(
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
       designWorkspaceThisTurn: designWorkspace,
+      designGeneration: designIntent?.request,
+      designOutputCount,
       priorDesigns,
       designSystemContext,
       onArtifact: async (artifact, html) => {
+        if (designIntent && !displayedHtmlArtifacts.some((item) => item.mediaId === artifact.mediaId)) {
+          const limit = designOutputCount!;
+          if (displayedHtmlArtifacts.length >= limit) throw new Error("This Design generation has reached its requested output count.");
+        }
         let durableArtifact = artifact;
         let designOwnership: DesignGeneratedRevisionOwnershipV1 | undefined;
         if (
@@ -1555,6 +1576,7 @@ async function prepareGeneration(
           if (!designProject) throw new Error("The Design Project is unavailable.");
           designOwnership = newArtboardOwnership(designProject.id, artifact.mediaId);
         }
+        if (designOwnership && designIntent) designOwnership = { ...designOwnership, generationIntentId: designIntent.id };
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
           generationId: streamId,

@@ -387,7 +387,8 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.match(featurePresentation, /durable named projects stored locally on this Mac/u);
-  assert.match(featurePresentation, /comments or bounded direct edits/u);
+  assert.match(featurePresentation, /Explore 2–4 directions/u);
+  assert.match(featurePresentation, /refine one exact Screen revision/u);
   assert.match(featurePresentation, /Preview, Code, and History/u);
   assert.match(featurePresentation, /Continue in workspace/u);
   assert.match(featurePresentation, /every source change reviewed/u);

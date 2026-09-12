@@ -791,3 +791,63 @@ test("render_artifact reads nested HTML through a canonicalized root alias", asy
   });
   assert.deepEqual(htmlBodies, ["<p>workspace chart</p>"]);
 });
+
+test("Explore and Refine enforce their requested output count before staging", async () => {
+  for (const operation of ["explore", "refine"] as const) {
+    const artifacts: string[] = [];
+    const request = operation === "explore"
+      ? { version: 1 as const, operation, count: 2 as const, creativeRange: "bold" as const, aspects: ["layout" as const] }
+      : { version: 1 as const, operation, base: { lineageId: "lineage:base", mediaId: "design:base" } };
+    const extension = createGenerativeUiExtension({
+      designWorkspaceThisTurn: true,
+      designGeneration: request,
+      onArtifact: (artifact) => { artifacts.push(artifact.mediaId); },
+    });
+    const tool = extension.tools![0]!;
+    const count = operation === "explore" ? 2 : 1;
+    for (let i = 0; i < count; i++) await tool.execute(`output-${i}`, { title: `Screen ${i}`, html: `<main>${i}</main>` });
+    await assert.rejects(tool.execute("excess", { title: "Excess", html: "<main>excess</main>" }), /HTML artifacts can be rendered/u);
+    assert.equal(artifacts.length, count);
+    assert.match(extension.systemPrompt!, operation === "explore" ? /exactly 2 distinct alternatives/u : /exactly one complete revision/u);
+  }
+});
+
+test("retry of a partial two-direction Explore renders only its single missing member", async () => {
+  const { designGenerationOutputCount } = await import("./design-generation-context.js");
+  const request = {version:1,operation:"explore",count:2,creativeRange:"balanced",aspects:[],retryDirectionSetId:"set:one"} as const;
+  const intent = {id:"intent:retry",turnId:"turn:retry",createdAt:1,directionSetId:"set:one",request:{...request,aspects:[]}};
+  const count = designGenerationOutputCount(intent,[{id:"set:one",sourceIntentId:"intent:original",requestedCount:2,actualCount:1,members:[{lineageId:"lineage:one",mediaId:"design:one"}],archived:false,status:"partial"}]);
+  assert.equal(count,1);
+  const artifacts: string[]=[];
+  const extension=createGenerativeUiExtension({designWorkspaceThisTurn:true,designGeneration:intent.request,designOutputCount:count,onArtifact:artifact=>{artifacts.push(artifact.mediaId);}});
+  assert.match(extension.systemPrompt!,/exactly 1 distinct alternatives/u);
+  await extension.tools![0]!.execute("missing",{title:"Missing alternative",html:"<main>Two</main>"});
+  await assert.rejects(extension.tools![0]!.execute("excess",{title:"Excess",html:"<main>Three</main>"}),/Up to 1 HTML artifacts/u);
+  assert.equal(artifacts.length,1);
+});
+
+test("partial Explore retry completes its durable set through real tool publication", async () => {
+  const { DesignProjectStore } = await import("./design-project-store.js");
+  const { newArtboardOwnership } = await import("./design-generated-revision-contract.js");
+  const { designGenerationOutputCount } = await import("./design-generation-context.js");
+  const root = await workspace();
+  const store = new DesignProjectStore({root:()=>root});
+  await store.initialize();
+  let project = await store.create({chatId:"chat:retry-tool",title:"Retry",connectionState:"prototype-only"});
+  const request = {version:1 as const,operation:"explore" as const,count:2 as const,creativeRange:"balanced" as const,aspects:[]};
+  project = await store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:original",request});
+  const original = project.generationIntents![0]!;
+  project = await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:"design:first",ownership:{...newArtboardOwnership(project.id,"design:first"),generationIntentId:original.id}}]});
+  project = await store.beginGeneration({projectId:project.id,expectedRevision:project.revision,turnId:"turn:retry",request:{...request,retryDirectionSetId:original.directionSetId}});
+  const retry = project.generationIntents!.find(intent=>intent.turnId==="turn:retry")!;
+  const extension = createGenerativeUiExtension({designWorkspaceThisTurn:true,designGeneration:retry.request,designOutputCount:designGenerationOutputCount(retry,project.directionSets!),onArtifact:async artifact=>{
+    project=await store.publishGeneratedRevisions({projectId:project.id,chatId:project.chatId,revisions:[{mediaId:artifact.mediaId,ownership:{...newArtboardOwnership(project.id,artifact.mediaId),generationIntentId:retry.id}}]});
+  }});
+  await extension.tools![0]!.execute("missing",{title:"Second direction",html:"<main>Second</main>"});
+  assert.equal(project.directionSets![0]!.status,"complete");
+  assert.equal(project.directionSets![0]!.actualCount,2);
+  assert.equal(project.canvas.nodes.length,2);
+  assert.ok(project.directionSets![0]!.members.some(member=>member.mediaId==="design:first"));
+  const restarted = new DesignProjectStore({root:()=>root});await restarted.initialize();
+  assert.equal((await restarted.get(project.id))!.directionSets![0]!.status,"complete");
+});

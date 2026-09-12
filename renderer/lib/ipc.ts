@@ -1,3 +1,4 @@
+import type { DesignGenerationRequestV1, DesignGenerationIntentV1 } from "../shared/design-generation";
 import type { CompactionEngine } from "../shared/compaction";
 // Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
@@ -776,6 +777,11 @@ export const designerApi = {
     invoke<DesignProjectGenerationPreflightV1>("designer:preflightGeneration", input),
   updateProject: (input: { id: string; expectedRevision: number; canvas: DesignProjectCanvasV1 }) =>
     invoke<DesignProjectMutationResultV1>("designer:updateProject", input),
+  generationProvenance: (input: { projectId: string; mediaId: string }) => invoke<DesignGenerationIntentV1 | null>("designer:generationProvenance", input),
+  chooseDirection: (input: { projectId: string; expectedRevision: number; directionSetId: string; member: { lineageId: string; mediaId: string } }) =>
+    invoke<DesignProjectMutationResultV1>("designer:chooseDirection", input),
+  archiveDirectionSet: (input: { projectId: string; expectedRevision: number; directionSetId: string; archived: boolean }) =>
+    invoke<DesignProjectMutationResultV1>("designer:archiveDirectionSet", input),
   setActiveRevision: (input: {
     id: string;
     expectedRevision: number;
@@ -1204,6 +1210,7 @@ export const chatsApi = {
       turnId: string;
       skillInvocation?: SkillInvocationV1;
       designPreflight?: DesignProjectGenerationPreflightV1;
+      designGeneration?: DesignGenerationRequestV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>

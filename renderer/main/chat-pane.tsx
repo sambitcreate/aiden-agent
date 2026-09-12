@@ -1,3 +1,5 @@
+import { DesignGenerationControls, DEFAULT_DESIGN_EXPLORE } from "../components/design-generation-controls";
+import type { DesignGenerationRequestV1 } from "../shared/design-generation";
 import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
 import { chatMessageQueue } from "../lib/chat-message-queue";
@@ -554,6 +556,8 @@ export function ChatPane({
   const generationIntentRef = React.useRef(0);
   const visualizeTurnRef = React.useRef(false);
   const designTurnRef = React.useRef(false);
+  const [designGenerationRequest, setDesignGenerationRequest] = React.useState<DesignGenerationRequestV1>(DEFAULT_DESIGN_EXPLORE);
+  React.useEffect(() => setDesignGenerationRequest(DEFAULT_DESIGN_EXPLORE), [chatId]);
   const designContextTurnRef = React.useRef<DesignTurnContextV1 | undefined>(undefined);
   const sourceDesignContextTurnRef = React.useRef<SourceDesignTurnContextV1 | undefined>(undefined);
   const [designTargets, setDesignTargets] = React.useState<DesignTurnTargetV1[]>([]);
@@ -1949,6 +1953,7 @@ export function ChatPane({
                 turnId: messageTurnId,
                 skillInvocation,
                 designPreflight,
+                ...(design && !selectedSource ? { designGeneration: designGenerationRequest } : {}),
               },
             );
           } catch (appendError) {
@@ -2023,6 +2028,7 @@ export function ChatPane({
       designCanvasImages,
       designProjectReconciliation,
       designTargets,
+      designGenerationRequest,
       detachedProjection,
       detachedGenerationDraining,
       presentation,
@@ -2887,6 +2893,31 @@ export function ChatPane({
                 }}
               />
             ) : null}
+            {presentation === "design" && !sourceDesignSelection ? <DesignGenerationControls
+              key={`generation:${chatId}`}
+              request={designGenerationRequest}
+              onChange={setDesignGenerationRequest}
+              disabled={isGenerating || isStartingGeneration || detachedGenerationDraining || Boolean(designProjectReconciliation)}
+              project={currentDesignProject}
+              onShow={(mediaId) => {
+                const artifact = designArtifacts.find((entry) => entry.artifact.mediaId === mediaId)?.artifact;
+                if (artifact) setDesignArtifactShowRequest((current) => ({ mediaId, artifactId: artifact.id, requestId: (current?.requestId ?? 0) + 1 }));
+              }}
+              onChoose={async (directionSetId, member) => {
+                const snapshot = await designPersistenceBarrierRef.current?.();
+                if (!snapshot) throw new Error("Wait for the Design canvas to finish saving.");
+                const result = await designerApi.chooseDirection({ projectId: snapshot.project.id, expectedRevision: snapshot.project.revision, directionSetId, member });
+                updateDesignProject(result.status === "updated" ? result.project : result.current);
+                if (result.status !== "updated") throw new Error("This project changed. Review the refreshed directions and try again.");
+              }}
+              onArchive={async (directionSetId, archived) => {
+                const snapshot = await designPersistenceBarrierRef.current?.();
+                if (!snapshot) throw new Error("Wait for the Design canvas to finish saving.");
+                const result = await designerApi.archiveDirectionSet({ projectId: snapshot.project.id, expectedRevision: snapshot.project.revision, directionSetId, archived });
+                updateDesignProject(result.status === "updated" ? result.project : result.current);
+                if (result.status !== "updated") throw new Error("This project changed. Review the refreshed directions and try again.");
+              }}
+            /> : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}
@@ -3211,6 +3242,7 @@ export function ChatPane({
                   onProjectChange={updateDesignProject}
                   onPersistenceBarrierChange={registerDesignPersistenceBarrier}
                   onRequestComposerFocus={focusComposer}
+                  onGenerationRequest={setDesignGenerationRequest}
                 />
               )}
             </div>

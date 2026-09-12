@@ -657,3 +657,48 @@ test("retry after project publication does not roll a newer active revision back
   assert.equal(project.canvas.nodes[0]?.activeMediaId, "design:newer");
   assert.equal(project.canvas.nodes[0]?.artifactMediaIds?.length, 3);
 });
+
+test("Explore intent ownership survives interrupted eligible publication and records partial membership", async (t) => {
+  const { root, projects, artifacts, service } = await fixture(t);
+  const initial = await projects.create({ chatId: "chat:explore-recovery", title: "Explore", connectionState: "prototype-only" });
+  const project = await projects.beginGeneration({ projectId: initial.id, expectedRevision: initial.revision, turnId: "user:explore", request: { version: 1, operation: "explore", count: 3, creativeRange: "balanced", aspects: ["layout"] } });
+  const intent = project.generationIntents![0]!;
+  const item = artifact("design:partial-explore", "Partial");
+  await artifacts.stage({ chatId: project.chatId, generationId: "generation:explore", artifact: item, html: HTML, designOwnership: { ...newArtboardOwnership(project.id, item.mediaId), generationIntentId: intent.id } });
+  await service.markSuccessfulCandidate(project.chatId, [item.mediaId]);
+  const restartedArtifacts = new GenerativeUiArtifactStore({ root: () => root, now: () => 102 });
+  await restartedArtifacts.initialize();
+  const restarted = new DesignGeneratedRevisionService({ projects, artifacts: restartedArtifacts });
+  await restarted.reconcileAtStartup([{ id: project.chatId, messages: [{ role: "assistant", htmlArtifacts: [item] }] }]);
+  const published = await projects.get(project.id);
+  assert.equal(published!.directionSets![0]!.actualCount, 1);
+  assert.equal(published!.directionSets![0]!.status, "partial");
+  const recovered = await restartedArtifacts.committedRecoverySourceFor(project.chatId, item.mediaId);
+  assert.equal(recovered?.designOwnership?.generationIntentId, intent.id);
+});
+
+test("generation append reconciliation prunes only durable absent turns across restart", async (t) => {
+  const { reconcileDesignGenerationAppend } = await import("./design-generation-append.js");
+  const { root, projects } = await fixture(t);
+  const initial = await projects.create({ chatId: "chat:append-boundary", title: "Append boundary", connectionState: "prototype-only" });
+  let project = initial;
+  for (const turnId of ["user:saved", "user:failed", "user:crashed"]) {
+    project = await projects.beginGeneration({ projectId: project.id, expectedRevision: project.revision, turnId, request: { version: 1, operation: "explore", count: 2, creativeRange: "balanced", aspects: ["layout"] } });
+  }
+  const reconcile = (input: { projectId: string; persistedUserMessageIds: string[] }) => projects.reconcileGenerationIntents(input);
+  await assert.rejects(reconcileDesignGenerationAppend({ projectId: project.id, readChat: async () => { throw new Error("uncertain disk read"); }, reconcile }), /uncertain disk read/u);
+  assert.equal((await projects.get(project.id))!.generationIntents!.length, 3);
+  await reconcileDesignGenerationAppend({ projectId: project.id, readChat: async () => null, reconcile });
+  assert.equal((await projects.get(project.id))!.generationIntents!.length, 3);
+  // A confirmed append failure is proven by a successful durable re-read;
+  // committed writes (including writes that reported errors) remain present.
+  await reconcileDesignGenerationAppend({ projectId: project.id, readChat: async () => ({ messages: [{ id: "user:saved", role: "user" }, { id: "user:crashed", role: "user" }] }), reconcile });
+  assert.deepEqual((await projects.get(project.id))!.generationIntents!.map((intent) => intent.turnId), ["user:saved", "user:crashed"]);
+  // Startup uses the same proof after rebuilding the store, with no live append.
+  const restarted = new DesignProjectStore({ root: () => root, now: () => 103 });
+  await restarted.initialize();
+  await reconcileDesignGenerationAppend({ projectId: project.id, readChat: async () => ({ messages: [{ id: "user:saved", role: "user" }] }), reconcile: (input) => restarted.reconcileGenerationIntents(input) });
+  const recovered = await restarted.get(project.id);
+  assert.deepEqual(recovered!.generationIntents!.map((intent) => intent.turnId), ["user:saved"]);
+  assert.equal(recovered!.directionSets!.length, 1);
+});

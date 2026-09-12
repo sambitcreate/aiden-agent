@@ -33,6 +33,13 @@ test("Design Studio exposes a coherent keyboard-accessible blank workbench", asy
   await expect(tools.getByRole("button", { name: "Explore" })).toBeEnabled();
   await expect(tools.getByRole("button", { name: "Refine" })).toBeDisabled();
   await expect(tools.getByRole("button", { name: "Export" })).toBeDisabled();
+  await tools.getByRole("button", { name: "Explore", exact: true }).click();
+  const generation = page.getByRole("region", { name: "Design generation", exact: true });
+  await expect(generation.getByLabel("Number of directions")).toHaveValue("2");
+  await generation.getByLabel("Number of directions").selectOption("4");
+  await generation.getByLabel("Creative range").selectOption("bold");
+  await expect(generation.getByLabel("Number of directions")).toHaveValue("4");
+  await page.getByRole("complementary", { name: "Design Project conversation" }).getByRole("button", { name: "Hide", exact: true }).click();
 
   await page.getByLabel("Add reference images to canvas").setInputFiles({
     name: "reference.png",
