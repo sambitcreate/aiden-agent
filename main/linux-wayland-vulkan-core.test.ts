@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  disableVulkanFeature,
   isWaylandSession,
   shouldSuppressOzoneWaylandVulkan,
 } from "./linux-wayland-vulkan-core.js";
@@ -25,4 +26,10 @@ test("Vulkan suppression is Linux Wayland only and respects an explicit X11 ozon
   assert.equal(shouldSuppressOzoneWaylandVulkan("darwin", wayland), false);
   assert.equal(shouldSuppressOzoneWaylandVulkan("win32", wayland), false);
   assert.equal(shouldSuppressOzoneWaylandVulkan("linux", {}), false);
+});
+
+test("Vulkan suppression preserves existing disabled features without duplicates", () => {
+  assert.equal(disableVulkanFeature(""), "Vulkan");
+  assert.equal(disableVulkanFeature("ExistingFeature, AnotherFeature"), "ExistingFeature,AnotherFeature,Vulkan");
+  assert.equal(disableVulkanFeature("ExistingFeature,Vulkan"), "ExistingFeature,Vulkan");
 });

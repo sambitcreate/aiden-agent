@@ -233,7 +233,7 @@ export interface AidenRemoteServiceStatus {
   tailscaleConnected: boolean;
   tailscaleInstalled: boolean;
   tailscaleRouteState: AidenTailscaleRouteState;
-  tailscaleErrorCode?: AidenTailscaleConnectionStatus["errorCode"];
+  tailscaleErrorCode?: AidenTailscaleConnectionStatus["errorCode"] | "permission_denied";
   pairedDeviceCount: number;
   approvedRootCount: number;
   errorCode?: "remote_port_in_use";
@@ -1191,7 +1191,7 @@ export class AidenRemoteService {
       tailscaleConnected,
       tailscaleInstalled: tailscaleStatus.installed,
       tailscaleRouteState,
-      ...(this.tailscalePermissionDenied && !tailscaleConnected
+      ...(this.tailscalePermissionDenied && !tailscaleConnected && !tailscaleErrorCode
         ? { tailscaleErrorCode: "permission_denied" as const }
         : tailscaleErrorCode
           ? { tailscaleErrorCode }

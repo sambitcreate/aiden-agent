@@ -1681,3 +1681,20 @@ test("two paired devices authenticate independently and revoking one leaves the 
     await app.cleanup();
   }
 });
+
+for (const errorCode of ["not_connected", "https_unavailable", "status_unavailable"] as const) {
+  test(`Tailscale ${errorCode} supersedes an earlier operator denial`, async () => {
+    const assessment: { state: "available" | "unavailable"; errorCode?: typeof errorCode } = { state: "available" };
+    const app = await fixture({ mode: "both", connectFailsWith: "tailscale_permission_denied", tailscaleAssessment: assessment });
+    try {
+      await app.service.setEnabled(true);
+      await app.service.connectTailscale();
+      assert.equal((await app.service.status()).tailscaleErrorCode, "permission_denied");
+      assessment.state = "unavailable";
+      assessment.errorCode = errorCode;
+      assert.equal((await app.service.status()).tailscaleErrorCode, errorCode);
+    } finally {
+      await app.cleanup();
+    }
+  });
+}

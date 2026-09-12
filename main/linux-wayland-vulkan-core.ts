@@ -12,3 +12,7 @@ export function shouldSuppressOzoneWaylandVulkan(
   if (ozonePlatformOverride?.trim().toLowerCase() === "x11") return false;
   return isWaylandSession(env);
 }
+
+export function disableVulkanFeature(existing: string): string {
+  return [...new Set([...existing.split(",").map((value) => value.trim()).filter(Boolean), "Vulkan"])].join(",");
+}

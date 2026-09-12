@@ -176,3 +176,9 @@ exact accessibility label, and verify a post-start diagnostic event plus
 - Probing a Linux Tailscale node's own MagicDNS HTTPS name from that same OrbStack VM can time out even while another tailnet peer reaches it immediately. Hold the scoped route open and probe from a separate peer when accepting the iOS network direction; always verify the temporary handler and listener are gone afterward.
 - Darwin can deliver or coalesce a directory's already-queued creation notification after `fs.watch` registration. Before a watcher integration test acquires the lease whose invalidation it means to observe, establish a quiet baseline so a rapid follow-up edit is the event under test rather than a registration race.
 - Playwright's `fill("")` and `clear()` use the same select-and-delete path as a manual text-clearing test, so swapping among those APIs does not avoid an intermittent Electron/Xvfb deletion miss. When the product benefits from it, expose an accessible clear action and exercise that real user path while retaining an exact empty-value assertion.
+
+## Linux parity audit — 2026-09-11
+
+- The documented `.memory/` directory is absent in this checkout; used checked-in Linux documentation and plans for project context.
+- Linux support PR #71 is historically green but currently conflicts with main; stacked fixes PR #89 is separate and has failing verification/Linux jobs. Pulling the support branch alone does not include those fixes.
+- PR #89 hosted logs pinpoint TS2322 at `main/services/aiden-remote-service.ts:1181`: returned `permission_denied` is missing from the service status `tailscaleErrorCode` union, blocking macOS and both Linux verification jobs.
