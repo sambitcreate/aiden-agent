@@ -204750,7 +204750,7 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
           "input": 0.075,
@@ -205941,7 +205941,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 131072
+          "output": 943718
         },
         "cost": {
           "input": 0.15,
@@ -243948,9 +243948,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.04732,
-          "output": 0.09464,
-          "cache_read": 0.009464
+          "input": 0.04704,
+          "output": 0.09408,
+          "cache_read": 0.009408
         }
       },
       "deepseek/deepseek-v4.1-flash": {
