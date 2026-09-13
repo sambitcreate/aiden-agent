@@ -1,5 +1,8 @@
 # Troubleshooting
 
+- OpenCode API message dumps can exceed the CLI's output limit and become truncated JSON; use `GET /api/session/{id}/message?limit=1` for the latest completed review, or bounded pagination, rather than dumping every tool result. Verify the returned assistant model metadata when exact-model reviews are required.
+- Provider diagnostics must classify `finalized` inside the Pi harness before `closedFailureMessage` replaces the raw error. Reclassifying `runtimeOutcome.finalMessage` in `llm-client` loses model-unavailable/authentication evidence; assert the emitted production event with a real faux-provider harness test.
+
 - `.papercuts/` is ignored even when its troubleshooting file is present in the PR branch, so persisting a required update needs an explicit `git add -f`.
 - Layout stabilization must race `animation.finished` against a short timeout because paused or infinite document animations never settle; keep geometry polling as the authoritative E2E readiness check.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.

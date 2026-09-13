@@ -8,7 +8,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { logger } from "../platform.js";
+import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
 import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import {
@@ -434,10 +435,21 @@ export async function collectMcpAgentTools(
           }`,
         );
       }
-      logger.warn(
-        "mcp",
-        `Skipping MCP server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "mcp",
+        event: "mcp-degraded",
+        outcome: projected.code === "cancelled" ? "cancelled" : "degraded",
+        code: projected.code,
+        fields: {
+          errorType: projected.errorType,
+          ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
+          ...(projected.causeCode ? { causeCode: projected.causeCode } : {}),
+          ...(projected.httpStatus === undefined ? {} : { httpStatus: projected.httpStatus }),
+          failurePhase: "mcp-tool-discovery",
+        },
+      });
     }
   }
   if (options.strict && servers.length > 0 && all.length === 0) {

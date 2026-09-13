@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, unlink } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { Chat } from "./types.js";
 import {
@@ -173,7 +173,7 @@ async function privateJson(file: string): Promise<unknown> {
   } finally { await handle.close(); }
 }
 
-async function atomicPrivateJson(root: string, file: string, value: unknown): Promise<void> {
+async function atomicPrivateJson(root: string, file: string, value: unknown, exclusive = false): Promise<void> {
   const staging = path.join(root, `.pi-upgrade.${randomUUID()}.tmp`);
   try {
     const handle = await open(staging, "wx", 0o600);
@@ -181,7 +181,13 @@ async function atomicPrivateJson(root: string, file: string, value: unknown): Pr
       await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
       await handle.sync();
     } finally { await handle.close(); }
-    await rename(staging, file);
+    if (exclusive) {
+      // Publish complete bytes without replacing a competing creator's policy.
+      await link(staging, file);
+      await unlink(staging);
+    } else {
+      await rename(staging, file);
+    }
     await chmod(file, 0o600);
     const directory = await open(root, "r");
     try { await directory.sync(); } finally { await directory.close(); }
@@ -282,7 +288,8 @@ export async function installedApplicationIdentity(
 }
 
 export class PiUpgradeRolloutStore {
-  private loaded?: Promise<PiUpgradeRolloutDocument>;
+  private hasLoaded = false;
+  private loadTail: Promise<void> = Promise.resolve();
   constructor(private readonly options: {
     root(): string | Promise<string>;
     initialStage: PiUpgradeRolloutStage;
@@ -306,28 +313,33 @@ export class PiUpgradeRolloutStore {
     try {
       const parsed = parseDocument(await privateJson(paths.policy));
       if (!parsed) throw new Error("The Pi upgrade rollout document is invalid.");
+      this.hasLoaded = true;
       return parsed;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create || this.hasLoaded) throw error;
       const initial = { version: 1 as const, stage: this.options.initialStage, activatedAt: this.now(), revision: 1 };
-      let handle;
       try {
-        handle = await open(paths.policy, "wx", 0o600);
+        await atomicPrivateJson(paths.root, paths.policy, initial, true);
       } catch (createError) {
         if ((createError as NodeJS.ErrnoException).code === "EEXIST") return this.readCurrent(false);
         throw createError;
       }
-      try {
-        await handle.writeFile(`${JSON.stringify(initial, null, 2)}\n`, "utf8");
-        await handle.sync();
-      } finally { await handle.close(); }
       return initial;
     }
   }
 
-  async load(): Promise<PiUpgradeRolloutDocument> {
-    this.loaded ??= this.readCurrent(true);
-    return this.loaded;
+  load(): Promise<PiUpgradeRolloutDocument> {
+    // Policy is operator-controlled: every read must observe and validate disk,
+    // including replacements after an earlier successful read or failed read.
+    // Serialize first reads so an overlapping load cannot retain creation
+    // permission after another load has observed the policy successfully.
+    const pending = this.loadTail.then(async () => {
+      const current = await this.readCurrent(!this.hasLoaded);
+      this.hasLoaded = true;
+      return current;
+    });
+    this.loadTail = pending.then(() => undefined, () => undefined);
+    return pending;
   }
 
   async advance(target: PiUpgradeRolloutStage): Promise<PiUpgradeRolloutDocument> {
@@ -355,9 +367,14 @@ export class PiUpgradeRolloutStore {
           installed.buildId !== identity.buildId || installed.evaluationSha256 !== evaluationSha256
         ) throw new Error("V4-only rollout requires receipts bound to this installed build and evaluation.");
       }
-      const next = { version: 1 as const, stage: target, activatedAt: this.now(), revision: current.revision + 1 };
+      const next = {
+        version: 1 as const, stage: target,
+        // Establish the new-chat cohort once; later stages only widen it.
+        activatedAt: target === "new_chats" ? this.now() : current.activatedAt,
+        revision: current.revision + 1,
+      };
       await atomicPrivateJson(paths.root, paths.policy, next);
-      this.loaded = Promise.resolve(next);
+      this.hasLoaded = true;
       return next;
     } finally { await releaseLock(); }
   }
