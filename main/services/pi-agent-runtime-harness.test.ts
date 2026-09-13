@@ -2742,6 +2742,7 @@ test("custom tool disabling removes base and extension tools from a frozen runti
   await harness.prompt("Respond without tools");
   assert.deepEqual(harness.state.tools, []);
   assert.equal(snapshot.tools.length, 2, "the shared frozen snapshot stays intact");
+});
 
 test("provider diagnostics classify before outcome redaction without exporting the raw error", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "aiden-provider-diagnostics-"));
