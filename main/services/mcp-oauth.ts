@@ -6,8 +6,8 @@
 
 import * as http from "http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
@@ -42,6 +42,7 @@ import { assertMcpPresetServer, mcpOAuthClientNameForServer } from "./mcp-preset
 import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
+import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
@@ -208,17 +209,17 @@ class McpOAuthProvider implements OAuthClientProvider {
 export function makeOAuthTransport(
   server: McpServer,
   provider: OAuthClientProvider,
+  signal?: AbortSignal,
 ): StreamableHTTPClientTransport | SSEClientTransport {
   assertMcpPresetServer(server);
   if (!server.url) throw new Error("This MCP server needs a URL.");
-  const url = new URL(server.url);
-  const requestInit = server.headers ? { headers: server.headers } : undefined;
-  if (server.transport === "sse") {
-    return new SSEClientTransport(url, { authProvider: provider, requestInit });
-  }
-  return new StreamableHTTPClientTransport(url, {
+  if (server.transport === "stdio") throw new Error("OAuth requires a remote MCP server.");
+  return createMcpRemoteTransport({
+    transport: server.transport,
+    serviceUrl: server.url,
+    serviceHeaders: server.headers,
+    signal,
     authProvider: provider,
-    requestInit,
   });
 }
 
@@ -445,7 +446,11 @@ export async function authorizeMcpServer(
     // while the SDK mutates a private replacement buffer. A renderer reload,
     // failed provider, or process crash before final verification cannot erase
     // credentials that were still valid when the user started.
-    const transport = makeOAuthTransport(server, provider);
+    const transportSignal = AbortSignal.any([
+      operation.signal,
+      ...(ownerSignal ? [ownerSignal] : []),
+    ]);
+    const transport = makeOAuthTransport(server, provider, transportSignal);
     const client = new Client(
       { name: "aiden-agent", version: "0.27.0" },
       { capabilities: {} },
@@ -470,17 +475,21 @@ export async function authorizeMcpServer(
       // Expected: connect() triggered redirectToAuthorization (browser opened).
     }
 
-    const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
-      operation.signal,
-      ownerSignal,
-    ]);
-    await raceMcpOAuthCancellation(transport.finishAuth(code), [
-      operation.signal,
-      ownerSignal,
-    ]);
+    try {
+      const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
+        operation.signal,
+        ownerSignal,
+      ]);
+      await raceMcpOAuthCancellation(transport.finishAuth(code), [
+        operation.signal,
+        ownerSignal,
+      ]);
+    } finally {
+      await transport.close().catch(() => {});
+    }
 
     // Verify the freshly minted tokens actually authorize a connection.
-    const verifyTransport = makeOAuthTransport(server, provider);
+    const verifyTransport = makeOAuthTransport(server, provider, transportSignal);
     const verifyClient = new Client(
       { name: "aiden-agent", version: "0.27.0" },
       { capabilities: {} },

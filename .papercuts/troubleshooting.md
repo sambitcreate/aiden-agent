@@ -1,5 +1,10 @@
 # Troubleshooting
 
+## 2026-09-12 — Listed upstream integration audit
+
+- This worktree has no `.memory/` or `node_modules/`. Read the main checkout's project memory as historical context, but use this worktree's exact HEAD/source as authority. The main checkout's `tsx` binary can execute dependency-free focused suites without installing packages here; suites with runtime package imports still fail module resolution (observed: `entities` in the subagent capability suite). Treat that as an environment limitation, not a product regression or passing test.
+- A repository in the earlier compaction reference table is not necessarily an installed integration. Verify runtime imports, vendored artifacts, implementation history, and explicit adoption decisions before proposing package upgrades.
+
 - OpenCode API message dumps can exceed the CLI's output limit and become truncated JSON; use `GET /api/session/{id}/message?limit=1` for the latest completed review, or bounded pagination, rather than dumping every tool result. Verify the returned assistant model metadata when exact-model reviews are required.
 - Provider diagnostics must classify `finalized` inside the Pi harness before `closedFailureMessage` replaces the raw error. Reclassifying `runtimeOutcome.finalMessage` in `llm-client` loses model-unavailable/authentication evidence; assert the emitted production event with a real faux-provider harness test.
 
@@ -432,6 +437,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+## 2026-09-12 — MCP maintenance implementation
+
+- MCP SDK1.30.0 closes HTTP transports during OAuth redirection but expects finishAuth to reuse the same object and discovered metadata. Restart only its exchange request lifetime, retaining owner cancellation.
+- SDK OAuth metadata GETs also send MCP-Protocol-Version; a protocol header alone does not identify a timed MCP RPC. Classify actual request semantics and test the real SDK helpers. SSE per-frame limits apply only to successful requested streams, never arbitrary MIME-labeled JSON/error bodies.
+- Physical-iPhone native verification found three failures in unchanged RemoteClient fixture tests (catalog expectation, invalid JSON __SwiftValue, and legacy fallback invalidResponse). See the maintenance acceptance record; Android52 passed, iOS198 passed/3 skipped/3 failed.
 
 - Production provider 400s are untriageable from `logs/aiden.log` alone: the real error text survives only in `userData/pi-compaction-sessions/*.jsonl` (per-message `errorMessage`), because the diagnostic journal strips provider messages outside the development profile. Check the journals before assuming a classification.
 - `@earendil-works/pi-ai` transports merge `model.headers` into every outgoing request and merge `options.headers` last — a per-conversation header can be attached once at runtime-model resolution instead of threading it through each call site.
