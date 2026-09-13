@@ -206,6 +206,8 @@ data class AidenAgentStep(
     val updatedAt: Double,
     val finishedAt: Double? = null,
     val contentOffset: Int? = null,
+    val reasoningStartOffset: Int? = null,
+    val reasoningEndOffset: Int? = null,
     val durationMs: Double? = null,
     val target: String? = null,
     val detail: String? = null,
@@ -279,6 +281,12 @@ data class AidenGenerationTimeline(
                 step.startedAt < 0 || step.updatedAt < 0 ||
                 (step.finishedAt != null && (!step.finishedAt.isFinite() || step.finishedAt < 0)) ||
                 (step.contentOffset != null && (step.contentOffset < 0 || step.contentOffset > AidenRemoteProtocol.MAX_SAFE_INTEGER)) ||
+                (step.reasoningStartOffset != null && (step.reasoningStartOffset < 0 || step.reasoningStartOffset > AidenRemoteProtocol.MAX_SAFE_INTEGER)) ||
+                (step.reasoningEndOffset != null && (
+                    step.reasoningStartOffset == null ||
+                    step.reasoningEndOffset < step.reasoningStartOffset ||
+                    step.reasoningEndOffset > AidenRemoteProtocol.MAX_SAFE_INTEGER
+                )) ||
                 (step.durationMs != null && (!step.durationMs.isFinite() || step.durationMs < 0)) ||
                 (step.label != null && (step.label.isEmpty() || step.label.length > 120)) ||
                 (step.toolName != null && (step.toolName.isEmpty() || step.toolName.length > 80)) ||

@@ -12,6 +12,7 @@ import {
   buildAgentRuntimeOptions,
   resolveGenerationThinkingLevel,
   reconcileTerminalAssistantProjection,
+  terminalAssistantThinkingSegments,
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
@@ -795,6 +796,53 @@ test("reconciles interleaved streamed blocks to Pi terminal content order", () =
     "Earlier reasoning.\n\nEarly thought.\n\nLate thought.",
   );
   assert.equal(projection.changed, true);
+  assert.deepEqual(terminalAssistantThinkingSegments({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Early thought." },
+      { type: "text", text: "First block. " },
+      { type: "thinking", thinking: "Late thought." },
+      { type: "text", text: "Second block." },
+    ],
+  }), [
+    { contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 14 },
+    { contentOffset: 13, reasoningStartOffset: 16, reasoningEndOffset: 29 },
+  ]);
+  assert.deepEqual(terminalAssistantThinkingSegments({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "hidden", redacted: true },
+      { type: "text", text: "First block. " },
+      { type: "thinking", thinking: "Late thought." },
+    ],
+  }), [
+    { contentOffset: 0 },
+    { contentOffset: 13, reasoningStartOffset: 0, reasoningEndOffset: 13 },
+  ]);
+  assert.deepEqual(terminalAssistantThinkingSegments({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Before tool." },
+      { type: "toolCall", id: "call-1", name: "read_file", arguments: {} },
+      { type: "thinking", thinking: "After tool." },
+    ],
+  }), [
+    { contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 12 },
+    { contentOffset: 0, reasoningStartOffset: 14, reasoningEndOffset: 25 },
+  ]);
+  assert.deepEqual(terminalAssistantThinkingSegments({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: "Visible after empty." },
+    ],
+  }), [
+    { contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 22 },
+  ]);
+  assert.equal(terminalAssistantThinkingSegments({
+    role: "toolResult",
+    content: [],
+  }), null);
 });
 
 test("terminal reconciliation exposes only readable Pi thinking and honors local hiding", () => {

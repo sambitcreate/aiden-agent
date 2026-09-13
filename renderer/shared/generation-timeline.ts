@@ -50,6 +50,10 @@ export interface AgentThinkingStep {
   finishedAt?: number;
   /** UTF-16 offset into the visible assistant text when this activity began. */
   contentOffset?: number;
+  /** UTF-16 offset into the exposed reasoning projection where this stretch begins. */
+  reasoningStartOffset?: number;
+  /** UTF-16 offset where this settled stretch ends; omitted while it is still open. */
+  reasoningEndOffset?: number;
   /** Wall-clock reasoning time measured by the host; pi reports no duration. */
   durationMs?: number;
 }
@@ -225,6 +229,13 @@ function parseThinkingStep(
   if (
     typeof step.id !== "string" ||
     !/^think-[1-9]\d*$/u.test(step.id) ||
+    (step.reasoningStartOffset !== undefined &&
+      (!Number.isSafeInteger(step.reasoningStartOffset) ||
+        (step.reasoningStartOffset as number) < 0)) ||
+    (step.reasoningEndOffset !== undefined &&
+      (!Number.isSafeInteger(step.reasoningEndOffset) ||
+        step.reasoningStartOffset === undefined ||
+        (step.reasoningEndOffset as number) < (step.reasoningStartOffset as number))) ||
     (step.durationMs !== undefined && !finiteTimestamp(step.durationMs))
   ) {
     return undefined;
@@ -237,6 +248,12 @@ function parseThinkingStep(
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
+    ...(step.reasoningStartOffset === undefined
+      ? {}
+      : { reasoningStartOffset: step.reasoningStartOffset as number }),
+    ...(step.reasoningEndOffset === undefined
+      ? {}
+      : { reasoningEndOffset: step.reasoningEndOffset as number }),
     ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
   };
 }

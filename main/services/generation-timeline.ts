@@ -249,6 +249,7 @@ export class GenerationTimelineProjector {
   private thinkingSequence = 0;
   private compactionSequence = 0;
   private contentOffset = 0;
+  private reasoningOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -321,6 +322,13 @@ export class GenerationTimelineProjector {
       // The stretch reopened on the merged thinking step: mark it open again so
       // the live timeline reflects reasoning in progress.
       delete last.finishedAt;
+      delete last.reasoningEndOffset;
+      if (
+        last.reasoningStartOffset === undefined ||
+        last.reasoningStartOffset > this.reasoningOffset
+      ) {
+        last.reasoningStartOffset = this.reasoningOffset;
+      }
       last.updatedAt = timestamp;
       this.openThinking = {
         index: this.timeline.steps.length - 1,
@@ -338,6 +346,7 @@ export class GenerationTimelineProjector {
       updatedAt: timestamp,
       durationMs: 0,
       contentOffset: this.contentOffset,
+      reasoningStartOffset: this.reasoningOffset,
     };
     this.openThinking = {
       index: this.timeline.steps.length,
@@ -351,6 +360,108 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || !this.openThinking) return;
     this.settleThinking(this.now());
     this.emit();
+  }
+
+  /** Keep reasoning boundaries aligned with the separately projected readable text. */
+  setReasoningOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    this.reasoningOffset = offset;
+  }
+
+  /** Retry removes abandoned reasoning while retaining its bounded activity history. */
+  rewindReasoningOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    const timestamp = this.now();
+    let changed = false;
+    if (this.openThinking) {
+      this.settleThinking(timestamp);
+      changed = true;
+    }
+    for (const step of this.timeline.steps) {
+      if (isToolStep(step) || step.reasoningStartOffset === undefined) continue;
+      if (step.reasoningStartOffset >= offset) {
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
+        changed = true;
+      } else if (
+        step.reasoningEndOffset === undefined ||
+        step.reasoningEndOffset > offset
+      ) {
+        step.reasoningEndOffset = offset;
+        changed = true;
+      }
+    }
+    this.reasoningOffset = offset;
+    if (changed) this.emit();
+  }
+
+  /** Replace streamed boundaries with Pi's canonical terminal block ordering. */
+  reconcileThinkingSegments(
+    stepStartIndex: number,
+    reasoningStart: number,
+    segments: ReadonlyArray<{
+      reasoningStartOffset?: number;
+      reasoningEndOffset?: number;
+    }>,
+  ): void {
+    if (
+      !Number.isSafeInteger(stepStartIndex) ||
+      stepStartIndex < 0 ||
+      !Number.isSafeInteger(reasoningStart) ||
+      reasoningStart < 0
+    ) {
+      return;
+    }
+    const thinkingSteps = this.timeline.steps
+      .slice(stepStartIndex)
+      .filter((step): step is AgentThinkingStep => !isToolStep(step));
+    let changed = false;
+    if (thinkingSteps.length !== segments.length) {
+      for (const step of thinkingSteps) {
+        changed ||= step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined;
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
+      }
+      this.reasoningOffset = Math.max(
+        this.reasoningOffset,
+        ...segments.flatMap((segment) =>
+          segment.reasoningEndOffset === undefined
+            ? []
+            : [reasoningStart + segment.reasoningEndOffset],
+        ),
+      );
+      if (changed) this.emit();
+      return;
+    }
+    for (const [index, step] of thinkingSteps.entries()) {
+      const segment = segments[index];
+      if (!segment) {
+        changed ||= step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined;
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
+        continue;
+      }
+      if (segment.reasoningStartOffset === undefined || segment.reasoningEndOffset === undefined) {
+        changed ||= step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined;
+        delete step.reasoningStartOffset;
+        delete step.reasoningEndOffset;
+      } else {
+        const nextStart = reasoningStart + segment.reasoningStartOffset;
+        const nextEnd = reasoningStart + segment.reasoningEndOffset;
+        changed ||= step.reasoningStartOffset !== nextStart || step.reasoningEndOffset !== nextEnd;
+        step.reasoningStartOffset = nextStart;
+        step.reasoningEndOffset = nextEnd;
+      }
+    }
+    this.reasoningOffset = Math.max(
+      this.reasoningOffset,
+      ...segments.flatMap((segment) =>
+        segment.reasoningEndOffset === undefined
+          ? []
+          : [reasoningStart + segment.reasoningEndOffset],
+      ),
+    );
+    if (changed) this.emit();
   }
 
   compactionStarted(): string {
@@ -509,6 +620,15 @@ export class GenerationTimelineProjector {
     step.durationMs = (step.durationMs ?? 0) + Math.max(0, timestamp - open.startedAt);
     step.updatedAt = timestamp;
     step.finishedAt = timestamp;
+    if (
+      step.reasoningStartOffset === undefined ||
+      this.reasoningOffset < step.reasoningStartOffset
+    ) {
+      delete step.reasoningStartOffset;
+      delete step.reasoningEndOffset;
+    } else {
+      step.reasoningEndOffset = this.reasoningOffset;
+    }
   }
 
   private updateTool(

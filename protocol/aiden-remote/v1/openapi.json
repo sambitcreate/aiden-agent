@@ -4676,10 +4676,25 @@
             "type": "integer",
             "minimum": 0
           },
+          "reasoningStartOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "UTF-16 offset into the exposed reasoning projection where this stretch begins."
+          },
+          "reasoningEndOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "UTF-16 offset at or after reasoningStartOffset where this settled stretch ends."
+          },
           "durationMs": {
             "type": "number",
             "minimum": 0
           }
+        },
+        "dependentRequired": {
+          "reasoningEndOffset": [
+            "reasoningStartOffset"
+          ]
         },
         "additionalProperties": false
       },

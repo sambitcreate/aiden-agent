@@ -524,6 +524,7 @@ export function subscribeDetachedTerminalChats(
       content: reset
         ? ""
         : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+      reasoning: reset ? "" : current.reasoning,
       lastTextDeltaAt:
         reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
     }));

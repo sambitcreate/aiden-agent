@@ -268,6 +268,9 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
         updatedAt: 2,
         finishedAt: 2,
         durationMs: 1_000,
+        contentOffset: 0,
+        reasoningStartOffset: 0,
+        reasoningEndOffset: 14,
       },
       {
         id: "tool-1",
@@ -280,6 +283,7 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
         startedAt: 2,
         updatedAt: 3,
         finishedAt: 3,
+        contentOffset: 0,
       },
       {
         id: "think-2",
@@ -287,6 +291,8 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
         kind: "thinking",
         startedAt: 3,
         updatedAt: 3,
+        contentOffset: 20,
+        reasoningStartOffset: 16,
       },
     ],
   };
@@ -295,7 +301,7 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
       chatId="chat-1"
       messages={[]}
       streamingText="Here is what I found."
-      streamingReasoning="First thought"
+      streamingReasoning={"First thought.\n\nSecond thought."}
       streamingArtifacts={[]}
       timeline={timeline}
       liveSubagents={[]}
@@ -310,6 +316,9 @@ test("the reasoning shimmer returns for a later open thinking step after prose",
   assert.match(markup, /agent-thinking-shimmer/u);
   assert.match(markup, />Thinking</u);
   assert.doesNotMatch(markup, /Thinking…/u);
+  assert.equal(markup.match(/reasoning-surface/gu)?.length, 2);
+  assert.match(markup, /First thought\./u);
+  assert.match(markup, /Second thought\./u);
 });
 
 test("settled reasoning uses one duration-labelled disclosure without an activity duplicate", () => {

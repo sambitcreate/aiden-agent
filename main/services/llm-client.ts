@@ -89,6 +89,8 @@ import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
   reconcileTerminalAssistantProjection,
+  terminalAssistantReasoning,
+  terminalAssistantThinkingSegments,
   resolveGenerationThinkingLevel,
   runtimeSupportsImages,
   settleGenerationCleanup,
@@ -1808,6 +1810,7 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
+    let currentAssistantTurnTimelineStepStart = 0;
     const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
@@ -2619,6 +2622,7 @@ export const llmClient = {
                 full: full.length,
                 reasoning: reasoning.length,
               };
+              currentAssistantTurnTimelineStepStart = timeline.snapshot().steps.length;
             }
             break;
           case "message_update": {
@@ -2666,6 +2670,7 @@ export const llmClient = {
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
+              timeline.setReasoningOffset(reasoning.length);
               currentAssistantTurnHadReasoningDelta = true;
               noteModelBecameReady();
               sendGeneration(streamId, "chat:reasoning-delta", {
@@ -2702,6 +2707,21 @@ export const llmClient = {
               event.message,
               exposeReasoning,
             );
+            const terminalThinkingSegments = exposeReasoning
+              ? terminalAssistantThinkingSegments(event.message)
+              : event.message.role === "assistant"
+                ? []
+                : null;
+            if (terminalThinkingSegments !== null) {
+              const terminalReasoningStart = projection.reasoning.length -
+                (exposeReasoning ? terminalAssistantReasoning(event.message).length : 0);
+              timeline.reconcileThinkingSegments(
+                currentAssistantTurnTimelineStepStart,
+                terminalReasoningStart,
+                terminalThinkingSegments,
+              );
+              timeline.setReasoningOffset(projection.reasoning.length);
+            }
             if (projection.changed) {
               full = projection.full;
               reasoning = projection.reasoning;
@@ -3068,6 +3088,7 @@ export const llmClient = {
               full = full.slice(0, fullLengthBeforeAttempt);
               reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
               timeline.rewindContentOffset(full.length);
+              timeline.rewindReasoningOffset(reasoning.length);
               sendGeneration(streamId, "chat:delta", {
                 streamId,
                 delta: "",

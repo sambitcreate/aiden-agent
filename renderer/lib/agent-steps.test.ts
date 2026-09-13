@@ -128,7 +128,9 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
     rows?.map((row) =>
       row.kind === "text"
         ? [row.kind, row.content]
-        : [row.kind, row.steps.map((entry) => entry.id)],
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : [row.kind, row.content],
     ),
     [
       ["text", "Before."],
@@ -152,6 +154,40 @@ test("reasoning milestones stay in the dedicated disclosure instead of activity 
     "Thinking",
   );
   assert.equal(reasoningActivityLabel(timeline("completed", [thought]), false), "Thought briefly");
+});
+
+test("places distinct reasoning stretches around prose and tool activity", () => {
+  const first = {
+    ...thinking("think-1", 0, 1_000),
+    contentOffset: 0,
+    reasoningStartOffset: 0,
+    reasoningEndOffset: 14,
+  };
+  const second = {
+    ...thinking("think-2", 2, 2_000),
+    contentOffset: 7,
+    reasoningStartOffset: 16,
+    reasoningEndOffset: 31,
+  };
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [first, positionedTool(1, 7), second]),
+    "First thought.\n\nSecond thought.",
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "activity"
+        ? [row.kind, row.steps.map((step) => step.id)]
+        : [row.kind, row.content],
+    ),
+    [
+      ["reasoning", "First thought."],
+      ["text", "Before."],
+      ["activity", ["tool-2"]],
+      ["reasoning", "Second thought."],
+      ["text", "After."],
+    ],
+  );
 });
 
 test("assistant presentation fails closed for legacy or invalid offsets", () => {

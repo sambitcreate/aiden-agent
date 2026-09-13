@@ -87,12 +87,19 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 10);
+  assert.equal(fixture.contractRevision, 11);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
+  const timelineEvent = fixture.events.find((event) => event.type === "timeline");
+  assert(timelineEvent, "missing timeline fixture event");
+  const timelinePayload = record(timelineEvent.payload, "timeline fixture payload");
+  const timeline = record(timelinePayload.timeline, "timeline fixture");
+  const timelineSteps = timeline.steps as Array<Record<string, unknown>>;
+  assert.equal(timelineSteps[1]?.reasoningStartOffset, 0);
+  assert.equal(timelineSteps[1]?.reasoningEndOffset, 12);
   assert.equal(record(fixture.speechStatus, "fixture speech status").selectedModelId, "parakeet-v3");
   assert.equal(record(fixture.speechTranscription, "fixture speech transcription").modelId, "parakeet-v3");
   assert.equal(
@@ -233,6 +240,24 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     description: "Must be exactly 1.",
   });
   const schemas = record(record(document.components, "components").schemas, "schemas");
+  const thinkingStepProperties = record(
+    record(schemas.GenerationThinkingStep, "GenerationThinkingStep").properties,
+    "GenerationThinkingStep properties",
+  );
+  assert.deepEqual(record(thinkingStepProperties.reasoningStartOffset, "reasoningStartOffset"), {
+    type: "integer",
+    minimum: 0,
+    description: "UTF-16 offset into the exposed reasoning projection where this stretch begins.",
+  });
+  assert.deepEqual(record(thinkingStepProperties.reasoningEndOffset, "reasoningEndOffset"), {
+    type: "integer",
+    minimum: 0,
+    description: "UTF-16 offset at or after reasoningStartOffset where this settled stretch ends.",
+  });
+  assert.deepEqual(
+    record(schemas.GenerationThinkingStep, "GenerationThinkingStep").dependentRequired,
+    { reasoningEndOffset: ["reasoningStartOffset"] },
+  );
   const pairingRequestProperties = record(
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",

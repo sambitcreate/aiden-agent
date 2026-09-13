@@ -313,12 +313,15 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   );
 
   projector.thinkingStarted();
+  projector.setReasoningOffset(5);
   projector.thinkingEnded();
   projector.thinkingStarted();
+  projector.setReasoningOffset(11);
   projector.thinkingEnded();
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
   projector.toolFinished("call-a", "completed");
   projector.thinkingStarted();
+  projector.setReasoningOffset(17);
 
   const final = projector.finish("completed");
   assert.deepEqual(
@@ -331,8 +334,12 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   );
   const [merged, , trailing] = final.steps;
   assert.equal(merged?.kind === "thinking" && merged.durationMs, 1_000);
+  assert.equal(merged?.kind === "thinking" && merged.reasoningStartOffset, 0);
+  assert.equal(merged?.kind === "thinking" && merged.reasoningEndOffset, 11);
   // finish() settles reasoning that was still open when the turn ended.
   assert.equal(trailing?.kind === "thinking" && trailing.durationMs, 500);
+  assert.equal(trailing?.kind === "thinking" && trailing.reasoningStartOffset, 11);
+  assert.equal(trailing?.kind === "thinking" && trailing.reasoningEndOffset, 17);
   assert.equal(typeof trailing?.finishedAt, "number");
 });
 
@@ -448,6 +455,78 @@ test("anchors activity to assistant text and groups parallel calls at one bounda
   );
 });
 
+test("terminal reconciliation aligns visible segments without assigning redacted reasoning", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
+    snapshots.push(timeline),
+  );
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.setContentOffset(7);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(13);
+  projector.thinkingEnded();
+  projector.reconcileThinkingSegments(0, 0, [
+    {},
+    { reasoningStartOffset: 0, reasoningEndOffset: 13 },
+  ]);
+
+  const [redacted, visible] = projector.snapshot().steps;
+  assert.equal(redacted?.kind === "thinking" && redacted.reasoningStartOffset, undefined);
+  assert.equal(visible?.kind === "thinking" && visible.reasoningStartOffset, 0);
+  assert.equal(visible?.kind === "thinking" && visible.reasoningEndOffset, 13);
+  const published = snapshots[snapshots.length - 1]?.steps;
+  assert.equal(published?.[0]?.kind === "thinking" && published[0].reasoningStartOffset, undefined);
+  assert.equal(published?.[1]?.kind === "thinking" && published[1].reasoningEndOffset, 13);
+});
+
+test("terminal reconciliation falls back when streamed and canonical segment counts differ", () => {
+  const fewerTerminalSegments = new GenerationTimelineProjector("generation-1", () => {});
+  fewerTerminalSegments.thinkingStarted();
+  fewerTerminalSegments.setReasoningOffset(20);
+  fewerTerminalSegments.thinkingEnded();
+  fewerTerminalSegments.toolStarted("call-a", "read_file", {});
+  fewerTerminalSegments.thinkingStarted();
+  fewerTerminalSegments.setReasoningOffset(30);
+  fewerTerminalSegments.thinkingEnded();
+  fewerTerminalSegments.reconcileThinkingSegments(0, 0, [
+    { reasoningStartOffset: 0, reasoningEndOffset: 30 },
+  ]);
+  assert.deepEqual(
+    fewerTerminalSegments.snapshot().steps
+      .filter((step) => step.kind === "thinking")
+      .map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]),
+    [[undefined, undefined], [undefined, undefined]],
+  );
+
+  const moreTerminalSegments = new GenerationTimelineProjector("generation-2", () => {});
+  moreTerminalSegments.thinkingStarted();
+  moreTerminalSegments.setReasoningOffset(10);
+  moreTerminalSegments.thinkingEnded();
+  moreTerminalSegments.reconcileThinkingSegments(0, 0, [
+    {},
+    { reasoningStartOffset: 0, reasoningEndOffset: 10 },
+  ]);
+  const [fallbackStep] = moreTerminalSegments.snapshot().steps;
+  assert.equal(fallbackStep?.kind === "thinking" && fallbackStep.reasoningStartOffset, undefined);
+  assert.equal(fallbackStep?.kind === "thinking" && fallbackStep.reasoningEndOffset, undefined);
+});
+
+test("reasoning offset setters ignore unsafe values", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.setReasoningOffset(-1);
+  projector.setReasoningOffset(1.5);
+  projector.rewindReasoningOffset(-1);
+  projector.rewindReasoningOffset(1.5);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(5);
+  projector.thinkingEnded();
+
+  const [step] = projector.snapshot().steps;
+  assert.equal(step?.kind === "thinking" && step.reasoningStartOffset, 0);
+  assert.equal(step?.kind === "thinking" && step.reasoningEndOffset, 5);
+});
+
 test("terminal reconciliation and retry rewind keep future offsets monotonic", () => {
   const snapshots: GenerationTimeline[] = [];
   const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
@@ -468,6 +547,56 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
     [15, 15, 15, 15],
   );
   assert.ok(snapshots.length > 0);
+});
+
+test("retry rewind removes abandoned reasoning boundaries before a new attempt", () => {
+  let now = 0;
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => ++now,
+  );
+  projector.thinkingStarted();
+  projector.setReasoningOffset(50);
+  projector.thinkingEnded();
+  projector.setContentOffset(10);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(100);
+  projector.thinkingEnded();
+
+  projector.rewindContentOffset(0);
+  projector.rewindReasoningOffset(0);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(5);
+  projector.thinkingEnded();
+
+  const snapshot = projector.snapshot();
+  assert.deepEqual(
+    snapshot.steps.map((step) =>
+      step.kind === "thinking"
+        ? [step.reasoningStartOffset, step.reasoningEndOffset]
+        : undefined,
+    ),
+    [[undefined, undefined], [0, 5]],
+  );
+  assert.deepEqual(parseGenerationTimeline(snapshot), snapshot);
+});
+
+test("retry rewind settles and safely reopens an unfinished thinking step", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {}, () => 100);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(50);
+
+  projector.rewindReasoningOffset(0);
+  projector.thinkingStarted();
+  projector.setReasoningOffset(5);
+  projector.thinkingEnded();
+
+  const snapshot = projector.snapshot();
+  const [step] = snapshot.steps;
+  assert.equal(step?.kind === "thinking" && step.reasoningStartOffset, 0);
+  assert.equal(step?.kind === "thinking" && step.reasoningEndOffset, 5);
+  assert.deepEqual(parseGenerationTimeline(snapshot), snapshot);
 });
 
 test("version 1 timelines replay without pretending to have presentation offsets", () => {
@@ -614,6 +743,43 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     parseGenerationTimeline({
       ...final,
       steps: [{ ...final.steps[0], contentOffset: -1 }],
+    }),
+    undefined,
+  );
+});
+
+test("rejects unsafe persisted reasoning offsets", () => {
+  const base = {
+    version: 3,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
+    steps: [{
+      id: "think-1",
+      order: 0,
+      kind: "thinking",
+      startedAt: 1,
+      updatedAt: 2,
+      finishedAt: 2,
+      contentOffset: 0,
+      reasoningStartOffset: 1,
+      reasoningEndOffset: 2,
+    }],
+  };
+  const withOffsets = (reasoningStartOffset: unknown, reasoningEndOffset: unknown) => ({
+    ...base,
+    steps: [{ ...base.steps[0], reasoningStartOffset, reasoningEndOffset }],
+  });
+
+  assert.ok(parseGenerationTimeline(base));
+  assert.equal(parseGenerationTimeline(withOffsets(-1, 2)), undefined);
+  assert.equal(parseGenerationTimeline(withOffsets(1.5, 2)), undefined);
+  assert.equal(parseGenerationTimeline(withOffsets(2, 1)), undefined);
+  assert.equal(
+    parseGenerationTimeline({
+      ...base,
+      steps: [{ ...base.steps[0], reasoningStartOffset: undefined, reasoningEndOffset: 2 }],
     }),
     undefined,
   );

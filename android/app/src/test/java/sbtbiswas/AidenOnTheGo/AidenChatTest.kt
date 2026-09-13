@@ -350,9 +350,13 @@ class AidenChatTest {
             updatedAt = 2500.0,
             finishedAt = 2500.0,
             contentOffset = 0,
+            reasoningStartOffset = 0,
+            reasoningEndOffset = 12,
             durationMs = 1000.0
         )
         assertEquals("Thought briefly", AidenAgentActivityPresentation.line(thinkStep))
+        assertEquals(0, thinkStep.reasoningStartOffset)
+        assertEquals(12, thinkStep.reasoningEndOffset)
 
         val runStep = AidenAgentStep(
             id = "tool-2",
@@ -457,6 +461,24 @@ class AidenChatTest {
         assertEquals("Visualizing", AidenAgentActivityPresentation.visualizingLabel(visualizing))
         assertEquals("Thought briefly", AidenAgentActivityPresentation.reasoningLabel(visualizing, active = false))
         assertNull(AidenAgentActivityPresentation.visualizingLabel(activeThinking))
+    }
+
+    @Test
+    fun testReasoningOffsetsFailClosedForUnsafeShapes() {
+        val invalidTimelines = listOf(
+            """{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningEndOffset":2}]}""",
+            """{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":-1,"reasoningEndOffset":2}]}""",
+            """{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":2,"reasoningEndOffset":1}]}"""
+        )
+        invalidTimelines.forEach { source ->
+            assertFalse(json.decodeFromString<AidenGenerationTimeline>(source).isRendererSafe())
+        }
+
+        assertThrows(Exception::class.java) {
+            json.decodeFromString<AidenGenerationTimeline>(
+                """{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":1.5,"reasoningEndOffset":2}]}"""
+            )
+        }
     }
 
     @Test

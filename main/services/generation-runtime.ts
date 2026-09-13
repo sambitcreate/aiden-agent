@@ -366,6 +366,56 @@ export function terminalAssistantReasoning(message: {
     .join("\n\n");
 }
 
+export interface TerminalAssistantThinkingSegment {
+  contentOffset: number;
+  reasoningStartOffset?: number;
+  reasoningEndOffset?: number;
+}
+
+/** Preserve every terminal thinking stretch while keeping redacted text absent. */
+export function terminalAssistantThinkingSegments(message: {
+  role?: string;
+  content?: unknown;
+}): TerminalAssistantThinkingSegment[] | null {
+  // `null` distinguishes a non-assistant message boundary from an assistant
+  // turn with no visible thinking. Pi emits message_end for tool results too;
+  // treating those as an empty assistant turn would erase the prior offsets.
+  if (message.role !== "assistant") return null;
+  if (!Array.isArray(message.content)) return [];
+  const segments: TerminalAssistantThinkingSegment[] = [];
+  let contentOffset = 0;
+  let reasoningOffset = 0;
+  let hasVisibleReasoningPart = false;
+  let hasNonThinkingBoundary = false;
+  for (const part of message.content) {
+    if (!part || typeof part !== "object") continue;
+    const candidate = part as { type?: unknown; text?: unknown; thinking?: unknown; redacted?: unknown };
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      contentOffset += candidate.text.length;
+      hasNonThinkingBoundary ||= candidate.text.length > 0;
+      continue;
+    }
+    if (candidate.type !== "thinking" || typeof candidate.thinking !== "string") {
+      hasNonThinkingBoundary = true;
+      continue;
+    }
+    let segment = segments[segments.length - 1];
+    if (hasNonThinkingBoundary || segment?.contentOffset !== contentOffset) {
+      segment = { contentOffset };
+      segments.push(segment);
+    }
+    hasNonThinkingBoundary = false;
+    if (candidate.redacted !== true) {
+      if (hasVisibleReasoningPart) reasoningOffset += 2;
+      segment.reasoningStartOffset ??= reasoningOffset;
+      reasoningOffset += candidate.thinking.length;
+      segment.reasoningEndOffset = reasoningOffset;
+      hasVisibleReasoningPart = true;
+    }
+  }
+  return segments;
+}
+
 /** Add terminal reasoning only when this assistant turn did not already stream it. */
 export function terminalAssistantReasoningFallback(
   message: { role?: string; content?: unknown },

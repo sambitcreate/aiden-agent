@@ -2,6 +2,7 @@ import { isActiveStep } from "./agent-steps";
 import {
   isToolStep,
   type AgentStep,
+  type AgentThinkingStep,
   type GenerationClaimCheck,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
@@ -19,6 +20,12 @@ export type AssistantPresentationRow =
       kind: "activity";
       contentOffset: number;
       steps: AgentStep[];
+    }
+  | {
+      key: string;
+      kind: "reasoning";
+      content: string;
+      step: AgentThinkingStep;
     };
 
 function textRow(
@@ -47,6 +54,7 @@ function textRow(
 export function assistantPresentationRows(
   content: string,
   timeline: GenerationTimeline | null | undefined,
+  reasoning = "",
 ): AssistantPresentationRow[] | null {
   if (!timeline?.steps.length) return null;
   const offsets = timeline.steps.map((step) => step.contentOffset);
@@ -62,23 +70,49 @@ export function assistantPresentationRows(
     return null;
   }
 
-  // Exposed reasoning has one dedicated disclosure. Thinking milestones still
-  // anchor and time the host timeline, but rendering them here would repeat the
-  // same phase as a second "Thinking" / "Thought" activity row.
-  const visibleSteps = timeline.steps.filter(isToolStep);
-
   const rows: AssistantPresentationRow[] = [];
   let cursor = 0;
   let stepIndex = 0;
-  while (stepIndex < visibleSteps.length) {
-    const offset = visibleSteps[stepIndex]?.contentOffset as number;
+  while (stepIndex < timeline.steps.length) {
+    const step = timeline.steps[stepIndex];
+    const offset = step?.contentOffset as number;
+    if (step && !isToolStep(step)) {
+      const start = step.reasoningStartOffset;
+      const end = step.reasoningEndOffset ?? reasoning.length;
+      if (
+        Number.isSafeInteger(start) &&
+        Number.isSafeInteger(end) &&
+        (start as number) >= 0 &&
+        (end as number) >= (start as number) &&
+        (end as number) <= reasoning.length
+      ) {
+        const thought = reasoning.slice(start, end).trim();
+        if (thought) {
+          const narrative = textRow(content, cursor, offset);
+          if (narrative) rows.push(narrative);
+          rows.push({
+            key: `reasoning-${step.id}`,
+            kind: "reasoning",
+            content: thought,
+            step,
+          });
+          cursor = offset;
+        }
+      }
+      stepIndex += 1;
+      continue;
+    }
+
     const narrative = textRow(content, cursor, offset);
     if (narrative) rows.push(narrative);
-
     const steps: AgentStep[] = [];
-    while (stepIndex < visibleSteps.length && visibleSteps[stepIndex]?.contentOffset === offset) {
-      const step = visibleSteps[stepIndex];
-      if (step) steps.push(step);
+    while (
+      stepIndex < timeline.steps.length &&
+      timeline.steps[stepIndex]?.contentOffset === offset &&
+      isToolStep(timeline.steps[stepIndex] as AgentStep)
+    ) {
+      const toolStep = timeline.steps[stepIndex];
+      if (toolStep) steps.push(toolStep);
       stepIndex += 1;
     }
     rows.push({

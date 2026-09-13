@@ -230,7 +230,7 @@ final class AidenChatTests: XCTestCase {
         let chat = try decoder.decode(
             AidenChat.self,
             from: Data(
-                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolCallId":"call-2","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"reasoningStartOffset":0,"reasoningEndOffset":12,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolCallId":"call-2","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
             )
         )
 
@@ -238,8 +238,35 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(timeline.isRendererSafe)
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[0]), "Read README.md")
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Thought briefly")
+        XCTAssertEqual(timeline.steps[1].reasoningStartOffset, 0)
+        XCTAssertEqual(timeline.steps[1].reasoningEndOffset, 12)
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[2]), "Ran Run tests")
         XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, ran 1 command")
+    }
+
+    func testReasoningOffsetsFailClosedForUnsafeShapes() throws {
+        let decoder = JSONDecoder()
+        let invalidTimelines = [
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningEndOffset":2}]}"#,
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":-1,"reasoningEndOffset":2}]}"#,
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":2,"reasoningEndOffset":1}]}"#,
+        ]
+        for source in invalidTimelines {
+            let timeline = try decoder.decode(
+                AidenGenerationTimeline.self,
+                from: Data(source.utf8)
+            )
+            XCTAssertFalse(timeline.isRendererSafe)
+        }
+
+        XCTAssertThrowsError(
+            try decoder.decode(
+                AidenGenerationTimeline.self,
+                from: Data(
+                    #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1,"finishedAt":2,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1,"updatedAt":2,"finishedAt":2,"reasoningStartOffset":1.5,"reasoningEndOffset":2}]}"#.utf8
+                )
+            )
+        )
     }
 
     func testReasoningActivityUsesOneDisclosureAndSurfacesVisualizationPhase() throws {

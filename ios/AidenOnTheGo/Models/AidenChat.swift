@@ -170,6 +170,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let updatedAt: Double
     let finishedAt: Double?
     let contentOffset: Int?
+    let reasoningStartOffset: Int?
+    let reasoningEndOffset: Int?
     let durationMs: Double?
     let target: String?
     let detail: String?
@@ -187,6 +189,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Double,
         finishedAt: Double?,
         contentOffset: Int?,
+        reasoningStartOffset: Int? = nil,
+        reasoningEndOffset: Int? = nil,
         durationMs: Double?,
         target: String?,
         detail: String?,
@@ -203,6 +207,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.finishedAt = finishedAt
         self.contentOffset = contentOffset
+        self.reasoningStartOffset = reasoningStartOffset
+        self.reasoningEndOffset = reasoningEndOffset
         self.durationMs = durationMs
         self.target = target
         self.detail = detail
@@ -230,6 +236,16 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt = try values.decode(Double.self, forKey: .updatedAt)
         finishedAt = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .finishedAt)
         contentOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .contentOffset)
+        reasoningStartOffset = try aidenDecodeOptionalNonNull(
+            Int.self,
+            from: values,
+            forKey: .reasoningStartOffset
+        )
+        reasoningEndOffset = try aidenDecodeOptionalNonNull(
+            Int.self,
+            from: values,
+            forKey: .reasoningEndOffset
+        )
         durationMs = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .durationMs)
         target = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .target)
         detail = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .detail)
@@ -242,7 +258,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
-        case finishedAt, contentOffset, durationMs, target, detail, lineChanges
+        case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
+        case durationMs, target, detail, lineChanges
     }
 
     var isActive: Bool {
@@ -336,6 +353,13 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                   step.finishedAt.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   step.contentOffset.map({
                       $0 >= 0 && $0 <= AidenRemoteProtocol.maxSafeInteger
+                  }) ?? true,
+                  step.reasoningStartOffset.map({
+                      $0 >= 0 && $0 <= AidenRemoteProtocol.maxSafeInteger
+                  }) ?? true,
+                  step.reasoningEndOffset.map({ end in
+                      guard let start = step.reasoningStartOffset else { return false }
+                      return end >= start && end <= AidenRemoteProtocol.maxSafeInteger
                   }) ?? true,
                   step.durationMs.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   step.label.map({ !$0.isEmpty && $0.unicodeScalars.count <= 120 }) ?? true,

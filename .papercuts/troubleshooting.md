@@ -429,3 +429,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+## 2026-09-12 — Split reasoning review
+
+- OpenCode Workers creates a clean isolated worktree without `node_modules`; reviewing an uncommitted snapshot required temporarily linking the source checkout's lockfile-matched dependency tree, then removing the link before accepting the review result.

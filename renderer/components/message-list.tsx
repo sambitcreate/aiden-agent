@@ -99,10 +99,10 @@ function AssistantResponse({
   streamComplete,
   onStreamHandoffComplete,
 }: AssistantResponseProps) {
-  const rows = assistantPresentationRows(content, timeline);
+  const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
-  // The one reasoning disclosure owns both the live and settled thought state.
-  // Other live phases continue in the activity row below the transcript.
+  // Each reasoning disclosure follows its own timeline stretch. Legacy turns
+  // without reasoning offsets retain the former single-disclosure fallback.
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const visualizingLive =
@@ -112,7 +112,8 @@ function AssistantResponse({
   // surface when the turn already contains thought text.
   const visualizing = useMinimumPresence(visualizingLive, MINIMUM_VISUALIZING_MS);
   const reasoningLabel = visualizing ? "Visualizing" : reasoningActivityLabel(timeline, active);
-  const showReasoning = Boolean(reasoning) || visualizing;
+  const hasSegmentedReasoning = rows?.some((row) => row.kind === "reasoning") ?? false;
+  const showLegacyReasoning = Boolean(reasoning) && !hasSegmentedReasoning;
   if (!rows || !timeline) {
     const activityTimeline = timeline
       ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
@@ -121,9 +122,9 @@ function AssistantResponse({
       <>
         <ActivityFeed timeline={activityTimeline} animate={streaming} />
         {subagentChips}
-        {showReasoning ? (
+        {showLegacyReasoning || visualizing ? (
           <ReasoningBlock
-            content={reasoning ?? ""}
+            content={showLegacyReasoning ? (reasoning ?? "") : ""}
             streaming={streaming && !streamComplete}
             active={active || visualizing}
             label={reasoningLabel}
@@ -157,9 +158,9 @@ function AssistantResponse({
 
   return (
     <>
-      {showReasoning ? (
+      {showLegacyReasoning || visualizing ? (
         <ReasoningBlock
-          content={reasoning ?? ""}
+          content={showLegacyReasoning ? (reasoning ?? "") : ""}
           streaming={streaming && !streamComplete}
           active={active || visualizing}
           label={reasoningLabel}
@@ -167,6 +168,25 @@ function AssistantResponse({
       ) : null}
       {subagentChips && !subagentActivityKey ? subagentChips : null}
       {rows.map((row, index) => {
+        if (row.kind === "reasoning") {
+          const rowActive =
+            streaming &&
+            !streamComplete &&
+            row.step.finishedAt === undefined &&
+            reasoningActive;
+          return (
+            <ReasoningBlock
+              key={row.key}
+              content={row.content}
+              streaming={streaming && !streamComplete}
+              active={rowActive}
+              label={reasoningActivityLabel(
+                activityTimelineFragment(timeline, [row.step]),
+                rowActive,
+              )}
+            />
+          );
+        }
         if (row.kind === "activity") {
           return (
             <React.Fragment key={row.key}>
