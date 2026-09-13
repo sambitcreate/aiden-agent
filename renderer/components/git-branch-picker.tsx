@@ -117,6 +117,7 @@ export function GitBranchPicker({
       qc.invalidateQueries({ queryKey: queryKeys.git(workspaceId) }),
       qc.invalidateQueries({ queryKey: queryKeys.gitReview(workspaceId) }),
       qc.invalidateQueries({ queryKey: queryKeys.gitPushCapability(workspaceId) }),
+      qc.invalidateQueries({ queryKey: queryKeys.gitPullRequestStatus(workspaceId) }),
       qc.invalidateQueries({ queryKey: queryKeys.gitComparisons(workspaceId) }),
     ]);
 
