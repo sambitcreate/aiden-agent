@@ -429,3 +429,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - E2E chat-title expectations assume the deterministic chat-model route. On a Mac where the native Foundation Models helper reports `ready`, automatic titles come from Apple Intelligence instead, so `chat-message-queue` sidebar-title lookups fail locally while passing in CI; probe the helper or move it aside before treating those failures as regressions.
 - `git add` on the tracked-but-ignored `.papercuts/troubleshooting.md` still needs `-f` after conflict resolution.
+
+## 2026-09-13 — GitHub PR checks sidebar dev launch
+
+- `npm ci` completed successfully but left `node_modules/electron/dist/Electron.app` absent; restore the macOS payload with `node node_modules/electron/install.js` before running `npm run dev`.
+- The default development user-data profile contained unreadable visual-artifact state and disabled chat mutations; use isolated `build/peer-dev-profile` and `build/peer-dev-config` paths for branch testing without modifying shared state.
+- Whole-file formatting reflowed unrelated JSX and broke whitespace-sensitive sidebar source assertions; keep those assertions tolerant of formatter line wrapping during focused UI edits.
+- OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.

@@ -222,6 +222,19 @@ function pullRequestChecksTone(state: GitHubPullRequestChecksState | null | unde
   }
 }
 
+function pullRequestChecksIconTone(state: GitHubPullRequestChecksState | null | undefined): string {
+  switch (state) {
+    case "passing":
+      return "text-status-green";
+    case "failing":
+      return "text-status-red";
+    case "pending":
+      return "text-status-warning";
+    default:
+      return "text-secondary";
+  }
+}
+
 function checkStatusLabel(check: GitHubPullRequestCheck): string {
   if (check.status === "action-required" && /\/actions\/runs\/\d+/u.test(check.url ?? "")) {
     return "Awaiting approval";
@@ -277,7 +290,7 @@ function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: bo
   return null;
 }
 
-function WorkspacePullRequestBadge({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
+function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
   const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
   const status = useGitPullRequestStatus(workspace.id, enabled);
   const pullRequest = status.data?.pullRequest;
@@ -294,15 +307,16 @@ function WorkspacePullRequestBadge({ workspace, visible, accessibilityName }: { 
     return (
       <Popover>
         <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="inline-flex h-6 max-w-[5.8rem] shrink-0 items-center gap-1 rounded-button bg-status-red-surface px-2 text-small-strong text-status-red outline-none transition-opacity duration-150 ease-out hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            className="text-status-red"
             aria-label={`${accessibilityName} GitHub pull request status: ${message}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">GitHub</span>
-          </button>
+            <AlertCircle aria-hidden="true" />
+          </Button>
         </PopoverTrigger>
         <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
           <p className="text-small-strong text-primary">GitHub status unavailable</p>
@@ -327,16 +341,16 @@ function WorkspacePullRequestBadge({ workspace, visible, accessibilityName }: { 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`inline-flex h-6 max-w-[5.8rem] shrink-0 items-center gap-1 rounded-button px-2 text-small-strong outline-none transition-opacity duration-150 ease-out hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${pullRequestChecksTone(displayChecksState)}`}
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          className={pullRequestChecksIconTone(displayChecksState)}
           aria-label={`${accessibilityName} pull request #${pullRequest.number}: ${label}`}
           onClick={(event) => event.stopPropagation()}
         >
-          <GitPullRequest className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">#{pullRequest.number}</span>
-          <span aria-hidden="true" className="inline-flex shrink-0">{checksIcon(displayChecksState)}</span>
-        </button>
+          <GitPullRequest aria-hidden="true" />
+        </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-3" align="start" aria-label={`Pull request #${pullRequest.number} checks`}>
         <div className="flex min-w-0 items-start justify-between gap-3">
@@ -1487,64 +1501,72 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(group.workspace.id)}
                         />
-                        <WorkspacePullRequestBadge
-                          workspace={group.workspace}
-                          visible={explicitlyExpanded}
-                          accessibilityName={workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}
-                        />
-                        <SidebarOverflowMenu
-                          ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
-                          triggerClassName="size-7 text-tertiary opacity-0 group-hover/workspace:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                          contentClassName="w-64"
-                        >
-                          <DropdownMenuItem
-                            disabled={
-                              Boolean(settingsBlockedReason) || appendReconciliationRequired
-                            }
-                            onSelect={() => void newAgentInWorkspace(group.workspace.id)}
+                        <div className="group/workspace-actions relative size-7 shrink-0">
+                          <div className="absolute inset-0 group-hover/workspace:invisible group-has-[.workspace-overflow-trigger:focus-visible]/workspace-actions:invisible group-has-[.workspace-overflow-trigger[data-state=open]]/workspace-actions:invisible">
+                            <WorkspacePullRequestIndicator
+                              workspace={group.workspace}
+                              visible={explicitlyExpanded}
+                              accessibilityName={workspaceAccessibleName(
+                                group.workspace,
+                                pathPreferences,
+                                workspaces,
+                              )}
+                            />
+                          </div>
+                          <SidebarOverflowMenu
+                            ariaLabel={`Actions for ${workspaceAccessibleName(group.workspace, pathPreferences, workspaces)}`}
+                            triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
+                            contentClassName="w-64"
                           >
-                            New chat
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={workspaceSwitchBlocked || group.chats.length === 0}
-                            title={
-                              group.chats.length === 0
-                                ? "Choose New chat to start this workspace."
-                                : undefined
-                            }
-                            onSelect={() => void openChat(group.chats[0])}
-                          >
-                            Open latest chat
-                          </DropdownMenuItem>
-                          {group.workspace.folderPath ? (
                             <DropdownMenuItem
-                              onSelect={() => void revealWorkspace(group.workspace)}
+                              disabled={
+                                Boolean(settingsBlockedReason) || appendReconciliationRequired
+                              }
+                              onSelect={() => void newAgentInWorkspace(group.workspace.id)}
                             >
-                              Show in Finder
+                              New chat
                             </DropdownMenuItem>
-                          ) : null}
-                          {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
-                          {workspaces.length > 1 && group.workspace.managedWorktree ? (
                             <DropdownMenuItem
-                              disabled={workspaceActionBlocked}
-                              icon="trash"
-                              color="red"
-                              onSelect={() => setDeletingWorktree(group.workspace)}
+                              disabled={workspaceSwitchBlocked || group.chats.length === 0}
+                              title={
+                                group.chats.length === 0
+                                  ? "Choose New chat to start this workspace."
+                                  : undefined
+                              }
+                              onSelect={() => void openChat(group.chats[0])}
                             >
-                              Delete worktree…
+                              Open latest chat
                             </DropdownMenuItem>
-                          ) : null}
-                          {workspaces.length > 1 && !group.workspace.managedWorktree ? (
-                            <DropdownMenuItem
-                              disabled={workspaceActionBlocked}
-                              icon="trash"
-                              color="red"
-                              onSelect={() => setRemovingWorkspace(group.workspace)}
-                            >
-                              Remove “{group.workspace.name}”
-                            </DropdownMenuItem>
-                          ) : null}
-                        </SidebarOverflowMenu>
+                            {group.workspace.folderPath ? (
+                              <DropdownMenuItem
+                                onSelect={() => void revealWorkspace(group.workspace)}
+                              >
+                                Show in Finder
+                              </DropdownMenuItem>
+                            ) : null}
+                            {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
+                            {workspaces.length > 1 && group.workspace.managedWorktree ? (
+                              <DropdownMenuItem
+                                disabled={workspaceActionBlocked}
+                                icon="trash"
+                                color="red"
+                                onSelect={() => setDeletingWorktree(group.workspace)}
+                              >
+                                Delete worktree…
+                              </DropdownMenuItem>
+                            ) : null}
+                            {workspaces.length > 1 && !group.workspace.managedWorktree ? (
+                              <DropdownMenuItem
+                                disabled={workspaceActionBlocked}
+                                icon="trash"
+                                color="red"
+                                onSelect={() => setRemovingWorkspace(group.workspace)}
+                              >
+                                Remove “{group.workspace.name}”
+                              </DropdownMenuItem>
+                            ) : null}
+                          </SidebarOverflowMenu>
+                        </div>
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
