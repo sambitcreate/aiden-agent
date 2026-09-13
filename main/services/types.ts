@@ -301,6 +301,8 @@ export type ModelInsightsActionResult =
   | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMeta {
+  /** Host-owned archive timestamp; absent for active chats. */
+  archivedAt?: number;
   id: string;
   title: string;
   /** Workspace this chat belongs to. */

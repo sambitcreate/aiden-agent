@@ -208,3 +208,10 @@ test("append admission charges encoded image representation and metadata", () =>
       data.length + Buffer.byteLength("providermodel", "utf8"),
   );
 });
+
+test("desktop restore uses the shared archive mutation and safe projection", () => {
+  const restore = source.slice(source.indexOf('ipcMain.handle("chats:restore"'), source.indexOf('"chats:renameWithFoundationModels"'));
+  assert.match(restore, /chatApplicationService\.archive\(asString\(id, "id"\), false\)/u);
+  assert.match(restore, /return chatForRenderer\(restored\)/u);
+  assert.match(restore, /ipcMain\.broadcast\("chats:changed"/u);
+});

@@ -12,6 +12,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  developmentHost?: () => Promise<string | undefined>;
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
@@ -106,6 +107,7 @@ async function fixture(options: {
   const handler = createAidenRemoteRequestHandler({
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
+    developmentHost: options.developmentHost,
     appVersion: "0.30.0",
     devices: {
       acquireDeviceAuthorization: () => {
@@ -250,6 +252,10 @@ async function fixture(options: {
       create: async (deviceId, key) => {
         calls.push(`chat-create:${deviceId}:${key}`);
         return chat;
+      },
+      archive: async (id, revision, input) => {
+        calls.push(`chat-archive:${id}:${revision}:${JSON.stringify(input)}`);
+        return { ...chat, id, archivedAt: new Date(2000).toISOString() };
       },
       rename: async (id, revision) => {
         calls.push(`chat-rename:${id}:${revision}`);
@@ -2350,4 +2356,47 @@ test("unknown routes and query aliases fail without reflecting untrusted input",
   } finally {
     await app.close();
   }
+});
+
+
+test("development host is optional, authenticated, bounded and never carries URL authority", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  for (const host of ["100.64.0.1", "100.127.255.255", "mac.tailnet.ts.net", "100.63.0.1", "100.128.0.1", "100.064.0.1", "100.64.256.1", "http://mac.ts.net:3000", "mac.ts.net/user", "user@mac.ts.net", "localhost", "mac.ts.net.evil.test", "ts.net"]) {
+    let reads = 0;
+    const app = await fixture({ developmentHost: async () => { reads++; return host; } });
+    try {
+      assert.equal((await fetch(`${app.base}/server`, { headers: { "aiden-protocol-version": "1" } })).status, 401);
+      assert.equal(reads, 0);
+      const response = await fetch(`${app.base}/server`, { headers });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const body = await response.json();
+      assert.equal(body.developmentHost, ["100.64.0.1", "100.127.255.255", "mac.tailnet.ts.net"].includes(host) ? host : undefined);
+    } finally { await app.close(); }
+  }
+  let blocked = false;
+  const app = await fixture({ authorizationBlocked: () => blocked, developmentHost: async () => { blocked = true; return "100.64.0.1"; } });
+  try { assert.equal((await fetch(`${app.base}/server`, { headers })).status, 403); }
+  finally { await app.close(); }
+});
+
+
+test("ordinary archive PATCH uses authenticated revision mutation and advertises support", async () => {
+  const app = await fixture({ capabilities: ["server:read", "chat:read", "chat:write"] });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json", "if-match": "rev_original" };
+  try {
+    const server = await fetch(`${app.base}/server`, { headers });
+    assert.ok((await server.json() as { features: string[] }).features.includes("chat-archive-v1"));
+    const result = await fetch(`${app.base}/chats/chat-1`, { method: "PATCH", headers, body: JSON.stringify({ archived: true }) });
+    assert.equal(result.status, 200);
+    assert.ok(app.calls.includes('chat-archive:chat-1:rev_original:{"archived":true}'));
+    const malformed = await fetch(`${app.base}/chats?includeArchived=true&includeArchived=false`, { headers });
+    assert.equal(malformed.status, 400);
+  } finally { await app.close(); }
+  const denied = await fixture({ capabilities: ["chat:read"] });
+  try {
+    const result = await fetch(`${denied.base}/chats/chat-1`, { method: "PATCH", headers, body: JSON.stringify({ archived: true }) });
+    assert.equal(result.status, 403);
+    assert.equal(denied.calls.some((call) => call.startsWith("chat-archive:")), false);
+  } finally { await denied.close(); }
 });

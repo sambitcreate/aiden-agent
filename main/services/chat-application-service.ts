@@ -38,7 +38,7 @@ export interface ChatApplicationDependencies {
   chatStore: Pick<
     typeof chatStore,
     "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
-  > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
+  > & Partial<Pick<typeof chatStore, "listSummaryMetadata" | "archive">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
@@ -185,6 +185,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         workspaceOperation?.release();
         mutationAdmission.release();
       }
+    },
+
+    archive(chatId: string, archived: boolean, options: ChatApplicationMutationOptions = {}) {
+      if (!deps.chatStore.archive) throw new Error("Chat archiving is unavailable.");
+      return deps.chatStore.archive(chatId, archived, async (chat) => options.assertCurrent?.(chat));
     },
 
     rename(chatId: string, title: string, options: ChatApplicationMutationOptions = {}) {

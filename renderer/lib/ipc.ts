@@ -498,6 +498,8 @@ export const aidenRemoteApi = {
     invoke<{ closed: boolean }>("remote:closePairing", pairingSessionId),
   revokeDevice: (deviceId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:revokeDevice", deviceId),
+  setSubagentSummaries: (deviceId: string, allowed: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setSubagentSummaries", deviceId, allowed),
   addApprovedRoot: () => invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
   removeApprovedRoot: (rootId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
@@ -780,6 +782,7 @@ export const chatsApi = {
     invokeChatMutation<Chat>("chats:create", input),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
+  restore: (id: string) => invoke<Chat>("chats:restore", id),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),

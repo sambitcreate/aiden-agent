@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import androidx.lifecycle.viewModelScope
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -34,32 +35,21 @@ import java.util.UUID
 fun AidenGitScreen(
     workspaceId: String,
     coordinator: AidenRemoteCoordinator,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    readOnlyReview: Boolean = false
 ) {
     val palette = AidenTheme.palette
-    val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsState().value
 
-    var gitReviewResult by remember { mutableStateOf<AidenGitResult?>(null) }
-    var selectedDiff by remember { mutableStateOf<AidenGitDiff?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var lastError by remember { mutableStateOf<String?>(null) }
-
-    // Last operation for retry
-    var lastFailedOperation by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var lastIdempotencyKey by remember { mutableStateOf(UUID.randomUUID()) }
-
-    // Sheets & Dialogs
-    var showCommitSheet by remember { mutableStateOf(false) }
-    var showBranchSheet by remember { mutableStateOf(false) }
-    var showPushDialog by remember { mutableStateOf(false) }
-    var showCompareDialog by remember { mutableStateOf(false) }
-    var showWorktreesSheet by remember { mutableStateOf(false) }
-    var pushCapability by remember { mutableStateOf<AidenGitPushCapability?>(null) }
-    var pushRemote by remember { mutableStateOf("origin") }
-    var pushBranch by remember { mutableStateOf("") }
-    var isCheckingPush by remember { mutableStateOf(false) }
-    var isOperating by remember { mutableStateOf(false) }
+    val state: AidenGitPaneState = androidx.lifecycle.viewmodel.compose.viewModel(
+        viewModelStoreOwner = androidx.activity.compose.LocalActivity.current as androidx.lifecycle.ViewModelStoreOwner,
+        key = "AidenGitPaneState:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$workspaceId"
+    )
+    val instanceAtComposition = coordinator.activeInstanceId
+    fun isCurrentRequest() = coordinator.client.value === client && coordinator.activeInstanceId == instanceAtComposition
+    val scope = state.viewModelScope
+    with(state) {
+    androidx.activity.compose.BackHandler(enabled = selectedDiff != null) { selectedDiff = null }
 
     fun refreshGit() {
         if (client != null) {
@@ -67,19 +57,28 @@ fun AidenGitScreen(
             scope.launch {
                 try {
                     val res = client.gitReview(workspaceId)
+                    if (!isCurrentRequest()) return@launch
                     gitReviewResult = res
                     lastError = null
                 } catch (e: Exception) {
+                    if (!isCurrentRequest()) return@launch
                     lastError = e.localizedMessage
                 } finally {
-                    isLoading = false
+                    if (isCurrentRequest()) {
+                        isLoading = false
+                    }
                 }
             }
         }
     }
 
     LaunchedEffect(client, workspaceId) {
-        refreshGit()
+        if (!hasRequested || loadedClient !== client) {
+            if (loadedClient !== client) connectionChanged()
+            hasRequested = true
+            loadedClient = client
+            refreshGit()
+        }
     }
 
     val review = gitReviewResult?.review
@@ -144,23 +143,24 @@ fun AidenGitScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(contentScroll),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         diff.diff.lines().forEach { line ->
-                            val color = when {
-                                line.startsWith("+") -> Color(0xFF4CAF50)
-                                line.startsWith("-") -> Color(0xFFE53935)
-                                line.startsWith("@@") -> palette.accent
-                                else -> palette.foreground
+                            val fill = when (aidenDiffLineKind(line)) {
+                                AidenDiffLineKind.ADDITION -> palette.success.copy(alpha = 0.12f)
+                                AidenDiffLineKind.DELETION -> palette.danger.copy(alpha = 0.12f)
+                                AidenDiffLineKind.HEADER -> palette.raised
+                                AidenDiffLineKind.CONTEXT -> Color.Transparent
                             }
                             Text(
                                 text = line,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = color,
+                                color = palette.foreground,
+                                modifier = Modifier.fillMaxWidth().background(fill),
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
                             )
@@ -192,7 +192,7 @@ fun AidenGitScreen(
                                 color = palette.danger,
                                 modifier = Modifier.weight(1f)
                             )
-                            if (lastFailedOperation != null) {
+                            if (!readOnlyReview && lastFailedOperation != null) {
                                 TextButton(
                                     onClick = {
                                         lastFailedOperation?.invoke()
@@ -241,8 +241,9 @@ fun AidenGitScreen(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Git action buttons row
-                            Row(
+                            // The shared Changes sheet exposes only review and comparison.
+                            if (readOnlyReview) TextButton(onClick = { showCompareDialog = true }) { Text("Compare") }
+                            else Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
@@ -264,14 +265,18 @@ fun AidenGitScreen(
                                             scope.launch {
                                                 try {
                                                     val cap = client.gitPushCapability(workspaceId)
+                                                    if (!isCurrentRequest()) return@launch
                                                     pushCapability = cap.pushCapability
                                                     pushRemote = cap.pushCapability?.remote ?: "origin"
                                                     pushBranch = cap.pushCapability?.branch ?: review.branch
                                                     showPushDialog = true
                                                 } catch (e: Exception) {
+                                                    if (!isCurrentRequest()) return@launch
                                                     lastError = e.localizedMessage
                                                 } finally {
-                                                    isCheckingPush = false
+                                                    if (isCurrentRequest()) {
+                                                        isCheckingPush = false
+                                                    }
                                                 }
                                             }
                                         }
@@ -325,6 +330,7 @@ fun AidenGitScreen(
                         }
                     } else {
                         LazyColumn(
+                    state = listScroll,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth(),
@@ -342,8 +348,10 @@ fun AidenGitScreen(
                                                     try {
                                                         val snapshotId = gitReviewResult?.snapshotId ?: ""
                                                         val res = client.gitDiff(workspaceId, snapshotId, file.id)
+                                                        if (!isCurrentRequest()) return@launch
                                                         selectedDiff = res.diff
                                                     } catch (e: Exception) {
+                                                        if (!isCurrentRequest()) return@launch
                                                         lastError = e.localizedMessage
                                                     }
                                                 }
@@ -378,11 +386,11 @@ fun AidenGitScreen(
                                         if (file.additions != null || file.deletions != null) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 file.additions?.let { adds ->
-                                                    Text("+$adds", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                                    Text("+$adds", color = palette.success, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                 }
                                                 file.deletions?.let { dels ->
-                                                    Text("-$dels", color = Color(0xFFE53935), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                                    Text("-$dels", color = palette.danger, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                                 }
                                             }
                                         }
@@ -392,7 +400,7 @@ fun AidenGitScreen(
                         }
 
                         // Commit Bottom Bar
-                        Surface(
+                        if (!readOnlyReview) Surface(
                             color = palette.canvas,
                             shadowElevation = 8.dp,
                             modifier = Modifier.fillMaxWidth()
@@ -417,7 +425,7 @@ fun AidenGitScreen(
     }
 
     // --- Commit Sheet ---
-    if (showCommitSheet && gitReviewResult != null) {
+    if (!readOnlyReview && showCommitSheet && gitReviewResult != null) {
         var commitMessage by remember { mutableStateOf("") }
         var stagedOnly by remember { mutableStateOf(false) }
         var showConfirmDialog by remember { mutableStateOf(false) }
@@ -519,13 +527,17 @@ fun AidenGitScreen(
                                                     stagedOnly = stagedOnly,
                                                     idempotencyKey = key
                                                 )
+                                                if (!isCurrentRequest()) return@launch
                                                 refreshGit()
                                                 lastError = null
                                             } catch (e: Exception) {
+                                                if (!isCurrentRequest()) return@launch
                                                 lastError = e.localizedMessage
                                                 lastFailedOperation = op
                                             } finally {
-                                                isOperating = false
+                                                if (isCurrentRequest()) {
+                                                    isOperating = false
+                                                }
                                             }
                                         }
                                     }
@@ -548,7 +560,7 @@ fun AidenGitScreen(
     }
 
     // --- Branch Selector Sheet ---
-    if (showBranchSheet) {
+    if (!readOnlyReview && showBranchSheet) {
         var branchesResult by remember { mutableStateOf<AidenGitBranches?>(null) }
         var showNewBranchDialog by remember { mutableStateOf(false) }
         var branchToCheckout by remember { mutableStateOf<String?>(null) }
@@ -557,8 +569,11 @@ fun AidenGitScreen(
             if (client != null) {
                 try {
                     val res = client.gitBranches(workspaceId)
+                    if (!isCurrentRequest()) return@LaunchedEffect
                     branchesResult = res.branches
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                    if (!isCurrentRequest()) return@LaunchedEffect
+                }
             }
         }
 
@@ -661,8 +676,10 @@ fun AidenGitScreen(
                                     if (client != null) {
                                         try {
                                             client.checkoutGitBranch(workspaceId, branch, snapshotId)
+                                            if (!isCurrentRequest()) return@launch
                                             refreshGit()
                                         } catch (e: Exception) {
+                                            if (!isCurrentRequest()) return@launch
                                             lastError = e.localizedMessage
                                         }
                                     }
@@ -722,8 +739,10 @@ fun AidenGitScreen(
                                         if (client != null) {
                                             try {
                                                 client.createGitBranch(workspaceId, name, start)
+                                                if (!isCurrentRequest()) return@launch
                                                 refreshGit()
                                             } catch (e: Exception) {
+                                                if (!isCurrentRequest()) return@launch
                                                 lastError = e.localizedMessage
                                             }
                                         }
@@ -746,7 +765,7 @@ fun AidenGitScreen(
     }
 
     // --- Push Dialog ---
-    if (showPushDialog) {
+    if (!readOnlyReview && showPushDialog) {
         val cap = pushCapability
         AlertDialog(
             onDismissRequest = { showPushDialog = false },
@@ -779,8 +798,10 @@ fun AidenGitScreen(
                                 if (client != null) {
                                     try {
                                         client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
+                                        if (!isCurrentRequest()) return@launch
                                         refreshGit()
                                     } catch (e: Exception) {
+                                        if (!isCurrentRequest()) return@launch
                                         lastError = e.localizedMessage
                                     }
                                 }
@@ -837,11 +858,15 @@ fun AidenGitScreen(
                                 scope.launch {
                                     try {
                                         val res = client.compareGit(workspaceId, baseRef.trim())
+                                        if (!isCurrentRequest()) return@launch
                                         comparisonResult = res.comparison
                                     } catch (e: Exception) {
+                                        if (!isCurrentRequest()) return@launch
                                         lastError = e.localizedMessage
                                     } finally {
-                                        isComparing = false
+                                        if (isCurrentRequest()) {
+                                            isComparing = false
+                                        }
                                     }
                                 }
                             }
@@ -902,7 +927,7 @@ fun AidenGitScreen(
     }
 
     // --- Worktrees Sheet ---
-    if (showWorktreesSheet) {
+    if (!readOnlyReview && showWorktreesSheet) {
         var worktreesList by remember { mutableStateOf<List<AidenGitWorktree>>(emptyList()) }
         var showNewWorktreeDialog by remember { mutableStateOf(false) }
 
@@ -910,8 +935,11 @@ fun AidenGitScreen(
             if (client != null) {
                 try {
                     val res = client.gitWorktrees(workspaceId)
+                    if (!isCurrentRequest()) return@LaunchedEffect
                     worktreesList = res.worktrees?.worktrees ?: emptyList()
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                    if (!isCurrentRequest()) return@LaunchedEffect
+                }
             }
         }
 
@@ -1033,8 +1061,10 @@ fun AidenGitScreen(
                                         if (client != null) {
                                             try {
                                                 client.createGitWorktree(workspaceId, branch, name)
+                                                if (!isCurrentRequest()) return@launch
                                                 coordinator.refreshWorkspaces()
                                             } catch (e: Exception) {
+                                                if (!isCurrentRequest()) return@launch
                                                 lastError = e.localizedMessage
                                             }
                                         }
@@ -1054,5 +1084,6 @@ fun AidenGitScreen(
                 )
             }
         }
+    }
     }
 }

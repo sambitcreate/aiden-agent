@@ -554,6 +554,7 @@ export interface ChatMessage {
 }
 
 export interface ChatMeta {
+  archivedAt?: number;
   id: string;
   title: string;
   workspaceId?: string;

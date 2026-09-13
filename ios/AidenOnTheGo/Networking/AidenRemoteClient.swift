@@ -89,6 +89,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Additive, presentation/read-path feature advertisement. Unknown valid
     /// tokens are retained so newer Macs remain compatible with this client.
     let features: [String]
+    let developmentHost: String?
 
     init(
         protocolVersion: Int,
@@ -101,7 +102,8 @@ struct AidenServer: Codable, Equatable, Sendable {
         connectionMode: AidenConnectionMode,
         minimumClientVersion: String?,
         serverTime: Date,
-        features: [String] = []
+        features: [String] = [],
+        developmentHost: String? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.instanceId = instanceId
@@ -114,10 +116,12 @@ struct AidenServer: Codable, Equatable, Sendable {
         self.minimumClientVersion = minimumClientVersion
         self.serverTime = serverTime
         self.features = features
+        self.developmentHost = AidenNativeBrowserAddress.developmentHost(developmentHost)
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        developmentHost = AidenNativeBrowserAddress.developmentHost(try? values.decode(String.self, forKey: .developmentHost))
         protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
         instanceId = try values.decode(String.self, forKey: .instanceId)
         name = try values.decode(String.self, forKey: .name)
@@ -222,7 +226,7 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case protocolVersion, instanceId, name, appVersion, capabilities, serverCapabilities, deviceName
-        case connectionMode, minimumClientVersion, serverTime, features
+        case connectionMode, minimumClientVersion, serverTime, features, developmentHost
     }
 }
 
@@ -793,8 +797,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
-    func chats(workspaceId: String? = nil) async throws -> [AidenChat] {
-        let query = workspaceId.map { [URLQueryItem(name: "workspaceId", value: $0)] } ?? []
+    func chats(workspaceId: String? = nil, includeArchived: Bool = false) async throws -> [AidenChat] {
+        var query = workspaceId.map { [URLQueryItem(name: "workspaceId", value: $0)] } ?? []
+        if includeArchived { query.append(URLQueryItem(name: "includeArchived", value: "true")) }
         let value: AidenChatListResponse = try await send(method: "GET", path: ["chats"], query: query)
         return value.chats
     }
@@ -871,6 +876,11 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: ChatUpdateRequest(title: title),
             headers: ["If-Match": revision]
         )
+    }
+
+    func setChatArchived(id: String, revision: String, archived: Bool) async throws -> AidenChat {
+        struct ArchiveRequest: Encodable { let archived: Bool }
+        return try await send(method: "PATCH", path: ["chats", id], body: ArchiveRequest(archived: archived), headers: ["If-Match": revision])
     }
 
     func removeChat(id: String, revision: String) async throws {
@@ -1437,6 +1447,12 @@ final class AidenRemoteClient: @unchecked Sendable {
             timeoutInterval: 120,
             maximumResponseBytes: 64 * 1_024
         )
+    }
+
+    func workspaceSubagents(workspaceId: String, chatId: String) async throws -> AidenWorkspaceSubagentPage {
+        let page: AidenWorkspaceSubagentPage = try await send(method: "GET",
+            path: ["workspaces", workspaceId, "chats", chatId, "subagents"], maximumResponseBytes: 100_000)
+        return try page.validated(workspaceID: workspaceId, chatID: chatId)
     }
 
     func workspaceFiles(workspaceId: String) async throws -> AidenWorkspaceFileIndex {

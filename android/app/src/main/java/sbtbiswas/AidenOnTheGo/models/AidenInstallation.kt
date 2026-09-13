@@ -48,6 +48,7 @@ data class AidenServer(
     val capabilities: List<AidenRemoteCapability>,
     val serverCapabilities: List<AidenRemoteCapability>? = null,
     val features: List<String> = emptyList(),
+    val developmentHost: String? = null,
     val deviceName: String? = null,
     val connectionMode: AidenConnectionMode = AidenConnectionMode.LAN,
     val minimumClientVersion: String? = null,

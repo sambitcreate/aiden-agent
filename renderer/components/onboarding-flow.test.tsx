@@ -331,6 +331,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.doesNotMatch(featurePresentation, /choose to connect it/u);
   assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
+  assert.match(source, /Browser opens your development server[\s\S]*?Subagent summaries need an explicit device grant/u);
   assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
   for (const group of [
     "Build in your workspace",

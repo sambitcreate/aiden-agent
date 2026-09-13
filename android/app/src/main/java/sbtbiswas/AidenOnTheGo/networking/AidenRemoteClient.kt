@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -561,8 +563,8 @@ class AidenRemoteClient(
         }
 
     // --- Chats ---
-    suspend fun chats(workspaceId: String? = null): List<AidenChat> {
-        val query = if (workspaceId != null) "?workspaceId=$workspaceId" else ""
+    suspend fun chats(workspaceId: String? = null, includeArchived: Boolean = false): List<AidenChat> {
+        val query = buildList { workspaceId?.let { add("workspaceId=$it") }; if (includeArchived) add("includeArchived=true") }.joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
         return executeRequest(
             "/chats$query",
             botScope = AidenBotPrivateResponseScope.ChatProjection
@@ -671,6 +673,11 @@ class AidenRemoteClient(
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
+
+    suspend fun setChatArchived(id: String, revision: String, archived: Boolean): AidenChat = executeRequest(
+        "/chats/$id", method = "PATCH", ifMatchRevision = revision,
+        bodyJson = buildJsonObject { put("archived", archived) }.toString(), botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes -> json.decodeFromString<AidenChat>(bytes.toString(Charsets.UTF_8)).also { require(it.id == id) } }
 
     suspend fun removeChat(id: String, revision: String) =
         executeRequest<Unit>(
@@ -1375,6 +1382,15 @@ class AidenRemoteClient(
             bodyJson = body,
             requestTimeoutSeconds = 120
         ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    }
+
+    suspend fun workspaceSubagents(workspaceId: String, chatId: String): AidenWorkspaceSubagents {
+        val identifier = Regex("[A-Za-z0-9_.:-]{1,128}")
+        require(identifier.matches(workspaceId) && identifier.matches(chatId) && workspaceId !in setOf(".", "..") && chatId !in setOf(".", "..")) { "Invalid workspace/chat identity" }
+        return executeRequest(
+            "/workspaces/$workspaceId/chats/$chatId/subagents",
+            maximumResponseBytes = 100_000
+        ) { bytes -> AidenWorkspaceSubagents.decode(bytes, workspaceId, chatId) }
     }
 
     // --- Files & Git ---

@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import androidx.lifecycle.viewModelScope
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -37,38 +38,52 @@ fun AidenWorkspaceEnvironmentScreen(
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsState().value
     val cache = coordinator.workspaceCache
     val activeInstanceId = coordinator.activeInstanceId
 
-    var fileIndex by remember { mutableStateOf<AidenWorkspaceFileIndex?>(null) }
-    var selectedFile by remember { mutableStateOf<AidenWorkspaceFileDocument?>(null) }
-    var draftContent by remember { mutableStateOf("") }
-    var originalContent by remember { mutableStateOf("") }
-    var isDirty by remember { mutableStateOf(false) }
-    var isOfflineSnapshot by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(true) }
-    var isSaving by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    // Dialog States
-    var showDiscardConfirmDialog by remember { mutableStateOf(false) }
-    var showConflictDialog by remember { mutableStateOf(false) }
+    val state: AidenFilePaneState = androidx.lifecycle.viewmodel.compose.viewModel(
+        viewModelStoreOwner = androidx.activity.compose.LocalActivity.current as androidx.lifecycle.ViewModelStoreOwner,
+        key = "AidenFilePaneState:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$workspaceId"
+    )
+    val context = androidx.compose.ui.platform.LocalContext.current
+    state.configure(
+        sbtbiswas.AidenOnTheGo.persistence.AidenFileDraftStore(java.io.File(context.filesDir, "file-drafts")),
+        coordinator.activeInstanceId.orEmpty(), workspaceId
+    )
+    val instanceAtComposition = coordinator.activeInstanceId
+    fun isCurrentRequest() = coordinator.client.value === client && coordinator.activeInstanceId == instanceAtComposition
+    val scope = state.viewModelScope
+    with(state) {
+    androidx.activity.compose.BackHandler(enabled = selectedFile != null) {
+        if (isDirty) showDiscardConfirmDialog = true else selectedFile = null
+    }
 
     fun refreshFiles() {
+        val recoveryRevision = openRevision
         if (client != null) {
             isLoading = true
             scope.launch {
                 try {
                     val index = client.workspaceFiles(workspaceId)
+                    if (!isCurrentRequest()) return@launch
                     fileIndex = index
+                    val draft = recovery
+                    val restorePath = selectedFile?.displayPath ?: draft?.path
+                    if (restorePath != null) {
+                        index.entries.firstOrNull { it.displayPath == restorePath }?.let { entry ->
+                            val recovered = client.workspaceFile(workspaceId, entry.id)
+                            if (!isCurrentRequest()) return@launch
+                            if (!isLatestOpen(recoveryRevision)) return@launch
+                            open(recovered)
+                        }
+                    }
                     isOfflineSnapshot = false
                     if (activeInstanceId != null) {
                         cache.store(index, activeInstanceId, workspaceId)
                     }
                 } catch (_: Exception) {
+                    if (!isCurrentRequest()) return@launch
                     // Try cache
                     if (activeInstanceId != null) {
                         val snapshot = cache.load(activeInstanceId, workspaceId)
@@ -78,7 +93,9 @@ fun AidenWorkspaceEnvironmentScreen(
                         }
                     }
                 } finally {
-                    isLoading = false
+                    if (isCurrentRequest()) {
+                        isLoading = false
+                    }
                 }
             }
         } else if (activeInstanceId != null) {
@@ -92,13 +109,16 @@ fun AidenWorkspaceEnvironmentScreen(
     }
 
     LaunchedEffect(client, workspaceId) {
-        refreshFiles()
+        if (!hasRequested || loadedClient !== client) {
+            if (loadedClient !== client) connectionChanged()
+            hasRequested = true
+            loadedClient = client
+            refreshFiles()
+        }
     }
 
-    val filteredEntries = remember(fileIndex, searchQuery) {
-        fileIndex?.entries?.filter {
-            searchQuery.isEmpty() || it.displayPath.contains(searchQuery, ignoreCase = true)
-        } ?: emptyList()
+    val filteredEntries = remember(fileIndex, searchQuery, expandedDirectories) {
+        AidenFileTree.rows(fileIndex?.entries.orEmpty(), expandedDirectories, searchQuery)
     }
 
     Scaffold(
@@ -153,31 +173,34 @@ fun AidenWorkspaceEnvironmentScreen(
                                 onClick = {
                                     if (client != null && !isSaving && !isOfflineSnapshot) {
                                         isSaving = true
+                                        val submittedText = draftContent
                                         scope.launch {
                                             try {
                                                 val updated = client.writeWorkspaceFile(
                                                     workspaceId = workspaceId,
                                                     fileId = doc.id,
-                                                    content = draftContent,
+                                                    content = submittedText,
                                                     expectedVersion = doc.version
                                                 )
-                                                selectedFile = updated
-                                                originalContent = updated.content
-                                                draftContent = updated.content
-                                                isDirty = false
+                                                if (!isCurrentRequest()) return@launch
+                                                saved(updated, submittedText)
                                                 if (activeInstanceId != null) {
                                                     cache.store(updated, activeInstanceId, workspaceId)
                                                 }
                                             } catch (e: AidenRemoteClientException.Server) {
+                                                if (!isCurrentRequest()) return@launch
                                                 if (e.statusCode == 409) {
                                                     showConflictDialog = true
                                                 } else {
                                                     errorMessage = e.message
                                                 }
                                             } catch (e: Exception) {
+                                                if (!isCurrentRequest()) return@launch
                                                 errorMessage = e.localizedMessage
                                             } finally {
-                                                isSaving = false
+                                                if (isCurrentRequest()) {
+                                                    isSaving = false
+                                                }
                                             }
                                         }
                                     }
@@ -267,8 +290,7 @@ fun AidenWorkspaceEnvironmentScreen(
                     BasicTextField(
                         value = draftContent,
                         onValueChange = {
-                            draftContent = it
-                            isDirty = (it != originalContent)
+                            edit(it)
                         },
                         textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
@@ -280,7 +302,7 @@ fun AidenWorkspaceEnvironmentScreen(
                         readOnly = isOfflineSnapshot,
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(contentScroll)
                     )
                 }
             } else {
@@ -312,6 +334,7 @@ fun AidenWorkspaceEnvironmentScreen(
                 )
 
                 LazyColumn(
+                    state = listScroll,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
                 ) {
@@ -339,37 +362,34 @@ fun AidenWorkspaceEnvironmentScreen(
                                 .padding(vertical = 2.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable {
-                                    if (entry.kind == AidenWorkspaceFileKind.FILE) {
+                                    if (entry.kind == AidenWorkspaceFileKind.DIRECTORY) toggleDirectory(entry.displayPath)
+                                    else if (entry.kind == AidenWorkspaceFileKind.FILE) {
+                                        val openTicket = beginOpen()
                                         scope.launch {
                                             if (client != null) {
                                                 try {
                                                     val fetchedDoc = client.workspaceFile(workspaceId, entry.id)
-                                                    selectedFile = fetchedDoc
-                                                    originalContent = fetchedDoc.content
-                                                    draftContent = fetchedDoc.content
-                                                    isDirty = false
+                                                    if (!isCurrentRequest()) return@launch
+                                                    if (!isLatestOpen(openTicket)) return@launch
+                                                    open(fetchedDoc)
                                                     if (activeInstanceId != null) {
                                                         cache.store(fetchedDoc, activeInstanceId, workspaceId)
                                                     }
                                                 } catch (_: Exception) {
+                                                    if (!isCurrentRequest()) return@launch
+                                                    if (!isLatestOpen(openTicket)) return@launch
                                                     // Try load from cache
                                                     if (activeInstanceId != null) {
                                                         val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
                                                         if (cachedDoc != null) {
-                                                            selectedFile = cachedDoc
-                                                            originalContent = cachedDoc.content
-                                                            draftContent = cachedDoc.content
-                                                            isDirty = false
+                                                            open(cachedDoc)
                                                         }
                                                     }
                                                 }
                                             } else if (activeInstanceId != null) {
                                                 val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
                                                 if (cachedDoc != null) {
-                                                    selectedFile = cachedDoc
-                                                    originalContent = cachedDoc.content
-                                                    draftContent = cachedDoc.content
-                                                    isDirty = false
+                                                    open(cachedDoc)
                                                 }
                                             }
                                         }
@@ -380,11 +400,11 @@ fun AidenWorkspaceEnvironmentScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                modifier = Modifier.padding(start = (12 + if (searchQuery.isBlank()) entry.displayPath.count { it == '/' }.coerceAtMost(8) * 14 else 0).dp, end = 12.dp, top = 10.dp, bottom = 10.dp)
                             ) {
                                 Icon(
                                     imageVector = when (entry.kind) {
-                                        AidenWorkspaceFileKind.DIRECTORY -> Icons.Default.Folder
+                                        AidenWorkspaceFileKind.DIRECTORY -> if (entry.displayPath in expandedDirectories) Icons.Default.FolderOpen else Icons.Default.Folder
                                         AidenWorkspaceFileKind.SYMLINK -> Icons.Default.Link
                                         AidenWorkspaceFileKind.FILE -> Icons.Default.Description
                                     },
@@ -398,7 +418,7 @@ fun AidenWorkspaceEnvironmentScreen(
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = entry.displayPath,
+                                    text = if (searchQuery.isBlank()) entry.name else entry.displayPath,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = palette.foreground,
                                     modifier = Modifier.weight(1f)
@@ -436,6 +456,7 @@ fun AidenWorkspaceEnvironmentScreen(
                         showDiscardConfirmDialog = false
                         draftContent = originalContent
                         isDirty = false
+                        persist()
                         selectedFile = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = palette.danger)
@@ -464,15 +485,17 @@ fun AidenWorkspaceEnvironmentScreen(
                 Button(
                     onClick = {
                         showConflictDialog = false
+                        val reloadTicket = beginOpen()
                         scope.launch {
                             if (client != null) {
                                 try {
                                     val reloaded = client.workspaceFile(workspaceId, doc.id)
-                                    selectedFile = reloaded
-                                    originalContent = reloaded.content
-                                    draftContent = reloaded.content
-                                    isDirty = false
-                                } catch (_: Exception) {}
+                                    if (!isCurrentRequest()) return@launch
+                                    if (!isLatestOpen(reloadTicket)) return@launch
+                                    open(reloaded, restore = false)
+                                } catch (_: Exception) {
+                                    if (!isCurrentRequest()) return@launch
+                                }
                             }
                         }
                     },
@@ -487,5 +510,6 @@ fun AidenWorkspaceEnvironmentScreen(
                 }
             }
         )
+    }
     }
 }

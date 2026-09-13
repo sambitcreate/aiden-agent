@@ -58,6 +58,7 @@ export interface AidenTailscaleSystemRunnerOptions {
 
 export interface AidenTailscaleConnectionStatus {
   installed: boolean;
+  developmentHost?: string;
   dnsName?: string;
   httpsAvailable?: boolean;
   serveStatus?: AidenTailscaleStatus;
@@ -135,6 +136,7 @@ export interface AidenTailscaleRouteLockOptions {
 }
 
 interface AidenTailscaleNodeStatus {
+  developmentHost?: string;
   dnsName?: string;
   httpsAvailable: boolean;
 }
@@ -164,15 +166,33 @@ function normalizeDnsName(value: unknown): string | undefined {
     : undefined;
 }
 
+/** A hint for this Mac's ordinary tailnet services, never a Serve route or peer address. */
+function developmentHostFromSelf(root: Record<string, unknown> | null): string | undefined {
+  const self = record(root?.Self);
+  if (root?.BackendState !== "Running" || !self || self.Online === false) return undefined;
+  const ips = Array.isArray(self.TailscaleIPs) ? self.TailscaleIPs.slice(0, 16) : [];
+  for (const ip of ips) {
+    if (typeof ip !== "string" || !/^100\.(?:[1-9][0-9]?|1[0-9]{2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})$/u.test(ip)) continue;
+    const octets = ip.split(".").map(Number);
+    if (octets[1]! >= 64 && octets[1]! <= 127 && octets[2]! <= 255 && octets[3]! <= 255) return ip;
+  }
+  const dns = normalizeDnsName(self.DNSName);
+  if (!dns || dns.length > 253 || !dns.endsWith(".ts.net")) return undefined;
+  const labels = dns.split(".");
+  return labels.length >= 4 && labels.every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)) ? dns : undefined;
+}
+
 function parseNodeStatus(serialized: string): AidenTailscaleNodeStatus {
   const root = record(parseBoundedJson(serialized, "Tailscale status"));
   const self = record(root?.Self);
+  const developmentHost = developmentHostFromSelf(root);
   const dnsName = normalizeDnsName(self?.DNSName);
   const certDomains = Array.isArray(root?.CertDomains)
     ? root.CertDomains.map(normalizeDnsName).filter((value): value is string => value !== undefined)
     : [];
   return {
     ...(dnsName ? { dnsName } : {}),
+    ...(developmentHost ? { developmentHost } : {}),
     // An exact certificate-domain match proves that the tailnet owner has
     // already enabled HTTPS. Aiden never follows or accepts Tailscale's
     // interactive authorization flow on the owner's behalf.
@@ -431,6 +451,7 @@ export class AidenRemoteTailscaleController {
         : undefined;
     return {
       installed: true,
+      ...(nodeStatus.developmentHost ? { developmentHost: nodeStatus.developmentHost } : {}),
       ...(nodeStatus.dnsName ? { dnsName: nodeStatus.dnsName } : {}),
       httpsAvailable: nodeStatus.httpsAvailable,
       ...(errorCode ? { errorCode } : {}),
@@ -474,6 +495,11 @@ export class AidenRemoteTailscaleController {
     } finally {
       if (this.connectionStatusRead === read) this.connectionStatusRead = null;
     }
+  }
+
+  async developmentHost(): Promise<string | undefined> {
+    if (!this.runner) return undefined;
+    try { return (await this.nodeStatus()).developmentHost; } catch { return undefined; }
   }
 
   async status(): Promise<AidenTailscaleConnectionStatus> {

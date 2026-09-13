@@ -348,3 +348,22 @@ When moving a phone between Macs, select the intended saved Mac before starting 
 ## 10. Contract change process
 
 Change this document, OpenAPI, TypeScript contract constants/types, shared fixtures, and Swift/TypeScript fixture tests in one phase. Additive changes increment `contractRevision`. Breaking changes require `/v2`. No handler may ship an undocumented route or field.
+
+
+## Adaptive workspace subagent summaries
+
+Feature `workspace-subagents-v1` advertises `GET /workspaces/:workspaceId/chats/:chatId/subagents`. This additive resource is the sole exception for public subagent summary metadata; all original parent/chat/Bot payload exclusions remain unchanged. Both `chat:read` and `workspace:read` plus a foreground Mac session-only per-device summary grant are required. Existing and newly paired devices start denied. Settings → Remote Access → Subagent summaries grants access to ordinary workspace chat run names, roles, status and timestamps for the current Mac process; disabling Remote Access, revocation or app restart removes grants. No client route can grant itself access.
+
+The exact response is documented in OpenAPI and fixture `workspaceSubagents`: version 1, requested workspace/chat identity, up to 100 newest run summaries and explicit `truncated`. Run IDs are HMAC-derived per device/session grant and change after regrant/restart. Each summary allows only id, label (80 Unicode characters), role, state, revision and startedAt/updatedAt milliseconds. Labels are untrusted display text. No task, private run/group/generation ID, activity, model, reasoning, transcript, output, error or control is returned. Selected detail uses these same summary fields; it is not a private-history endpoint.
+
+Read checks ordinary chat ownership and enabled/grant state before storage access and again after asynchronous work; device authorization is rechecked before the final ownership check. Unknown/moved/nonordinary chat returns 404; no grant or disabled subagents returns 403 capability_denied. Responses are no-store; clients must clear summaries on identity switch, denied response or grant loss, preserve normal chat when an older server lacks the feature, and avoid hidden-pane polling.
+
+### Native development Browser (additive contract revision 11)
+
+The optional `/server.developmentHost` is a bare host hint for the **current Mac's** running Tailscale node. It prefers a canonical IPv4 in `100.64.0.0/10` and otherwise uses its validated `.ts.net` name. It is omitted when discovery is unavailable and can be cached for 30 seconds. The field has no port, scheme, credentials or API path; it is not authorization. It does not depend on Tailscale HTTPS availability or Serve configuration. Discovery reads only the node's Self status, not peers, and rechecks device authentication before emitting the response.
+
+The mobile Browser combines the hint with an explicit user port (initially 3000) or opens a user-entered HTTP(S) URL in native WKWebView/WebView. The page loads HTML, JavaScript, assets and WebSockets directly from that server over the tailnet, with native browser accessibility and rendering. It does not stream Mac browser frames, share desktop cookies, acquire a desktop browser owner or call browser-control APIs. The removed experimental frame/session/command routes and Browser grants are not part of revision 11. Subagent grants remain separate and unchanged.
+
+Dev servers must listen on their Tailscale interface or `0.0.0.0`; a localhost-only listener needs separately configured forwarding. Aiden does not silently reconfigure the user's server, firewall, ACLs or Tailscale Serve routes. Direct HTTP previews do not require a page HTTPS certificate, but the tailnet must allow the target port. Native browser HTTP admission is separate from the Aiden API's unchanged HTTPS, credential and certificate-pin policy. No Aiden authentication headers, privileged JavaScript bridge or certificate bypass is injected into development pages. Ordinary browser origins, CORS and WebSocket/HMR configuration still apply.
+
+Older Macs that omit the hint remain usable through a manually entered reachable URL. Choosing a development host does not automatically navigate, launch a server or expand workspace/model permissions.

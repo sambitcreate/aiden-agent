@@ -466,7 +466,10 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertNotNil(Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription"))
         XCTAssertNotNil(Bundle.main.object(forInfoDictionaryKey: "NSLocalNetworkUsageDescription"))
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "NSSupportsLiveActivities") as? Bool, true)
-        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity"))
+        let ats = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any])
+        XCTAssertEqual(ats["NSAllowsArbitraryLoadsInWebContent"] as? Bool, true)
+        XCTAssertNotEqual(ats["NSAllowsArbitraryLoads"] as? Bool, true)
+        XCTAssertNil(ats["NSExceptionDomains"])
 
         let privacyManifestURL = try XCTUnwrap(Bundle.main.url(
             forResource: "PrivacyInfo",

@@ -169,7 +169,7 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
     readFile(`${iosRoot}AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift`, "utf8"),
   ]);
 
-  assert.equal([...project.matchAll(/AIDEN_BOT_FIRST_ENABLED = YES;/gu)].length, 2);
+  assert.equal([...project.matchAll(/"?AIDEN_BOT_FIRST_ENABLED"? = YES;/gu)].length, 2);
   assert.match(
     info,
     /<key>AidenBotFirstEnabled<\/key>\s*<string>\$\(AIDEN_BOT_FIRST_ENABLED\)<\/string>/u,
@@ -359,7 +359,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   assert.match(
     chat,
-    /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
+    /struct AidenChatDetailView[\s\S]*?init\(readOnlyFixture chat: AidenChat\) \{\s*coordinator = nil[\s\S]*?if let coordinator \{[\s\S]*?\} else \{\s*#if DEBUG\s*model = AidenChatViewModel\(readOnlyFixture: chat\)/u,
   );
   assert.match(chat, /func load\(\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
   assert.match(
@@ -916,7 +916,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(
     chat,
-    /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u,
+    /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$composerSession\.isPhotoPickerPresented/u,
   );
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
   assert.match(chat, /\.fileImporter\(/u);

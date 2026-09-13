@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- User-entered dev sites have dynamic Tailscale IPs. Android's XML domain rules
+         cannot express CIDRs. The Aiden API still requires canonical HTTPS and pinning. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

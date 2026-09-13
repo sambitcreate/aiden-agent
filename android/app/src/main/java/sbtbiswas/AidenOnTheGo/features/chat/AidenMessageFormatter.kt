@@ -18,7 +18,7 @@ enum class AidenAnnotationTag {
 }
 
 private val markdownPattern by lazy {
-    Regex("""(https?://[^\s\t\n]+)|(`[^`\n]+`)|(@\w+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)|(~[^~]+~)""")
+    Regex("""(\[[^\]\n]+\]\(https?://[^\s)]+\))|(https?://[^\s\t\n<>"\[\]()`]+)|(`[^`\n]+`)|(@\w+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)|(~[^~]+~)""")
 }
 
 /**
@@ -41,9 +41,12 @@ fun buildAidenFormattedMessage(
             val raw = token.value
 
             when {
-                raw.startsWith("http://") || raw.startsWith("https://") -> {
+                raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("[") -> {
+                    val markdown = Regex("\\[([^\\]]+)\\]\\((https?://[^\\s)]+)\\)").matchEntire(raw)
+                    val destination = markdown?.groupValues?.get(2) ?: raw
+                    val label = markdown?.groupValues?.get(1) ?: raw
                     val start = length
-                    append(raw)
+                    append(label)
                     val end = length
                     addStyle(
                         SpanStyle(
@@ -53,7 +56,7 @@ fun buildAidenFormattedMessage(
                         ),
                         start, end
                     )
-                    addStringAnnotation(AidenAnnotationTag.LINK.name, raw, start, end)
+                    addStringAnnotation(AidenAnnotationTag.LINK.name, destination, start, end)
                 }
                 raw.startsWith("`") && raw.endsWith("`") -> {
                     val content = raw.removeSurrounding("`")

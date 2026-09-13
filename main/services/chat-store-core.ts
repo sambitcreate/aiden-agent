@@ -66,6 +66,10 @@ export interface ChatStoreDurability {
   syncFile?: (target: string) => Promise<void>;
 }
 
+export class ChatArchivedError extends Error {
+  constructor() { super("Restore this archived chat before sending a message."); }
+}
+
 export class ChatCreateReconciliationRequiredError extends Error {
   readonly chatId: string;
 
@@ -172,6 +176,8 @@ export function createChatStore(
       Number.isFinite(meta.createdAt) &&
       typeof meta.updatedAt === "number" &&
       Number.isFinite(meta.updatedAt) &&
+      (meta.archivedAt === undefined ||
+        (typeof meta.archivedAt === "number" && Number.isFinite(meta.archivedAt) && Number.isFinite(new Date(meta.archivedAt).getTime()))) &&
       (meta.workspaceId === undefined ||
         typeof meta.workspaceId === "string") &&
       (meta.botId === undefined ||
@@ -603,6 +609,7 @@ export function createChatStore(
       providerId: chat.providerId,
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
+      ...(chat.archivedAt !== undefined ? { archivedAt: chat.archivedAt } : {}),
       summaryRevision: chatSummaryRevision(chat),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
@@ -937,6 +944,23 @@ export function createChatStore(
       });
     },
 
+    async archive(
+      id: string,
+      archived: boolean,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (archived) chat.archivedAt ??= Date.now();
+        else delete chat.archivedAt;
+        chat.updatedAt = Math.max(Date.now(), chat.updatedAt + 1);
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
     /** Apply an asynchronous rename only when no newer rename won the race. */
     async replaceTitleIfUnchanged(
       id: string,
@@ -1062,6 +1086,9 @@ export function createChatStore(
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        if (message.role === "user" && chat.archivedAt !== undefined) {
+          throw new ChatArchivedError();
+        }
         if (meta?.isCurrent && !meta.isCurrent()) {
           throw new Error("The renderer document is no longer active.");
         }
@@ -1127,6 +1154,9 @@ export function createChatStore(
           chat.title = deriveChatTitleSeed(full);
         }
         await writeChatAndMeta(chat, () => {
+          if (message.role === "user" && chat.archivedAt !== undefined) {
+            throw new ChatArchivedError();
+          }
           if (meta?.isCurrent && !meta.isCurrent()) {
             throw new Error("The renderer document is no longer active.");
           }

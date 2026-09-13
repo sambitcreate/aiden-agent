@@ -65,7 +65,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
 
         XCTAssertNotEqual(transportSecurity["NSAllowsArbitraryLoads"] as? Bool, true)
         XCTAssertNotEqual(transportSecurity["NSAllowsArbitraryLoadsForMedia"] as? Bool, true)
-        XCTAssertNotEqual(transportSecurity["NSAllowsArbitraryLoadsInWebContent"] as? Bool, true)
+        XCTAssertEqual(transportSecurity["NSAllowsArbitraryLoadsInWebContent"] as? Bool, true)
         XCTAssertNotEqual(transportSecurity["NSAllowsLocalNetworking"] as? Bool, true)
         XCTAssertNil(transportSecurity["NSExceptionDomains"])
     }
@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 9)
+        XCTAssertEqual(fixture.contractRevision, 11)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)

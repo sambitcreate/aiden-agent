@@ -42,6 +42,7 @@ class AidenRemoteCoordinator(
     private val intentCatalogStore: AidenIntentCatalogStore? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job())
 ) {
+    val fileDraftStore = sbtbiswas.AidenOnTheGo.persistence.AidenFileDraftStore(File(storageDir, "file-drafts"))
     val archiveStore = AidenWorkspaceArchiveStore(storageDir)
     val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
@@ -74,6 +75,10 @@ class AidenRemoteCoordinator(
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _chatMetadataRevision = MutableStateFlow(0L)
+    val chatMetadataRevision = _chatMetadataRevision.asStateFlow()
+    fun chatMetadataChanged() { _chatMetadataRevision.value += 1 }
+
     private var activationGeneration: Long = 0
 
     val activeInstanceId: String?
@@ -100,6 +105,7 @@ class AidenRemoteCoordinator(
         activationGeneration += 1
         val generation = activationGeneration
         val installation = installationStore.activeInstallation
+        sbtbiswas.AidenOnTheGo.features.workspaces.AidenBrowserPaneState.activate(installation?.instanceId)
         if (installation == null) {
             _client.value = null
             _serverInfo.value = null
@@ -205,6 +211,8 @@ class AidenRemoteCoordinator(
         botCache.purge(installation.instanceId, installation.deviceId)
         chatCache.purge(installation.instanceId)
         draftStore.purge(installation.instanceId)
+        fileDraftStore.purge(installation.instanceId)
+        sbtbiswas.AidenOnTheGo.features.workspaces.AidenBrowserPaneState.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()

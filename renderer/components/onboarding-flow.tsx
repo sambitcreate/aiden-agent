@@ -1257,7 +1257,10 @@ export function OnboardingFlow() {
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and iPad access starts off. After setup, opt in from Settings → Remote
-                      Access; Aiden must stay running, and Tailscale is optional.
+                      Access; Aiden must stay running, and Tailscale is optional. Wide windows can keep chat
+                      beside workspace tools. Browser opens your development server on the device over Tailscale.
+                      Ask Aiden to forward a localhost server when needed.
+                      Subagent summaries need an explicit device grant on this Mac.
                     </Text>
                   </div>
                 </div>

@@ -201,6 +201,12 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
+  ipcMain.handle("chats:restore", async (_event, id: unknown) => {
+    const restored = await chatApplicationService.archive(asString(id, "id"), false);
+    ipcMain.broadcast("chats:changed", {});
+    return chatForRenderer(restored);
+  });
+
   ipcMain.handle(
     "chats:renameWithFoundationModels",
     async (_event, id: unknown) =>

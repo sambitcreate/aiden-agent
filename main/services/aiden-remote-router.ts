@@ -1,12 +1,15 @@
+import { AIDEN_REMOTE_SUBAGENTS_FEATURE, type AidenRemoteSubagentService } from "./aiden-remote-subagents.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  isAidenDevelopmentHost,
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
+  AIDEN_REMOTE_CHAT_ARCHIVE_FEATURE,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   parseAidenRemoteBotConversationQuery,
@@ -66,6 +69,7 @@ export interface AidenRemoteServerProjection {
   connectionMode: AidenRemoteConnectionMode;
   minimumClientVersion?: string;
   features: string[];
+  developmentHost?: string;
   serverTime: string;
 }
 
@@ -90,6 +94,7 @@ type AidenRemoteRouterDeviceRegistry = {
 export interface AidenRemoteRouterDependencies {
   instanceId: string;
   displayName(): string;
+  developmentHost?: () => Promise<string | undefined>;
   appVersion: string;
   devices: AidenRemoteRouterDeviceRegistry;
   pairing: Pick<AidenRemotePairingService, "exchange">
@@ -102,12 +107,13 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
+  > & Partial<Pick<AidenRemoteChatService, "archive" | "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   >;
+  subagents?: Pick<AidenRemoteSubagentService, "list">;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -589,26 +595,27 @@ function browserQuery(query: string): { location: string; cursor?: string } {
   return { location, ...(cursor ? { cursor } : {}) };
 }
 
-function chatsQuery(query: string): { workspaceId?: string } {
-  if (!query) return {};
-  const separator = query.indexOf("=");
-  if (
-    separator <= 0 ||
-    query.slice(0, separator) !== "workspaceId" ||
-    query.indexOf("&") >= 0 ||
-    !/^[A-Za-z0-9._:-]{1,128}$/u.test(query.slice(separator + 1))
-  ) {
+function chatsQuery(query: string): { workspaceId?: string; includeArchived?: boolean } {
+  const params = new URLSearchParams(query);
+  const workspaceId = params.get("workspaceId");
+  const archived = params.get("includeArchived");
+  if ([...params.keys()].some((key) => key !== "workspaceId" && key !== "includeArchived") ||
+      params.getAll("workspaceId").length > 1 || params.getAll("includeArchived").length > 1 ||
+      (workspaceId !== null && !/^[A-Za-z0-9._:-]{1,128}$/u.test(workspaceId)) ||
+      (archived !== null && archived !== "true" && archived !== "false")) {
     throw new AidenRemoteServiceError("invalid_request", "The chats query is invalid.", 400);
   }
-  return { workspaceId: query.slice(separator + 1) };
+  return { ...(workspaceId !== null ? { workspaceId } : {}), ...(archived !== null ? { includeArchived: archived === "true" } : {}) };
 }
 
-function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
+function chatSummariesQuery(query: string): { limit: number; cursor?: string; includeArchived?: boolean } {
   if (!query) return { limit: AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT };
   const params = new URLSearchParams(query);
   if (
-    [...params.keys()].some((key) => key !== "limit" && key !== "cursor") ||
+    [...params.keys()].some((key) => key !== "limit" && key !== "cursor" && key !== "includeArchived") ||
     params.getAll("limit").length > 1 ||
+    params.getAll("includeArchived").length > 1 ||
+    (params.has("includeArchived") && !["true", "false"].includes(params.get("includeArchived")!)) ||
     params.getAll("cursor").length > 1
   ) {
     throw new AidenRemoteServiceError(
@@ -639,7 +646,7 @@ function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
       400,
     );
   }
-  return { limit, ...(cursor !== null ? { cursor } : {}) };
+  return { limit, ...(cursor !== null ? { cursor } : {}), ...(params.has("includeArchived") ? { includeArchived: params.get("includeArchived") === "true" } : {}) };
 }
 
 function usageQuery(query: string): UsageDateRange {
@@ -895,10 +902,12 @@ export function createAidenRemoteRequestHandler(
         // Every authenticated operation crosses the synchronous revocation
         // fence. Only mutations participate in the drain; SSE/read lifetimes
         // must not postpone durable revocation or cleanup.
+        const previousAuthorization = releaseDeviceAuthorization;
         releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
           device.id,
           request.method !== "GET",
         );
+        previousAuthorization?.();
         return device;
       };
       if (request.method === "GET" && path === "/health") {
@@ -939,7 +948,11 @@ export function createAidenRemoteRequestHandler(
         route = "server";
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
+        const host = await dependencies.developmentHost?.().catch(() => undefined);
+        // Recheck admission after asynchronous self-host discovery.
+        await authenticate(request, dependencies.devices, "server:read");
         const projection: AidenRemoteServerProjection = {
+          ...(isAidenDevelopmentHost(host) ? { developmentHost: host } : {}),
           protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
           instanceId: dependencies.instanceId,
           name: dependencies.displayName(),
@@ -950,9 +963,11 @@ export function createAidenRemoteRequestHandler(
             ? { serverCapabilities: [...AIDEN_REMOTE_CAPABILITIES] }
             : {}),
           connectionMode: dependencies.connectionMode(),
-          features: dependencies.chats?.listSummaries
-            ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
-            : [],
+          features: [
+            ...(dependencies.chats?.listSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
+            ...(dependencies.chats?.archive ? [AIDEN_REMOTE_CHAT_ARCHIVE_FEATURE] : []),
+            ...(dependencies.subagents ? [AIDEN_REMOTE_SUBAGENTS_FEATURE] : []),
+          ],
           serverTime: new Date(dependencies.now()).toISOString(),
         };
         writeJson(response, 200, projection);
@@ -1397,6 +1412,21 @@ export function createAidenRemoteRequestHandler(
             body,
           ),
         );
+        return;
+      }
+      const subagentsMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/chats\/([A-Za-z0-9._:-]{1,128})\/subagents$/u.exec(path);
+      if (subagentsMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chat";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        requireDeviceCapabilities(device, ["workspace:read"]);
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.subagents) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        const result = await dependencies.subagents.list(device.id, subagentsMatch[1]!, subagentsMatch[2]!, async () => {
+          const current = await authenticate(request, dependencies.devices, "chat:read");
+          requireDeviceCapabilities(current, ["workspace:read"]);
+        });
+        writeJson(response, 200, result);
         return;
       }
       if (path === "/workspaces" && request.method === "GET") {
@@ -1891,7 +1921,8 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.chats.list(chatsQuery(query).workspaceId));
+        const input = chatsQuery(query);
+        writeJson(response, 200, await dependencies.chats.list(input.workspaceId, input.includeArchived));
         return;
       }
       if (path === "/chat-summaries" && request.method === "GET") {
@@ -1905,7 +1936,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.chats.listSummaries(input.limit, input.cursor),
+          await dependencies.chats.listSummaries(input.limit, input.cursor, input.includeArchived),
         );
         return;
       }
@@ -1944,7 +1975,11 @@ export function createAidenRemoteRequestHandler(
           response,
           200,
           await runChatMutation(dependencies.chats, device, chatMatch[1]!, "chat", () =>
-            dependencies.chats!.rename(chatMatch[1]!, revision, body)),
+            Object.prototype.hasOwnProperty.call(body ?? {}, "archived")
+              ? dependencies.chats!.archive
+                ? dependencies.chats!.archive(chatMatch[1]!, revision, body)
+                : Promise.reject(new AidenRemoteServiceError("not_found", "Chat archiving is unavailable.", 404))
+              : dependencies.chats!.rename(chatMatch[1]!, revision, body)),
         );
         return;
       }

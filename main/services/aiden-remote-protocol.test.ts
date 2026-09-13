@@ -87,7 +87,7 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 10);
+  assert.equal(fixture.contractRevision, 11);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
@@ -154,6 +154,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.equal(info.version, "1.0.0");
   const paths = record(document.paths, "OpenAPI paths");
   const requiredPaths = [
+
+    "/workspaces/{workspaceId}/chats/{chatId}/subagents",
     "/health",
     "/pairing/manual-bootstrap",
     "/pairing/exchange",
@@ -1355,4 +1357,17 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
     true,
   );
+});
+
+
+test("chat archive timestamps are optional validated wire fields", () => {
+  const sample = {
+    id: "chat-archive", workspaceId: "workspace", title: "Archived", messages: [],
+    createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:01.000Z", revision: "rev_example",
+  };
+  assert.equal(parseAidenRemoteChatProjection(sample).archivedAt, undefined);
+  assert.equal(parseAidenRemoteChatProjection({ ...sample, archivedAt: sample.updatedAt }).archivedAt, sample.updatedAt);
+  for (const archivedAt of [null, 1234, "invalid"]) {
+    assert.throws(() => parseAidenRemoteChatProjection({ ...sample, archivedAt }));
+  }
 });

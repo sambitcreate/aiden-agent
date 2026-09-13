@@ -314,3 +314,14 @@ test("a revisited detached stream restores the responding window from its last t
     /streamingText:[\s\S]{0,180}detachedGenerationDraining[\s\S]{0,120}displayedStreamingText/u,
   );
 });
+
+test("archived chats retain their composer draft and provide explicit restore", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /!archivedChatMessage && modelReady/u);
+  assert.match(pane, /chatsApi\.restore\(restoringId\)/u);
+  assert.match(pane, /queryKeys\.chat\(restoringId\), restored/u);
+  assert.match(pane, /Restore chat/u);
+  assert.match(pane, /ready=\{ready &&/u);
+  assert.doesNotMatch(pane, /key=\{[^}]*archived/u);
+  assert.match(source("./root-view.tsx"), /onNotification\("chats:changed"[\s\S]*queryKey: \["chat"\]/u);
+});

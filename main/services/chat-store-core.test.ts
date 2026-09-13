@@ -1444,3 +1444,22 @@ test("a renderer replaced while a per-chat opt-in is staged cannot commit it", a
   assert.equal(checks, 2);
   assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
 });
+
+
+test("archive persists in payload and metadata, blocks new user append and preserves completion", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace" });
+  await store.appendMessage(chat.id, { role: "user", content: "existing" });
+  const archived = await store.archive(chat.id, true);
+  assert.ok(archived.archivedAt);
+  assert.equal((await store.get(chat.id))?.archivedAt, archived.archivedAt);
+  assert.equal((await store.listSummaryMetadata())[0]?.archivedAt, archived.archivedAt);
+  await assert.rejects(store.appendMessage(chat.id, { role: "user", content: "hidden" }), /Restore/u);
+  await store.appendMessage(chat.id, { role: "assistant", content: "finishing accepted turn" });
+  await assert.rejects(store.archive(chat.id, false, () => { throw new Error("revoked"); }), /revoked/u);
+  assert.ok((await store.get(chat.id))?.archivedAt);
+  await store.archive(chat.id, false);
+  await store.appendMessage(chat.id, { role: "user", content: "restored" });
+  assert.equal((await store.get(chat.id))?.messages.length, 3);
+  assert.equal((await store.listSummaryMetadata())[0]?.archivedAt, undefined);
+});

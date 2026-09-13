@@ -13,6 +13,7 @@ import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 
 class AidenOnTheGoApp : Application() {
+    val services: AidenApplicationServices by lazy { AidenApplicationServices(this) }
     override fun onCreate() {
         super.onCreate()
         AidenDiagnostics.record(AidenDiagnosticArea.APP, AidenDiagnosticEvent.LAUNCH, AidenDiagnosticOutcome.STARTED)

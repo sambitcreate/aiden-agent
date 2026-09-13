@@ -1,3 +1,4 @@
+import { remoteSubagentGrants } from "../services/aiden-remote-subagents.js";
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
@@ -30,6 +31,7 @@ async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
     displayName: state.displayName,
     status: await runtime.service.status(),
     devices: await runtime.state.listDevices(),
+    subagentSummaryDevices: remoteSubagentGrants.devices(),
     ...(pairing ? { pairing } : {}),
     approvedRoots: state.approvedRoots.map((root) => ({
       id: root.id,
@@ -147,6 +149,19 @@ export function registerAidenRemoteHandlers(): void {
       parseIdentifier(sessionId, "pairing_"),
     );
     return { closed };
+  });
+
+  ipcMain.handle("remote:setSubagentSummaries", async (event, deviceValue: unknown, allowed: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Sharing requires the active application document."));
+    const deviceId = parseIdentifier(deviceValue, "device_");
+    if (typeof allowed !== "boolean") throw new Error("Invalid summary sharing choice.");
+    const runtime = await getAidenRemoteRuntime();
+    if (allowed && !(await runtime.state.snapshot()).enabled) throw new Error("Enable Remote Access before sharing summaries.");
+    const device = (await runtime.state.listDevices()).find((entry) => entry.id === deviceId && entry.revokedAt === undefined);
+    if (!device || owner.isDestroyed()) throw new Error("This device or application document is unavailable.");
+    remoteSubagentGrants.set(deviceId, allowed);
+    ipcMain.broadcast("remote:changed", {});
+    return settingsSnapshot();
   });
 
   ipcMain.handle("remote:revokeDevice", async (_event, deviceId: unknown) => {

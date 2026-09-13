@@ -304,7 +304,7 @@ test("summary query enforces chat:read, defaults, and hard bounds over HTTP", as
   const serverProjection = await (await fetch(`${base}/server`, {
     headers,
   })).json() as { features?: string[] };
-  assert.deepEqual(serverProjection.features, ["chat-summaries-v1"]);
+  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-archive-v1"]);
 });
 
 test("pathological synthetic history keeps summary responses bounded without payload reads", async () => {
@@ -437,4 +437,23 @@ test("chat store performs bounded legacy summary migration without transcript re
   assert.equal(transcriptReads, 0);
   const migrated = JSON.parse(await fs.readFile(path.join(directory, "index.json"), "utf8")) as ChatMeta[];
   assert.equal(migrated[0]?.summaryRevision, summaries[0]?.summaryRevision);
+});
+
+
+test("archive filtering remains transcript free and cursor scope cannot change", async () => {
+  const rows = [metadata("active-a", 3000), metadata("archived", 2000, { archivedAt: 2000 }), metadata("active-b", 1000)];
+  const fixture = summaryService(rows);
+  const active = await fixture.service.listSummaries(1);
+  assert.deepEqual(active.summaries.map((row) => row.id), ["active-a"]);
+  assert.ok(active.nextCursor);
+  await assert.rejects(fixture.service.listSummaries(1, active.nextCursor, true), /filter/u);
+  const next = await fixture.service.listSummaries(1, active.nextCursor);
+  assert.deepEqual(next.summaries.map((row) => row.id), ["active-b"]);
+  const all = await fixture.service.listSummaries(100, undefined, true);
+  assert.equal(all.summaries.length, 3);
+  assert.equal(all.summaries.find((row) => row.id === "archived")?.archivedAt, new Date(2000).toISOString());
+  fixture.replace(rows.map((row) => row.id === "active-b" ? { ...row, archivedAt: 4000 } : row));
+  const fresh = await fixture.service.listSummaries(100);
+  assert.deepEqual(fresh.summaries.map((row) => row.id), ["active-a"]);
+  assert.equal(fixture.payloadReads(), 0);
 });

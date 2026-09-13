@@ -248,3 +248,136 @@ enum AidenWorkspaceEnvironmentValidation {
         return git
     }
 }
+
+struct AidenWorkspaceSubagentRun: Decodable, Identifiable, Equatable, Sendable {
+    enum Role: String, Decodable, Sendable { case scout, planner, reviewer }
+    enum State: String, Decodable, Sendable {
+        case queued, starting, running, completed, failed, timed_out, interrupted, needs_attention, stopped, unknown
+        var title: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
+    }
+    let id: String
+    let label: String
+    let role: Role
+    let state: State
+    let revision: Int64
+    let startedAt: Int64
+    let updatedAt: Int64
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: AidenSubagentCodingKey.self)
+        try values.requireExactly(["id", "label", "role", "state", "revision", "startedAt", "updatedAt"])
+        id = try values.decode(String.self, forKey: .init("id"))
+        label = try values.decode(String.self, forKey: .init("label"))
+        role = try values.decode(Role.self, forKey: .init("role"))
+        state = try values.decode(State.self, forKey: .init("state"))
+        revision = try values.decode(Int64.self, forKey: .init("revision"))
+        startedAt = try values.decode(Int64.self, forKey: .init("startedAt"))
+        updatedAt = try values.decode(Int64.self, forKey: .init("updatedAt"))
+        guard id.range(of: "^run_[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+              !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              label.unicodeScalars.count <= 80,
+              !label.unicodeScalars.contains(where: { $0.value <= 31 || $0.value == 127 }),
+              revision > 0, revision <= 9_007_199_254_740_991,
+              startedAt >= 0, startedAt <= 9_007_199_254_740_991,
+              updatedAt >= startedAt, updatedAt <= 9_007_199_254_740_991 else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+}
+
+struct AidenWorkspaceSubagentPage: Decodable, Equatable, Sendable {
+    let version: Int
+    let workspaceId: String
+    let chatId: String
+    let runs: [AidenWorkspaceSubagentRun]
+    let truncated: Bool
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: AidenSubagentCodingKey.self)
+        try values.requireExactly(["version", "workspaceId", "chatId", "runs", "truncated"])
+        version = try values.decode(Int.self, forKey: .init("version"))
+        workspaceId = try values.decode(String.self, forKey: .init("workspaceId"))
+        chatId = try values.decode(String.self, forKey: .init("chatId"))
+        runs = try values.decode([AidenWorkspaceSubagentRun].self, forKey: .init("runs"))
+        truncated = try values.decode(Bool.self, forKey: .init("truncated"))
+        guard version == 1,
+              workspaceId.range(of: "^[A-Za-z0-9._:-]{1,128}$", options: .regularExpression) != nil,
+              chatId.range(of: "^[A-Za-z0-9._:-]{1,128}$", options: .regularExpression) != nil,
+              runs.count <= 100, Set(runs.map(\.id)).count == runs.count else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+
+    func validated(workspaceID: String, chatID: String) throws -> Self {
+        guard workspaceId == workspaceID, chatId == chatID else { throw AidenRemoteClientError.invalidResponse }
+        return self
+    }
+}
+
+private struct AidenSubagentCodingKey: CodingKey {
+    let stringValue: String
+    var intValue: Int? { nil }
+    init(_ string: String) { stringValue = string }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}
+
+private extension KeyedDecodingContainer where Key == AidenSubagentCodingKey {
+    func requireExactly(_ keys: Set<String>) throws {
+        guard Set(allKeys.map(\.stringValue)) == keys else { throw AidenRemoteClientError.invalidResponse }
+    }
+}
+
+/// Pure address policy: hints never initiate a request.
+enum AidenNativeBrowserAddress {
+    static func url(_ input: String) -> URL? {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.utf8.count <= 8192, !text.contains("\\"),
+              !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              let parts = URLComponents(string: text),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil,
+              parts.port.map({ (1...65535).contains($0) }) ?? true else { return nil }
+        return parts.url
+    }
+
+    static func developmentHost(_ input: String?) -> String? {
+        guard let input, input == input.lowercased(), input.utf8.count <= 253 else { return nil }
+        let octets = input.split(separator: ".", omittingEmptySubsequences: false)
+        if octets.count == 4, let numbers = Optional(octets.compactMap { Int($0) }), numbers.count == 4,
+           zip(octets, numbers).allSatisfy({ String($1) == $0 && (0...255).contains($1) }),
+           numbers[0] == 100, (64...127).contains(numbers[1]) { return input }
+        guard input.hasSuffix(".ts.net"), octets.count >= 3,
+              octets.allSatisfy({ label in
+                  !label.isEmpty && label.count <= 63 && label.first != "-" && label.last != "-"
+                  && label.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+              }) else { return nil }
+        return input
+    }
+
+    /// Only an explicitly tapped HTTP Tailscale website link belongs to the development pane.
+    static func isDevelopmentLink(_ candidate: URL) -> Bool {
+        guard let validated = url(candidate.absoluteString), validated.scheme?.lowercased() == "http" else { return false }
+        return developmentHost(validated.host) != nil
+    }
+
+    static func resolvedURL(_ input: String, developmentHost: String?) -> URL? {
+        guard let url = url(input) else { return nil }
+        let host = url.host?.lowercased() ?? ""
+        if host == "localhost" || host.hasSuffix(".localhost") || host == "0.0.0.0"
+            || host == "[::1]" || host == "::1" || host.hasPrefix("127.") {
+            guard let host = Self.developmentHost(developmentHost),
+                  var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            parts.host = host
+            return parts.url
+        }
+        return url
+    }
+
+    static func developmentURL(host: String?, port: String) -> URL? {
+        guard let host = developmentHost(host), let value = Int(port), String(value) == port,
+              (1...65535).contains(value) else { return nil }
+        return url("http://\(host):\(value)/")
+    }
+}

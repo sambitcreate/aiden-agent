@@ -535,7 +535,8 @@ data class AidenChatSummary(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String,
-    val activity: AidenChatSummaryActivity
+    val activity: AidenChatSummaryActivity,
+    @Serializable(with = InstantIso8601Serializer::class) val archivedAt: Instant? = null
 ) {
     init {
         if (id.isEmpty() || id.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
@@ -563,7 +564,8 @@ data class AidenChatSummary(
             createdAt = chat.createdAt,
             updatedAt = chat.updatedAt,
             revision = chat.revision,
-            activity = activity
+            activity = activity,
+            archivedAt = chat.archivedAt
         )
     }
 }
@@ -608,7 +610,8 @@ data class AidenChat(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant,
     var revision: String,
-    var titlePending: Boolean? = null
+    var titlePending: Boolean? = null,
+    @Serializable(with = InstantIso8601Serializer::class) var archivedAt: Instant? = null
 ) {
     val isBotChat: Boolean get() = botId != null
     val isTitlePending: Boolean get() = titlePending == true
@@ -1181,5 +1184,13 @@ object AidenChatModelAuthority {
             modelId = if (chat.isBotChat) chat.modelId else selectedModelId,
             thinkingLevel = selectedThinkingLevel
         )
+    }
+}
+
+/** Mutation bounds are narrower than historic title projection bounds. */
+object AidenChatActionValidation {
+    fun validTitle(value: String): Boolean {
+        val title = value.trim()
+        return title.isNotEmpty() && title.codePointCount(0, title.length) <= 200
     }
 }

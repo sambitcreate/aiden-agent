@@ -198,6 +198,7 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
       void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
         queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
       ]);

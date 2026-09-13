@@ -9,6 +9,14 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.navigation3.runtime.*
+import androidx.navigation3.ui.NavDisplay
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.navigation3.*
+import kotlinx.serialization.Serializable
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenChatEnvironmentPane
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.auth.AndroidAidenSecureStore
@@ -30,15 +38,18 @@ import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.persistence.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
-sealed class AidenScreen {
-    object ProductShell : AidenScreen()
-    data class ChatDetail(val chatId: String, val startsVoice: Boolean = false) : AidenScreen()
-    data class BotProfile(val botId: String) : AidenScreen()
-    data class BotEditor(val botId: String?) : AidenScreen()
-    data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
-    data class WorkspaceGit(val workspaceId: String) : AidenScreen()
+@Serializable
+sealed class AidenScreen : NavKey {
+    @Serializable object ProductShell : AidenScreen()
+    @Serializable data class ChatDetail(val chatId: String, val startsVoice: Boolean = false) : AidenScreen()
+    @Serializable data class BotProfile(val botId: String) : AidenScreen()
+    @Serializable data class BotEditor(val botId: String?) : AidenScreen()
+    @Serializable data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
+    @Serializable data class Environment(val workspaceId: String, val chatId: String) : AidenScreen()
+    @Serializable data class WorkspaceGit(val workspaceId: String) : AidenScreen()
 }
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 class MainActivity : ComponentActivity() {
     private val pendingNavigationRequest = mutableStateOf<AidenNavigationRequest?>(null)
 
@@ -46,25 +57,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val filesDir = applicationContext.filesDir
-        val secureStore = AndroidAidenSecureStore(applicationContext)
-        val installationStore = AidenInstallationStore(filesDir, secureStore)
-        val chatCache = AidenChatCache(filesDir)
-        val draftStore = AidenChatDraftStore(filesDir)
-        val navigationStore = AidenProductNavigationStore(filesDir)
-        val appearanceStore = AidenAppearanceStore(filesDir)
-        val voiceInputStore = AidenVoiceInputStore(applicationContext)
-        val intentCatalogStore = AidenIntentCatalogStore(applicationContext)
-        val liveNotificationManager = AidenRemoteLiveNotificationManager(applicationContext)
-        val coordinator = AidenRemoteCoordinator(
-            installationStore = installationStore,
-            storageDir = filesDir,
-            chatCache = chatCache,
-            draftStore = draftStore,
-            navigationStore = navigationStore,
-            intentCatalogStore = intentCatalogStore
-        )
-        acceptDeepLink(intent)
+        val services = (application as AidenOnTheGoApp).services
+        val installationStore = services.installationStore
+        val chatCache = services.chatCache
+        val draftStore = services.draftStore
+        val navigationStore = services.navigationStore
+        val appearanceStore = services.appearanceStore
+        val voiceInputStore = services.voiceInputStore
+        val liveNotificationManager = services.liveNotificationManager
+        val coordinator = services.coordinator
+        if (savedInstanceState == null) acceptDeepLink(intent)
 
         setContent {
             val appearanceConfig by appearanceStore.config.collectAsState()
@@ -73,7 +75,32 @@ class MainActivity : ComponentActivity() {
             val hasCompletedWorkspaceRefresh by coordinator.hasCompletedWorkspaceRefresh.collectAsState()
             val activeInstallationId by installationStore.activeInstallationId.collectAsState()
             val installations by installationStore.installations.collectAsState()
-            var currentScreen by remember { mutableStateOf<AidenScreen>(AidenScreen.ProductShell) }
+            val backStack = rememberNavBackStack(AidenScreen.ProductShell)
+            fun navigate(screen: AidenScreen) {
+                if (screen == AidenScreen.ProductShell) {
+                    backStack.clear()
+                    backStack.add(screen)
+                } else {
+                    val existing = backStack.indexOfLast { entry ->
+                        entry == screen || (entry is AidenScreen.ChatDetail && screen is AidenScreen.ChatDetail && entry.chatId == screen.chatId)
+                    }
+                    if (existing >= 0) {
+                        while (backStack.lastIndex > existing) backStack.removeLastOrNull()
+                    } else backStack.add(screen)
+                }
+            }
+            fun navigateBack() { if (backStack.size > 1) backStack.removeLastOrNull() }
+            var navigationInstallation by rememberSaveable { mutableStateOf(activeInstallationId) }
+            LaunchedEffect(activeInstallationId) {
+                if (navigationInstallation != activeInstallationId) {
+                    navigate(AidenScreen.ProductShell)
+                    navigationInstallation = activeInstallationId
+                }
+            }
+            var splitEnvironment by rememberSaveable { mutableStateOf(false) }
+            val wideDirective = androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective(androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2())
+            val canSplitEnvironment = wideDirective.maxHorizontalPartitions > 1
+            val paneStrategy = rememberSupportingPaneSceneStrategy<NavKey>(directive = if (splitEnvironment) wideDirective else wideDirective.copy(maxHorizontalPartitions = 1))
             val botsViewModel: AidenBotsViewModel = viewModel(
                 factory = AidenBotsViewModel.factory(coordinator)
             )
@@ -95,7 +122,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (requestedInstance != null && activeInstallationId != requestedInstance) {
                     installationStore.setActiveInstallation(requestedInstance)
-                    currentScreen = AidenScreen.ProductShell
+                    navigate(AidenScreen.ProductShell)
                     return@LaunchedEffect
                 }
                 if (connectionState != sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState.CONNECTED) {
@@ -122,7 +149,7 @@ class MainActivity : ComponentActivity() {
                                     coordinator.activeInstanceId.orEmpty(),
                                     if (chat.isBotChat) AidenProductArea.BOTS else AidenProductArea.WORKSPACES
                                 )
-                                currentScreen = AidenScreen.ChatDetail(chat.id, request.startsVoice)
+                                navigate(AidenScreen.ChatDetail(chat.id, request.startsVoice))
                             } catch (error: Exception) {
                                 coordinator.presentError(error.message ?: "That chat is unavailable.")
                             }
@@ -148,7 +175,7 @@ class MainActivity : ComponentActivity() {
                                     coordinator.activeInstanceId.orEmpty(),
                                     AidenProductArea.WORKSPACES
                                 )
-                                currentScreen = AidenScreen.ChatDetail(chat.id, request.startsVoice)
+                                navigate(AidenScreen.ChatDetail(chat.id, request.startsVoice))
                             } catch (error: Exception) {
                                 coordinator.presentError(error.message ?: "Aiden couldn't create the chat.")
                             }
@@ -163,33 +190,22 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = AidenTheme.palette.canvas
                 ) {
-                    AnimatedContent(
-                        targetState = currentScreen,
-                        label = "ScreenTransition",
-                        transitionSpec = {
-                            if (targetState is AidenScreen.ProductShell) {
-                                (slideInVertically(
-                                    initialOffsetY = { -it / 10 },
-                                    animationSpec = sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.spatialExpressiveSpring<androidx.compose.ui.unit.IntOffset>()
-                                ) + fadeIn(sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.nonSpatialExpressiveSpring<Float>())).togetherWith(
-                                    slideOutVertically(
-                                        targetOffsetY = { it / 10 },
-                                        animationSpec = sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.spatialExpressiveSpring<androidx.compose.ui.unit.IntOffset>()
-                                    ) + fadeOut(sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.nonSpatialExpressiveSpring<Float>())
-                                )
-                            } else {
-                                (slideInVertically(
-                                    initialOffsetY = { it / 8 },
-                                    animationSpec = sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.spatialExpressiveSpring<androidx.compose.ui.unit.IntOffset>()
-                                ) + fadeIn(sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.nonSpatialExpressiveSpring<Float>())).togetherWith(
-                                    slideOutVertically(
-                                        targetOffsetY = { -it / 8 },
-                                        animationSpec = sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.spatialExpressiveSpring<androidx.compose.ui.unit.IntOffset>()
-                                    ) + fadeOut(sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion.nonSpatialExpressiveSpring<Float>())
-                                )
+                    if (navigationInstallation == activeInstallationId) NavDisplay(
+                        backStack = backStack,
+                        onBack = ::navigateBack,
+                        sceneStrategies = listOf(paneStrategy),
+                        entryDecorators = listOf(
+                            rememberSaveableStateHolderNavEntryDecorator(),
+                            rememberViewModelStoreNavEntryDecorator()
+                        ),
+                        entryProvider = { key ->
+                            val screen = key as AidenScreen
+                            val metadata = when (screen) {
+                                is AidenScreen.ChatDetail -> SupportingPaneSceneStrategy.mainPane(screen.chatId)
+                                is AidenScreen.Environment -> SupportingPaneSceneStrategy.supportingPane(screen.chatId)
+                                else -> emptyMap()
                             }
-                        }
-                    ) { screen ->
+                            NavEntry(key, metadata = metadata) {
                         when (screen) {
                             is AidenScreen.ProductShell -> {
                                 ContentView(
@@ -200,11 +216,11 @@ class MainActivity : ComponentActivity() {
                                     appearanceStore = appearanceStore,
                                     voiceInputStore = voiceInputStore,
                                     botsViewModel = botsViewModel,
-                                    onNavigateToChat = { chatId -> currentScreen = AidenScreen.ChatDetail(chatId) },
-                                    onNavigateToBotProfile = { botId -> currentScreen = AidenScreen.BotProfile(botId) },
-                                    onNavigateToBotEditor = { botId -> currentScreen = AidenScreen.BotEditor(botId) },
-                                    onNavigateToWorkspaceFiles = { wsId -> currentScreen = AidenScreen.WorkspaceFiles(wsId) },
-                                    onNavigateToWorkspaceGit = { wsId -> currentScreen = AidenScreen.WorkspaceGit(wsId) }
+                                    onNavigateToChat = { chatId -> navigate(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToBotProfile = { botId -> navigate(AidenScreen.BotProfile(botId)) },
+                                    onNavigateToBotEditor = { botId -> navigate(AidenScreen.BotEditor(botId)) },
+                                    onNavigateToWorkspaceFiles = { wsId -> navigate(AidenScreen.WorkspaceFiles(wsId)) },
+                                    onNavigateToWorkspaceGit = { wsId -> navigate(AidenScreen.WorkspaceGit(wsId)) }
                                 )
                             }
                             is AidenScreen.ChatDetail -> {
@@ -216,16 +232,17 @@ class MainActivity : ComponentActivity() {
                                     voiceInputStore = voiceInputStore,
                                     liveNotificationManager = liveNotificationManager,
                                     startVoiceOnOpen = screen.startsVoice,
-                                    onNavigateBack = { currentScreen = AidenScreen.ProductShell }
+                                    onOpenEnvironment = { workspaceId -> splitEnvironment = false; navigate(AidenScreen.Environment(workspaceId, screen.chatId)) },
+                                    onNavigateBack = ::navigateBack
                                 )
                             }
                             is AidenScreen.BotProfile -> {
                                 AidenBotProfileScreen(
                                     botId = screen.botId,
                                     coordinator = coordinator,
-                                    onNavigateBack = { currentScreen = AidenScreen.ProductShell },
-                                    onNavigateToChat = { chatId -> currentScreen = AidenScreen.ChatDetail(chatId) },
-                                    onNavigateToEditBot = { botId -> currentScreen = AidenScreen.BotEditor(botId) },
+                                    onNavigateBack = ::navigateBack,
+                                    onNavigateToChat = { chatId -> navigate(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToEditBot = { botId -> navigate(AidenScreen.BotEditor(botId)) },
                                     onBotMutated = { botsViewModel.loadBots(force = true) }
                                 )
                             }
@@ -233,29 +250,34 @@ class MainActivity : ComponentActivity() {
                                 AidenBotEditorScreen(
                                     botId = screen.botId,
                                     coordinator = coordinator,
-                                    onNavigateBack = { currentScreen = AidenScreen.ProductShell },
+                                    onNavigateBack = ::navigateBack,
                                     onBotSaved = { botId ->
                                         botsViewModel.loadBots(force = true)
-                                        currentScreen = AidenScreen.BotProfile(botId)
+                                        navigate(AidenScreen.BotProfile(botId))
                                     }
                                 )
+                            }
+                            is AidenScreen.Environment -> {
+                                AidenChatEnvironmentPane(screen.workspaceId, screen.chatId, coordinator, ::navigateBack, if (canSplitEnvironment) ({ splitEnvironment = !splitEnvironment }) else null, splitEnvironment)
                             }
                             is AidenScreen.WorkspaceFiles -> {
                                 AidenWorkspaceEnvironmentScreen(
                                     workspaceId = screen.workspaceId,
                                     coordinator = coordinator,
-                                    onNavigateBack = { currentScreen = AidenScreen.ProductShell }
+                                    onNavigateBack = ::navigateBack
                                 )
                             }
                             is AidenScreen.WorkspaceGit -> {
                                 AidenGitScreen(
                                     workspaceId = screen.workspaceId,
                                     coordinator = coordinator,
-                                    onNavigateBack = { currentScreen = AidenScreen.ProductShell }
+                                    onNavigateBack = ::navigateBack
                                 )
                             }
                         }
-                    }
+                            }
+                        }
+                    )
                 }
             }
         }

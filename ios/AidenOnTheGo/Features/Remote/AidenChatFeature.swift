@@ -673,6 +673,7 @@ enum AidenStreamFeedbackDecision {
 final class AidenWorkspaceChatsModel {
     private let coordinator: AidenRemoteCoordinator
     private let workspaceId: String
+    private let installationID: String?
     private let cache: AidenChatCache
     private let hapticScope: UUID
     private let onChatUpdated: @MainActor (AidenChat) -> Void
@@ -691,6 +692,7 @@ final class AidenWorkspaceChatsModel {
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
+        self.installationID = coordinator.activeInstanceId
         self.workspaceId = workspaceId
         self.hapticScope = hapticScope
         self.cache = cache
@@ -699,6 +701,29 @@ final class AidenWorkspaceChatsModel {
     }
 
     var isConnected: Bool { coordinator.connectionState == .connected }
+    var supportsArchive: Bool { coordinator.server?.features.contains("chat-archive-v1") == true }
+    var activeChats: [AidenChat] { chats.filter { !$0.isArchived } }
+    var archivedChats: [AidenChat] { chats.filter(\.isArchived) }
+    var canArchive: Bool { coordinator.activeInstanceId == installationID && isConnected && !isMutating && supportsArchive && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true }
+
+    func restore(_ chat: AidenChat) async {
+        guard canArchive, chat.isArchived, let context = try? coordinator.requestContext() else { return }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let updated = try await coordinator.remoteClient(for: context).setChatArchived(id: chat.id, revision: chat.revision, archived: false)
+            guard coordinator.isCurrent(context), updated.id == chat.id, updated.workspaceId == workspaceId, !updated.isArchived else { return }
+            upsert(updated)
+            try? await persist(chat: updated, instanceId: context.instanceId)
+            guard coordinator.isCurrent(context) else { return }
+            onChatUpdated(updated)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), !aidenIsCancellation(error) else { return }
+            presentedError = error.localizedDescription
+        }
+    }
+
 
     func setHapticsActive(_ active: Bool) {
         if active {
@@ -724,7 +749,7 @@ final class AidenWorkspaceChatsModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
+            let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId, includeArchived: supportsArchive)
             guard coordinator.isCurrent(context) else { return }
             chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
             try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
@@ -875,8 +900,8 @@ final class AidenChatViewModel {
 
     private let runtime: Runtime
     private var allowsMutations: Bool
-    private let onChatUpdated: @MainActor (AidenChat) -> Void
-    private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    private var onChatUpdated: @MainActor (AidenChat) -> Void
+    private var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
     private let hapticScope: UUID
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -1013,8 +1038,76 @@ final class AidenChatViewModel {
         return coordinator.connectionState == .connected
     }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
-    var canSend: Bool {
+    private(set) var isUpdatingChat = false
+    var canUpdateChat: Bool {
         guard !isReadOnlyPresentation else { return false }
+        return isConnected && coordinator.activeInstanceId == instanceId && !isUpdatingChat
+            && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true
+    }
+
+    var supportsArchive: Bool { !isReadOnlyFixture && coordinator.server?.features.contains("chat-archive-v1") == true }
+
+    @discardableResult
+    func setArchived(_ archived: Bool) async -> Bool {
+        guard canUpdateChat, supportsArchive, let context = try? coordinator.requestContext() else { return false }
+        isUpdatingChat = true
+        defer { isUpdatingChat = false }
+        let requested = chat
+        do {
+            let updated = try await coordinator.remoteClient(for: context).setChatArchived(id: requested.id, revision: requested.revision, archived: archived)
+            guard coordinator.isCurrent(context), updated.id == requested.id, updated.workspaceId == requested.workspaceId,
+                  updated.isArchived == archived else { return false }
+            if chat.revision != requested.revision {
+                return await reconcileChat(context: context) && chat.isArchived == archived
+            }
+            chat.archivedAt = updated.archivedAt
+            chat.revision = updated.revision
+            chat.updatedAt = updated.updatedAt
+            try? await cache.saveChat(chat, instanceId: instanceId)
+            try? await cache.reconcileChatSummary(chat, instanceId: instanceId)
+            guard coordinator.isCurrent(context) else { return false }
+            onChatUpdated(chat)
+            return true
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            guard coordinator.isCurrent(context), !aidenIsCancellation(error) else { return false }
+            presentedError = error.localizedDescription
+            return false
+        }
+    }
+
+    static func normalizedChatTitle(_ title: String) -> String? {
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !cleaned.isEmpty && cleaned.unicodeScalars.count <= 200 ? cleaned : nil
+    }
+
+    func rename(to title: String) async {
+        guard canUpdateChat, let title = Self.normalizedChatTitle(title), title != chat.title,
+              let context = try? coordinator.requestContext() else { return }
+        isUpdatingChat = true
+        defer { isUpdatingChat = false }
+        let requested = chat
+        do {
+            let updated = try await coordinator.remoteClient(for: context).updateChat(id: requested.id, revision: requested.revision, title: title)
+            guard coordinator.isCurrent(context), updated.id == requested.id, updated.workspaceId == requested.workspaceId else { return }
+            if chat.revision != requested.revision { _ = await reconcileChat(context: context); return }
+            // Keep the live transcript/composer untouched while adopting canonical metadata.
+            chat.title = updated.title
+            chat.titlePending = updated.titlePending
+            chat.revision = updated.revision
+            chat.updatedAt = updated.updatedAt
+            try? await cache.saveChat(chat, instanceId: instanceId)
+            guard coordinator.isCurrent(context) else { return }
+            onChatUpdated(chat)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), !aidenIsCancellation(error) else { return }
+            presentedError = error.localizedDescription
+        }
+    }
+
+    var canSend: Bool {
+        guard !isReadOnlyPresentation, !chat.isArchived else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
             && !isStarting && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
@@ -1089,6 +1182,12 @@ final class AidenChatViewModel {
         } else {
             coordinator.haptics.deactivate(scope: hapticScope)
         }
+    }
+
+    func setPresentationCallbacks(onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
+                                  onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void) {
+        self.onChatUpdated = onChatUpdated
+        self.onChatActivityChanged = onChatActivityChanged
     }
 
     func load() async {
@@ -2130,7 +2229,7 @@ struct AidenWorkspaceChatsView: View {
             }
 
             Section("Chats") {
-                if model.chats.isEmpty, !model.isLoading {
+                if model.activeChats.isEmpty, !model.isLoading {
                     ContentUnavailableView(
                         "No Chats",
                         systemImage: "bubble.left.and.bubble.right",
@@ -2138,7 +2237,7 @@ struct AidenWorkspaceChatsView: View {
                     )
                     .listRowBackground(Color.clear)
                 } else {
-                    ForEach(model.chats) { chat in
+                    ForEach(model.activeChats) { chat in
                         NavigationLink {
                             AidenChatDetailView(
                                 coordinator: coordinator,
@@ -2169,6 +2268,18 @@ struct AidenWorkspaceChatsView: View {
                         .contextMenu {
                             Button { beginRename(chat) } label: { Label("Rename", systemImage: "pencil") }
                             Button(role: .destructive) { deleteChat = chat } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
+                }
+            }
+            if !model.archivedChats.isEmpty {
+                Section("Archived Chats") {
+                    ForEach(model.archivedChats) { chat in
+                        HStack {
+                            Text(chat.title).lineLimit(2)
+                            Spacer()
+                            Button("Restore", systemImage: "arrow.uturn.backward") { Task { await model.restore(chat) } }
+                                .disabled(!model.canArchive)
                         }
                     }
                 }
@@ -2249,51 +2360,248 @@ struct AidenWorkspaceChatsView: View {
     }
 }
 
+enum AidenWorkspaceTool: String, CaseIterable, Identifiable {
+    case files, changes, subagents, browser
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .files: "Files"; case .changes: "Changes"; case .subagents: "Subagents"; case .browser: "Browser" }
+    }
+}
+
+struct AidenWorkspacePaneLayout: Equatable {
+    let showsSplit: Bool
+    let showsChat: Bool
+    let showsEnvironment: Bool
+
+    static func resolve(width: CGFloat, accessibilityText: Bool, tool: AidenWorkspaceTool?, expanded: Bool,
+                        browserSplitRequested: Bool = false) -> Self {
+        let inlineTool = tool == .browser || tool == .subagents
+        let requested = tool == .browser ? browserSplitRequested : true
+        let split = width >= 760 && !accessibilityText && inlineTool && requested && !expanded
+        return Self(showsSplit: split, showsChat: !inlineTool || split, showsEnvironment: inlineTool)
+    }
+
+}
+
+@MainActor
+@Observable
+final class AidenComposerSession {
+    let voiceInput = ComposerVoiceInputController()
+    var didAutoStartVoice = false
+    var selectedPhotos: [PhotosPickerItem] = []
+    var isPhotoPickerPresented = false
+    var isFileImporterPresented = false
+    var isPreparingAttachments = false
+    @ObservationIgnored var attachmentPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var departureTask: Task<Void, Never>?
+
+    func resumePresentation() {
+        departureTask?.cancel()
+        departureTask = nil
+    }
+
+    func leavePresentation() {
+        departureTask?.cancel()
+        departureTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.voiceInput.cancelDiscardingRecording()
+            self?.didAutoStartVoice = false
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class AidenChatWorkspaceSession {
+    let model: AidenChatViewModel
+    let composer = AidenComposerSession()
+    let files: AidenWorkspaceFilesModel?
+    let git: AidenWorkspaceGitModel
+    let subagents: AidenWorkspaceSubagentsModel
+    let browser: AidenWorkspaceBrowserModel
+    var tool: AidenWorkspaceTool?
+    var toolExpanded = false
+    var browserSplitRequested = false
+    var composerHeight: CGFloat = 132
+    var isScrolledAwayFromLatest = false
+    var scrollPosition = ScrollPosition(idType: String.self)
+    var composerWasFocused = false
+    var restoreComposerFocusOnPanelClose = false
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadedContext: AidenRemoteRequestContext?
+    @ObservationIgnored private var loadedPresentationRevision: String?
+
+    init(model: AidenChatViewModel, workspace: AidenWorkspace?, haptics: (any AidenHapticEmitting)? = nil, installationID: String? = nil) {
+        self.model = model
+        files = workspace.map { AidenWorkspaceFilesModel(workspace: $0, installationID: installationID, recoveryScope: model.chat.id) }
+        git = AidenWorkspaceGitModel(haptics: haptics, installationID: installationID)
+        subagents = AidenWorkspaceSubagentsModel(installationID: installationID ?? "", workspaceID: model.chat.workspaceId, chatID: model.chat.id)
+        browser = AidenWorkspaceBrowserModel()
+    }
+
+    func load(context: AidenRemoteRequestContext?, presentationRevision: String, force: Bool = false) async {
+        if force || loadTask == nil || loadedContext != context || loadedPresentationRevision != presentationRevision {
+            let previous = loadTask
+            loadedContext = context
+            loadedPresentationRevision = presentationRevision
+            // Layout remounts share this task; a real connection change reconciles once.
+            loadTask = Task {
+                await previous?.value
+                await model.load()
+            }
+        }
+        await loadTask?.value
+    }
+
+}
+
+@MainActor
+@Observable
+final class AidenChatWorkspaceSessionStore {
+    var environmentPresentationRequest = 0
+    struct Key: Hashable {
+        let installationID: String
+        let workspaceID: String
+        let chatID: String
+    }
+    @ObservationIgnored private var sessions: [Key: AidenChatWorkspaceSession] = [:]
+
+    func clearPrivateSummaries(unless context: AidenRemoteRequestContext?) {
+        for session in sessions.values {
+            session.subagents.clearUnless(context: context)
+            session.browser.clearUnless(context: context)
+        }
+    }
+
+    func session(for key: Key, create: () -> AidenChatWorkspaceSession) -> AidenChatWorkspaceSession {
+        if let session = sessions[key] { return session }
+        let session = create()
+        sessions[key] = session
+        return session
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var aidenChatWorkspaceSessions: AidenChatWorkspaceSessionStore? = nil
+}
+
 struct AidenChatDetailView: View {
+    @Environment(\.aidenChatWorkspaceSessions) private var sharedSessions
+    @State private var fallbackSessions = AidenChatWorkspaceSessionStore()
+    @State private var session: AidenChatWorkspaceSession?
+    let coordinator: AidenRemoteCoordinator?
+    let chat: AidenChat
+    var autoStartVoice = false
+    var allowsMutations = true
+    var onChatUpdated: @MainActor (AidenChat) -> Void = { _ in }
+    var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+
+#if DEBUG
+    init(readOnlyFixture chat: AidenChat) {
+        coordinator = nil
+        self.chat = chat
+        allowsMutations = false
+    }
+#endif
+
+    init(coordinator: AidenRemoteCoordinator, chat: AidenChat, autoStartVoice: Bool = false,
+         allowsMutations: Bool = true, onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }) {
+        self.coordinator = coordinator
+        self.chat = chat
+        self.autoStartVoice = autoStartVoice
+        self.allowsMutations = allowsMutations
+        self.onChatUpdated = onChatUpdated
+        self.onChatActivityChanged = onChatActivityChanged
+    }
+
+    private var identity: AidenChatWorkspaceSessionStore.Key {
+        .init(installationID: coordinator?.activeInstanceId ?? "fixture", workspaceID: chat.workspaceId, chatID: chat.id)
+    }
+
+    var body: some View {
+        Group {
+            if let session,
+               session.subagents.installationID == identity.installationID,
+               session.model.chat.workspaceId == identity.workspaceID,
+               session.model.chat.id == identity.chatID {
+                AidenChatDetailContent(coordinator: coordinator, session: session,
+                                       autoStartVoice: autoStartVoice, allowsMutations: allowsMutations, presentationRevision: chat.revision)
+            } else {
+                ProgressView("Opening chat…")
+            }
+        }
+        .onChange(of: session?.tool) { _, tool in
+            if tool != nil { sharedSessions?.environmentPresentationRequest += 1 }
+        }
+        .task(id: identity) {
+            session = (sharedSessions ?? fallbackSessions).session(for: identity) {
+                let model: AidenChatViewModel
+                if let coordinator {
+                    model = AidenChatViewModel(coordinator: coordinator, chat: chat, allowsMutations: allowsMutations,
+                                               onChatUpdated: onChatUpdated, onChatActivityChanged: onChatActivityChanged)
+                } else {
+#if DEBUG
+                    model = AidenChatViewModel(readOnlyFixture: chat)
+#else
+                    preconditionFailure("A live chat needs a coordinator")
+#endif
+                }
+                return AidenChatWorkspaceSession(model: model,
+                    workspace: coordinator?.workspaces.first { $0.id == chat.workspaceId && chat.botId == nil },
+                    haptics: coordinator?.haptics, installationID: coordinator?.activeInstanceId ?? "fixture")
+            }
+            session?.model.setPresentationCallbacks(onChatUpdated: onChatUpdated, onChatActivityChanged: onChatActivityChanged)
+        }
+    }
+}
+
+private struct AidenChatDetailContent: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
-    @State private var model: AidenChatViewModel
-    @State private var composerHeight: CGFloat = 132
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var session: AidenChatWorkspaceSession
+    @Bindable var model: AidenChatViewModel
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
-    @State private var isScrolledAwayFromLatest = false
+    @State private var isRenamingChat = false
+    @State private var renameTitle = ""
     @FocusState private var composerIsFocused: Bool
-    @State private var coordinator: AidenRemoteCoordinator?
+    let coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
     let allowsMutations: Bool
+    let presentationRevision: String
+    private struct LoadIdentity: Equatable {
+        let context: AidenRemoteRequestContext?
+        let revision: String
+    }
+    private var loadIdentity: LoadIdentity {
+        LoadIdentity(context: coordinator.flatMap { try? $0.requestContext() }, revision: presentationRevision)
+    }
 
-    init(
-        coordinator: AidenRemoteCoordinator,
-        chat: AidenChat,
-        autoStartVoice: Bool = false,
-        allowsMutations: Bool = true,
-        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
-        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
-    ) {
-        _coordinator = State(initialValue: coordinator)
-        _model = State(initialValue: AidenChatViewModel(
-            coordinator: coordinator,
-            chat: chat,
-            allowsMutations: allowsMutations,
-            onChatUpdated: onChatUpdated,
-            onChatActivityChanged: onChatActivityChanged
-        ))
-        _botToolsModel = State(initialValue: chat.botId.map {
-            AidenBotChatToolsModel(chatID: chat.id, botID: $0)
+    private var composerHeight: CGFloat {
+        get { session.composerHeight }
+        nonmutating set { session.composerHeight = newValue }
+    }
+    private var isScrolledAwayFromLatest: Bool {
+        get { session.isScrolledAwayFromLatest }
+        nonmutating set { session.isScrolledAwayFromLatest = newValue }
+    }
+
+    init(coordinator: AidenRemoteCoordinator?, session: AidenChatWorkspaceSession,
+         autoStartVoice: Bool, allowsMutations: Bool, presentationRevision: String) {
+        self.presentationRevision = presentationRevision
+        self.coordinator = coordinator
+        self.session = session
+        model = session.model
+        _botToolsModel = State(initialValue: session.model.chat.botId.map {
+            AidenBotChatToolsModel(chatID: session.model.chat.id, botID: $0)
         })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
     }
-
-#if DEBUG
-    init(readOnlyFixture chat: AidenChat) {
-        _coordinator = State(initialValue: nil)
-        _model = State(initialValue: AidenChatViewModel(readOnlyFixture: chat))
-        _botToolsModel = State(initialValue: nil)
-        autoStartVoice = false
-        allowsMutations = false
-    }
-#endif
 
     private var workspace: AidenWorkspace? {
         coordinator?.workspaces.first { $0.id == model.chat.workspaceId }
@@ -2323,7 +2631,19 @@ struct AidenChatDetailView: View {
     }
 
     var body: some View {
-        chatStack
+        workspaceContent
+        .environment(\.openURL, OpenURLAction { url in
+            guard let coordinator, workspace != nil, session.files != nil,
+                  AidenNativeBrowserAddress.isDevelopmentLink(url) else { return .systemAction }
+            // This closure runs only for the user's link activation, never while parsing tool output.
+            session.browser.clearUnless(context: try? coordinator.requestContext())
+            session.browser.addressInput = url.absoluteString
+            session.browser.openAddress()
+            session.toolExpanded = false
+            session.tool = .browser
+            composerIsFocused = false
+            return .handled
+        })
         .background(palette.canvas.ignoresSafeArea())
         .onPreferenceChange(AidenComposerHeightPreferenceKey.self) { height in
             guard height > 0 else { return }
@@ -2338,11 +2658,19 @@ struct AidenChatDetailView: View {
         .onChange(of: botPrimarySupportsImages, initial: true) { _, supportsImages in
             model.setBotPrimarySupportsImages(supportsImages)
         }
+        .alert("Rename Chat", isPresented: $isRenamingChat) {
+            TextField("Chat title", text: $renameTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { Task { await model.rename(to: renameTitle) } }
+                .disabled(AidenChatViewModel.normalizedChatTitle(renameTitle) == nil || !model.canUpdateChat)
+        }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
-        .task { await model.load() }
+        .task(id: loadIdentity) {
+            await session.load(context: loadIdentity.context, presentationRevision: loadIdentity.revision)
+        }
         .task(id: botToolsSessionIdentity) {
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
@@ -2365,8 +2693,101 @@ struct AidenChatDetailView: View {
         } message: {
             Text("This Bot’s primary model reads text only. Choose a vision model for photos and screenshots; attached images and a focused question will go to that model, while replies keep using the current primary model.")
         }
-        .onAppear { model.setHapticsActive(true) }
-        .onDisappear { model.setHapticsActive(false) }
+        .onAppear {
+            if coordinator != nil { model.setHapticsActive(true) }
+            composerIsFocused = session.composerWasFocused && session.tool == nil
+        }
+        .onChange(of: composerIsFocused) { _, focused in session.composerWasFocused = focused }
+        .onDisappear { if coordinator != nil { model.setHapticsActive(false) } }
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        if let coordinator, let workspace, let files = session.files {
+            GeometryReader { geometry in
+                let layout = AidenWorkspacePaneLayout.resolve(width: geometry.size.width,
+                    accessibilityText: dynamicTypeSize.isAccessibilitySize, tool: session.tool, expanded: session.toolExpanded,
+                    browserSplitRequested: session.browserSplitRequested)
+                HStack(spacing: 0) {
+                    chatStack
+                        .frame(width: layout.showsSplit ? (geometry.size.width - 1) / 2 : geometry.size.width)
+                        .frame(width: layout.showsChat ? nil : 0)
+                        .opacity(layout.showsChat ? 1 : 0)
+                        .allowsHitTesting(layout.showsChat)
+                        .accessibilityHidden(!layout.showsChat)
+                        .clipped()
+                    Divider().frame(width: layout.showsSplit ? 1 : 0).opacity(layout.showsSplit ? 1 : 0)
+                    environmentContent(coordinator: coordinator, workspace: workspace, files: files, split: layout.showsSplit,
+                                       canSplit: geometry.size.width >= 760 && !dynamicTypeSize.isAccessibilitySize)
+                        .frame(width: layout.showsSplit ? (geometry.size.width - 1) / 2 : geometry.size.width)
+                        .frame(width: layout.showsEnvironment ? nil : 0)
+                        .opacity(layout.showsEnvironment ? 1 : 0)
+                        .allowsHitTesting(layout.showsEnvironment)
+                        .accessibilityHidden(!layout.showsEnvironment)
+                        .clipped()
+                }
+                .onChange(of: layout.showsChat) { _, visible in
+                    if !visible {
+                        session.restoreComposerFocusOnPanelClose = composerIsFocused
+                        composerIsFocused = false
+                    }
+                }
+                .sheet(isPresented: Binding(
+                    get: { session.tool == .files || session.tool == .changes },
+                    set: { if !$0 && (session.tool == .files || session.tool == .changes) { session.tool = nil } }
+                )) {
+                    AidenWorkspaceFileReviewSheet(coordinator: coordinator, workspace: workspace,
+                        files: files, git: session.git,
+                        selection: Binding(get: { session.tool ?? .files }, set: { session.tool = $0 }))
+                }
+            }
+        } else {
+            chatStack
+        }
+    }
+
+    private func environmentContent(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace,
+                                    files: AidenWorkspaceFilesModel, split: Bool, canSplit: Bool) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    session.tool = nil
+                    session.toolExpanded = false
+                    if session.restoreComposerFocusOnPanelClose { composerIsFocused = true }
+                    session.restoreComposerFocusOnPanelClose = false
+                } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Close workspace panel")
+                Spacer()
+                Text(session.tool?.title ?? "Browser").font(.headline)
+                Spacer()
+                if session.tool == .browser && canSplit {
+                    Button {
+                        session.browserSplitRequested = !split
+                        session.toolExpanded = false
+                    } label: {
+                        Image(systemName: split ? "arrow.up.left.and.arrow.down.right" : "rectangle.split.2x1")
+                    }
+                    .accessibilityLabel(split ? "Expand browser" : "Split browser to the right")
+                    .accessibilityHint("Keeps the chat on the left and website on the right when space permits")
+                }
+            }
+            .buttonStyle(.bordered)
+            .padding(12)
+            ZStack {
+                AidenWorkspaceSubagentsView(model: session.subagents, coordinator: coordinator, active: session.tool == .subagents)
+                    .opacity(session.tool == .subagents ? 1 : 0)
+                    .allowsHitTesting(session.tool == .subagents)
+                    .accessibilityHidden(session.tool != .subagents)
+                AidenWorkspaceBrowserView(model: session.browser, coordinator: coordinator, active: session.tool == .browser)
+                    .opacity(session.tool == .browser ? 1 : 0)
+                    .allowsHitTesting(session.tool == .browser)
+                    .accessibilityHidden(session.tool != .browser)
+            }
+        }
+        .background(palette.canvas)
     }
 
     private var chatStack: some View {
@@ -2381,6 +2802,10 @@ struct AidenChatDetailView: View {
             ScrollView {
                 messageList
             }
+            .refreshable {
+                await session.load(context: loadIdentity.context, presentationRevision: loadIdentity.revision, force: true)
+            }
+            .scrollPosition($session.scrollPosition)
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 aidenChatIsScrolledAwayFromLatest(
@@ -2440,6 +2865,7 @@ struct AidenChatDetailView: View {
                 .accessibilityHidden(true)
             Color.clear.frame(height: 1).id("chat-bottom")
         }
+        .scrollTargetLayout()
         .padding(.horizontal)
         .padding(.top, 20)
     }
@@ -2462,6 +2888,7 @@ struct AidenChatDetailView: View {
     private var composer: some View {
         AidenComposerView(
             model: model,
+            composerSession: session.composer,
             autoStartVoice: autoStartVoice,
             composerFocus: $composerIsFocused
         )
@@ -2521,14 +2948,25 @@ struct AidenChatDetailView: View {
                 .accessibilityLabel("Bot actions")
             }
         } else if model.chat.botId == nil,
-                  let coordinator, let workspace, workspace.hasFolder {
+                  let coordinator, let workspace {
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
+                Menu {
+                    Button("Rename", systemImage: "pencil") {
+                        renameTitle = model.chat.title
+                        isRenamingChat = true
+                    }.disabled(!model.canUpdateChat)
+                    Button(model.chat.isArchived ? "Restore" : "Archive", systemImage: "archivebox") {
+                        Task { if await model.setArchived(!model.chat.isArchived) { dismiss() } }
+                    }.disabled(!model.canUpdateChat || !model.supportsArchive)
+                    if workspace.hasFolder {
+                        Button("Changes", systemImage: "arrow.triangle.branch") { session.tool = .changes }
+                        Button("Files", systemImage: "folder") { session.tool = .files }
+                    }
+                    Button("Open Browser", systemImage: "globe") { session.tool = .browser }
                 } label: {
-                    Label("Files", systemImage: "folder")
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
                 }
-                .accessibilityLabel("Workspace files")
+                .accessibilityLabel("Chat actions")
             }
         }
     }
@@ -4400,15 +4838,9 @@ private struct AidenComposerView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var model: AidenChatViewModel
+    @Bindable var composerSession: AidenComposerSession
     let autoStartVoice: Bool
     let composerFocus: FocusState<Bool>.Binding
-    @State private var voiceInput = ComposerVoiceInputController()
-    @State private var didAutoStartVoice = false
-    @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var isPhotoPickerPresented = false
-    @State private var isFileImporterPresented = false
-    @State private var isPreparingAttachments = false
-    @State private var attachmentPreparationTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -4442,17 +4874,17 @@ private struct AidenComposerView: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 5)
                     .focused(composerFocus)
-                    .disabled(voiceInput.isBusy)
+                    .disabled(composerSession.voiceInput.isBusy)
                     .submitLabel(.send)
                     .onSubmit {
                         guard !model.isStreaming else { return }
-                        voiceInput.stopBeforeSubmittingDraft()
+                        composerSession.voiceInput.stopBeforeSubmittingDraft()
                         Task { await model.send() }
                     }
 
                 HStack(alignment: .center, spacing: 10) {
                 AidenUIKitMenuButton {
-                    if model.isUploadingAttachment || isPreparingAttachments {
+                    if model.isUploadingAttachment || composerSession.isPreparingAttachments {
                         ProgressView().controlSize(.small).frame(width: 44, height: 44)
                     } else {
                         Image(systemName: "plus")
@@ -4464,15 +4896,15 @@ private struct AidenComposerView: View {
                 }
                 .disabled(
                     !model.isConnected || model.isStreaming || model.isUploadingAttachment
-                        || isPreparingAttachments || model.pendingAttachments.count >= 10
+                        || composerSession.isPreparingAttachments || model.pendingAttachments.count >= 10
                 )
                 .accessibilityLabel("Add attachment")
                 .accessibilityHint(model.acceptsImageAttachments
                     ? "Attach an image or bounded text file"
                     : "Attach a bounded text file. This model cannot read images")
                 .photosPicker(
-                    isPresented: $isPhotoPickerPresented,
-                    selection: $selectedPhotos,
+                    isPresented: $composerSession.isPhotoPickerPresented,
+                    selection: $composerSession.selectedPhotos,
                     maxSelectionCount: max(1, attachmentCapacity),
                     matching: .images
                 )
@@ -4576,7 +5008,7 @@ private struct AidenComposerView: View {
                 Button {
                     Task {
                         guard !model.isReadOnlyPresentation else { return }
-                        await voiceInput.toggle(
+                        await composerSession.voiceInput.toggle(
                             currentDraft: model.draft,
                             updateDraft: { model.draft = $0 },
                             macTranscriber: model.transcribeMacSpeech
@@ -4584,7 +5016,7 @@ private struct AidenComposerView: View {
                     }
                 } label: {
                     Group {
-                        if voiceInput.isListening {
+                        if composerSession.voiceInput.isListening {
                             AidenListeningWaveform(isAnimated: !reduceMotion)
                         } else {
                             Image(systemName: "mic")
@@ -4595,9 +5027,9 @@ private struct AidenComposerView: View {
                 }
                 .disabled(
                     model.isReadOnlyPresentation || model.isStreaming
-                        || (voiceInput.isBusy && !voiceInput.isListening)
+                        || (composerSession.voiceInput.isBusy && !composerSession.voiceInput.isListening)
                 )
-                .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
+                .accessibilityLabel(composerSession.voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
                     Button { Task { await model.stop() } } label: {
@@ -4612,7 +5044,7 @@ private struct AidenComposerView: View {
                     .accessibilityLabel("Stop response")
                 } else {
                     Button {
-                        voiceInput.stopBeforeSubmittingDraft()
+                        composerSession.voiceInput.stopBeforeSubmittingDraft()
                         Task { await model.send() }
                     } label: {
                         Image(systemName: "arrow.up")
@@ -4628,7 +5060,7 @@ private struct AidenComposerView: View {
                 }
             }
 
-            if let error = voiceInput.errorMessage, !voiceInput.isListening {
+            if let error = composerSession.voiceInput.errorMessage, !composerSession.voiceInput.isListening {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -4644,23 +5076,23 @@ private struct AidenComposerView: View {
         }
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
         .task {
-            guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
-            didAutoStartVoice = true
-            await voiceInput.toggle(
+            guard !model.isReadOnlyPresentation, autoStartVoice, !composerSession.didAutoStartVoice else { return }
+            composerSession.didAutoStartVoice = true
+            await composerSession.voiceInput.toggle(
                 currentDraft: model.draft,
                 updateDraft: { model.draft = $0 },
                 macTranscriber: model.transcribeMacSpeech
             )
         }
-        .onChange(of: selectedPhotos) { _, items in
-            guard !model.isReadOnlyPresentation, !items.isEmpty, !isPreparingAttachments else { return }
+        .onChange(of: composerSession.selectedPhotos) { _, items in
+            guard !model.isReadOnlyPresentation, !items.isEmpty, !composerSession.isPreparingAttachments else { return }
             let selected = Array(items.prefix(attachmentCapacity))
-            selectedPhotos = []
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
+            composerSession.selectedPhotos = []
+            composerSession.isPreparingAttachments = true
+            composerSession.attachmentPreparationTask = Task {
                 defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
+                    composerSession.isPreparingAttachments = false
+                    composerSession.attachmentPreparationTask = nil
                 }
                 var uploads: [AidenAttachmentUpload] = []
                 var preparationFailures = 0
@@ -4690,18 +5122,18 @@ private struct AidenComposerView: View {
             }
         }
         .fileImporter(
-            isPresented: $isFileImporterPresented,
+            isPresented: $composerSession.isFileImporterPresented,
             allowedContentTypes: allowedAttachmentContentTypes,
             allowsMultipleSelection: true
         ) { result in
             guard !model.isReadOnlyPresentation else { return }
             let capacity = attachmentCapacity
-            guard capacity > 0, !isPreparingAttachments else { return }
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
+            guard capacity > 0, !composerSession.isPreparingAttachments else { return }
+            composerSession.isPreparingAttachments = true
+            composerSession.attachmentPreparationTask = Task {
                 defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
+                    composerSession.isPreparingAttachments = false
+                    composerSession.attachmentPreparationTask = nil
                 }
                 var uploads: [AidenAttachmentUpload] = []
                 var preparationFailures = 0
@@ -4728,15 +5160,11 @@ private struct AidenComposerView: View {
                 presentAttachmentFailures(preparationFailures + uploadFailures)
             }
         }
-        .onDisappear {
-            voiceInput.cancelDiscardingRecording()
-            attachmentPreparationTask?.cancel()
-            attachmentPreparationTask = nil
-            isPreparingAttachments = false
-        }
+        .onAppear { composerSession.resumePresentation() }
+        .onDisappear { composerSession.leavePresentation() }
         .onChange(of: scenePhase) { _, phase in
             if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
-                voiceInput.cancelDiscardingRecording()
+                composerSession.voiceInput.cancelDiscardingRecording()
             }
         }
     }
@@ -4754,7 +5182,7 @@ private struct AidenComposerView: View {
                         return
                     }
                     composerFocus.wrappedValue = false
-                    isPhotoPickerPresented = true
+                    composerSession.isPhotoPickerPresented = true
                 }
             },
             UIAction(
@@ -4763,7 +5191,7 @@ private struct AidenComposerView: View {
             ) { _ in
                 Task { @MainActor in
                     composerFocus.wrappedValue = false
-                    isFileImporterPresented = true
+                    composerSession.isFileImporterPresented = true
                 }
             },
         ])

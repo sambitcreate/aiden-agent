@@ -55,6 +55,7 @@ export interface AidenRemoteSettingsSnapshot {
   status: AidenRemoteStatusView;
   devices: AidenRemoteDeviceView[];
   approvedRoots: AidenRemoteApprovedRootView[];
+  subagentSummaryDevices?: string[];
   pairing?: AidenRemotePairingStatusView;
 }
 

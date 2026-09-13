@@ -781,3 +781,32 @@ test("route lock cannot collide with a retained Aiden TCP listener on the same p
     await new Promise<void>((resolve) => listener.close(() => resolve()));
   }
 });
+
+test("development host uses only the running Mac self IP independently of HTTPS and Serve", async () => {
+  const calls: readonly string[][] = [];
+  const controller = new AidenRemoteTailscaleController({run:async args => {
+    (calls as string[][]).push([...args]);
+    assert.equal(args[0], "status");
+    return JSON.stringify({BackendState:"Running",Self:{Online:true,DNSName:"mac.tail.ts.net.",TailscaleIPs:["fd7a:115c:a1e0::1","100.70.2.3"]},Peer:{other:{TailscaleIPs:["100.80.1.1"]}},CertDomains:[]});
+  }});
+  assert.equal(await controller.developmentHost(), "100.70.2.3");
+  assert.deepEqual(calls, [["status", "--json", "--peers=false"]]);
+});
+
+test("development host rejects stale state and malformed addresses; self DNS fallback remains optional", async () => {
+  for (const [node, expected] of [
+    [{BackendState:"Stopped",Self:{TailscaleIPs:["100.64.0.1"]}}, undefined],
+    [{BackendState:"Running",Self:{Online:false,TailscaleIPs:["100.64.0.1"]}}, undefined],
+    [{BackendState:"Running",Self:{TailscaleIPs:["100.63.255.255","100.128.0.1","100.70.300.1","100.070.2.3"]}}, undefined],
+    [{BackendState:"Running",Self:{DNSName:"MAC.TAIL.ts.net."}}, "mac.tail.ts.net"],
+    [{BackendState:"Running",Self:{DNSName:"mac.ts.net.evil.com"}}, undefined],
+    [{BackendState:"Running",Self:{DNSName:"mac..tail.ts.net"}}, undefined],
+    [{BackendState:"Running",Peer:{a:{TailscaleIPs:["100.70.2.3"]}}}, undefined],
+  ] as const) {
+    const controller = new AidenRemoteTailscaleController({run:async()=>JSON.stringify(node)});
+    assert.equal(await controller.developmentHost(), expected);
+  }
+  const status = await new AidenRemoteTailscaleController({run:async args=>args[0]==="status"?JSON.stringify({BackendState:"Running",Self:{DNSName:"mac.tail.ts.net",TailscaleIPs:["100.127.255.255"]}}):"{}"}).status();
+  assert.equal(status.developmentHost,"100.127.255.255");
+  assert.equal(status.httpsAvailable,false);
+});

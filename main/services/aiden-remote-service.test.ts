@@ -104,6 +104,7 @@ async function within<T>(promise: Promise<T>, milliseconds = 1_000): Promise<T> 
 }
 
 interface FixtureOptions {
+  onRemoteEnabledChange?: (enabled: boolean) => void;
   mode?: "lan" | "tailscale" | "both";
   lanPort?: number;
   initial?: (state: AidenRemoteStateDocument) => void;
@@ -269,6 +270,7 @@ async function fixture(
   const service = new AidenRemoteService({
     state,
     appVersion: "0.30.0",
+    onRemoteEnabledChange: options.onRemoteEnabledChange,
     hostname: "Aiden-Test",
     bonjour,
     tailscale,
@@ -1605,4 +1607,25 @@ test("two paired devices authenticate independently and revoking one leaves the 
   } finally {
     await app.cleanup();
   }
+});
+
+
+test("ephemeral sharing is enabled on restored startup and synchronously fenced by disable and shutdown", async () => {
+  const changes: boolean[] = [];
+  const app = await fixture({ initial: state => { state.enabled = true; }, onRemoteEnabledChange: enabled => changes.push(enabled) });
+  try {
+    await app.service.initialize();
+    assert.equal(changes[changes.length - 1], true);
+    const disable = app.service.setEnabled(false);
+    assert.equal(changes[changes.length - 1], false, "deny grants before asynchronous listener teardown");
+    await disable;
+    await app.service.setEnabled(true);
+    assert.equal(changes[changes.length - 1], true);
+    app.service.stop();
+    assert.equal(changes[changes.length - 1], false);
+    await app.service.setEnabled(true);
+    const shutdown = app.service.stopAndSettle();
+    assert.equal(changes[changes.length - 1], false);
+    await shutdown;
+  } finally { await app.cleanup(); }
 });

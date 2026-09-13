@@ -99,3 +99,13 @@ Before export or upload:
 Draft product copy and the unresolved App Store fields live in `APP_STORE_METADATA.md`.
 
 Never upload an archive built with a personal/imported compatibility identifier, an Apple Development identity, or `get-task-allow=true`.
+
+## Adaptive workspace internal upload — build 28, 2026-09-09
+
+The owner authorized uploading the current adaptive mobile workspace changes to internal testers. App Store Connect reported latest processed/uploaded build 27, so all app/widget/test configurations were bumped to 0.1.0(28). The archive was built from the current uncommitted `feature/adaptive-mobile-workspace` checkout, not a released commit. A source manifest under `/tmp/aiden-testflight-adaptive/source-build-28.json` remained unchanged during archive.
+
+Archive and internal-only local export succeeded. The local IPA SHA-256 is `d0b6684746406e2aca564a920979e83bf20c384af107eecede2e4f139509f921`; both app and widget match their approved bundle IDs, team 5WP229CBB8, version 0.1.0/build28, distribution signing and get-task-allow=false. The main app has the approved App Group; the widget declares none. Strict deep signature verification passed, TFInternalTestingOnly=true, and no XCTest bundle is included. Release policy checks passed 20 Ruby tests/42 assertions and 31 Node tests. Physical devices were unavailable.
+
+A second export of the same archive through Xcode's configured account uploaded successfully at 2026-09-10T02:12:36Z with the checked-in internal-only upload policy. Xcode reports the package is processing. The managed upload does not retain its IPA, so the local IPA digest above identifies the reviewed local export, not independently proven uploaded bytes. Logs and the reviewed local IPA are under `/tmp/aiden-testflight-adaptive/`.
+
+**Pending:** ASC processing status and Internal Testers group assignment/verification. The named CLI profile's credential lookup remains blocked by a macOS Keychain prompt. No external distribution or App Review submission was requested. This iOS build contains native adaptive panes and HTTP preview-link handling; the `tailscale_serve` tool itself runs in the corresponding updated Mac app.

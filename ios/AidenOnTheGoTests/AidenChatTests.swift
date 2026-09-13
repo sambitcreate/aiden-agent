@@ -2,9 +2,75 @@ import Foundation
 import SwiftUI
 import UIKit
 import XCTest
+import SwiftUI
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    @MainActor func testRenameTitleValidationCountsUnicodeScalarsAndTrimsWhitespace() {
+        XCTAssertEqual(AidenChatViewModel.normalizedChatTitle("  New title\n"), "New title")
+        XCTAssertNil(AidenChatViewModel.normalizedChatTitle(" \n"))
+        XCTAssertNotNil(AidenChatViewModel.normalizedChatTitle(String(repeating: "🧑", count: 200)))
+        XCTAssertNil(AidenChatViewModel.normalizedChatTitle(String(repeating: "🧑", count: 201)))
+    }
+
+    @MainActor func testReadOnlyChatCannotRenameOrLoseDraft() async {
+        let chat = sampleChat()
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+        model.draft = "Unsent draft"
+        XCTAssertFalse(model.canUpdateChat)
+        await model.rename(to: "Changed")
+        XCTAssertEqual(model.chat.title, chat.title)
+        XCTAssertEqual(model.draft, "Unsent draft")
+        XCTAssertFalse(model.supportsArchive)
+        let archived = await model.setArchived(true)
+        XCTAssertFalse(archived)
+        XCTAssertFalse(model.chat.isArchived)
+    }
+
+    func testChatArchiveDateDecodeIsOptionalAndRejectsMalformedState() throws {
+        var chat = sampleChat()
+        chat.archivedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(chat)
+        let decoded = try JSONDecoder.aidenRemote().decode(AidenChat.self, from: data)
+        XCTAssertTrue(decoded.isArchived)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "archivedAt")
+        XCTAssertFalse(try JSONDecoder.aidenRemote().decode(AidenChat.self, from: JSONSerialization.data(withJSONObject: object)).isArchived)
+        object["archivedAt"] = "not-a-date"
+        XCTAssertThrowsError(try JSONDecoder.aidenRemote().decode(AidenChat.self, from: JSONSerialization.data(withJSONObject: object)))
+    }
+
+    @MainActor func testArchiveRemovesActiveHomeAndCachedSummaryWhileRetainingRecoverableChat() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let home = AidenHomeModel(chatCache: cache)
+        var chat = sampleChat()
+        home.accept(chat)
+        try await cache.saveChats([chat], instanceId: "mac", workspaceId: chat.workspaceId)
+        try await cache.reconcileChatSummary(chat, instanceId: "mac")
+        chat.archivedAt = Date()
+        home.accept(chat)
+        try await cache.saveChat(chat, instanceId: "mac")
+        try await cache.reconcileChatSummary(chat, instanceId: "mac")
+        XCTAssertTrue(home.chats.isEmpty)
+        let summaries = await cache.loadChatSummaries(instanceId: "mac")
+        XCTAssertTrue(summaries?.summaries.isEmpty == true)
+        let saved = await cache.loadChat(instanceId: "mac", chatId: chat.id)
+        XCTAssertTrue(saved?.isArchived == true)
+        XCTAssertEqual(saved?.messages, chat.messages)
+        let listed = await cache.loadChats(instanceId: "mac", workspaceId: chat.workspaceId)
+        XCTAssertTrue(listed?.first?.isArchived == true)
+        chat.archivedAt = nil
+        home.accept(chat)
+        try await cache.reconcileChatSummary(chat, instanceId: "mac")
+        XCTAssertEqual(home.chats.map(\.id), [chat.id])
+        let restored = await cache.loadChatSummaries(instanceId: "mac")
+        XCTAssertEqual(restored?.summaries.map(\.id), [chat.id])
+    }
+
     func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
         XCTAssertFalse(
             aidenChatIsScrolledAwayFromLatest(
@@ -2256,6 +2322,64 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(model.presentedError)
     }
 #endif
+
+#if DEBUG
+    @MainActor
+    func testWorkspaceSessionKeepsDraftAndToolAcrossRepeatedLayoutChanges() {
+        let store = AidenChatWorkspaceSessionStore()
+        let key = AidenChatWorkspaceSessionStore.Key(installationID: "mac-a", workspaceID: "workspace-1", chatID: "chat-1")
+        var creationCount = 0
+        func getSession(_ key: AidenChatWorkspaceSessionStore.Key) -> AidenChatWorkspaceSession {
+            store.session(for: key) {
+                creationCount += 1
+                return AidenChatWorkspaceSession(model: AidenChatViewModel(readOnlyFixture: sampleChat()), workspace: nil)
+            }
+        }
+        let session = getSession(key)
+        session.model.draft = "Unsent work survives resizing"
+        session.tool = .changes
+        session.git.selectedDiff = AidenGitDiff(kind: "diff", displayPath: "App.swift", diff: "+ change", truncated: false)
+        for width: CGFloat in [1200, 760, 759, 390, 1100, 600, 1200] {
+            let layout = AidenWorkspacePaneLayout.resolve(width: width, accessibilityText: false,
+                                                         tool: session.tool, expanded: false)
+            XCTAssertFalse(layout.showsSplit)
+            XCTAssertTrue(layout.showsChat)
+            XCTAssertTrue(getSession(key) === session)
+            XCTAssertEqual(session.model.draft, "Unsent work survives resizing")
+            XCTAssertEqual(session.git.selectedDiff?.displayPath, "App.swift")
+        }
+        XCTAssertEqual(creationCount, 1)
+        let otherHost = getSession(.init(installationID: "mac-b", workspaceID: key.workspaceID, chatID: key.chatID))
+        XCTAssertFalse(otherHost === session)
+        XCTAssertTrue(otherHost.model.draft.isEmpty)
+        XCTAssertNil(otherHost.tool)
+        let otherWorkspace = getSession(.init(installationID: key.installationID, workspaceID: "workspace-2", chatID: key.chatID))
+        XCTAssertFalse(otherWorkspace === session)
+    }
+
+#endif
+
+    func testWorkspacePanePolicyPresentsFilesOverChatAndBrowserSplitOnlyWhenRequested() {
+        for width: CGFloat in [0, 390, 759, 1024, 1600] {
+            for tool in [AidenWorkspaceTool.files, .changes] {
+                let sheet = AidenWorkspacePaneLayout.resolve(width: width, accessibilityText: false, tool: tool, expanded: false)
+                XCTAssertTrue(sheet.showsChat)
+                XCTAssertFalse(sheet.showsSplit)
+                XCTAssertFalse(sheet.showsEnvironment)
+            }
+            let browser = AidenWorkspacePaneLayout.resolve(width: width, accessibilityText: false, tool: .browser, expanded: false)
+            XCTAssertFalse(browser.showsSplit)
+            XCTAssertTrue(browser.showsEnvironment)
+            let split = AidenWorkspacePaneLayout.resolve(width: width, accessibilityText: false, tool: .browser, expanded: false, browserSplitRequested: true)
+            XCTAssertEqual(split.showsSplit, width >= 760)
+        }
+        let accessible = AidenWorkspacePaneLayout.resolve(width: 1600, accessibilityText: true, tool: .browser, expanded: false, browserSplitRequested: true)
+        XCTAssertFalse(accessible.showsSplit)
+        XCTAssertTrue(accessible.showsEnvironment)
+        let expanded = AidenWorkspacePaneLayout.resolve(width: 1600, accessibilityText: false, tool: .browser, expanded: true, browserSplitRequested: true)
+        XCTAssertFalse(expanded.showsSplit)
+        XCTAssertTrue(expanded.showsEnvironment)
+    }
 
     private func eventJSON(sequence: Int, type: String, payload: String) -> String {
         """

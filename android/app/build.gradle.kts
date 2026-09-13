@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "sbtbiswas.AidenOnTheGo"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "sbtbiswas.AidenOnTheGo"
         minSdk = 26
@@ -99,6 +99,7 @@ dependencies {
   androidTestImplementation(libs.androidx.test.espresso.core)
 
   // Navigation
+  implementation(libs.androidx.adaptive.navigation3)
   implementation(libs.androidx.navigation3.ui)
   implementation(libs.androidx.navigation3.runtime)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)

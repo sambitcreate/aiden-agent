@@ -200,6 +200,11 @@ private fun AidenWorkspaceHome(
     var fullyRevealedWorkspaceIds by rememberSaveable(activeInstanceId) {
         mutableStateOf(emptyList<String>())
     }
+    val chatMetadataRevision by coordinator.chatMetadataRevision.collectAsState()
+    LaunchedEffect(chatMetadataRevision) { if (chatMetadataRevision > 0) viewModel.load(force = true) }
+    val chatActionsServer by coordinator.serverInfo.collectAsState()
+    var showArchivedChats by rememberSaveable(activeInstanceId) { mutableStateOf(false) }
+    if (showArchivedChats) AidenArchivedChatsSheet(coordinator, { showArchivedChats = false }, { viewModel.refresh(workspaces) })
     var showSidebarOrganizationMenu by remember { mutableStateOf(false) }
     val usageSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -416,6 +421,9 @@ private fun AidenWorkspaceHome(
                                 expanded = showSidebarOrganizationMenu,
                                 onDismissRequest = { showSidebarOrganizationMenu = false }
                             ) {
+                                if (chatActionsServer?.features?.contains("chat-archive-v1") == true) DropdownMenuItem(
+                                    text = { Text("Archived chats") }, onClick = { showSidebarOrganizationMenu = false; showArchivedChats = true }
+                                )
                                 DropdownMenuItem(
                                     text = { Text("By workspace") },
                                     leadingIcon = {

@@ -200,6 +200,12 @@ actor AidenChatCache {
 
     func reconcileChatSummary(_ chat: AidenChat, instanceId: String) throws {
         guard !chat.isBotChat else { return }
+        if var workspaceChats = loadChats(instanceId: instanceId, workspaceId: chat.workspaceId),
+           let index = workspaceChats.firstIndex(where: { $0.id == chat.id }) {
+            workspaceChats[index] = chat
+            try saveChats(workspaceChats, instanceId: instanceId, workspaceId: chat.workspaceId)
+        }
+        if chat.isArchived { try removeChatSummary(instanceId: instanceId, chatId: chat.id); return }
         let cached = loadChatSummaries(instanceId: instanceId)
         let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
         let summaries = AidenChatSummaryPage.merged(

@@ -1,3 +1,4 @@
+import type { AidenRemoteSubagentService } from "./aiden-remote-subagents.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
@@ -120,9 +121,10 @@ export interface AidenRemoteServiceOptions {
   loadTlsIdentity(): Promise<AidenRemoteTlsIdentity>;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
   tailscale: Pick<AidenRemoteTailscaleController, "status" | "connect" | "disconnect">
-    & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
+    & Partial<Pick<AidenRemoteTailscaleController, "developmentHost" | "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
   bonjour: AidenRemoteBonjourPublisher;
   notifyPairingChanged?: () => void;
+  onRemoteEnabledChange?: (enabled: boolean) => void;
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -135,6 +137,7 @@ export interface AidenRemoteServiceOptions {
         chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
+        subagents?: Pick<AidenRemoteSubagentService, "list">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -377,6 +380,16 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
 }
 
 export class AidenRemoteService {
+  private developmentHostCache?: { expires: number; value: Promise<string | undefined> };
+  private developmentHost(): Promise<string | undefined> {
+    const now = this.now();
+    if (!this.developmentHostCache || this.developmentHostCache.expires <= now) {
+      const value = Promise.resolve().then(() => this.options.tailscale.developmentHost?.()).catch(() => undefined);
+      this.developmentHostCache = { expires: now + 30_000, value };
+    }
+    return this.developmentHostCache.value;
+  }
+
   private lanServer: HttpsServer | null = null;
   private tailscaleServer: HttpServer | null = null;
   private readonly lanConnections = new Set<Duplex>();
@@ -406,6 +419,7 @@ export class AidenRemoteService {
     await this.serialized(async () => {
       const state = await this.options.state.initialize();
       if (state.enabled) await this.startConfigured(state);
+      this.options.onRemoteEnabledChange?.(state.enabled);
     });
   }
 
@@ -430,6 +444,7 @@ export class AidenRemoteService {
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
+        developmentHost: () => this.developmentHost(),
         appVersion: this.options.appVersion,
         devices: this.options.state,
         pairing,
@@ -679,10 +694,12 @@ export class AidenRemoteService {
   }
 
   async stopAndSettle(): Promise<void> {
+    this.options.onRemoteEnabledChange?.(false);
     await this.serialized(() => this.stopListeners());
   }
 
   stop(): void {
+    this.options.onRemoteEnabledChange?.(false);
     this.pairing?.close();
     this.options.bonjour.stop();
     this.destroyConnections(this.lanConnections);
@@ -692,6 +709,7 @@ export class AidenRemoteService {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) this.options.onRemoteEnabledChange?.(false);
     await this.serialized(async () => {
       const current = await this.options.state.snapshot();
       if (enabled) {
@@ -704,8 +722,10 @@ export class AidenRemoteService {
             throw error;
           }
         }
+        this.options.onRemoteEnabledChange?.(true);
         return;
       }
+      this.options.onRemoteEnabledChange?.(false);
       let disconnectError: unknown;
       if (current.tailscaleOwnership) {
         try {

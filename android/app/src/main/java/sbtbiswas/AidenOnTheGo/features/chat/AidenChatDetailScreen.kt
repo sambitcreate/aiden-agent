@@ -95,7 +95,8 @@ fun AidenChatDetailScreen(
     voiceInputStore: AidenVoiceInputStore,
     liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
     startVoiceOnOpen: Boolean = false,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onOpenEnvironment: ((String) -> Unit)? = null
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
@@ -103,7 +104,11 @@ fun AidenChatDetailScreen(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val haptics = LocalHapticFeedback.current
+    var showChatMenu by remember(chatId) { mutableStateOf(false) }
+    var renameTitle by rememberSaveable(chatId) { mutableStateOf<String?>(null) }
+    var showFilesChanges by rememberSaveable(chatId) { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
+    val activityOwner = androidx.activity.compose.LocalActivity.current as? androidx.lifecycle.ViewModelStoreOwner
 
     val viewModel: AidenChatViewModel = viewModel(
         key = "chat:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$chatId",
@@ -116,7 +121,9 @@ fun AidenChatDetailScreen(
         )
     )
 
+    val serverInfo by coordinator.serverInfo.collectAsState()
     val chat by viewModel.chat.collectAsState()
+    val updatingMetadata by viewModel.isUpdatingMetadata.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val liveText by viewModel.liveText.collectAsState()
@@ -129,10 +136,27 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
 
+    var savedPendingAttachmentCount by rememberSaveable { mutableIntStateOf(0) }
+    val pendingCountAtRestore = remember { savedPendingAttachmentCount }
+    LaunchedEffect(Unit) {
+        if (pendingCountAtRestore > 0 && pendingAttachments.isEmpty()) viewModel.reportLostPendingAttachments()
+    }
+    SideEffect { savedPendingAttachmentCount = pendingAttachments.size }
+
     val listState = rememberLazyListState()
 
-    val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val voiceSession: AidenChatVoiceSession = viewModel(
+        key = "voice:${coordinator.activeInstanceId}:$chatId",
+        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return AidenChatVoiceSession(ComposerVoiceInputController(context.applicationContext)) as T
+            }
+        }
+    )
+    val voiceInput = voiceSession.controller
+    val activity = androidx.activity.compose.LocalActivity.current
+    val lifecycleOwner = (activity as? androidx.lifecycle.LifecycleOwner) ?: LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
@@ -140,12 +164,11 @@ fun AidenChatDetailScreen(
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) voiceInput.cancelDiscardingRecording()
+            if (event == Lifecycle.Event.ON_STOP && activity?.isChangingConfigurations != true) voiceInput.cancelDiscardingRecording()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            voiceInput.destroy()
         }
     }
 
@@ -221,8 +244,10 @@ fun AidenChatDetailScreen(
         }
     }
 
+    var consumedVoiceStart by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(startVoiceOnOpen) {
-        if (!startVoiceOnOpen || voiceInput.isListening || voiceInput.isBusy) return@LaunchedEffect
+        if (!startVoiceOnOpen || consumedVoiceStart || voiceInput.isListening || voiceInput.isBusy) return@LaunchedEffect
+        consumedVoiceStart = true
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startVoiceInput()
         } else {
@@ -244,6 +269,21 @@ fun AidenChatDetailScreen(
     val isScrolledUp by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+        }
+    }
+
+    renameTitle?.let { title ->
+        AlertDialog(onDismissRequest = { if (!updatingMetadata) renameTitle = null }, title = { Text("Rename chat") },
+            text = { TextField(value = title, onValueChange = { if (it.codePointCount(0, it.length) <= 1024) renameTitle = it }, colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(), singleLine = true, label = { Text("Chat name") }, isError = !AidenChatActionValidation.validTitle(title), supportingText = { if (!AidenChatActionValidation.validTitle(title)) Text("Use 1 to 200 characters.") }) },
+            confirmButton = { TextButton(enabled = AidenChatActionValidation.validTitle(title) && !updatingMetadata, onClick = { viewModel.rename(title) { renameTitle = null } }) { Text("Save") } },
+            dismissButton = { TextButton(enabled = !updatingMetadata, onClick = { renameTitle = null }) { Text("Cancel") } })
+    }
+
+    if (showFilesChanges && chat?.workspaceId != null && chat?.isBotChat == false) {
+        ModalBottomSheet(onDismissRequest = { showFilesChanges = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.92f)) {
+                sbtbiswas.AidenOnTheGo.features.workspaces.AidenFilesChangesPane(chat!!.workspaceId, chatId, coordinator) { showFilesChanges = false }
+            }
         }
     }
 
@@ -275,6 +315,25 @@ fun AidenChatDetailScreen(
                     }
                 },
                 actions = {
+                    val workspaceId = chat?.workspaceId
+                    if (chat?.isBotChat == false) Box {
+                        IconButton(onClick = { showChatMenu = true }, enabled = !updatingMetadata) { Icon(Icons.Default.MoreVert, contentDescription = "Chat actions") }
+                        DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) {
+                            DropdownMenuItem(text = { Text("Rename") }, onClick = { showChatMenu = false; renameTitle = chat?.title.orEmpty() })
+                            if (serverInfo?.features?.contains("chat-archive-v1") == true) DropdownMenuItem(text = { Text(if (chat?.archivedAt != null) "Restore" else "Archive") }, enabled = !isStreaming,
+                                onClick = { showChatMenu = false; viewModel.setArchived(chat?.archivedAt == null) { onNavigateBack() } })
+                            if (workspaceId != null && onOpenEnvironment != null) {
+                                fun paneState(): sbtbiswas.AidenOnTheGo.features.workspaces.AidenEnvironmentPaneState? {
+                                    val installation = coordinator.installationStore.activeInstallation ?: return null
+                                    val owner = activityOwner ?: return null
+                                    return androidx.lifecycle.ViewModelProvider(owner)["environment:${installation.instanceId}:${installation.deviceId}:$workspaceId:$chatId", sbtbiswas.AidenOnTheGo.features.workspaces.AidenEnvironmentPaneState::class.java]
+                                }
+                                DropdownMenuItem(text = { Text("Changes") }, onClick = { showChatMenu = false; paneState()?.selectFileMode("Modified"); showFilesChanges = true })
+                                DropdownMenuItem(text = { Text("Files") }, onClick = { showChatMenu = false; paneState()?.selectFileMode("All Files"); showFilesChanges = true })
+                                DropdownMenuItem(text = { Text("Open Browser") }, onClick = { showChatMenu = false; paneState()?.select("Browser"); onOpenEnvironment(workspaceId) })
+                            }
+                        }
+                    }
                     if (isStreaming) {
                         IconButton(
                             onClick = { viewModel.cancelTurn() }
@@ -416,6 +475,8 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                if (chat?.archivedAt != null) Text("This chat is archived. Choose Restore in Chat actions to send again. Your draft is kept.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+
                 // 1:1 Parity iOS Glass Composer
                 AidenComposerView(
                     draft = draft,
@@ -551,7 +612,23 @@ fun AidenChatDetailScreen(
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
-                            onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+                            onOpenUrl = { url ->
+                                val installation = coordinator.installationStore.activeInstallation
+                                val preview = AidenDevBrowser.chatPreviewUrl(url)
+                                val workspaceId = chat?.workspaceId
+                                if (preview != null && installation != null && workspaceId != null && !isBotChat && onOpenEnvironment != null) {
+                                    val owner = activityOwner
+                                    if (owner != null) {
+                                        val models = androidx.lifecycle.ViewModelProvider(owner)
+                                        val browser = models["native-browser:${installation.instanceId}:${installation.deviceId}:$workspaceId:$chatId", sbtbiswas.AidenOnTheGo.features.workspaces.AidenBrowserPaneState::class.java]
+                                        browser.configure(installation.instanceId)
+                                        if (browser.openUserPreview(context, preview)) {
+                                            models["environment:${installation.instanceId}:${installation.deviceId}:$workspaceId:$chatId", sbtbiswas.AidenOnTheGo.features.workspaces.AidenEnvironmentPaneState::class.java].select("Browser")
+                                            onOpenEnvironment(workspaceId)
+                                        } else coordinator.presentError("Close a Browser tab before opening another preview.")
+                                    } else try { uriHandler.openUri(url) } catch (_: Exception) { }
+                                } else try { uriHandler.openUri(url) } catch (_: Exception) { }
+                            }
                         )
                     }
                 }

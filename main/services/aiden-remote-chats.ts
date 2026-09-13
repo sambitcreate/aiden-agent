@@ -17,6 +17,7 @@ import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
 } from "./chat-append-commit.js";
+import { ChatArchivedError } from "./chat-store-core.js";
 import type { createChatApplicationService } from "./chat-application-service.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -123,6 +124,7 @@ export interface AidenRemoteChatProjection {
   messages: AidenRemoteMessageProjection[];
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
   revision: string;
   titlePending?: true;
 }
@@ -134,6 +136,7 @@ export interface AidenRemoteChatSummaryProjection {
   titlePending: boolean;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
   revision: string;
   activity: "idle" | "active";
 }
@@ -144,6 +147,7 @@ export interface AidenRemoteChatSummaryPage {
 }
 
 interface AidenRemoteChatSummarySnapshot {
+  includeArchived: boolean;
   id: string;
   expiresAt: number;
   summaries: AidenRemoteChatSummaryProjection[];
@@ -292,6 +296,7 @@ function chatRevision(chat: Chat): string {
     model: hasModelSelection ? chat.model : null,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
+    ...(chat.archivedAt !== undefined ? { archivedAt: chat.archivedAt } : {}),
     messages: chat.messages
       .filter((message) => message.role === "user" || message.role === "assistant")
       .map((message) => ({
@@ -322,6 +327,7 @@ function safeSummaryMetadata(
     !SAFE_ID.test(workspaceId) ||
     !Number.isFinite(meta.createdAt) ||
     !Number.isFinite(meta.updatedAt) ||
+    (meta.archivedAt !== undefined && (!Number.isFinite(meta.archivedAt) || !Number.isFinite(new Date(meta.archivedAt).getTime()))) ||
     !Number.isFinite(new Date(meta.createdAt).getTime()) ||
     !Number.isFinite(new Date(meta.updatedAt).getTime()) ||
     meta.updatedAt < meta.createdAt
@@ -334,6 +340,7 @@ function safeSummaryMetadata(
     title: boundedUnicodeScalarPrefix(meta.title, 1_024),
     createdAt: new Date(meta.createdAt).toISOString(),
     updatedAt: new Date(meta.updatedAt).toISOString(),
+    ...(meta.archivedAt !== undefined ? { archivedAt: new Date(meta.archivedAt).toISOString() } : {}),
     revision: chatSummaryRevision(meta),
   };
 }
@@ -393,6 +400,7 @@ export function projectAidenRemoteChat(
       }),
       createdAt: new Date(chat.createdAt).toISOString(),
       updatedAt: new Date(chat.updatedAt).toISOString(),
+      ...(chat.archivedAt !== undefined ? { archivedAt: new Date(chat.archivedAt).toISOString() } : {}),
       revision: chatRevision(chat),
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
     };
@@ -544,7 +552,7 @@ export class AidenRemoteChatService {
   constructor(
     private readonly options: {
       application: Pick<ChatApplicationService, "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyToWorkspace" | "remove">
-        & Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
+        & Partial<Pick<ChatApplicationService, "listSummaryMetadata" | "archive">>;
       chatStore: {
         get(id: string): Promise<Chat | null>;
         appendMessage(
@@ -792,16 +800,17 @@ export class AidenRemoteChatService {
     });
   }
 
-  async list(workspaceId?: string): Promise<{ chats: AidenRemoteChatProjection[] }> {
+  async list(workspaceId?: string, includeArchived = false): Promise<{ chats: AidenRemoteChatProjection[] }> {
     if (workspaceId) safeId(workspaceId, "workspace");
     const metadata = await this.options.application.listRegular(workspaceId);
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
-    return { chats: chats.map((chat) => this.project(chat)) };
+    return { chats: chats.filter((chat) => includeArchived || chat.archivedAt === undefined).map((chat) => this.project(chat)) };
   }
 
   async listSummaries(
     limit = AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
     cursor?: string,
+    includeArchived = false,
   ): Promise<AidenRemoteChatSummaryPage> {
     const listSummaryMetadata = this.options.application.listSummaryMetadata;
     if (!listSummaryMetadata) {
@@ -823,9 +832,11 @@ export class AidenRemoteChatService {
     let offset = 0;
     if (cursor !== undefined) {
       ({ snapshot, offset } = this.decodeSummaryCursor(cursor));
+      if (snapshot.includeArchived !== includeArchived) throw new AidenRemoteServiceError("invalid_request", "The archive filter does not match this cursor.", 400);
     } else {
       const summaries = this.freezeSummaryPage(
         (await listSummaryMetadata())
+          .filter((entry) => includeArchived || entry.archivedAt === undefined)
           .map(safeSummaryMetadata)
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
           .sort((left, right) => {
@@ -836,6 +847,7 @@ export class AidenRemoteChatService {
       );
       const now = this.summaryNow();
       snapshot = {
+        includeArchived,
         id: randomBytes(18).toString("base64url"),
         expiresAt: now + SUMMARY_CURSOR_TTL_MS,
         summaries,
@@ -856,7 +868,8 @@ export class AidenRemoteChatService {
       } else {
         const currentIds = new Set(
           (await listSummaryMetadata())
-            .map(safeSummaryMetadata)
+            .filter((entry) => includeArchived || entry.archivedAt === undefined)
+          .map(safeSummaryMetadata)
             .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
             .map((entry) => entry.id),
         );
@@ -1075,6 +1088,23 @@ export class AidenRemoteChatService {
     }
   }
 
+  async archive(chatId: string, revision: string, input: unknown): Promise<AidenRemoteChatProjection> {
+    const record = ownRecord(input);
+    if (!record || !exactKeys(record, ["archived"]) || typeof record.archived !== "boolean") {
+      throw new AidenRemoteServiceError("invalid_request", "The archive request is invalid.", 400);
+    }
+    const current = await this.chat(safeId(chatId, "chat"));
+    if (current.botId || current.workspaceId === ASSISTANT_WORKSPACE_ID) {
+      throw new AidenRemoteServiceError("invalid_request", "Only ordinary chats can be archived here.", 400);
+    }
+    if (!this.options.application.archive) throw new AidenRemoteServiceError("not_found", "Chat archiving is unavailable.", 404);
+    const updated = await this.options.application.archive(chatId, record.archived, {
+      assertCurrent: (chat) => requireRevision(revision, chat),
+    });
+    this.options.notifyChanged?.(chatId);
+    return this.project(updated);
+  }
+
   async rename(chatId: string, revision: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const title = parseTitle(input);
     const updated = await this.options.application.rename(safeId(chatId, "chat"), title, {
@@ -1146,6 +1176,7 @@ export class AidenRemoteChatService {
         parsed,
         async () => {
           const authoritative = await this.chat(chatId);
+          if (authoritative.archivedAt !== undefined) throw new AidenRemoteServiceError("revision_conflict", "Restore this archived chat before sending a message.", 409);
           const requestedProviderId = parsed.providerId ?? authoritative.providerId;
           const requestedModelId = parsed.modelId ?? authoritative.model;
           const preservesPinnedGemini =
@@ -1312,6 +1343,7 @@ export class AidenRemoteChatService {
   }
 
   private mapOperationError(error: unknown): never {
+    if (error instanceof ChatArchivedError) throw new AidenRemoteServiceError("revision_conflict", error.message, 409);
     if (error instanceof AidenRemoteServiceError) throw error;
     if (error instanceof AidenOperationContractError) {
       const status = error.code === "idempotency_capacity" ? 429 : 409;

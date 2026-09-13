@@ -38,7 +38,7 @@ const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".c
 let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
-export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
+export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command", "tailscale_serve"]);
 /** Sharing a local file is an outbound disclosure and always needs attended approval. */
 export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image"]);
 
@@ -864,6 +864,11 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "tailscale_serve":
+      return a.action === "open"
+        ? `Expose localhost:${String(a.localPort ?? "?")} over private Tailscale HTTP on port ${String(a.exposedPort ?? a.localPort ?? "?")} until stopped`
+        : a.action === "stop" ? `Stop this workspace’s Tailscale HTTP preview: ${String(a.id ?? "?")}`
+          : "Inspect this workspace’s Tailscale HTTP previews";
     case "share_image":
       return `Share image in chat: ${String(a.path ?? "?")}`;
     default:

@@ -839,6 +839,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var updatedAt: Date
     var revision: String
     var titlePending: Bool? = nil
+    var archivedAt: Date? = nil
+    var isArchived: Bool { archivedAt != nil }
 
     var isTitlePending: Bool { titlePending == true }
     var isBotChat: Bool { botId != nil }
@@ -854,7 +856,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         revision: String,
-        titlePending: Bool? = nil
+        titlePending: Bool? = nil,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -867,6 +870,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.revision = revision
         self.titlePending = titlePending
+        self.archivedAt = archivedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -888,6 +892,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         updatedAt = updatedTimestamp.date
         revision = try values.decode(String.self, forKey: .revision)
         titlePending = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .titlePending)
+        archivedAt = try aidenDecodeOptionalNonNull(AidenRemoteTimestamp.self, from: values, forKey: .archivedAt)?.date
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1016,7 +1021,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, botId, title, providerId, modelId, messages
-        case createdAt, updatedAt, revision, titlePending
+        case createdAt, updatedAt, revision, titlePending, archivedAt
     }
 }
 

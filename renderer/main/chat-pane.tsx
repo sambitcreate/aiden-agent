@@ -279,9 +279,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
           ? "Restore this bot before continuing the conversation."
           : undefined
     : undefined;
+  const [restoringChat, setRestoringChat] = React.useState(false);
+  const archivedChatMessage = chat.data?.archivedAt !== undefined
+    ? "This chat is archived. Restore it to send another message."
+    : undefined;
   const ready =
-    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
+    !archivedChatMessage && modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
+    archivedChatMessage ??
     chatReadinessMessage ??
     botReadinessMessage ??
     modelReadinessMessage ??
@@ -1161,6 +1166,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       skillInvocation?: SkillInvocationV1,
       options?: { visualize?: boolean; btw?: boolean },
     ) => {
+      if (archivedChatMessage) throw new Error(archivedChatMessage);
       if (options?.btw) {
         if (attachments.length > 0 || skillInvocation) {
           throw new Error("Side questions do not accept attachments or skills.");
@@ -1263,6 +1269,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [
+      archivedChatMessage,
       chatId,
       computerUseSaving,
       detachedGenerationDraining,
@@ -2062,6 +2069,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 setBtwView(null);
               }}
             />
+          ) : null}
+          {archivedChatMessage ? (
+            <section role="status" className="flex items-center justify-between gap-3 rounded-card bg-control px-4 py-3 text-small text-secondary">
+              <span>{archivedChatMessage}</span>
+              <Button size="small" variant="filled" disabled={restoringChat} onClick={async () => {
+                const restoringId = chatId;
+                setRestoringChat(true);
+                try {
+                  const restored = await chatsApi.restore(restoringId);
+                  qc.setQueryData(queryKeys.chat(restoringId), restored);
+                  await qc.invalidateQueries({ queryKey: queryKeys.chats });
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "Could not restore this chat.");
+                } finally { setRestoringChat(false); }
+              }}>{restoringChat ? "Restoring…" : "Restore chat"}</Button>
+            </section>
           ) : null}
           {questionnaire ? (
             <AskUserQuestionComposer

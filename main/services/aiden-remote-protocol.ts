@@ -1,3 +1,4 @@
+import { parseRemoteSubagentPage, type RemoteSubagentPage } from "./aiden-remote-subagents.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   AidenRemoteChatProjection,
@@ -13,6 +14,7 @@ export const AIDEN_REMOTE_MAX_CHAT_MESSAGES = 10_000;
 export const AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT = 100;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT = 200;
 export const AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH = 512;
+export const AIDEN_REMOTE_CHAT_ARCHIVE_FEATURE = "chat-archive-v1" as const;
 export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
@@ -474,8 +476,21 @@ export interface AidenRemoteLegacyNonNegotiatingFixture {
   };
 }
 
+/** Bare tailnet address hint only; never a URL or connection authority. */
+export function isAidenDevelopmentHost(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 253) return false;
+  if (/^100\.(?:[0-9]{1,3}\.){2}[0-9]{1,3}$/u.test(value)) {
+    const parts = value.split(".");
+    return parts.every(part => String(Number(part)) === part && Number(part) <= 255)
+      && Number(parts[1]) >= 64 && Number(parts[1]) <= 127;
+  }
+  return value.endsWith(".ts.net") && value !== "ts.net" && value.split(".").every(label =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label));
+}
+
 export interface AidenRemoteContractFixture {
   contractRevision: number;
+  workspaceSubagents?: RemoteSubagentPage;
   protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
   generated: false;
   notice: string;
@@ -509,6 +524,7 @@ export interface AidenRemoteContractFixture {
     connectionMode: "lan" | "tailscale" | "both";
     minimumClientVersion?: string;
     features: string[];
+    developmentHost?: string;
     serverTime: string;
   };
   chatSummaries: AidenRemoteChatSummaryPage;
@@ -1806,6 +1822,7 @@ export function parseAidenRemoteChatProjection(
     messages,
     createdAt,
     updatedAt,
+    ...(hasOwn(value, "archivedAt") ? { archivedAt: dateTimeValue(value.archivedAt, `${label} archivedAt`) } : {}),
     revision: boundedRevision(value.revision, `${label} revision`),
     ...(hasProviderId
       ? { providerId: boundedText(value.providerId, `${label} providerId`, 256) }
@@ -1859,6 +1876,7 @@ export function parseAidenRemoteChatSummaryProjection(
     titlePending: value.titlePending,
     createdAt,
     updatedAt,
+    ...(hasOwn(value, "archivedAt") ? { archivedAt: dateTimeValue(value.archivedAt, `${label} archivedAt`) } : {}),
     revision,
     activity: enumMember(
       value.activity,
@@ -2995,6 +3013,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "connectionMode",
       "minimumClientVersion",
       "features",
+      "developmentHost",
       "serverTime",
     ],
     "Fixture server projection",
@@ -3009,6 +3028,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   assertBoundedString(server, "appVersion", 40);
   if (server.minimumClientVersion !== undefined) {
     assertBoundedString(server, "minimumClientVersion", 40);
+  }
+  if (server.developmentHost !== undefined && !isAidenDevelopmentHost(server.developmentHost)) {
+    throw new Error("Fixture developmentHost must be a bare Tailscale self host.");
   }
   const deviceCapabilities = parseCapabilityList(server.capabilities, "server device-grant");
   const serverCapabilities = parseCapabilityList(server.serverCapabilities, "server-supported");
@@ -3560,6 +3582,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   return {
     ...value,
     contractRevision,
+    ...(value.workspaceSubagents === undefined ? {} : { workspaceSubagents: parseRemoteSubagentPage(value.workspaceSubagents) }),
     protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
     generated: false,
     notice: fixtureNotice,

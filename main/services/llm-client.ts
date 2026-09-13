@@ -31,6 +31,7 @@ import {
 } from "./browser-tools.js";
 import { prepareBrowserToolApproval, assertBrowserToolApproval, type BrowserToolApproval } from "./browser/approval.js";
 import type { PreparedBrowserFile } from "./browser/files.js";
+import { canUseTailscalePreviewTool, createTailscalePreviewTool } from "./tailscale-preview-tool.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
 import { webSearchService } from "./web-search-main.js";
@@ -1035,6 +1036,25 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  const previewTools = workspace && canUseTailscalePreviewTool({
+    workspaceId: workspace.id, folderPath, permission,
+    assistantMode, bot: Boolean(botContext), usageSource: options.usageSource,
+  }) ? [createTailscalePreviewTool({
+    workspaceId: workspace.id,
+    signal,
+    revalidate: async () => {
+      signal.throwIfAborted();
+      if (!active.has(streamId)) throw new Error("This preview generation is no longer active.");
+      const current = await configStore.getWorkspace(workspace.id);
+      signal.throwIfAborted();
+      if (!active.has(streamId) || !current || current.permission !== workspace.permission
+        || current.folderPath !== workspace.folderPath
+        || (current.permission !== "ask" && current.permission !== "full")) {
+        throw new Error("Preview workspace access changed. Start a new response.");
+      }
+    },
+    service: async () => (await import("./tailscale-preview-service.js")).getTailscalePreviewService(),
+  })] : [];
   let tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
@@ -1043,6 +1063,7 @@ async function prepareGeneration(
       permission: toolPermission,
       computerUse,
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
+      previewTools,
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0

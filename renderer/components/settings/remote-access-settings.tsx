@@ -577,6 +577,23 @@ export function RemoteAccessSettings() {
         ) : null}
       </FieldSet>
 
+      <FieldSet title="Subagent summaries">
+        <div className="px-4 py-3 text-small text-secondary">
+          Share subagent names, roles and status from ordinary workspace chats with selected devices.
+          Private activity and transcripts stay on this Mac. Sharing ends when Aiden restarts or Remote Access is disabled.
+        </div>
+        {snapshot.devices.filter((device) => device.revokedAt === undefined).map((device) => (
+          <Field key={device.id} label={device.name} description="Allow this device to view subagent summaries for this Mac session.">
+            <Switch
+              aria-label={`Share subagent summaries with ${device.name}`}
+              checked={snapshot.subagentSummaryDevices?.includes(device.id) ?? false}
+              disabled={busy !== null || !snapshot.status.enabled}
+              onCheckedChange={(allowed) => { void mutate("subagent-sharing", () => aidenRemoteApi.setSubagentSummaries(device.id, allowed)); }}
+            />
+          </Field>
+        ))}
+      </FieldSet>
+
       <FieldSet title="Mobile devices">
         <Field
           label="Add a device"

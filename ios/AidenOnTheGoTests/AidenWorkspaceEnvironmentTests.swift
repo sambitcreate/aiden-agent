@@ -1,12 +1,227 @@
 import CryptoKit
 import Foundation
 import XCTest
+import UIKit
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    func testFilesTreeExpandsFoldersAndSearchFindsCollapsedDescendants() {
+        let entries = [
+            AidenWorkspaceFileEntry(id: "root", displayPath: "README.md", name: "README.md", kind: .file, size: 10, language: nil),
+            AidenWorkspaceFileEntry(id: "src", displayPath: "src", name: "src", kind: .directory, size: nil, language: nil),
+            AidenWorkspaceFileEntry(id: "nested", displayPath: "src/views", name: "views", kind: .directory, size: nil, language: nil),
+            AidenWorkspaceFileEntry(id: "file", displayPath: "src/views/page.swift", name: "page.swift", kind: .file, size: 20, language: "swift")
+        ]
+        XCTAssertEqual(Set(AidenWorkspaceFileTree.visible(entries, search: "", expanded: []).map(\.id)), ["root", "src"])
+        XCTAssertEqual(Set(AidenWorkspaceFileTree.visible(entries, search: "", expanded: ["src"]).map(\.id)), ["root", "src", "nested"])
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, search: "", expanded: ["src", "src/views"]).count, 4)
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, search: "PAGE", expanded: []).map(\.id), ["file"])
+        XCTAssertEqual(Set(AidenWorkspaceFileTree.visible(entries, search: "  ", expanded: []).map(\.id)), ["root", "src"])
+    }
+
     override func tearDown() {
         EnvironmentMockURLProtocol.handler = nil
         super.tearDown()
+    }
+
+    func testNativeBrowserAddressRejectsPrivilegedSchemesCredentialsAndBadPorts() {
+        for text in ["file:///etc/passwd", "javascript:alert(1)", "aiden-otg://open", "https://u:p@example.com", "http://example.com:0", "http://example.com:65536", "http://example.com\\evil"] {
+            XCTAssertNil(AidenNativeBrowserAddress.url(text), text)
+        }
+        XCTAssertNotNil(AidenNativeBrowserAddress.url("http://100.64.1.2:3000/path?q=1#section"))
+        XCTAssertNotNil(AidenNativeBrowserAddress.url("https://example.com"))
+    }
+
+    func testNativeBrowserHintRequiresBareTailscaleHostAndValidPort() {
+        for host in ["localhost", "127.0.0.1", "100.63.1.2", "100.128.1.2", "100.064.1.2", "https://mac.ts.net", "mac.ts.net.evil", "mac.ts.net:3000", "-mac.ts.net"] {
+            XCTAssertNil(AidenNativeBrowserAddress.developmentHost(host), host)
+        }
+        XCTAssertEqual(AidenNativeBrowserAddress.developmentHost("mac.tail.ts.net"), "mac.tail.ts.net")
+        XCTAssertEqual(AidenNativeBrowserAddress.developmentURL(host: "100.64.1.2", port: "3000")?.absoluteString, "http://100.64.1.2:3000/")
+        XCTAssertNil(AidenNativeBrowserAddress.developmentURL(host: "100.64.1.2", port: "65536"))
+    }
+
+    func testOnlyTappedHTTPDevelopmentLinksAreEligibleForWorkspaceRouting() {
+        for text in ["http://100.100.10.20:3000/", "http://mac.tail.ts.net:3000/page"] {
+            XCTAssertTrue(AidenNativeBrowserAddress.isDevelopmentLink(URL(string: text)!))
+        }
+        for text in ["https://example.com", "http://example.com", "https://mac.tail.ts.net", "http://mac.tail.ts.net.evil", "http://u:p@mac.tail.ts.net", "http://127.0.0.1:3000", "file:///tmp/page.html"] {
+            XCTAssertFalse(AidenNativeBrowserAddress.isDevelopmentLink(URL(string: text)!))
+        }
+    }
+
+    func testNativeBrowserLocalhostMapsOnlyWithExplicitMacHint() {
+        XCTAssertNil(AidenNativeBrowserAddress.resolvedURL("http://localhost:3000/", developmentHost: nil))
+        XCTAssertEqual(AidenNativeBrowserAddress.resolvedURL("http://127.0.0.1:3000/page?q=1", developmentHost: "100.100.10.20")?.absoluteString,
+                       "http://100.100.10.20:3000/page?q=1")
+    }
+
+    @MainActor func testNativeBrowserHintDoesNotCreatePageAndTabsRetainWebViews() {
+        let model = AidenWorkspaceBrowserModel()
+        model.updateHint(serverHost: "invalid", endpoint: URL(string: "https://mac.tail.ts.net:4317"))
+        XCTAssertEqual(model.developmentHost, "mac.tail.ts.net")
+        XCTAssertTrue(model.tabs.isEmpty)
+        model.addTab()
+        let first = model.selectedTab!
+        XCTAssertNil(first.webView.url)
+        XCTAssertFalse(first.webView.configuration.websiteDataStore.isPersistent)
+        XCTAssertTrue(first.webView.configuration.userContentController.userScripts.isEmpty)
+        model.addTab()
+        model.select(first)
+        XCTAssertTrue(model.selectedTab?.webView === first.webView)
+        model.close(first)
+        XCTAssertEqual(model.tabs.count, 1)
+        model.clearUnless(context: nil)
+        XCTAssertTrue(model.tabs.isEmpty)
+        XCTAssertNil(model.selectedTabID)
+        XCTAssertTrue(model.addressInput.isEmpty)
+    }
+
+    func testServerDevelopmentHintIsOptionalAndInvalidHintDoesNotBreakConnection() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var server = try XCTUnwrap(root["server"] as? [String: Any])
+        func decode() throws -> AidenServer {
+            try AidenRemoteJSONDecoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: server))
+        }
+        XCTAssertEqual(try decode().developmentHost, "100.100.10.20")
+        server.removeValue(forKey: "developmentHost")
+        XCTAssertNil(try decode().developmentHost)
+        server["developmentHost"] = ["invalid": true]
+        XCTAssertNil(try decode().developmentHost)
+        server["developmentHost"] = "https://evil.example"
+        XCTAssertNil(try decode().developmentHost)
+    }
+
+    private func subagentFixture() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(root["workspaceSubagents"] as? [String: Any])
+    }
+
+    private func decodeSubagents(_ value: [String: Any]) throws -> AidenWorkspaceSubagentPage {
+        try AidenRemoteJSONDecoder.decode(AidenWorkspaceSubagentPage.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+
+    func testSharedSubagentResourceRejectsPrivateFieldsForeignIdentityAndInvalidRuns() throws {
+        let fixture = try subagentFixture()
+        let page = try decodeSubagents(fixture)
+        XCTAssertEqual(page.version, 1)
+        XCTAssertEqual(page.runs.first?.role, .reviewer)
+        XCTAssertEqual(page.runs.first?.state, .completed)
+        XCTAssertNoThrow(try page.validated(workspaceID: "workspace_fixture_01", chatID: "chat_fixture_01"))
+        XCTAssertThrowsError(try page.validated(workspaceID: "foreign", chatID: page.chatId))
+        XCTAssertThrowsError(try page.validated(workspaceID: page.workspaceId, chatID: "foreign"))
+        var invalid = fixture
+        invalid["privateJournal"] = "must never cross this resource"
+        XCTAssertThrowsError(try decodeSubagents(invalid))
+        let run = try XCTUnwrap((fixture["runs"] as? [[String: Any]])?.first)
+        for (key, badValue): (String, Any) in [
+            ("id", "private-child-id"), ("label", String(repeating: "a", count: 81)),
+            ("label", "Bad\nlabel"), ("role", "admin"), ("state", "invented"),
+            ("revision", 0), ("startedAt", -1), ("updatedAt", 0),
+            ("task", "private task instructions")
+        ] {
+            var badRun = run
+            badRun[key] = badValue
+            invalid = fixture
+            invalid["runs"] = [badRun]
+            XCTAssertThrowsError(try decodeSubagents(invalid), "Rejected \(key)")
+        }
+        invalid = fixture
+        invalid["runs"] = [run, run]
+        XCTAssertThrowsError(try decodeSubagents(invalid))
+        invalid["runs"] = Array(repeating: run, count: 101)
+        XCTAssertThrowsError(try decodeSubagents(invalid))
+    }
+
+    @MainActor
+    func testLateSubagentResponseCannotRepopulateClearedSession() throws {
+        let page = try decodeSubagents(subagentFixture())
+        let model = AidenWorkspaceSubagentsModel(installationID: "mac-a", workspaceID: page.workspaceId, chatID: page.chatId)
+        let first = model.beginLoading()
+        model.clear()
+        try model.accept(page, generation: first)
+        XCTAssertNil(model.page)
+        XCTAssertEqual(model.status, .idle)
+        let current = model.beginLoading()
+        try model.accept(page, generation: current)
+        XCTAssertEqual(model.page, page)
+        model.selectedID = page.runs.first?.id
+        model.clear()
+        XCTAssertNil(model.selectedID)
+        XCTAssertNil(model.page)
+    }
+
+    @MainActor
+    func testSubagentsRejectRunRevisionRegressionAndDuplicateJSONKeys() throws {
+        let fixture = try subagentFixture()
+        let page = try decodeSubagents(fixture)
+        let model = AidenWorkspaceSubagentsModel(installationID: "mac-a", workspaceID: page.workspaceId, chatID: page.chatId)
+        try model.accept(page, generation: model.beginLoading())
+        var stale = fixture
+        var run = try XCTUnwrap((fixture["runs"] as? [[String: Any]])?.first)
+        run["revision"] = 1
+        stale["runs"] = [run]
+        XCTAssertThrowsError(try model.accept(decodeSubagents(stale), generation: model.beginLoading()))
+        XCTAssertEqual(model.page?.runs.first?.revision, 2)
+        let duplicate = Data("{\"version\":1,\"version\":1,\"workspaceId\":\"workspace-1\",\"chatId\":\"chat-1\",\"runs\":[],\"truncated\":false}".utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenWorkspaceSubagentPage.self, from: duplicate))
+    }
+
+    func testSubagentClientUsesBoundParentRoute() async throws {
+        let fixture = try subagentFixture()
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+        EnvironmentMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/workspaces/workspace_fixture_01/chats/chat_fixture_01/subagents")
+            return Self.response(request, 200, json)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [EnvironmentMockURLProtocol.self]
+        let client = AidenRemoteClient(endpoint: URL(string: "https://aiden.test/api/aiden/v1")!, credential: "credential",
+                                       session: URLSession(configuration: configuration))
+        let page = try await client.workspaceSubagents(workspaceId: "workspace_fixture_01", chatId: "chat_fixture_01")
+        XCTAssertEqual(page.runs.count, 1)
+    }
+
+    func testFileRecoveryBoundAccountsForJSONExpansion() {
+        XCTAssertNotNil(AidenWorkspaceFileRecovery(draft: String(repeating: "a", count: 80_000), expectedVersion: "v1").recoveryText)
+        XCTAssertNil(AidenWorkspaceFileRecovery(draft: String(repeating: "\"", count: 80_000), expectedVersion: "v1").recoveryText)
+        XCTAssertNil(AidenWorkspaceFileRecovery(draft: String(repeating: "a", count: 100_000), expectedVersion: "v1").recoveryText)
+    }
+
+    @MainActor
+    func testRetainedGitModelRejectsAnotherInstallation() {
+        let model = AidenWorkspaceGitModel(installationID: "mac-a")
+        XCTAssertTrue(model.accepts(installationID: "mac-a"))
+        XCTAssertFalse(model.accepts(installationID: "mac-b"))
+    }
+
+    func testFileRecoverySurvivesRelaunchWithoutCrossChatOrHostInvalidation() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let keyA = AidenWorkspaceFileRecovery.key(workspaceID: "workspace-1", displayPath: "App.swift", chatID: "chat-a")
+        let keyB = AidenWorkspaceFileRecovery.key(workspaceID: "workspace-1", displayPath: "App.swift", chatID: "chat-b")
+        XCTAssertNotEqual(keyA, keyB)
+        let sessionA = await store.beginSession(instanceId: "mac-a", chatId: keyA)
+        let sessionB = await store.beginSession(instanceId: "mac-a", chatId: keyB)
+        let record = AidenWorkspaceFileRecovery(draft: "Unsaved change", expectedVersion: "original-version")
+        let encoded = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
+        let savedA = try await store.save(encoded, session: sessionA)
+        let savedB = try await store.save("Other chat's edit", session: sessionB)
+        XCTAssertTrue(savedA, "Opening the same file in another chat must not invalidate this recovery writer")
+        XCTAssertTrue(savedB)
+        let relaunched = AidenChatDraftStore(root: root)
+        let recoveredSession = await relaunched.beginSession(instanceId: "mac-a", chatId: keyA)
+        let recovered = await relaunched.load(session: recoveredSession)
+        XCTAssertEqual(try JSONDecoder().decode(AidenWorkspaceFileRecovery.self, from: Data(try XCTUnwrap(recovered).utf8)), record)
+        let otherHostSession = await relaunched.beginSession(instanceId: "mac-b", chatId: keyA)
+        let otherHost = await relaunched.load(session: otherHostSession)
+        XCTAssertNil(otherHost)
+        XCTAssertEqual(Set(try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any]).keys),
+                       ["draft", "expectedVersion"], "Recovery must not persist a reusable file handle")
     }
 
     func testFileAndGitDTOsRejectUnsafeOrUnboundServerData() throws {

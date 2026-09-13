@@ -119,7 +119,7 @@ class AidenChatViewModel(
         get() = activeClient() != null
 
     val canSend: Boolean
-        get() = !isReadOnlyPresentation && isConnected && !_isStarting.value &&
+        get() = _chat.value?.archivedAt == null && !isReadOnlyPresentation && isConnected && !_isStarting.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
 
@@ -216,6 +216,39 @@ class AidenChatViewModel(
         _selectedThinkingLevel.value = level
     }
 
+    private val _isUpdatingMetadata = MutableStateFlow(false)
+    val isUpdatingMetadata = _isUpdatingMetadata.asStateFlow()
+
+    fun rename(title: String, completed: () -> Unit) = updateMetadata(title.trim(), null, completed)
+    fun setArchived(archived: Boolean, completed: () -> Unit) = updateMetadata(null, archived, completed)
+
+    private fun updateMetadata(title: String?, archived: Boolean?, completed: () -> Unit) {
+        val client = activeClient() ?: run { _presentedError.value = "Reconnect to your Mac before updating this chat."; return }
+        val original = _chat.value ?: return
+        if (_isUpdatingMetadata.value || original.isBotChat) return
+        if (title != null && !AidenChatActionValidation.validTitle(title)) {
+            _presentedError.value = "Enter a chat name with 1 to 200 characters."
+            return
+        }
+        _isUpdatingMetadata.value = true
+        viewModelScope.launch {
+            try {
+                val result = if (title != null) client.updateChat(chatId, original.revision, title)
+                    else client.setChatArchived(chatId, original.revision, archived == true)
+                if (activeClient() !== client || result.id != chatId || result.workspaceId != original.workspaceId) return@launch
+                val current = _chat.value ?: return@launch
+                val merged = current.copy(title = result.title, titlePending = result.titlePending, archivedAt = result.archivedAt,
+                    revision = if (current.revision == original.revision) result.revision else current.revision, updatedAt = maxOf(current.updatedAt, result.updatedAt))
+                _chat.value = merged
+                chatCache.saveChat(merged, instanceId)
+                coordinator.chatMetadataChanged()
+                completed()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { if (activeClient() === client) _presentedError.value = error.localizedMessage ?: "Chat update failed. Refresh before trying again." }
+            finally { _isUpdatingMetadata.value = false }
+        }
+    }
+
     fun loadChat() {
         val client = activeClient() ?: return
         viewModelScope.launch {
@@ -270,6 +303,10 @@ class AidenChatViewModel(
     }
 
     fun send() {
+        if (_chat.value?.archivedAt != null) {
+            _presentedError.value = "Restore this archived chat before sending. Your draft and attachments are kept."
+            return
+        }
         if (!canSend) return
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
@@ -414,6 +451,12 @@ class AidenChatViewModel(
             _isUploadingAttachment.value = false
         }
         return failedCount
+    }
+
+    fun reportLostPendingAttachments() {
+        if (_pendingAttachments.value.isEmpty()) {
+            _presentedError.value = "Unsent attachments could not be recovered after reopening. Add them again before sending."
+        }
     }
 
     fun removePendingAttachment(attachmentId: String) {

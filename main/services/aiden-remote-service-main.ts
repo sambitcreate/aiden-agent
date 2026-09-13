@@ -1,3 +1,6 @@
+import { AidenRemoteSubagentService, remoteSubagentGrants } from "./aiden-remote-subagents.js";
+import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentsEnabled } from "./subagents/feature-flag.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -354,6 +357,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let workspaceApi:
     | Promise<{
         instanceId: string;
+        subagents: AidenRemoteSubagentService;
         workspaces: AidenRemoteWorkspaceService;
         workspaceBrowser: AidenRemoteWorkspaceBrowserService;
         chats: AidenRemoteChatService;
@@ -660,6 +664,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             memorySettings,
             usage: usageStore,
             speech,
+            subagents: new AidenRemoteSubagentService({
+              grants: remoteSubagentGrants,
+              enabled: subagentsEnabled,
+              ownsChat: async (workspaceId, chatId) => {
+                const workspace = (await configStore.listWorkspaces()).find((entry) => entry.id === workspaceId);
+                if (!workspace) return false;
+                return (await chatApplicationService.listRegular(workspaceId)).some((entry) => entry.id === chatId && !entry.botId);
+              },
+              listRuns: (chatId) => subagentRunStore.listByChat(chatId),
+            }),
             bots,
             botNotice: {
               status: (deviceId) => botApplicationService.noticeStatus(deviceId),
@@ -682,6 +696,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }
       return workspaceApi;
     },
+    onRemoteEnabledChange: (enabled) => {
+      remoteSubagentGrants.setEnabled(enabled);
+    },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
       hostnames: [hostname],
@@ -693,6 +710,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
     revokeDevice: async (deviceId) => {
+      remoteSubagentGrants.set(deviceId, false);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,

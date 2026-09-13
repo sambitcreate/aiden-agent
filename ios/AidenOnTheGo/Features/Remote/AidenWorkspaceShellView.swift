@@ -186,6 +186,7 @@ final class AidenHomeModel {
 
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
+        if chat.isArchived { removeChat(id: chat.id); return }
         let activity = chats.first(where: { $0.id == chat.id })?.activity ?? .idle
         chats.removeAll { $0.id == chat.id }
         chats.append(AidenChatSummary(chat: chat, preservingActivity: activity))
@@ -560,7 +561,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
     ) -> Self {
         make(
             workspaces: workspaces,
-            chats: AidenChat.regularWorkspaceChats(from: chats).map { AidenChatSummary(chat: $0) },
+            chats: AidenChat.regularWorkspaceChats(from: chats).filter { !$0.isArchived }.map { AidenChatSummary(chat: $0) },
             searchText: searchText
         )
     }
@@ -675,6 +676,9 @@ struct AidenWorkspaceShellView: View {
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.aidenPalette) private var palette
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.aidenChatWorkspaceSessions) private var chatWorkspaceSessions
+    @State private var columnVisibility = NavigationSplitViewVisibility.automatic
+    @State private var availableShellWidth: CGFloat = 0
 
     @State private var isShowingPairing = false
     @State private var isShowingAppSettings = false
@@ -781,7 +785,7 @@ struct AidenWorkspaceShellView: View {
     var body: some View {
         Group {
             if usesSplitNavigation {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     regularWorkspaceSidebar
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 } detail: {
@@ -836,6 +840,11 @@ struct AidenWorkspaceShellView: View {
                         }
                 }
             }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableShellWidth = $0 }
+        .onChange(of: chatWorkspaceSessions?.environmentPresentationRequest) { _, _ in
+            // Make room for two useful panes; the native sidebar toggle remains available.
+            if availableShellWidth < 1140 { columnVisibility = .detailOnly }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if case .offline(let message) = coordinator.connectionState {

@@ -379,3 +379,40 @@ owns; reopen the terminal before judging the final live state.
 
 - Zsh does not split scalar loop values by default; use explicit delimiters in pairwise merge probes so branch names are not accidentally concatenated.
 - Standalone green PRs still conflicted in shared settings, test registries, and UI fixtures. Assemble the exact combined stack and retain every feature's test registration before merging to main.
+
+## 2026-09-09 — Adaptive mobile workspace research
+
+- This checkout has no `.memory/` directory despite the root guidance; use current source and the plan inventory for project status.
+- Five requested specialist reviews exceed the three child slots. Creating a fourth agent still fails with `agent thread limit reached` after one finishes; reuse agents for five specialist passes and disclose the limit.
+- Apple advertises Duo preparation but the Xcode 27.1 beta/full preparation docs are still forthcoming; separate published talk guidance from SDK-compiled and device-verified support.
+
+- Browser feasibility: this worktree lacks node_modules/Electron. A standalone hermetic spike ran against the canonical checkout's existing Electron 43.1.1 binary; no install or production profile was needed. Native hidden captures require freshness checks, since nonempty bytes alone can be a stale frame.
+
+- Native review found that layout-retained state needs request-context guards and separate draft ownership; fixed stale reconnect writes, per-chat file recovery collisions, hidden-pane toolbar preferences and loading flags left set after cancellation.
+- Adaptive 1.3.0 requires compile SDK 37 and AGP 9.1 despite Kotlin-only compilation succeeding on the old toolchain; validate AAR metadata before choosing dependencies.
+- Local Xcode has no iOS 27.1 SDK and paired physical iOS devices are unavailable. Compile app/test bundles without claiming device acceptance; keep the existing simulator prohibition.
+- Chromium screencast can emit multiple frames before acknowledgment; delayed ACK alone is not a one-frame source queue. Bound broker payloads and ACK bookkeeping separately.
+
+- Browser ACK initially discarded the metadata needed to click a displayed frame; retain bounded delivered-frame metadata separately from encoded-buffer backpressure. New capture alone must not invalidate visible input.
+- Repeated HTTP reauthorization overwrote the prior mutation-drain release handle; acquire the replacement fence before releasing the old one to avoid leaks and revocation gaps.
+- Native frame decode can race a successful navigation response; guard final publication with a mutation generation as well as installation/session identity.
+- 2026-09-09 Browser companion E2E: pairing is header-exempt but authenticated routes require `Aiden-Protocol-Version: 1`; include it in the shared HTTPS test helper to avoid a misleading unavailable-browser assertion.
+
+- Browser requirement correction: the intended mobile surface renders the development site locally over direct Tailscale HTTP. Removed the earlier shared-desktop JPEG transport and its grants; confirm page execution location before designing a remote browser transport.
+- Dynamic tailnet IPs cannot be expressed as Android network-security-config CIDR exceptions. Native WebView HTTP support needs cleartext admission, while the separately validated Aiden API remains HTTPS-only with its existing trust/pinning rules.
+
+- Tailscale preview tool: Pi argument validation removes extra fields and coerces fractional integers, so reject unsupported raw action fields before schema validation to avoid silently ignoring a supplied target.
+- Preview verification: package script is `type-check`, not `typecheck`; use the repository script name.
+- 2026-09-09 Tailscale preview tests: project TypeScript library target excludes Array.at despite the Node runtime supporting it; use indexed last-element access in checked test files.
+
+- Internal TestFlight release: ASC API commands blocked in macOS SecItemCopyMatching waiting for Keychain access; cancelled duplicate reads and left one next-build-number request pending. Repo telemetry variable is ASC_TELEMETRY_DISABLED=1.
+- Build 28 local IPA export: Apple rsync spawned Homebrew rsync3.5 from PATH, which rejects --extended-attributes. Retry export with system directories first in PATH; no global tooling changes.
+- Build28 signing verification: only the main app declares an App Group; widget intentionally has none. Verify each bundle against its own declared entitlements rather than requiring the main app’s group on both.
+
+- Device Hub launch: UI inspection timed out for both app path and bundle ID. Physical iPad is paired but locked; devicectl fails to mount its developer image (CoreDevice12040/10003). Requires device unlock before launch.
+
+- Chat file review: opacity/hit-testing alone keeps a hidden TextEditor focused. Explicitly resign editor focus when switching to Modified; keep its draft model retained. Restrict pending Git retry actions to the full Git surface.
+
+- 2026-09-09 archive recovery: shared Button uses `small`/`filled`, not common `sm`/`secondary` variants; TypeScript caught the mismatch before delivery. Reused the actual component contract.
+
+- The ASC build-number editor quotes Xcode build-setting keys; updated the shipping-policy test to accept equivalent quoted keys while still requiring Bot-first YES in both configurations.

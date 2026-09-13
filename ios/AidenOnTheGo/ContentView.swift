@@ -4,6 +4,7 @@ struct ContentView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
+    @State private var chatWorkspaceSessions = AidenChatWorkspaceSessionStore()
     @State private var navigationRequest: AidenNavigationRequest?
 
     var body: some View {
@@ -24,7 +25,11 @@ struct ContentView: View {
                 )
             }
         }
+        .environment(\.aidenChatWorkspaceSessions, chatWorkspaceSessions)
         .task { await coordinator.start() }
+        .onChange(of: try? coordinator.requestContext()) { _, context in
+            chatWorkspaceSessions.clearPrivateSummaries(unless: context)
+        }
         .onOpenURL { url in
             guard let request = AidenDeepLink.request(from: url) else {
                 coordinator.presentedError = String(localized: "That Aiden link is invalid or no longer supported.")

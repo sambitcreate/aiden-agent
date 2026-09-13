@@ -98,6 +98,14 @@ function fixture(
         });
         return structuredClone(current);
       },
+      archive: async (_id, archived, options) => {
+        if (!current) throw new Error("missing");
+        await options?.assertCurrent?.(current);
+        if (archived) current.archivedAt = current.updatedAt + 1;
+        else delete current.archivedAt;
+        current.updatedAt += 1;
+        return structuredClone(current);
+      },
       rename: async (_id, title, options) => {
         if (!current) throw new Error("missing");
         await options?.assertCurrent?.(current);
@@ -1498,4 +1506,22 @@ test("attachment references enforce device, chat, expiry, revocation, dimensions
     }),
     (error: unknown) => (error as { code?: string }).code === "handle_capacity",
   );
+});
+
+
+test("archive is revision checked, restorable and excluded from default lists", async () => {
+  const app = fixture();
+  const original = await app.service.get("chat-1");
+  await assert.rejects(app.service.archive("chat-1", "rev_stale", { archived: true }), /changed/u);
+  await assert.rejects(app.service.archive("chat-1", original.revision, { archived: true, title: "mixed" }), /invalid/u);
+  const archived = await app.service.archive("chat-1", original.revision, { archived: true });
+  assert.ok(archived.archivedAt);
+  assert.notEqual(archived.revision, original.revision);
+  assert.equal((await app.service.list()).chats.length, 0);
+  assert.equal((await app.service.list(undefined, true)).chats.length, 1);
+  assert.equal((await app.service.listSummaries()).summaries.length, 0);
+  assert.ok((await app.service.listSummaries(50, undefined, true)).summaries[0]?.archivedAt);
+  const restored = await app.service.archive("chat-1", archived.revision, { archived: false });
+  assert.equal(restored.archivedAt, undefined);
+  assert.equal((await app.service.list()).chats.length, 1);
 });
