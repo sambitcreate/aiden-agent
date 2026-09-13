@@ -436,3 +436,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A renderer exception during final streaming can detach a generation and miss its one-shot terminal payload. The durable run and chat settle correctly, but `chats:settled`/authoritative refetch does not clear the retained detached-stream owner, leaving “Response continues in the background…” and the sidebar activity ring until the renderer restarts.
 - A parallel read-only diagnostic command used a stale worktree path and failed before inspection; validate the active checkout path before dispatching concurrent repository reads.
 - The repository script is `npm run type-check`, not the common `typecheck` spelling; inspect `package.json` before chaining validation commands so a typo does not skip later linting.
+
+## 2026-09-13 — GitHub PR checks sidebar dev launch
+
+- `npm ci` completed successfully but left `node_modules/electron/dist/Electron.app` absent; restore the macOS payload with `node node_modules/electron/install.js` before running `npm run dev`.
+- The default development user-data profile contained unreadable visual-artifact state and disabled chat mutations; use isolated `build/peer-dev-profile` and `build/peer-dev-config` paths for branch testing without modifying shared state.
+- Whole-file formatting reflowed unrelated JSX and broke whitespace-sensitive sidebar source assertions; keep those assertions tolerant of formatter line wrapping during focused UI edits.
+- OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.
