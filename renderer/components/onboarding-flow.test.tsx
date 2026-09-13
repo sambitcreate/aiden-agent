@@ -240,9 +240,11 @@ test("onboarding is an application modal with an explicit provider deferral", ()
 });
 
 test("Other ways OpenAI, Anthropic, and Tailscale choices reuse ProviderIcon wells", () => {
-  const moreWays = sourceSection('data-onboarding-more-providers', "choice === \"tailscale\"");
-  assert.match(moreWays, /openai-key.*anthropic.*tailscale/su);
-  assert.match(moreWays, /<ProviderIcon[\s\S]*providerId=\{item\.iconProviderId\}/u);
+  const moreWays = sourceSection("data-onboarding-more-providers", "{moreProviders.map((provider) => {");
+  assert.match(
+    moreWays,
+    /\["openai-key", "anthropic", "tailscale"\][\s\S]*providerId=\{item\.iconProviderId\}/u,
+  );
   assert.match(moreWays, /rounded-control bg-popover text-primary shadow-control/u);
   assert.match(providerPresentation, /iconProviderId: "openai"/u);
   assert.match(providerPresentation, /iconProviderId: "anthropic"/u);
