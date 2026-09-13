@@ -61,6 +61,7 @@ export function GitCommitDialog({
         queryClient.invalidateQueries({ queryKey: queryKeys.git(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.gitBranches(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.gitPushCapability(workspaceId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.gitPullRequestStatus(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.gitComparisons(workspaceId) }),
       ]),
     [queryClient, workspaceId],
