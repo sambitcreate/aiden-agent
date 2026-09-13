@@ -21,6 +21,7 @@ import {
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
 } from "./generation-runtime.js";
+import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
@@ -147,6 +148,7 @@ export async function resolveModelRuntimeWith(
   providerId: string,
   modelId: string,
   signal?: AbortSignal,
+  conversationId?: string,
 ): Promise<ResolvedModelRuntime> {
   if (providerId === OPENAI_CODEX_PROVIDER_ID) {
     const model = await dependencies.codex.prepareRuntimeModel(modelId, signal);
@@ -166,12 +168,13 @@ export async function resolveModelRuntimeWith(
   // legacy Aiden key for this path.
   const nativeProvider = dependencies.native.getProvider(providerId);
   if (nativeProvider) {
-    const model = dependencies.native.getModel(providerId, modelId);
-    if (!model) {
+    const resolvedModel = dependencies.native.getModel(providerId, modelId);
+    if (!resolvedModel) {
       throw new Error(
         `Model "${modelId}" is not available through Pi's ${nativeProvider.label} provider. Choose another model and try again.`,
       );
     }
+    const model = withOpenCodeSessionAttribution(resolvedModel, conversationId);
     return {
       provider: nativeProvider,
       model,
@@ -197,7 +200,10 @@ export async function resolveModelRuntimeWith(
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
-  const model = buildModel(provider, modelId, limits);
+  const model = withOpenCodeSessionAttribution(
+    buildModel(provider, modelId, limits),
+    conversationId,
+  );
   const headers = resolveRuntimeHeaders(provider);
   const models = createModels();
   models.setProvider(

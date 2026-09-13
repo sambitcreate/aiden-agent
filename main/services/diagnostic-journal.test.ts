@@ -75,6 +75,40 @@ test("production journal strips development-only fields from typed callers", asy
   });
 });
 
+test("legacy logging safely classifies cancellation and ignores hostile proxy errors", async () => {
+  for (const profile of ["production", "development"] as const) await withJournal(profile, async () => {
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [revoked.proxy]));
+    const inheritsProxy = Object.create(revoked.proxy);
+    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [inheritsProxy]));
+    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [{
+      toJSON() { throw new Error("private"); },
+      toString() { throw new Error("private"); },
+    }]));
+    const event = writeLegacyDiagnostic("error", "pi", [new DOMException("private", "AbortError")]);
+    assert.equal(event.code, "cancelled");
+    assert.equal(event.outcome, "cancelled");
+    assert.equal(writeLegacyDiagnostic("warn", "pi", [{ status: 503 }]).code, undefined);
+    assert.equal(writeLegacyDiagnostic("warn", "pi", [{ name: "AbortError" }]).code, undefined);
+  });
+});
+
+test("production legacy adapter retains structural SDK causes without serializing envelopes", async () => {
+  await withJournal("production", async (target) => {
+    const event = writeLegacyDiagnostic("warn", "mcp", [
+      "Skipping private server", { cause: { code: "ECONNREFUSED", status: 503 },
+        message: "private-prompt", headers: { authorization: "private-auth" }, url: "https://private-endpoint", task: "private-task" },
+    ]);
+    assert.equal(event.event, "mcp-degraded");
+    assert.equal(event.code, "network-failed");
+    assert.equal(event.fields?.causeCode, "network-failed");
+    assert.equal(event.fields?.httpStatus, 503);
+    await flushDiagnosticJournal();
+    assert.doesNotMatch(await fs.readFile(target, "utf8"), /private-/);
+  });
+});
+
 test("journal enforces owner-only modes", async () => {
   await withJournal("production", async (target, dir) => {
     await flushDiagnosticJournal();

@@ -27,6 +27,28 @@ failure vocabulary. No upload path was added.
 
 ## Verification evidence
 
+### September 2026 production-cause hardening
+
+- Main diagnostics retain only closed error/cause categories, validated structural
+  HTTP status, and bounded fingerprints; they never persist raw request/response
+  text. Cause traversal is bounded, cycle-aware, and excludes proxies/accessors.
+  Fingerprints group the closed error/cause/status tuple rather than call sites:
+  V8 stack accessors may execute custom formatting, so stack materialization is
+  deliberately excluded. Provider terminal failures count as failed health;
+  they previously contributed to the degraded bucket through the legacy logger.
+- Renderer exceptions use `renderer-exception`, with script/promise/React/route
+  phases; actual renderer process death retains `renderer-crashed`. Abort errors
+  are counted as cancellation rather than failure.
+- Provider failure classification runs in the harness before outcome redaction.
+  `model_unavailable` is diagnostic-only; the existing portable provider-failure
+  DTO and native client presentation remain compatible. MCP discovery projects
+  the caught error structurally instead of interpolating it into a log string.
+- Task reads and generations distinguish neutral `todo-storage-disabled` evidence
+  from `todo-snapshot-invalid`; policy-disabled tracking does not inflate degraded
+  health counts. Events contain neither chat identifiers nor task content.
+- Historical opaque errors remain undiagnosed where the old journal discarded
+  their causes. These changes improve future evidence, not retrospective certainty.
+
 The implementation has passed the repository's full desktop test command, the
 focused diagnostic contract/policy suite, TypeScript and E2E type checks, ESLint,
 the standard Electron E2E matrix, the isolated production-profile diagnostics

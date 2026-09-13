@@ -83,3 +83,77 @@ test("replay uses only the session-provided current branch", async () => {
   assert.equal(state.tasks[0]?.subject, "Current");
   assert.notDeepEqual(state.tasks, (abandoned.message.details as TodoToolDetailsV1).tasks);
 });
+
+test("only the last checkpoint is authoritative across adversarial snapshot orderings", async () => {
+  const valid = result(details("Older", 8));
+  const invalid = result({ tasks: "corrupt" });
+  const newest = result(details("Authoritative", 3));
+  const error = { ...invalid, message: { ...invalid.message, isError: true } };
+  const unrelated = {
+    type: "message",
+    message: { role: "toolResult", toolName: "other", details: {} },
+  };
+  for (const branch of [
+    [invalid, newest],
+    [valid, invalid, newest],
+    [invalid, valid, invalid, newest],
+    [invalid, error, unrelated, valid, invalid, newest, error, unrelated],
+  ]) {
+    const state = await replayTodoState({ getBranch: async () => branch });
+    assert.deepEqual(state, {
+      tasks: [{ id: 2, subject: "Authoritative", status: "pending" }],
+      nextId: 3,
+    });
+  }
+  for (const branch of [
+    [invalid],
+    [invalid, valid, invalid],
+    [valid, invalid, error, unrelated],
+    [valid, result(undefined), error],
+    [valid, result(null), unrelated],
+  ]) {
+    await assert.rejects(replayTodoState({ getBranch: async () => branch }), TodoSnapshotError);
+  }
+});
+
+test("a newer full empty checkpoint supersedes corrupt and populated snapshots", async () => {
+  const empty = { ...details("Unused"), action: "clear", tasks: [], nextId: 1 };
+  assert.deepEqual(await replayTodoState({
+    getBranch: async () => [result(details("Old")), result({}), result(empty)],
+  }), { tasks: [], nextId: 1 });
+});
+
+test("error-only and non-checkpoint branches initialize empty state", async () => {
+  const checkpoint = result(details("Ignored"));
+  assert.deepEqual(await replayTodoState({
+    getBranch: async () => [
+      null,
+      [],
+      { type: "compaction", message: checkpoint.message },
+      { type: "message", message: { ...checkpoint.message, role: "assistant" } },
+      { type: "message", message: { ...checkpoint.message, isError: true } },
+      { type: "message", message: { ...checkpoint.message, isError: true, details: {} } },
+    ],
+  }), { tasks: [], nextId: 1 });
+});
+
+test("branch read failures propagate unchanged", async () => {
+  const failure = new Error("journal read failed");
+  await assert.rejects(replayTodoState({
+    getBranch: async () => { throw failure; },
+  }), (error) => error === failure);
+});
+
+test("iterator failures propagate before interpreting any candidate checkpoint", async () => {
+  for (const candidate of [undefined, result(details("Valid")), result({})]) {
+    const failure = new Error("journal iteration failed");
+    await assert.rejects(replayTodoState({
+      getBranch: async () => ({
+        *[Symbol.iterator]() {
+          if (candidate) yield candidate;
+          throw failure;
+        },
+      }),
+    }), (error) => error === failure);
+  }
+});

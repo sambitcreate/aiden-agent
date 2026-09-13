@@ -5,6 +5,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TodoPanel } from "./todo-panel.js";
 
 const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
+
+test("storage-disabled tracking explains availability without suggesting corrupt history", () => {
+  const html = renderToStaticMarkup(<TodoPanel snapshot={{
+    version: 1, chatId: "chat", availability: "unavailable",
+    unavailableReason: "storage_not_enabled", tasks: [],
+  }} />);
+  assert.match(html, /Task tracking not enabled/u);
+  assert.match(html, /cannot save or update a task list here/u);
+  assert.doesNotMatch(html, /could not verify|older snapshot|Tasks unavailable/u);
+});
 const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("./ui.tsx", import.meta.url), "utf8");
 
