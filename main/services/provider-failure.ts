@@ -3,6 +3,8 @@ import {
   PROVIDER_FAILURE_VERSION,
   type ProviderFailureV1,
 } from "../../renderer/shared/provider-failure.js";
+import { createHash } from "node:crypto";
+import type { DiagnosticSafeFields } from "./diagnostics-contract.js";
 
 export type ProviderFailureReason =
   | "request-failed"
@@ -96,6 +98,25 @@ export function providerFailureChatMetadata(
   outcome: ProviderFailedTerminalOutcome,
 ): { providerFailure: ProviderFailureV1 } {
   return { providerFailure: providerFailureFromTerminalOutcome(outcome) };
+}
+
+/** Main-only: call before outcome redaction. Message-derived categories are hints, never HTTP evidence. */
+export function providerFailureDiagnosticFields(
+  outcome: ProviderFailedTerminalOutcome,
+): DiagnosticSafeFields {
+  const failure = providerFailureFromTerminalOutcome(outcome);
+  const message = outcome.finalMessage?.errorMessage;
+  const providerCategory = failure.category === "invalid_request" &&
+    typeof message === "string" && MODEL_UNAVAILABLE.test(message)
+    ? "model_unavailable" : failure.category;
+  const failurePhase = outcome.reason === "compaction-failed" ? "provider-compaction" : "provider-request";
+  // Fingerprint only closed metadata, never low-entropy provider/request text.
+  return {
+    providerCategory,
+    failurePhase,
+    attempts: failure.attempts,
+    fingerprint: createHash("sha256").update(`${failurePhase}:${providerCategory}`).digest("hex").slice(0, 16),
+  };
 }
 
 const CLOSED_NON_PROVIDER_ERRORS = new Set([

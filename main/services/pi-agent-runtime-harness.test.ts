@@ -1,7 +1,7 @@
 import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
@@ -35,6 +35,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
+import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -2741,4 +2742,26 @@ test("custom tool disabling removes base and extension tools from a frozen runti
   await harness.prompt("Respond without tools");
   assert.deepEqual(harness.state.tools, []);
   assert.equal(snapshot.tools.length, 2, "the shared frozen snapshot stays intact");
+
+test("provider diagnostics classify before outcome redaction without exporting the raw error", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-provider-diagnostics-"));
+  t.after(async () => { await flushDiagnosticJournal(); await rm(root, { recursive: true, force: true }); });
+  const target = join(root, "aiden.log");
+  initDiagnosticJournal({ targetPath: target, profile: "production", sessionId: "session-test" });
+  const { harness } = await managedTestHarness([
+    fauxAssistantMessage("", { stopReason: "error", errorMessage: "model not found PRIVATE_MODEL_CANARY" }),
+  ]);
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: {
+    role: "user", content: "PRIVATE_PROMPT_CANARY", timestamp: 1,
+  } });
+  assert.equal(outcome.kind, "provider_failed");
+  assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_MODEL_CANARY/u);
+  await flushDiagnosticJournal();
+  const bytes = await readFile(target, "utf8");
+  const entries = bytes.trim().split("\n").map((line) => JSON.parse(line));
+  const failures = entries.filter((entry) => entry.event === "provider-failed");
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].fields.providerCategory, "model_unavailable");
+  assert.equal(failures[0].fields.failurePhase, "provider-request");
+  assert.doesNotMatch(bytes, /PRIVATE_MODEL_CANARY|PRIVATE_PROMPT_CANARY|errorMessage/u);
 });

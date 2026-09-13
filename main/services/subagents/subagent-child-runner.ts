@@ -30,7 +30,7 @@ import {
   type SubagentRuntimeAuthority,
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
-import type { SubagentReadToolName } from "./capability-profile.js";
+import { SUBAGENT_READ_TOOL_NAMES, type SubagentReadToolName } from "./capability-profile.js";
 import {
   captureLiveSubagentContext,
   type SubagentContextCapture,
@@ -582,9 +582,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       compactionEngine: input.compactionEngine,
       systemPrompt: subagentRoleSystemPrompt(input.request.role, {
         contextMode: input.context.mode,
-        workspaceRead:
-          input.v2Authority?.capabilities.workspaceRead ??
-          (input.permission !== "none" && input.inheritedCeiling.length > 0),
+        workspaceRead: childTools.some((tool) =>
+          (SUBAGENT_READ_TOOL_NAMES as readonly string[]).includes(tool.name),
+        ),
         workspaceWrite: input.v2Authority?.capabilities.workspaceWrite === true,
         shell: input.v2Authority?.capabilities.shell === true,
         mcpRead:

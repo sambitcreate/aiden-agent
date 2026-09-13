@@ -1,5 +1,13 @@
 # Troubleshooting
 
+## 2026-09-12 — Listed upstream integration audit
+
+- This worktree has no `.memory/` or `node_modules/`. Read the main checkout's project memory as historical context, but use this worktree's exact HEAD/source as authority. The main checkout's `tsx` binary can execute dependency-free focused suites without installing packages here; suites with runtime package imports still fail module resolution (observed: `entities` in the subagent capability suite). Treat that as an environment limitation, not a product regression or passing test.
+- A repository in the earlier compaction reference table is not necessarily an installed integration. Verify runtime imports, vendored artifacts, implementation history, and explicit adoption decisions before proposing package upgrades.
+
+- OpenCode API message dumps can exceed the CLI's output limit and become truncated JSON; use `GET /api/session/{id}/message?limit=1` for the latest completed review, or bounded pagination, rather than dumping every tool result. Verify the returned assistant model metadata when exact-model reviews are required.
+- Provider diagnostics must classify `finalized` inside the Pi harness before `closedFailureMessage` replaces the raw error. Reclassifying `runtimeOutcome.finalMessage` in `llm-client` loses model-unavailable/authentication evidence; assert the emitted production event with a real faux-provider harness test.
+
 - `.papercuts/` is ignored even when its troubleshooting file is present in the PR branch, so persisting a required update needs an explicit `git add -f`.
 - Layout stabilization must race `animation.finished` against a short timeout because paused or infinite document animations never settle; keep geometry polling as the authoritative E2E readiness check.
 - Pi 0.80.10 can choose the oldest oversized user turn as `firstKeptEntryId`, leaving both summary inputs empty and producing a no-op checkpoint. When the journal has a newer turn, retry `prepareCompaction` with a minimal retained-tail budget; still refuse the checkpoint if both summary inputs remain empty.
@@ -437,3 +445,26 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Review found capability consumers outside the desktop/native picker (Bot inventory and Telegram) and assistant artifact images in raw history; added projection and role-aware image-limit regressions.
 - Frozen runtime contribution snapshots require a copied tool policy; added a real harness test covering base and extension tools.
 - Hosted verify hit a pre-existing Git cancellation fixture race: a short marker poll expired while push was still running, then cleanup removed its wrapper. Replaced delay/count coordination with a bounded marker handshake and awaited cancellation cleanup.
+
+## 2026-09-12 — MCP maintenance implementation
+
+- MCP SDK1.30.0 closes HTTP transports during OAuth redirection but expects finishAuth to reuse the same object and discovered metadata. Restart only its exchange request lifetime, retaining owner cancellation.
+- SDK OAuth metadata GETs also send MCP-Protocol-Version; a protocol header alone does not identify a timed MCP RPC. Classify actual request semantics and test the real SDK helpers. SSE per-frame limits apply only to successful requested streams, never arbitrary MIME-labeled JSON/error bodies.
+- Physical-iPhone native verification found three failures in unchanged RemoteClient fixture tests (catalog expectation, invalid JSON __SwiftValue, and legacy fallback invalidResponse). See the maintenance acceptance record; Android52 passed, iOS198 passed/3 skipped/3 failed.
+
+- Production provider 400s are untriageable from `logs/aiden.log` alone: the real error text survives only in `userData/pi-compaction-sessions/*.jsonl` (per-message `errorMessage`), because the diagnostic journal strips provider messages outside the development profile. Check the journals before assuming a classification.
+- `@earendil-works/pi-ai` transports merge `model.headers` into every outgoing request and merge `options.headers` last — a per-conversation header can be attached once at runtime-model resolution instead of threading it through each call site.
+
+## 2026-09-12 — Production provider-failure investigation
+
+- The 0.40.0 production diagnostic log collapsed a concrete OpenCode Go 400 into duplicate `unknown` generation failures; correlate the Pi journal to recover historical provider causes. PR #110 improves future evidence but cannot reconstruct old redacted logs.
+- A renderer exception during final streaming can detach a generation and miss its one-shot terminal payload. The durable run and chat settle correctly, but `chats:settled`/authoritative refetch does not clear the retained detached-stream owner, leaving “Response continues in the background…” and the sidebar activity ring until the renderer restarts.
+- A parallel read-only diagnostic command used a stale worktree path and failed before inspection; validate the active checkout path before dispatching concurrent repository reads.
+- The repository script is `npm run type-check`, not the common `typecheck` spelling; inspect `package.json` before chaining validation commands so a typo does not skip later linting.
+
+## 2026-09-13 — GitHub PR checks sidebar dev launch
+
+- `npm ci` completed successfully but left `node_modules/electron/dist/Electron.app` absent; restore the macOS payload with `node node_modules/electron/install.js` before running `npm run dev`.
+- The default development user-data profile contained unreadable visual-artifact state and disabled chat mutations; use isolated `build/peer-dev-profile` and `build/peer-dev-config` paths for branch testing without modifying shared state.
+- Whole-file formatting reflowed unrelated JSX and broke whitespace-sensitive sidebar source assertions; keep those assertions tolerant of formatter line wrapping during focused UI edits.
+- OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.

@@ -2,6 +2,7 @@
 // the original transcript so paste still succeeds.
 
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import {
@@ -37,7 +38,14 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DICTATION_CLEANUP_TIMEOUT_MS);
   try {
-    const runtime = await resolveModelRuntime(providerId, modelId, controller.signal);
+    const runtime = await resolveModelRuntime(
+      providerId,
+      modelId,
+      controller.signal,
+      // One-shot polish has no conversation; a fresh id still satisfies the
+      // gateway's per-request attribution requirement.
+      randomUUID(),
+    );
     const result = await runtime.streams
       .streamSimple(
         runtime.model,
