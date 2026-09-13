@@ -94,7 +94,7 @@ function providerInventory(
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
-          supportsImages: metadata?.vision === true,
+          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,

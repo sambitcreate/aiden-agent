@@ -125,7 +125,7 @@ export class AidenRemoteModelService {
         const model: AidenRemoteModelProjection = {
           id,
           label: bounded(metadata?.name ?? id, 256),
-          supportsImages: metadata?.vision === true,
+          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
           ...(isModelHidden(settings.hiddenModelsByProvider, provider.id, id)
             ? { hidden: true }
             : {}),

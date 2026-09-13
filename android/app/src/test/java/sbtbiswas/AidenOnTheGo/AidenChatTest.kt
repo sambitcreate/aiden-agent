@@ -20,6 +20,16 @@ class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun testCustomModelOverridesPreserveImageAndVisibilityFlags() {
+        val catalog = json.decodeFromString<AidenModelCatalog>("""
+            {"providers":[{"id":"custom:tailnet","label":"Private","models":[{"id":"text","label":"Text","supportsImages":false},{"id":"vision","label":"Vision","supportsImages":true,"hidden":true}]}],"defaults":{}}
+        """.trimIndent())
+        assertFalse(catalog.providers.first().models.first().acceptsImageInput)
+        assertTrue(catalog.providers.first().models.last().acceptsImageInput)
+        assertEquals(listOf("text"), catalog.visibleProviders.first().models.map { it.id })
+    }
+
+    @Test
     fun testHiddenAndAllHiddenProviderModelsStayOutOfNewSelections() {
         val wire = """
             {
