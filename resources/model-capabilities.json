@@ -199857,7 +199857,8 @@
         },
         "cost": {
           "input": 2.1,
-          "output": 10.95
+          "output": 10.95,
+          "cache_read": 0.23
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -205092,7 +205093,8 @@
         },
         "cost": {
           "input": 0.05,
-          "output": 0.23
+          "output": 0.23,
+          "cache_read": 0.05
         }
       },
       "inference-net/schematron-v2-turbo": {
@@ -205121,7 +205123,8 @@
         },
         "cost": {
           "input": 0.03,
-          "output": 0.15
+          "output": 0.15,
+          "cache_read": 0.03
         }
       },
       "cohere/north-mini-code:free": {
@@ -243657,7 +243660,8 @@
         },
         "cost": {
           "input": 2.1,
-          "output": 10.95
+          "output": 10.95,
+          "cache_read": 0.23
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -243944,9 +243948,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.04788,
-          "output": 0.09576,
-          "cache_read": 0.009576
+          "input": 0.04732,
+          "output": 0.09464,
+          "cache_read": 0.009464
         }
       },
       "deepseek/deepseek-v4.1-flash": {
@@ -248984,7 +248988,8 @@
         },
         "cost": {
           "input": 0.05,
-          "output": 0.23
+          "output": 0.23,
+          "cache_read": 0.05
         }
       },
       "inference-net/schematron-v2-turbo": {
@@ -249013,7 +249018,8 @@
         },
         "cost": {
           "input": 0.03,
-          "output": 0.15
+          "output": 0.15,
+          "cache_read": 0.03
         }
       },
       "cohere/north-mini-code:free": {
@@ -249797,9 +249803,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.25,
-          "cache_read": 0.015
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.03
         }
       },
       "z-ai/glm-4.5": {
