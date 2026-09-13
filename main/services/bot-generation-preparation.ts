@@ -5,7 +5,7 @@ import type { Chat, Workspace } from "./types.js";
 
 type BotGenerationChat = Pick<
   Chat,
-  "botId" | "workspaceId" | "providerId" | "model"
+  "id" | "botId" | "workspaceId" | "providerId" | "model"
 >;
 
 export interface RequestedBotGenerationTarget {
@@ -28,6 +28,7 @@ export interface PrepareBotGenerationInput<Runtime extends ExactBotRuntime> {
     providerId: string,
     model: string,
     signal?: AbortSignal,
+    conversationId?: string,
   ): Promise<Runtime>;
   signal?: AbortSignal;
 }
@@ -125,6 +126,7 @@ export async function prepareBotGeneration<Runtime extends ExactBotRuntime>(
     selection.providerId,
     selection.model,
     input.signal,
+    input.chat.id,
   );
   if (
     runtime.provider.id !== selection.providerId ||

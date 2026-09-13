@@ -664,7 +664,7 @@ async function prepareGeneration(
   };
   const runtime =
     botContext?.prepared.runtime ??
-    (await resolveModelRuntime(params.providerId, params.model, signal));
+    (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -1079,14 +1079,20 @@ async function prepareGeneration(
       includeCodingTools: !botContext,
       imageInspectionTool:
         botContext && !supportsImages && botContext.admission.authority.visionProvider
-          ? createVisionAnalysisTool({
-              attachments: chat.messages.flatMap((message) => message.attachments ?? []),
-              authority: {
-                providerId: botContext.admission.authority.visionProvider.sourceProviderId,
-                modelId: botContext.admission.authority.visionProvider.sourceModelId,
-                revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+          ? createVisionAnalysisTool(
+              {
+                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                authority: {
+                  providerId: botContext.admission.authority.visionProvider.sourceProviderId,
+                  modelId: botContext.admission.authority.visionProvider.sourceModelId,
+                  revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+                },
               },
-            })
+              {
+                resolveRuntime: (providerId, modelId, signal) =>
+                  resolveBotModelRuntime(providerId, modelId, signal, params.chatId),
+              },
+            )
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
