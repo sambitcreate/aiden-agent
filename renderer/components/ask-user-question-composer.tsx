@@ -38,7 +38,6 @@ export function AskUserQuestionComposer({
     () => new Map(),
   );
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
-  const customRef = React.useRef<HTMLTextAreaElement | null>(null);
   const question = prompt.questions[activeIndex]!;
   const answer = answers.get(activeIndex);
   const customDraft =
@@ -145,7 +144,7 @@ export function AskUserQuestionComposer({
   return (
     <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column">
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className="ask-user-question-shell min-h-76 rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}
@@ -218,7 +217,7 @@ export function AskUserQuestionComposer({
                 disabled={submitting}
                 className={cn(
                   "ask-user-question-option group flex min-h-16 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left",
-                  selected && "is-selected",
+                  selected && "is-selected bg-list-selection",
                 )}
                 onClick={() => {
                   if (question.multiSelect) toggleMulti(option.label);
@@ -246,7 +245,6 @@ export function AskUserQuestionComposer({
           <div className="min-w-0 flex-1">
             <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
               <textarea
-                ref={customRef}
                 value={customDraft}
                 rows={1}
                 maxLength={4_000}
@@ -291,7 +289,7 @@ export function AskUserQuestionComposer({
               {continueLabel}
             </Button>
           ) : null}
-          <Button variant="filled" size="small" disabled={submitting} onClick={() => commit()}>
+          <Button variant="muted" size="small" disabled={submitting} onClick={() => commit()}>
             {submitting ? "Sending…" : "Skip"}
           </Button>
         </div>

@@ -25,9 +25,17 @@ test("structured questions fully replace the composer with the reference card", 
   assert.match(component, /role=\{question\.multiSelect \? "checkbox" : "radio"\}/u);
   assert.match(component, /aria-checked=\{selected\}/u);
   assert.match(component, /optionIndexFromKey/u);
+  assert.match(component, /HTMLTextAreaElement/u);
+  assert.match(component, /HTMLInputElement/u);
+  assert.match(component, /bg-list-selection/u);
+  assert.match(component, /variant="muted"/u);
   assert.doesNotMatch(component, /ask-user-question-pill/u);
   assert.doesNotMatch(component, /border border-field/u);
   assert.match(styles, /\.ask-user-question-option:focus-visible/u);
+  assert.match(
+    styles,
+    /\.ask-user-question-option\.is-selected \{\s*background: var\(--surface-list-selection\);/u,
+  );
   assert.match(styles, /@keyframes ask-user-question-in/u);
   assert.doesNotMatch(styles, /\.ask-user-question-pill/u);
 });

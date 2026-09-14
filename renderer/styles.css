@@ -460,6 +460,7 @@ body {
 }
 
 .ask-user-question-shell {
+  overflow: visible;
   animation: ask-user-question-in 180ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 
@@ -470,10 +471,13 @@ body {
     opacity 150ms ease-out;
 }
 
-.ask-user-question-option:hover:not(:disabled),
-.ask-user-question-option:focus-visible,
-.ask-user-question-option.is-selected {
+.ask-user-question-option:hover:not(:disabled):not(.is-selected),
+.ask-user-question-option:focus-visible:not(.is-selected) {
   background: var(--surface-control);
+}
+
+.ask-user-question-option.is-selected {
+  background: var(--surface-list-selection);
 }
 
 .ask-user-question-option-arrow {
