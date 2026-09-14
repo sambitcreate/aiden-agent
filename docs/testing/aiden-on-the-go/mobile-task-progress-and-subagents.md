@@ -35,6 +35,12 @@ Three GPT-5.6 Luna/max agents implemented/reviewed the shared protocol, iOS, and
 
 The first full physical iPhone run exposed stale test assumptions. Follow-up test-only corrections account for the new server feature list, scoped Bot catalog storage, the client's public error wrapper, JSON serialization of reversed collections, a valid avatar revision to reach the intended diagnostic check, and Unicode whitespace in iOS 27 date formatting.
 
+## PR #123 review follow-up
+
+Pullfrog's review was addressed with generation-fenced observer cleanup on iOS, atomic persistence of negotiated grants and freshly confirmed server support, surrogate-safe agent text projection, and exclusion of the current Android turn from earlier-session options. Regression tests exercise observer exit/restart, late cancellation, reloading two paired Macs before/after a failed capability refresh, failed persistence rollback, Unicode boundaries, and duplicate turn presentation. The existing iOS source allowlist and fixture-load signature check were updated to match the reviewed progress source and API, resolving the initial CI failures.
+
+Follow-up validation: full `npm test` passed; `npm run test:ios-release`, lint, and type-check passed; focused progress tests passed (16 tests). Full physical iPhone 13 Pro XCTest passed with 357 passed, 6 skipped, and 0 failures (`/tmp/aiden-pullfrog-ios-final.xcresult`). Android JVM tests and instrumentation APK build passed; the locale/timezone-safe presentation regression compiles. Android connected instrumentation remains unrun without a device.
+
 ## Remaining physical acceptance
 
 No Android device was attached during implementation. Connected Compose instrumentation and manual phone/tablet checks remain open. Compilation/JVM tests are not physical UI evidence.

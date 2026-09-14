@@ -6,6 +6,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -115,6 +117,45 @@ class AidenChatProgressUiTest {
         compose.onNodeWithText("Earlier agents").assertExists().performClick()
         compose.runOnIdle { assertEquals(1, agentClicks) }
     }
+
+    @Test
+    fun currentTurnAdvertisedByHistoricalRosterIsShownOnlyAsCurrent() {
+        val currentTurnStartedAt = Instant.parse("2026-08-25T00:00:00Z")
+        val historicalSnapshotStartedAt = Instant.parse("2026-08-24T00:00:00Z")
+        val current = roster("turn_current", listOf(agent("current-agent")))
+        val historical = roster(
+            "turn_previous",
+            listOf(agent("previous-agent")),
+            previousTurns = listOf(
+                AidenChatPreviousTurn(
+                    turnId = "turn_current",
+                    startedAt = currentTurnStartedAt
+                )
+            )
+        )
+
+        compose.setContent {
+            AidenTheme {
+                AidenAgentRosterSheet(
+                    currentRoster = current,
+                    selectedRoster = current,
+                    history = listOf(current, historical),
+                    onSelectTurn = {},
+                    onAgentClick = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        compose.onNodeWithText("Current").assertExists()
+        compose.onNodeWithText("Earlier · ${formatRosterDateForTest(currentTurnStartedAt)}").assertDoesNotExist()
+        compose.onNodeWithText("Earlier · ${formatRosterDateForTest(historicalSnapshotStartedAt)}").assertExists()
+    }
+
+    private fun formatRosterDateForTest(instant: Instant): String =
+        DateTimeFormatter.ofPattern("MMM d")
+            .withZone(ZoneId.systemDefault())
+            .format(instant)
 
     private fun roster(
         turnId: String,

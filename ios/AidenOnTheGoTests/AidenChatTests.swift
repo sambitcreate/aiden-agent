@@ -114,6 +114,119 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testProgressObservationReleasesCompletedHandleAndCanRestart() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        model.startProgressObservation()
+        try await waitForProgressRequestCount(1)
+        try await waitForProgressObservationToStop(model)
+        XCTAssertFalse(model.isProgressObservationRunning)
+
+        // The first observer exited through a completed task body. A later
+        // activation must be able to create a fresh observer for the same chat.
+        model.startProgressObservation()
+        try await waitForProgressRequestCount(2)
+        try await waitForProgressObservationToStop(model)
+        XCTAssertFalse(model.isProgressObservationRunning)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 2)
+    }
+
+    @MainActor
+    func testCancelledOlderProgressObserverCannotClearNewerHandle() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .finite)
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        model.startProgressObservation()
+        try await waitForProgressRequestCount(1)
+        XCTAssertTrue(model.isProgressObservationRunning)
+
+        // The completed SSE response leaves the observer in its reconnect
+        // sleep. Cancel that observer and immediately arm a new generation;
+        // the old task's completion must not clear the new task handle.
+        model.stopProgressObservation()
+        model.startProgressObservation()
+        try await waitForProgressRequestCount(2)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(model.isProgressObservationRunning)
+        XCTAssertTrue(model.isProgressStale, "A finished stream should retain a last-known label while reconnecting.")
+    }
+
+    @MainActor
+    private func makeProgressLifecycleModel(
+        mode: AidenChatProgressLifecycleURLProtocol.Mode
+    ) async throws -> AidenChatViewModel {
+        AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
+        let keychain = AidenChatProgressMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let endpoint = URL(string: "https://aiden.test/api/aiden/v1")!
+        let exchange = AidenRemoteContractFixture.PairingExchange(
+            protocolVersion: 1,
+            instanceId: "instance-progress-lifecycle",
+            deviceId: "device-progress-lifecycle",
+            credential: "credential-progress-lifecycle",
+            capabilities: [.serverRead, .workspaceRead, .tasksRead, .agentsRead],
+            endpoint: endpoint,
+            serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        )
+        _ = try store.savePairing(
+            exchange,
+            trust: AidenRemoteContractFixture.PairingTrust(mode: .system),
+            name: "Progress Lifecycle Mac"
+        )
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(
+                    endpoint: installation.endpoint,
+                    credential: credential,
+                    session: session
+                )
+            }
+        )
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .connected)
+
+        let chat = try AidenRemoteJSONDecoder.decode(
+            AidenChat.self,
+            from: Data(
+                """
+                {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}
+                """.utf8
+            )
+        )
+        return AidenChatViewModel(coordinator: coordinator, chat: chat)
+    }
+
+    @MainActor
+    private func waitForProgressRequestCount(_ expected: Int) async throws {
+        for _ in 0..<100 {
+            if AidenChatProgressLifecycleURLProtocol.progressRequestCount >= expected { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for progress SSE request (expected).")
+    }
+
+    @MainActor
+    private func waitForProgressObservationToStop(_ model: AidenChatViewModel) async throws {
+        for _ in 0..<100 {
+            if !model.isProgressObservationRunning { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for the progress observer to finish.")
+    }
+
     func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
         XCTAssertFalse(
             aidenChatIsScrolledAwayFromLatest(
@@ -2401,6 +2514,165 @@ final class AidenChatTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
             revision: "revision-1"
         )
+    }
+}
+
+private final class AidenChatProgressMemoryKeychain: KeychainStoring {
+    private var values: [String: String] = [:]
+
+    func save(_ value: String, forKey key: KeychainStore.Key) throws {
+        values[key.rawValue] = value
+    }
+
+    func load(_ key: KeychainStore.Key) throws -> String? {
+        values[key.rawValue]
+    }
+
+    func delete(_ key: KeychainStore.Key) throws {
+        values[key.rawValue] = nil
+    }
+
+    func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = value
+    }
+
+    func load(_ key: KeychainStore.Key, scope: String) throws -> String? {
+        values[KeychainStore.scopedKey(key, scope: scope)]
+    }
+
+    func delete(_ key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @unchecked Sendable {
+    enum Mode: Sendable, Equatable {
+        case denied
+        case finite
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var mode: Mode = .denied
+    nonisolated(unsafe) private static var _progressRequestCount = 0
+
+    static var progressRequestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _progressRequestCount
+    }
+
+    static func reset(mode: Mode = .denied) {
+        lock.lock()
+        self.mode = mode
+        _progressRequestCount = 0
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let result: (HTTPURLResponse, Data)
+        switch path {
+        case "/api/aiden/v1/server":
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Data(
+                    """
+                    {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","tasks:read","agents:read"],"serverCapabilities":["server:read","workspace:read","tasks:read","agents:read"],"features":["chat-tasks-v1","chat-agents-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}
+                    """.utf8
+                )
+            )
+        case "/api/aiden/v1/workspaces":
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Data(#"{"workspaces":[]}"#.utf8)
+            )
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/tasks":
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Self.taskSnapshot
+            )
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
+            result = Self.response(
+                for: request,
+                status: 200,
+                contentType: "application/json",
+                data: Self.rosterSnapshot
+            )
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
+            let currentMode: Mode
+            Self.lock.lock()
+            Self._progressRequestCount += 1
+            currentMode = Self.mode
+            Self.lock.unlock()
+            if currentMode == .denied {
+                result = Self.response(
+                    for: request,
+                    status: 403,
+                    contentType: "application/json",
+                    data: Data(
+                        #"{"error":{"code":"capability_denied","message":"Progress access denied.","requestId":"progress-request-1","retryable":false}}"#.utf8
+                    )
+                )
+            } else {
+                let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "text/event-stream",
+                    data: Data("id: 1\nevent: task_update\ndata: {\"protocolVersion\":1,\"streamId\":\"chat-progress-lifecycle\",\"sequence\":1,\"timestamp\":\"2026-09-14T12:00:00Z\",\"type\":\"task_update\",\"terminal\":false,\"payload\":\(payload)}\n\n".utf8)
+                )
+            }
+        default:
+            result = Self.response(
+                for: request,
+                status: 404,
+                contentType: "application/json",
+                data: Data(#"{}"#.utf8)
+            )
+        }
+
+        client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: result.1)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static let taskSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","availability":"ready","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[{"id":1,"subject":"Observe lifecycle","status":"in_progress","activeForm":"Observing lifecycle"}]}
+        """.utf8
+    )
+
+    private static let rosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","availability":"unavailable","unavailableReason":"unsupported","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static func response(
+        for request: URLRequest,
+        status: Int,
+        contentType: String,
+        data: Data
+    ) -> (HTTPURLResponse, Data) {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: nil,
+            headerFields: ["Content-Type": contentType]
+        )!
+        return (response, data)
     }
 }
 

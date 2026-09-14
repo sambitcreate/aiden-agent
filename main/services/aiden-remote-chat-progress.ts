@@ -6,6 +6,7 @@ import {
   type SubagentRunSnapshot,
 } from "../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotText } from "../../renderer/shared/subagent-safe-text.js";
+import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
@@ -229,7 +230,7 @@ export class AidenRemoteChatProgressService {
         revision: run.revision,
         role: run.role,
         label:
-          sanitizeSubagentSnapshotText(run.label).slice(0, 120) ||
+          boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.label), 120) ||
           ROLES[run.role],
         // Private child instructions and reports are deliberately not projected.
         taskPreview: `${ROLES[run.role]} task`,
@@ -245,7 +246,7 @@ export class AidenRemoteChatProgressService {
             }
           : {}),
         modelId:
-          sanitizeSubagentSnapshotText(run.modelId).slice(0, 160) || "Model",
+          boundedUnicodePrefix(sanitizeSubagentSnapshotText(run.modelId), 160) || "Model",
         turns: run.turns,
         tools: run.tools,
         tokens: run.tokens,

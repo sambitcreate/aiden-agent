@@ -4,8 +4,10 @@ import type { ServerResponse } from "node:http";
 import test from "node:test";
 import type { SubagentRunSnapshotV1 } from "../../renderer/shared/subagent-runs.js";
 import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
+import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
+import { parseAidenRemoteChatAgentRoster } from "./aiden-remote-protocol.js";
 
 const todo: TodoSnapshotViewV1 = {
   version: 1,
@@ -178,6 +180,72 @@ test("public agents retain display facts but omit private identities, instructio
     service.agentRoster("device-1", "chat-1", "turn_other"),
     /unavailable/,
   );
+});
+
+test("public agent text keeps surrogate pairs at the protocol bounds", async () => {
+  const labelAtBoundary = `${"l".repeat(119)}😀`;
+  const modelIdAtBoundary = `${"m".repeat(159)}🚀`;
+  const boundedLabel = boundedUnicodePrefix(labelAtBoundary, 120);
+  const boundedModelId = boundedUnicodePrefix(modelIdAtBoundary, 160);
+
+  assert.equal(labelAtBoundary.length, 121);
+  assert.equal(modelIdAtBoundary.length, 161);
+  assert.equal([...boundedLabel].length, 120);
+  assert.equal([...boundedModelId].length, 160);
+  assert.equal(boundedLabel, labelAtBoundary);
+  assert.equal(boundedModelId, modelIdAtBoundary);
+  const wireRoster = {
+    version: 1 as const,
+    chatId: "chat-1",
+    turnId: "turn_boundary",
+    availability: "ready" as const,
+    epoch: "epoch_boundary",
+    revision: 1,
+    updatedAt: "2026-09-14T00:00:00.000Z",
+    agents: [{
+      agentId: "agent_boundary",
+      depth: 1,
+      revision: 1,
+      role: "reviewer" as const,
+      label: boundedLabel,
+      taskPreview: "Reviewer task",
+      state: "completed" as const,
+      startedAt: "2026-09-14T00:00:00.000Z",
+      updatedAt: "2026-09-14T00:00:01.000Z",
+      finishedAt: "2026-09-14T00:00:01.000Z",
+      modelId: boundedModelId,
+      turns: 1,
+      tools: 1,
+      tokens: 1,
+    }],
+  };
+  assert.throws(
+    () => parseAidenRemoteChatAgentRoster({
+      ...wireRoster,
+      agents: [{ ...wireRoster.agents[0]!, label: labelAtBoundary.slice(0, 120) }],
+    }),
+    /characters/u,
+  );
+  assert.throws(
+    () => parseAidenRemoteChatAgentRoster({
+      ...wireRoster,
+      agents: [{ ...wireRoster.agents[0]!, modelId: modelIdAtBoundary.slice(0, 160) }],
+    }),
+    /characters/u,
+  );
+  assert.doesNotThrow(() =>
+    parseAidenRemoteChatAgentRoster(wireRoster),
+  );
+
+  const sourceLabel = `${"l".repeat(118)}😀`;
+  const sourceModelId = `${"m".repeat(158)}🚀`;
+  const { service } = fixture({
+    readAgents: async () => [{ ...run, label: sourceLabel, modelId: sourceModelId }],
+  });
+  const roster = await service.agentRoster("device-1", "chat-1");
+  assert.equal(roster.agents[0]?.label, sourceLabel);
+  assert.equal(roster.agents[0]?.modelId, sourceModelId);
+  assert.doesNotThrow(() => parseAidenRemoteChatAgentRoster(roster));
 });
 
 test("new parent turns reset the roster instead of showing the prior agents", async () => {

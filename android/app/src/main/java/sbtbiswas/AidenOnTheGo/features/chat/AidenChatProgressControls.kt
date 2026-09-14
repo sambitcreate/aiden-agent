@@ -330,10 +330,11 @@ private fun AidenAgentRosterContent(
             roster.turnId != null && roster.turnId != currentRoster.turnId
         }
         val historicalSnapshotIds = historicalSnapshots.mapNotNull { it.turnId }.toSet()
+        val hiddenTurnIds = historicalSnapshotIds + listOfNotNull(currentRoster.turnId)
         val turnOptions = buildList {
             currentRoster.previousTurns.forEach(::add)
             history.forEach { roster -> roster.previousTurns.forEach(::add) }
-        }.distinctBy { it.turnId }.filterNot { it.turnId in historicalSnapshotIds }
+        }.distinctBy { it.turnId }.filterNot { it.turnId in hiddenTurnIds }
         if (history.size > 1 || turnOptions.isNotEmpty()) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 10.dp)) {
                 item {

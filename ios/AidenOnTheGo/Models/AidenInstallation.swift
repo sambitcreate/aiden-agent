@@ -301,25 +301,34 @@ final class AidenInstallationStore {
     /// Persists the complete grant list returned by the authenticated additive
     /// capability-negotiation endpoint. Ordinary `/server` refreshes remain
     /// narrowing-only; this separate path records the server's explicit grant
-    /// decision without allowing a cached support inventory to widen access.
+    /// decision together with fresh support in one write. A failed refresh or
+    /// process exit must never persist grants absent from the support inventory.
     func updateNegotiatedDeviceCapabilities(
         _ capabilities: [AidenRemoteCapability],
-        for instanceId: String
+        confirmedBy server: AidenServer,
+        connectedAt: Date = Date()
     ) throws {
-        guard let index = installations.firstIndex(where: { $0.id == instanceId }) else { return }
+        guard let index = installations.firstIndex(where: { $0.id == server.instanceId }) else { return }
         let known = Set(AidenRemoteCapability.v1Known)
         guard Set(capabilities).count == capabilities.count,
               Set(capabilities).isSubset(of: known),
+              let supported = server.serverCapabilities,
+              Set(capabilities).isSubset(of: Set(supported)),
+              Set(capabilities).isSubset(of: Set(server.capabilities)),
               !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
             throw AidenRemoteClientError.invalidResponse
         }
         let progress = Set([AidenRemoteCapability.tasksRead, .agentsRead])
         let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)
-        guard existingNonProgress.isSubset(of: Set(capabilities)) else {
+        guard existingNonProgress == Set(capabilities).subtracting(progress) else {
             throw AidenRemoteClientError.invalidResponse
         }
         let previousInstallations = installations
         installations[index].deviceCapabilities = capabilities
+        installations[index].serverCapabilities = supported
+        installations[index].name = server.name
+        installations[index].lastConnectedAt = connectedAt
+        installations.sort(by: Self.sortInstallations)
         do {
             try persist()
         } catch {

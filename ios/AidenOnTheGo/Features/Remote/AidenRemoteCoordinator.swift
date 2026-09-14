@@ -805,14 +805,13 @@ final class AidenRemoteCoordinator {
             guard isCurrentContext(installationId: installationId, generation: generation) else {
                 return
             }
-            try installationStore.updateNegotiatedDeviceCapabilities(
-                negotiatedCapabilities,
-                for: installationId
-            )
             let refreshedServer = try await client.server()
             guard isCurrentContext(installationId: installationId, generation: generation),
                   refreshedServer.instanceId == installationId else { return }
-            try installationStore.updateServer(refreshedServer)
+            try installationStore.updateNegotiatedDeviceCapabilities(
+                negotiatedCapabilities,
+                confirmedBy: refreshedServer
+            )
             self.server = refreshedServer
         } catch let error where aidenIsCancellation(error) {
             return

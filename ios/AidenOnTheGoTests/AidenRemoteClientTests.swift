@@ -2979,6 +2979,38 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testNegotiatedProgressPersistenceRejectsUnconfirmedSupportAndRollsBackFailedWrites() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-progress", deviceId: "device-progress", credential: "credential-progress"),
+            trust: makeSystemTrust(), name: "Progress Mac"
+        )
+        let grants: [AidenRemoteCapability] = [.serverRead, .workspaceRead, .tasksRead, .agentsRead]
+        func server(support: [AidenRemoteCapability]?) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "instance-progress", name: "Progress Mac",
+                appVersion: "1.0", capabilities: grants, serverCapabilities: support,
+                connectionMode: .lan, minimumClientVersion: nil, serverTime: Date()
+            )
+        }
+        let originalSnapshot = keychain.values[.remoteInstallations]
+        for support in [nil, [.serverRead, .workspaceRead]] as [[AidenRemoteCapability]?] {
+            XCTAssertThrowsError(try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: support)))
+            XCTAssertEqual(keychain.values[.remoteInstallations], originalSnapshot)
+        }
+        keychain.failingSaveKeys = [.remoteInstallations]
+        XCTAssertThrowsError(try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: grants)))
+        XCTAssertEqual(store.activeInstallation?.deviceCapabilities, [.serverRead, .workspaceRead])
+        XCTAssertEqual(keychain.values[.remoteInstallations], originalSnapshot)
+        keychain.failingSaveKeys = []
+        try store.updateNegotiatedDeviceCapabilities(grants, confirmedBy: server(support: grants))
+        let reloaded = AidenInstallationStore(keychain: keychain)
+        XCTAssertEqual(reloaded.activeInstallation?.deviceCapabilities, grants)
+        XCTAssertEqual(reloaded.activeInstallation?.serverCapabilities, grants)
+    }
+
+    @MainActor
     func testServerRefreshCanNarrowButNeverWidenDeviceGrants() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -3224,85 +3256,107 @@ final class AidenRemoteClientTests: XCTestCase {
 
     @MainActor
     func testCoordinatorNegotiatesProgressOnlyAfterServerFeatureDiscovery() async throws {
-        let keychain = AidenRemoteMemoryKeychain()
-        let store = AidenInstallationStore(keychain: keychain)
-        let exchange = makeExchange(
-            instanceId: "instance-progress",
-            deviceId: "device-progress",
-            credential: "credential-progress"
-        )
-        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Progress Mac")
+        for outcome in ["success", "refreshFailure", "unconfirmedGrants"] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-other", deviceId: "device-other", credential: "other-credential"),
+                trust: makeSystemTrust(), name: "Other Mac"
+            )
+            let exchange = makeExchange(
+                instanceId: "instance-progress",
+                deviceId: "device-progress",
+                credential: "credential-progress"
+            )
+            _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Progress Mac")
 
-        let session = makeSession()
-        var serverRequests = 0
-        var capabilityRequests = 0
-        AidenRemoteMockURLProtocol.handler = { request in
-            switch (request.httpMethod, request.url?.path) {
-            case ("GET", "/api/aiden/v1/server"):
-                serverRequests += 1
-                var serverObject: [String: Any] = [
-                    "protocolVersion": 1,
-                    "instanceId": "instance-progress",
-                    "name": "Progress Mac",
-                    "appVersion": "1.0.0",
-                    "capabilities": serverRequests == 1
-                        ? ["server:read", "workspace:read"]
-                        : ["server:read", "workspace:read", "tasks:read", "agents:read"],
-                    "features": ["chat-tasks-v1", "chat-agents-v1"],
-                    "connectionMode": "lan",
-                    "serverTime": "2026-09-14T12:00:00.000Z",
-                ]
-                if serverRequests > 1 {
-                    serverObject["serverCapabilities"] = [
-                        "server:read", "workspace:read", "tasks:read", "agents:read",
+            let session = makeSession()
+            var persistedDuringRefresh: String?
+            var serverRequests = 0
+            var capabilityRequests = 0
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    serverRequests += 1
+                    if serverRequests > 1 {
+                        persistedDuringRefresh = keychain.values[.remoteInstallations]
+                        if outcome == "refreshFailure" { throw URLError(.networkConnectionLost) }
+                    }
+                    var serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-progress",
+                        "name": "Progress Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": serverRequests == 1 || outcome == "unconfirmedGrants"
+                            ? ["server:read", "workspace:read"]
+                            : ["server:read", "workspace:read", "tasks:read", "agents:read"],
+                        "features": ["chat-tasks-v1", "chat-agents-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-09-14T12:00:00.000Z",
                     ]
+                    serverObject["serverCapabilities"] = ["server:read", "workspace:read"]
+                    if serverRequests > 1 {
+                        serverObject["serverCapabilities"] = [
+                            "server:read", "workspace:read", "tasks:read", "agents:read",
+                        ]
+                    }
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        data: try JSONSerialization.data(withJSONObject: serverObject)
+                    )
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let body = try Self.jsonBody(request)
+                    let name = try XCTUnwrap(body["name"] as? String)
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        data: try JSONSerialization.data(withJSONObject: ["name": name])
+                    )
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    capabilityRequests += 1
+                    let body = try Self.jsonBody(request)
+                    XCTAssertEqual(Set(try XCTUnwrap(body["accepts"] as? [String])), Set(["tasks:read", "agents:read"]))
+                    return Self.response(
+                        for: request,
+                        status: 200,
+                        json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"tasks:read\",\"agents:read\"]}"
+                    )
+                default:
+                    XCTFail("Unexpected progress negotiation request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
                 }
-                return Self.response(
-                    for: request,
-                    status: 200,
-                    data: try JSONSerialization.data(withJSONObject: serverObject)
-                )
-            case ("GET", "/api/aiden/v1/workspaces"):
-                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
-            case ("PATCH", "/api/aiden/v1/device/identity"):
-                let body = try Self.jsonBody(request)
-                let name = try XCTUnwrap(body["name"] as? String)
-                return Self.response(
-                    for: request,
-                    status: 200,
-                    data: try JSONSerialization.data(withJSONObject: ["name": name])
-                )
-            case ("POST", "/api/aiden/v1/device/capabilities"):
-                capabilityRequests += 1
-                let body = try Self.jsonBody(request)
-                XCTAssertEqual(Set(try XCTUnwrap(body["accepts"] as? [String])), Set(["tasks:read", "agents:read"]))
-                return Self.response(
-                    for: request,
-                    status: 200,
-                    json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"tasks:read\",\"agents:read\"]}"
-                )
-            default:
-                XCTFail("Unexpected progress negotiation request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
-                return Self.response(for: request, status: 500, json: "{}")
             }
+
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected)
+            XCTAssertEqual(serverRequests, 2)
+            XCTAssertEqual(capabilityRequests, 1)
+            // Reload the exact snapshot saved before the second request returned:
+            // a process exit here must preserve both Macs with their old grants.
+            let interruptedKeychain = AidenRemoteMemoryKeychain()
+            interruptedKeychain.values[.remoteInstallations] = try XCTUnwrap(persistedDuringRefresh)
+            let interruptedStore = AidenInstallationStore(keychain: interruptedKeychain)
+            XCTAssertEqual(interruptedStore.installations.count, 2, outcome)
+            XCTAssertEqual(interruptedStore.activeInstallation?.deviceCapabilities, [.serverRead, .workspaceRead], outcome)
+
+            let reloaded = AidenInstallationStore(keychain: keychain)
+            XCTAssertEqual(reloaded.installations.count, 2, outcome)
+            let installation = try XCTUnwrap(reloaded.activeInstallation)
+            XCTAssertEqual(installation.id, "instance-progress")
+            XCTAssertEqual(installation.deviceCapabilities.contains(.tasksRead), outcome == "success", outcome)
+            XCTAssertEqual(installation.deviceCapabilities.contains(.agentsRead), outcome == "success", outcome)
+            XCTAssertTrue(Set(installation.deviceCapabilities).isSubset(of: Set(installation.serverCapabilities ?? [])), outcome)
         }
-
-        let coordinator = AidenRemoteCoordinator(
-            installationStore: store,
-            clientFactory: { installation, credential in
-                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
-            }
-        )
-        await coordinator.start()
-
-        XCTAssertEqual(coordinator.connectionState, .connected)
-        XCTAssertEqual(serverRequests, 2)
-        XCTAssertEqual(capabilityRequests, 1)
-        let installation = try XCTUnwrap(store.activeInstallation)
-        XCTAssertTrue(installation.deviceCapabilities.contains(.tasksRead))
-        XCTAssertTrue(installation.deviceCapabilities.contains(.agentsRead))
-        XCTAssertTrue(installation.serverCapabilities?.contains(.tasksRead) == true)
-        XCTAssertTrue(installation.serverCapabilities?.contains(.agentsRead) == true)
     }
 
     @MainActor

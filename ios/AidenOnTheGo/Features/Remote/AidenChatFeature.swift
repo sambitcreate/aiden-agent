@@ -914,6 +914,7 @@ final class AidenChatViewModel {
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
     private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
     private(set) var isProgressStale = false
+    var isProgressObservationRunning: Bool { progressTask != nil }
     var draft = "" {
         didSet {
             guard draft != oldValue else { return }
@@ -1242,6 +1243,7 @@ final class AidenChatViewModel {
         let generation = progressObservationGeneration
         progressTask = Task { [weak self] in
             await self?.observeProgress(generation: generation)
+            self?.finishProgressObservation(generation: generation)
         }
     }
 
@@ -1341,6 +1343,18 @@ final class AidenChatViewModel {
             } catch {
                 return
             }
+        }
+    }
+
+    /// A progress stream can finish without the view disappearing (for
+    /// example, after a capability denial or a cancelled request). Release the
+    /// handle only if this is still the current generation so an older
+    /// cancelled observer cannot clear a newly started observer.
+    private func finishProgressObservation(generation: UInt64) {
+        guard generation == progressObservationGeneration else { return }
+        progressTask = nil
+        if taskProgress != nil || agentRoster != nil {
+            isProgressStale = true
         }
     }
 
