@@ -3,16 +3,20 @@
   "builtAt": "2026-09-14T05:32:03.238Z",
   "helpers": {
     "worktree-remover": {
-      "sha256": "8c7d3415781f31e2bd225b2dc62a8adbc69f145e9830d8bbcccf15a315355c35"
+      "sha256": "8c7d3415781f31e2bd225b2dc62a8adbc69f145e9830d8bbcccf15a315355c35",
+      "source": "4181c1a089e44e528e85b2ab4d2383f80ca3986ebd144dce24421e31721dcfe6"
     },
     "subagent-run-store": {
-      "sha256": "7147631336e94c6cbaa9ffc1e153b1fca1ad739c2b2bd5714296b4e67df9c4a5"
+      "sha256": "7147631336e94c6cbaa9ffc1e153b1fca1ad739c2b2bd5714296b4e67df9c4a5",
+      "source": "e2204e2d1838002196c6202bbdd79fcefd47d534a551d4dd5e62fe868f47aaa2"
     },
     "subagent-shell-runner": {
-      "sha256": "074c2d5d4ce62e8152e06ccc31bb25728a5037dbec471373a8f769f42a402202"
+      "sha256": "074c2d5d4ce62e8152e06ccc31bb25728a5037dbec471373a8f769f42a402202",
+      "source": "ecbcd55c706e2ab0898f7370c3ec949fb4add265eb9c00ce15eb1a4a12d00ea1"
     },
     "subagent-file-mutator": {
-      "sha256": "a0dae0705885b5316885a4c26246019325fb85f450874f69376f66df831f0b2b"
+      "sha256": "a0dae0705885b5316885a4c26246019325fb85f450874f69376f66df831f0b2b",
+      "source": "297f972a6434abd702a65f8a1b17d4c4efe5d4f8781407584f37a8f3570a78b8"
     }
   }
 }

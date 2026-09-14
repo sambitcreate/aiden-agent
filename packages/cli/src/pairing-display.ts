@@ -11,7 +11,12 @@ export async function renderPairingTerminal(pairing: AidenRemoteDesktopPairing):
   if (pairing.bootstrap.serverSpkiSha256) {
     lines.push(`Verification: ${pairing.bootstrap.serverSpkiSha256.slice(-9, -1).toUpperCase()}`);
   }
-  const seconds = Math.max(0, Math.ceil((Date.parse(pairing.bootstrap.expiresAt) - Date.now()) / 1000));
-  lines.push(`Scan with Aiden on your phone — expires in ${Math.floor(seconds / 60)}m ${seconds % 60}s.`);
+  const expiresAt = Date.parse(pairing.bootstrap.expiresAt);
+  if (Number.isFinite(expiresAt)) {
+    const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    lines.push(`Scan with Aiden on your phone — expires in ${Math.floor(seconds / 60)}m ${seconds % 60}s.`);
+  } else {
+    lines.push("Scan with Aiden on your phone.");
+  }
   return lines.join("\n");
 }

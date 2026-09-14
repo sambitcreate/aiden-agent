@@ -5,7 +5,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { NATIVE_HELPERS, nativeHelperTarget, verifyNativeHelper } from "./native-helpers.mjs";
+import {
+  NATIVE_HELPERS,
+  nativeHelperFileHash,
+  nativeHelperSourceHash,
+  nativeHelperTarget,
+  verifyNativeHelper,
+} from "./native-helpers.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -61,18 +67,39 @@ test("verifyNativeHelper rejects non-ELF on linux and unreadable files", () => {
 test("verifyNativeHelper accepts the Mach-O shape on darwin", () => {
   const dir = scratch();
   try {
+    // Real thin Mach-O stores its magic little-endian: CF FA ED FE on disk.
     const thin = path.join(dir, "thin-arm64");
     const bytes = Buffer.alloc(20);
-    bytes.writeUInt32BE(0xfeedfacf, 0);
+    bytes.writeUInt32LE(0xfeedfacf, 0);
     bytes.writeUInt32LE(0x0100000c, 4); // CPU_TYPE_ARM64
     writeFileSync(thin, bytes);
     assert.equal(verifyNativeHelper(thin, "darwin", "arm64"), true);
     assert.equal(verifyNativeHelper(thin, "darwin", "x64"), false);
-    const fat = path.join(dir, "fat");
-    bytes.writeUInt32BE(0xcafebabe, 0);
-    writeFileSync(fat, bytes);
-    assert.equal(verifyNativeHelper(fat, "darwin", "x64"), true);
-    assert.equal(verifyNativeHelper(fat, "darwin", "arm64"), true);
+    // 32-bit thin magic never verifies — helpers are 64-bit only.
+    const thin32 = path.join(dir, "thin-32");
+    const bytes32 = Buffer.alloc(20);
+    bytes32.writeUInt32LE(0xfeedface, 0);
+    bytes32.writeUInt32LE(0x0100000c, 4);
+    writeFileSync(thin32, bytes32);
+    assert.equal(verifyNativeHelper(thin32, "darwin", "arm64"), false);
+    // A universal binary must actually carry a slice for the host arch.
+    const fat = Buffer.alloc(8 + 2 * 20);
+    fat.writeUInt32BE(0xcafebabe, 0);
+    fat.writeUInt32BE(2, 4); // nfat_arch
+    fat.writeUInt32BE(0x01000007, 8); // slice 1: x86_64
+    fat.writeUInt32BE(0x0100000c, 28); // slice 2: arm64
+    const fatFile = path.join(dir, "fat");
+    writeFileSync(fatFile, fat);
+    assert.equal(verifyNativeHelper(fatFile, "darwin", "x64"), true);
+    assert.equal(verifyNativeHelper(fatFile, "darwin", "arm64"), true);
+    const x64Only = Buffer.alloc(8 + 20);
+    x64Only.writeUInt32BE(0xcafebabe, 0);
+    x64Only.writeUInt32BE(1, 4);
+    x64Only.writeUInt32BE(0x01000007, 8);
+    const x64OnlyFile = path.join(dir, "fat-x64-only");
+    writeFileSync(x64OnlyFile, x64Only);
+    assert.equal(verifyNativeHelper(x64OnlyFile, "darwin", "x64"), true);
+    assert.equal(verifyNativeHelper(x64OnlyFile, "darwin", "arm64"), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -90,9 +117,10 @@ test("checked-in prebuilt trees carry all helpers, executable bits, and a matchi
       const file = path.join(dir, `aiden-${helper}`);
       assert.ok(existsSync(file), `${target} missing aiden-${helper}`);
       assert.ok((readFileSync(file).readUInt32BE(0) >>> 0) !== 0, `${helper} is empty`);
-      // Manifest checksum must match the shipped bytes.
-      const sha = manifest.helpers?.[helper]?.sha256;
-      assert.ok(sha, `${target} manifest missing sha256 for ${helper}`);
+      // Manifest checksum must match the shipped bytes, and the recorded
+      // source hash must match the current sources (staleness detection).
+      assert.equal(nativeHelperFileHash(file), manifest.helpers?.[helper]?.sha256, `${target}/aiden-${helper} checksum mismatch`);
+      assert.equal(nativeHelperSourceHash(repositoryRoot, helper), manifest.helpers?.[helper]?.source, `${target}/aiden-${helper} source hash mismatch`);
       // Executable bit must survive into the bundle.
       assert.notEqual(statSync(file).mode & 0o111, 0, `${target}/aiden-${helper} is not executable`);
     }

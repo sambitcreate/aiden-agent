@@ -57,8 +57,21 @@ export function legacyCliWorkspaceScopeId(workspaceRoot: string): string {
 export function sharedMemoryRoot(agentDir?: string, env: NodeJS.ProcessEnv = process.env): string {
   if (env.AIDEN_CONFIG_DIR?.trim()) return path.join(aidenConfigDir(env), "memory");
   const home = path.join(os.homedir(), ".aiden");
-  if (agentDir === undefined || path.resolve(agentDir) === path.join(home, "agent")) {
+  if (agentDir === undefined) return path.join(home, "memory");
+  // Compare realpath'd so a symlinked default agent dir (or a custom agentDir
+  // pointing at it) still resolves to the shared root, and a relative env
+  // override cannot produce a cwd-dependent memory location.
+  const realpath = (file: string): string => {
+    try {
+      return realpathSync.native(file);
+    } catch {
+      return path.resolve(file);
+    }
+  };
+  const canonical = realpath(path.resolve(agentDir));
+  const defaultAgent = realpath(path.join(home, "agent"));
+  if (canonical === defaultAgent || path.resolve(agentDir) === path.join(home, "agent")) {
     return path.join(home, "memory");
   }
-  return path.join(agentDir, "shared-memory");
+  return path.join(canonical, "shared-memory");
 }

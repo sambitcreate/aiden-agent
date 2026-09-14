@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
@@ -147,15 +147,67 @@ test("serve lifecycle recovers stale leases and never signals a recycled PID", a
   assert.equal(api.recoverStaleServeLease(dir), true);
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 
-  // A live PID whose command line is not this CLI's `serve` is treated as a
-  // recycled PID: status reports not-running and stop clears the lock without
-  // ever signaling the foreign process.
+  // A live Aiden process that is NOT the daemon (e.g. a `schedule` fallback
+  // command, or this test runner) is a legitimate lock holder: status reports
+  // not-running, stop refuses without clearing, and recovery leaves it alone.
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
   api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: process.pid, startedAt: Date.now() });
   assert.equal(api.daemonStatus(dir).running, false);
+  await assert.rejects(api.stopDaemon(dir), /not the daemon/);
+  assert.equal(existsSync(join(dir, "serve.lock")), true);
+  assert.equal(api.recoverStaleServeLease(dir), false);
+  rmSync(join(dir, "serve.lock"), { recursive: true, force: true });
+
+  // A live PID whose command line is not this CLI at all is a recycled PID:
+  // the lock is cleared without ever signaling the foreign process.
+  const foreign = spawn("sleep", ["30"]);
+  t.after(() => { try { foreign.kill("SIGKILL"); } catch { /* already gone */ } });
+  await new Promise((resolve) => foreign.once("spawn", resolve));
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: foreign.pid, startedAt: Date.now() });
   await assert.rejects(api.stopDaemon(dir), /stale lock/);
   assert.equal(existsSync(join(dir, "serve.lock")), false);
+  assert.equal(api.pidAlive(foreign.pid), true);
+
+  // Corrupt owner.json and non-positive PIDs are treated as dead owners.
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  writeFileSync(join(dir, "serve.lock", "owner.json"), "{not json");
+  // A just-created lock may be mid-acquire; age it past the fresh-lock grace.
+  const past = new Date(Date.now() - 10_000);
+  utimesSync(join(dir, "serve.lock"), past, past);
+  assert.equal(api.recoverStaleServeLease(dir), true);
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: 0, startedAt: Date.now() });
+  utimesSync(join(dir, "serve.lock"), past, past);
+  assert.equal(api.recoverStaleServeLease(dir), true);
   assert.equal(api.pidAlive(process.pid), true);
+});
+
+test("serve lifecycle identifies a live daemon by its recorded argv", async (t) => {
+  const dir = temporary(t);
+  // A real child whose argv ends in `serve`, recorded verbatim in owner.json
+  // the way acquireLease does — classification must not depend on how THIS
+  // checker process was launched.
+  const fixture = join(dir, "fake-serve.mjs");
+  writeFileSync(fixture, `setInterval(() => {}, 1e9);`);
+  const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore" });
+  t.after(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } });
+  await new Promise((resolve) => child.once("spawn", resolve));
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), {
+    pid: child.pid,
+    argv: [process.execPath, fixture, "serve"],
+    startedAt: Date.now(),
+  });
+  writeFileSync(api.daemonSocket(dir), "");
+  assert.equal(api.daemonStatus(dir).running, true);
+  assert.equal(api.recoverStaleServeLease(dir), false);
+  // stopDaemon signals the recorded daemon and clears its artifacts once dead.
+  const stopped = await api.stopDaemon(dir, 5_000);
+  assert.equal(stopped.stopped, true);
+  assert.equal(api.pidAlive(child.pid), false);
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
 test("a real child completes through a local compatible provider with no recursive tools", async (t) => {

@@ -134,7 +134,14 @@ export function createDaemonChats(agentDir: string) {
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
         const additionalNames: string[] = [];
         const extensions: InlineExtension[] = botAdmission || !workspace.folderPath ? [] : [
-          await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd }),
+          // A corrupt settings file or wedged shared DB must degrade to
+          // no-memory, never brick the generation (desktop parity: llm-client
+          // warns and continues without memory).
+          await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
+            .catch((error: unknown) => {
+              process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
+              return { name: "aiden-memory", factory: () => undefined };
+            }),
           createTodoInlineExtension({ latestContext: () => undefined }),
           createMcpExtension(agentDir),
           createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),

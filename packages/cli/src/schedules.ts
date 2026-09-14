@@ -84,16 +84,33 @@ export function createCliScheduler(agentDir: string) {
         const tasks = await store.list();
         const items: Array<Record<string, unknown>> = [];
         for (const task of tasks) {
-          for (const run of await store.runs(task.id)) {
+          let taskName: string;
+          let runs: Awaited<ReturnType<typeof store.runs>>;
+          try {
+            taskName = [...task.name].slice(0, 120).join("");
+            runs = await store.runs(task.id);
+          } catch {
+            // A task deleted between list() and here must not poison the feed.
+            continue;
+          }
+          for (const run of runs) {
             // Inclusive cursor matches the remote contract; consumers dedupe by run id.
             if ((since !== undefined && run.finishedAt < since) || run.result === "silent") continue;
+            // A corrupt stored row must not poison the whole feed; |x| > 8.64e15
+            // is finite but still throws inside toISOString.
+            if (!Number.isFinite(run.startedAt) || !Number.isFinite(run.finishedAt)
+              || Math.abs(run.startedAt) > 8.64e15 || Math.abs(run.finishedAt) > 8.64e15
+              || run.finishedAt < run.startedAt) continue;
             const failed = run.result === "error" || run.result === "blocked";
-            const summary = (run.error ?? run.output)?.slice(0, 20_000);
-            items.push({ id: run.id, taskId: task.id, taskName: task.name, status: failed ? "failed" : "succeeded", startedAt: new Date(run.startedAt).toISOString(), finishedAt: new Date(run.finishedAt).toISOString(), notify: task.notify, ...(summary ? { summary } : {}), ...(failed ? { errorCode: run.result === "blocked" ? "blocked" : "execution_failed" } : {}) });
+            const text = run.error ?? run.output;
+            const summary = text === undefined ? undefined : [...text].slice(0, 2_000).join("");
+            items.push({ id: run.id, taskId: task.id, taskName, status: failed ? "failed" : "succeeded", startedAt: new Date(run.startedAt).toISOString(), finishedAt: new Date(run.finishedAt).toISOString(), notify: task.notify, ...(summary ? { summary } : {}), ...(failed ? { errorCode: run.result === "blocked" ? "blocked" : "execution_failed" } : {}) });
           }
         }
-        items.sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt)));
-        return { notifications: items.slice(0, 100) };
+        // Oldest 100 kept (returned newest-first): a consumer's cursor only
+        // advances past delivered items, so overflow arrives on the next poll.
+        items.sort((a, b) => String(a.finishedAt).localeCompare(String(b.finishedAt)));
+        return { notifications: items.slice(0, 100).reverse(), now: Date.now() };
       }
       case "preview": if (!value) throw new Error("Provide a quoted cron expression."); return nextScheduledRuns(value, timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, 5);
       case "save": {

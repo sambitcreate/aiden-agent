@@ -628,7 +628,7 @@ async function fixture(options: {
       },
       notifications: async (since) => {
         calls.push(`schedule-notifications:${since ?? ""}`);
-        return { notifications: [] };
+        return { notifications: [], now: 2_000 };
       },
       preview: () => ({ dates: [new Date(2_000).toISOString()] }),
       scripts: async (deviceId, workspaceId) => {
@@ -2078,6 +2078,41 @@ test("authenticated scheduled-task routes enforce capability and mutation precon
     ]);
   } finally {
     await app.close();
+  }
+});
+
+test("the scheduled-notifications feed enforces schedule:read and a strict since cursor", async () => {
+  const app = await fixture({ capabilities: ["schedule:read"] });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const feed = await fetch(`${app.base}/scheduled-tasks/notifications`, { headers });
+    assert.equal(feed.status, 200);
+    assert.deepEqual(await feed.json(), { notifications: [], now: 2_000 });
+    assert.deepEqual(app.calls, ["schedule-notifications:"]);
+
+    const cursor = await fetch(`${app.base}/scheduled-tasks/notifications?since=1700000000000`, { headers });
+    assert.equal(cursor.status, 200);
+    assert.deepEqual(app.calls[app.calls.length - 1], "schedule-notifications:1700000000000");
+
+    // 9999999999999999 (16 digits) passes the regex but exceeds Number.MAX_SAFE_INTEGER;
+    // 99999999999999999 (17 digits) is rejected by the regex itself — both must 400.
+    for (const query of ["since=-1", "since=1.5", "since=1e5", "since=01", "since=", "since=1&since=2", "since=9999999999999999", "since=99999999999999999", "other=1"]) {
+      const rejected = await fetch(`${app.base}/scheduled-tasks/notifications?${query}`, { headers });
+      assert.equal(rejected.status, 400, query);
+    }
+  } finally {
+    await app.close();
+  }
+
+  const unscoped = await fixture({ capabilities: ["schedule:write"] });
+  try {
+    const denied = await fetch(`${unscoped.base}/scheduled-tasks/notifications`, { headers });
+    assert.equal(denied.status, 403);
+  } finally {
+    await unscoped.close();
   }
 });
 

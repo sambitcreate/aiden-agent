@@ -474,7 +474,10 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private struct ScheduledTaskList: Decodable { let tasks: [AidenScheduledTask] }
     private struct ScheduledRunList: Decodable { let runs: [AidenScheduledRun] }
-    private struct ScheduledRunNotificationList: Decodable { let notifications: [AidenScheduledRunNotification] }
+    private struct ScheduledRunNotificationList: Decodable {
+        let notifications: [AidenScheduledRunNotification]
+        let now: Int64
+    }
     private struct ScheduledScriptList: Decodable { let scripts: [AidenScheduledScript] }
     private struct ScheduledMcpServerList: Decodable { let servers: [AidenScheduledMcpServer] }
     private struct ScheduledPreviewRequest: Encodable {
@@ -1348,14 +1351,18 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     /// Completed runs across all tasks since `since` (epoch-ms cursor) — the polling feed behind schedule notifications.
-    func scheduledRunNotifications(since: Date? = nil) async throws -> [AidenScheduledRunNotification] {
+    func scheduledRunNotifications(since: Date? = nil) async throws -> AidenScheduledRunNotificationFeed {
         let query = since.map {
             [URLQueryItem(name: "since", value: String(Int64($0.timeIntervalSince1970 * 1000)))]
         } ?? []
         let value: ScheduledRunNotificationList = try await send(
             method: "GET", path: ["scheduled-tasks", "notifications"], query: query
         )
-        return try AidenScheduledTaskValidation.notifications(value.notifications)
+        guard value.now >= 0 else { throw AidenRemoteClientError.invalidResponse }
+        return AidenScheduledRunNotificationFeed(
+            notifications: try AidenScheduledTaskValidation.notifications(value.notifications),
+            serverNow: Date(timeIntervalSince1970: TimeInterval(value.now) / 1_000)
+        )
     }
 
     func previewSchedule(cron: String, timezone: String, count: Int = 3) async throws -> [Date] {

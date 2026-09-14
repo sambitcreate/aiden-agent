@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { NATIVE_HELPERS, nativeHelperTarget, verifyNativeHelper } from "./native-helpers.mjs";
+import { NATIVE_HELPERS, nativeHelperSourceHash, nativeHelperTarget, verifyNativeHelper } from "./native-helpers.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dockerTargets = process.argv.slice(2).flatMap((arg, index, argv) => (arg === "--docker" ? argv.slice(index + 1) : []));
@@ -60,7 +60,12 @@ const manifest = {
   builtAt: new Date().toISOString(),
   helpers: Object.fromEntries(NATIVE_HELPERS.map((helper) => {
     const file = path.join(output, `aiden-${helper}`);
-    return [helper, { sha256: createHash("sha256").update(readFileSync(file)).digest("hex") }];
+    return [helper, {
+      sha256: createHash("sha256").update(readFileSync(file)).digest("hex"),
+      // The installer refuses a prebuilt whose sources moved on — prevents a
+      // stale binary silently passing every check after a main.c edit.
+      source: nativeHelperSourceHash(repositoryRoot, helper),
+    }];
   })),
 };
 writeFileSync(path.join(output, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

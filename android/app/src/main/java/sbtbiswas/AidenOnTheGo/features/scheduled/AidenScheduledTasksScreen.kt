@@ -1,5 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.scheduled
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -84,6 +90,26 @@ fun AidenScheduledTasksScreen(
     var runs by remember { mutableStateOf<List<AidenScheduledRun>>(emptyList()) }
     var runsLoading by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        // Persist only once the system dialog resolves — a process death while
+        // it is up must not permanently suppress the prompt.
+        onResult = { requestedNotificationPermission = true }
+    )
+
+    // Scheduled-run notifications need POST_NOTIFICATIONS on API 33+; prompt
+    // here rather than relying on the chat-streaming path to have asked first.
+    LaunchedEffect(canReadSchedules) {
+        if (
+            canReadSchedules &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !requestedNotificationPermission &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     fun hasCurrentAccess(capability: AidenRemoteCapability): Boolean {
         val current = coordinator.installationStore.activeInstallation ?: return false

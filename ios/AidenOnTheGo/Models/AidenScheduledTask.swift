@@ -109,6 +109,13 @@ struct AidenScheduledRunNotification: Codable, Identifiable, Equatable, Sendable
     let notify: Bool
 }
 
+/// The `/scheduled-tasks/notifications` envelope — `now` is the server clock
+/// (epoch ms) so first-poll baselining never trusts the device clock.
+struct AidenScheduledRunNotificationFeed: Equatable, Sendable {
+    let notifications: [AidenScheduledRunNotification]
+    let serverNow: Date
+}
+
 struct AidenScheduledScript: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let name: String

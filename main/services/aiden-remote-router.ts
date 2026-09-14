@@ -662,7 +662,11 @@ function scheduledNotificationsQuery(query: string): { since?: number } {
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
   }
-  return { since: Number(query.slice(separator + 1)) };
+  const parsed = Number(query.slice(separator + 1));
+  if (!Number.isSafeInteger(parsed)) {
+    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+  }
+  return { since: parsed };
 }
 
 function scheduledScriptsQuery(query: string): { workspaceId?: string } {

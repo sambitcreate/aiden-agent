@@ -363,24 +363,70 @@ cpSync(join(piAgentPkg, "dist", "core", "export-html"), exportDir, { recursive: 
 // pi's auth/model guidance prints absolute paths into these docs.
 cpSync(join(piAgentPkg, "docs"), join(appDir, "docs"), { recursive: true });
 
-// Native helpers: prefer architecture-verified prebuilts (AIDEN_NATIVE_PREBUILT_DIR
+// Native helpers: prefer checksum-verified prebuilts (AIDEN_NATIVE_PREBUILT_DIR
 // or the repo's prebuilt/native/<target> tree) so installs need no C toolchain;
 // fall back to compiling from native/ when no prebuilt matches this platform.
 mkdirSync(join(appDir, "native"), { recursive: true });
-const { NATIVE_HELPERS, nativeHelperTarget, verifyNativeHelper } = await import(resolve(pkgDir, "../../scripts/native-helpers.mjs"));
-const prebuiltDir = process.env.AIDEN_NATIVE_PREBUILT_DIR
-  ?? join(resolve(pkgDir, "../.."), "prebuilt", "native", nativeHelperTarget() ?? "none");
-const usePrebuilt = NATIVE_HELPERS.every((helper) => {
-  const file = join(prebuiltDir, `aiden-${helper}`);
-  return existsSync(file) && verifyNativeHelper(file);
-});
-if (usePrebuilt) {
-  for (const helper of NATIVE_HELPERS) cpSync(join(prebuiltDir, `aiden-${helper}`), join(appDir, `native/aiden-${helper}`));
+const {
+  NATIVE_HELPERS,
+  nativeHelperFileHash,
+  nativeHelperSourceHash,
+  nativeHelperTarget,
+  verifyNativeHelper,
+} = await import(resolve(pkgDir, "../../scripts/native-helpers.mjs"));
+const repositoryRoot = resolve(pkgDir, "../..");
+const helperTarget = nativeHelperTarget();
+const prebuiltOverride = process.env.AIDEN_NATIVE_PREBUILT_DIR;
+if (prebuiltOverride) console.log(`[build] Using AIDEN_NATIVE_PREBUILT_DIR=${prebuiltOverride}`);
+const prebuiltDir = prebuiltOverride ?? join(repositoryRoot, "prebuilt", "native", helperTarget ?? "none");
+// Verify, not just find: manifest target, architecture magic, and per-helper
+// sha256 must all agree before a prebuilt is trusted. A stale source hash
+// (main.c edited without rebuilding prebuilts) also fails closed.
+const prebuiltFailure = (() => {
+  if (!helperTarget) return `no target for ${process.platform}/${process.arch}`;
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(prebuiltDir, "manifest.json"), "utf8"));
+  } catch {
+    return "missing or unreadable manifest.json";
+  }
+  // JSON.parse succeeds for `null`/`"x"`/`5` — only an object can be trusted.
+  if (!manifest || typeof manifest !== "object") return "manifest.json is not a JSON object";
+  if (manifest.target !== helperTarget) return `manifest target ${manifest.target} is not ${helperTarget}`;
+  for (const helper of NATIVE_HELPERS) {
+    const file = join(prebuiltDir, `aiden-${helper}`);
+    if (!existsSync(file)) return `aiden-${helper} is missing`;
+    if (!verifyNativeHelper(file)) return `aiden-${helper} failed architecture verification`;
+    try {
+      if (nativeHelperFileHash(file) !== manifest.helpers?.[helper]?.sha256) return `aiden-${helper} checksum mismatch`;
+    } catch {
+      return `aiden-${helper} is unreadable`;
+    }
+    const expectedSource = manifest.helpers?.[helper]?.source;
+    if (expectedSource && existsSync(join(repositoryRoot, "native", helper))
+      && nativeHelperSourceHash(repositoryRoot, helper) !== expectedSource) {
+      return `aiden-${helper} is stale (sources changed since the prebuilt was made)`;
+    }
+  }
+  return undefined;
+})();
+if (prebuiltFailure === undefined) {
+  for (const helper of NATIVE_HELPERS) {
+    const staged = join(appDir, `native/aiden-${helper}`);
+    cpSync(join(prebuiltDir, `aiden-${helper}`), staged);
+    chmodSync(staged, 0o755);
+  }
+} else if (!helperTarget) {
+  // Helpers are optional at runtime — callers fall back to JavaScript.
+  console.warn(`[build] No native helper target for ${process.platform}/${process.arch}; skipping helpers.`);
 } else {
+  console.warn(`[build] Prebuilt helpers unusable (${prebuiltFailure}); compiling from source.`);
   for (const helper of NATIVE_HELPERS) {
     const build = spawnSync(process.execPath, [resolve(pkgDir, `../../scripts/build-${helper}.mjs`)], { encoding: "utf8" });
-    if (build.status !== 0) throw new Error(`Native ${helper} build failed: ${build.stderr}`);
-    cpSync(resolve(pkgDir, `../../build/native/aiden-${helper}`), join(appDir, `native/aiden-${helper}`));
+    if (build.status !== 0) throw new Error(`Native ${helper} build failed: ${build.stderr || build.error?.message || `exit ${build.status}`}`);
+    const staged = join(appDir, `native/aiden-${helper}`);
+    cpSync(resolve(pkgDir, `../../build/native/aiden-${helper}`), staged);
+    chmodSync(staged, 0o755);
   }
 }
 

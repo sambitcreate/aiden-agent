@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, open, stat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -179,15 +180,19 @@ export interface MemoryImportSource {
 export class MemoryStore {
   private database?: DatabaseSync;
   private databaseFile?: string;
+  private opening?: Promise<DatabaseSync>;
+  private openGeneration = 0;
 
   constructor(
     private readonly options: {
       root(): string | Promise<string>;
       now?: () => number;
       /**
-       * Legacy databases absorbed into this store. Copied once per file
-       * fingerprint (size + mtime), so a downgraded surface that keeps
-       * writing to its old location is re-absorbed on the next open.
+       * Legacy databases absorbed into this store. Each source scope is
+       * copied once per (file fingerprint, source scope, destination scope)
+       * — a downgraded surface that keeps writing to its old location is
+       * re-absorbed on the next open, and a scope remapped later still gets
+       * its canonical-scope copy.
        */
       imports?: () => Promise<readonly MemoryImportSource[]>;
       /**
@@ -208,6 +213,18 @@ export class MemoryStore {
       await this.repairPrivateModes();
       return this.database;
     }
+    // Concurrent cold opens would each build a handle and race the schema;
+    // share a single in-flight open instead.
+    this.opening ??= this.openDatabase();
+    try {
+      return await this.opening;
+    } finally {
+      this.opening = undefined;
+    }
+  }
+
+  private async openDatabase(): Promise<DatabaseSync> {
+    const generation = this.openGeneration;
     const root = await this.options.root();
     await mkdir(root, { recursive: true, mode: 0o700 });
     await chmod(root, 0o700);
@@ -217,9 +234,9 @@ export class MemoryStore {
     await chmod(file, 0o600);
     const database = new DatabaseSync(file);
     database.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
-      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS memory_facts (
         id TEXT PRIMARY KEY,
         scope_kind TEXT NOT NULL CHECK (scope_kind IN ('bot', 'workspace')),
@@ -294,7 +311,12 @@ export class MemoryStore {
     `);
     const factColumns = database.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>;
     if (!factColumns.some(({ name }) => name === "source_turn_id")) {
-      database.exec("ALTER TABLE memory_facts ADD COLUMN source_turn_id TEXT");
+      try {
+        database.exec("ALTER TABLE memory_facts ADD COLUMN source_turn_id TEXT");
+      } catch (error) {
+        // A concurrently opening surface may have just added it.
+        if (!/duplicate column/iu.test(error instanceof Error ? error.message : "")) throw error;
+      }
     }
     this.databaseFile = file;
     await this.repairPrivateModes();
@@ -305,6 +327,12 @@ export class MemoryStore {
       database.close();
       this.databaseFile = undefined;
       throw error;
+    }
+    // A close() that ran during the open must not leave a resurrected handle.
+    if (generation !== this.openGeneration) {
+      database.close();
+      this.databaseFile = undefined;
+      throw new Error("The memory store was closed while it was opening.");
     }
     this.database = database;
     return database;
@@ -341,6 +369,10 @@ export class MemoryStore {
         if (marker.get(key)) continue;
         validateScope(from);
         validateScope(to);
+        // A cross-kind alias is meaningless — the copy selects the source
+        // row's own scope_kind, so copying workspace rows under a bot id
+        // would corrupt scoping. Skip it rather than poison the store.
+        if (to.kind !== from.kind) { mark.run(key, this.now()); continue; }
         // Copied rows need derived ids — `id` is globally unique across
         // scopes, and supersedes_id is remapped to the same derived form so
         // the supersession chain stays inside the new scope. The ':'-joined
@@ -381,80 +413,149 @@ export class MemoryStore {
     }
   }
 
+  /**
+   * Imports one legacy database scope-by-scope. Markers are keyed by
+   * (fingerprint, source scope, destination scope): a scope later remapped to
+   * a new workspace (e.g. the folder is registered after first import) gets a
+   * fresh import with derived ids, while already-imported rows are never
+   * re-copied. Rows failing validation are skipped so one bad legacy row can
+   * never poison the shared store.
+   */
   private async importLegacyDatabase(
     database: DatabaseSync,
     source: MemoryImportSource,
     marker: { get(key: string): unknown },
     mark: { run(key: string, at: number): unknown },
   ): Promise<void> {
-    if (path.resolve(source.file) === this.databaseFile) return;
-    const info = await stat(source.file).catch(() => undefined);
-    if (!info?.isFile()) return;
-    const key = `file:${source.file}:${info.size}:${Math.trunc(info.mtimeMs)}`;
-    if (marker.get(key)) return;
-    const remap = source.scopeIds ?? {};
-    const legacy = new DatabaseSync(source.file);
+    const sourceFile = path.resolve(source.file);
+    if (sourceFile === this.databaseFile) return;
     try {
+      if (this.databaseFile && realpathSync(sourceFile) === realpathSync(this.databaseFile)) return;
+    } catch { /* one side missing or unresolvable — the resolved-path check above stands */ }
+    const info = await stat(sourceFile).catch(() => undefined);
+    if (!info?.isFile()) return;
+    const fingerprint = `${sourceFile}:${info.size}:${Math.trunc(info.mtimeMs)}`;
+    const remap = source.scopeIds ?? {};
+    let legacy: DatabaseSync;
+    try {
+      legacy = new DatabaseSync(sourceFile);
+    } catch (error) {
+      // stderr (not console): this module also loads in the Electron main
+      // process, which bans console, and in the CLI under strip-types.
+      process.stderr.write(`[memory] Could not open legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
+      return;
+    }
+    try {
+      // A downgraded surface may hold this file without a busy timeout.
+      legacy.exec("PRAGMA busy_timeout = 2000");
       const tables = new Set(
         (legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
           .map(({ name }) => name),
       );
-      if (tables.has("memory_facts")) {
-        const columns = new Set(
-          (legacy.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>).map(({ name }) => name),
-        );
-        const turnColumn = columns.has("source_turn_id") ? "source_turn_id" : "NULL AS source_turn_id";
-        const rows = legacy.prepare(`
-          SELECT id, scope_kind, scope_id, normalized_text, provenance_kind,
-            source_id, source_chat_id, source_message_id, ${turnColumn},
-            created_at, updated_at, confidence, expires_at, review_state,
-            state, supersedes_id, always_on
-          FROM memory_facts
-        `).all() as unknown as FactRow[];
-        const insert = database.prepare(`
-          INSERT OR IGNORE INTO memory_facts (
-            id, scope_kind, scope_id, normalized_text, provenance_kind,
-            source_id, source_chat_id, source_message_id, source_turn_id,
-            created_at, updated_at, confidence, expires_at, review_state,
-            state, supersedes_id, always_on
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const row of rows) {
-          insert.run(
-            row.id, row.scope_kind, remap[row.scope_id] ?? row.scope_id, row.normalized_text,
-            row.provenance_kind, row.source_id, row.source_chat_id, row.source_message_id,
-            row.source_turn_id, row.created_at, row.updated_at, row.confidence,
-            row.expires_at, row.review_state, row.state, row.supersedes_id, row.always_on,
-          );
+      if (!tables.has("memory_facts") && !tables.has("memory_documents")) return;
+      const factColumns = tables.has("memory_facts")
+        ? new Set((legacy.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>).map(({ name }) => name))
+        : new Set<string>();
+      const turnColumn = factColumns.has("source_turn_id") ? "source_turn_id" : "NULL AS source_turn_id";
+      const factRows = tables.has("memory_facts")
+        ? legacy.prepare(`
+            SELECT id, scope_kind, scope_id, normalized_text, provenance_kind,
+              source_id, source_chat_id, source_message_id, ${turnColumn},
+              created_at, updated_at, confidence, expires_at, review_state,
+              state, supersedes_id, always_on
+            FROM memory_facts
+          `).all() as unknown as FactRow[]
+        : [];
+      const documentRows = tables.has("memory_documents")
+        ? legacy.prepare(`
+            SELECT id, scope_kind, scope_id, kind, normalized_text,
+              source_chat_id, source_id, updated_at
+            FROM memory_documents
+          `).all() as unknown as Array<{
+            id: string; scope_kind: "bot" | "workspace"; scope_id: string;
+            kind: "transcript" | "artifact"; normalized_text: string;
+            source_chat_id: string; source_id: string; updated_at: number;
+          }>
+        : [];
+      const sourceScopes = new Set<string>();
+
+      for (const row of factRows) sourceScopes.add(`${row.scope_kind}:${row.scope_id}`);
+      for (const row of documentRows) sourceScopes.add(`${row.scope_kind}:${row.scope_id}`);
+      const insertFact = database.prepare(`
+        INSERT OR IGNORE INTO memory_facts (
+          id, scope_kind, scope_id, normalized_text, provenance_kind,
+          source_id, source_chat_id, source_message_id, source_turn_id,
+          created_at, updated_at, confidence, expires_at, review_state,
+          state, supersedes_id, always_on
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertDocument = database.prepare(`
+        INSERT OR IGNORE INTO memory_documents (
+          id, scope_kind, scope_id, kind, normalized_text,
+          source_chat_id, source_id, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const scopeKey of sourceScopes) {
+        const separator = scopeKey.indexOf(":");
+        const kind = scopeKey.slice(0, separator) as MemoryScope["kind"];
+        const sourceId = scopeKey.slice(separator + 1);
+        if (kind !== "bot" && kind !== "workspace") continue;
+        const destinationId = remap[sourceId] ?? sourceId;
+        if (!SAFE_ID.test(destinationId)) continue;
+        // Keyed by destination so a scope first imported unmapped can be
+        // re-imported under its canonical scope once it becomes known.
+        const key = `import:${fingerprint}:${kind}:${sourceId}->${destinationId}`;
+        if (marker.get(key)) continue;
+        const remapped = destinationId !== sourceId;
+        const deriveId = (id: string): string => `${id.slice(0, 128)}:${destinationId.slice(0, 31)}`;
+        let skipped = 0;
+        let deduped = 0;
+        for (const row of factRows) {
+          if (row.scope_kind !== kind || row.scope_id !== sourceId) continue;
+          try {
+            // Imported rows must satisfy the same invariants as put(): the id
+            // stays removable and the text stays safe to inject into prompts.
+            if (!SAFE_ID.test(row.id)) throw new Error("bad id");
+            const text = normalizeMemoryText(row.normalized_text);
+            const id = remapped ? deriveId(row.id) : row.id;
+            const supersedesId = row.supersedes_id && remapped ? deriveId(row.supersedes_id) : row.supersedes_id;
+            const outcome = insertFact.run(
+              id, kind, destinationId, text,
+              row.provenance_kind, row.source_id, row.source_chat_id, row.source_message_id,
+              row.source_turn_id, row.created_at, row.updated_at, row.confidence,
+              row.expires_at, row.review_state, row.state, supersedesId, row.always_on,
+            );
+            if (outcome.changes === 0) deduped += 1;
+          } catch {
+            skipped += 1;
+          }
         }
-      }
-      if (tables.has("memory_documents")) {
-        const rows = legacy.prepare(`
-          SELECT id, scope_kind, scope_id, kind, normalized_text,
-            source_chat_id, source_id, updated_at
-          FROM memory_documents
-        `).all() as unknown as Array<{
-          id: string; scope_kind: "bot" | "workspace"; scope_id: string;
-          kind: "transcript" | "artifact"; normalized_text: string;
-          source_chat_id: string; source_id: string; updated_at: number;
-        }>;
-        const insert = database.prepare(`
-          INSERT OR IGNORE INTO memory_documents (
-            id, scope_kind, scope_id, kind, normalized_text,
-            source_chat_id, source_id, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const row of rows) {
-          insert.run(
-            row.id, row.scope_kind, remap[row.scope_id] ?? row.scope_id, row.kind,
-            row.normalized_text, row.source_chat_id, row.source_id, row.updated_at,
-          );
+        for (const row of documentRows) {
+          if (row.scope_kind !== kind || row.scope_id !== sourceId) continue;
+          try {
+            if (!SAFE_ID.test(row.id)) throw new Error("bad id");
+            const text = normalizeMemoryText(row.normalized_text);
+            const outcome = insertDocument.run(
+              remapped ? deriveId(row.id) : row.id, kind, destinationId, row.kind,
+              text, row.source_chat_id, row.source_id, row.updated_at,
+            );
+            if (outcome.changes === 0) deduped += 1;
+          } catch {
+            skipped += 1;
+          }
         }
+        if (skipped > 0 || deduped > 0) {
+          process.stderr.write(`[memory] Importing ${scopeKey} from ${sourceFile}: skipped ${skipped} invalid row(s), ${deduped} already present.\n`);
+        }
+        mark.run(key, this.now());
       }
+    } catch (error) {
+      // A locked (SQLITE_BUSY) or corrupt legacy file must degrade to a skipped
+      // source, not abort the whole store open — it self-heals next open.
+      process.stderr.write(`[memory] Could not import legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
     } finally {
       legacy.close();
     }
-    mark.run(key, this.now());
   }
 
   private async repairPrivateModes(): Promise<void> {
@@ -486,43 +587,48 @@ export class MemoryStore {
     const supersedesId = input.supersedesId === undefined
       ? undefined
       : safeId(input.supersedesId, "superseded fact");
-    const prior = supersedesId
-      ? database.prepare(`
-          SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
-        `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
-      : undefined;
-    if (supersedesId && !prior) {
-      throw new Error("The superseded memory fact is unavailable in this scope.");
-    }
-    const existing = database.prepare(`
-      SELECT * FROM memory_facts
-      WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
-    `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
-    if (existing && !supersedesId) return factFromRow(existing);
-    if (existing && existing.id !== supersedesId) {
-      throw new Error("The replacement duplicates another active fact in this scope.");
-    }
-    const count = database.prepare(`
-      SELECT count(*) AS count FROM memory_facts
-      WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
-        AND (expires_at IS NULL OR expires_at > ?)
-        AND (? IS NULL OR id <> ?)
-    `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
-    if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
-    if (input.alwaysOn) {
-      const alwaysOn = database.prepare(`
+    const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
+    // All conflict/capacity reads run under the write transaction so two
+    // concurrent surfaces cannot both pass the gates.
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = supersedesId
+        ? database.prepare(`
+            SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
+          `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
+        : undefined;
+      if (supersedesId && !prior) {
+        throw new Error("The superseded memory fact is unavailable in this scope.");
+      }
+      const existing = database.prepare(`
+        SELECT * FROM memory_facts
+        WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
+      `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
+      if (existing && !supersedesId) {
+        database.exec("COMMIT");
+        return factFromRow(existing);
+      }
+      if (existing && existing.id !== supersedesId) {
+        throw new Error("The replacement duplicates another active fact in this scope.");
+      }
+      const count = database.prepare(`
         SELECT count(*) AS count FROM memory_facts
-        WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
+        WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
           AND (expires_at IS NULL OR expires_at > ?)
           AND (? IS NULL OR id <> ?)
       `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
-      if (Number(alwaysOn.count) >= MAX_ALWAYS_ON) {
-        throw new Error("This memory scope already has the maximum always-on facts.");
+      if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
+      if (input.alwaysOn) {
+        const alwaysOn = database.prepare(`
+          SELECT count(*) AS count FROM memory_facts
+          WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
+            AND (expires_at IS NULL OR expires_at > ?)
+            AND (? IS NULL OR id <> ?)
+        `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
+        if (Number(alwaysOn.count) >= MAX_ALWAYS_ON) {
+          throw new Error("This memory scope already has the maximum always-on facts.");
+        }
       }
-    }
-    const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
-    database.exec("BEGIN IMMEDIATE");
-    try {
       if (supersedesId) {
         database.prepare("UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
           .run(now, supersedesId);
@@ -623,8 +729,10 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let inserted = 0;
     try {
-      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ?")
-        .run(sourceChatId);
+      // Scoped delete: legacy-scope copies of this chat's documents (imported
+      // for downgrade compatibility) must not be wiped by a new-scope write.
+      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
+        .run(sourceChatId, valid.kind, valid.id);
       const existing = database.prepare(`
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
       `).get(valid.kind, valid.id) as { count: number };
@@ -782,6 +890,7 @@ export class MemoryStore {
   }
 
   async close(): Promise<void> {
+    this.openGeneration += 1;
     this.database?.close();
     this.database = undefined;
     await this.repairPrivateModes();

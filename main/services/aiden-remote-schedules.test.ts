@@ -188,6 +188,7 @@ test("scheduled notifications aggregate completed runs across tasks since a curs
 
   const all = await value.service.notifications();
   assert.equal(all.notifications.length, 2);
+  assert.equal(typeof all.now, "number");
   assert.deepEqual(
     all.notifications.map((item) => item.taskName).sort(),
     ["Evening sweep", "Morning review"],

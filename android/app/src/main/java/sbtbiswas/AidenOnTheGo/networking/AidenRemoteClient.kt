@@ -1300,11 +1300,15 @@ class AidenRemoteClient(
         AidenScheduledTaskValidation.runs(resp.runs, taskId)
     }
 
-    suspend fun scheduledRunNotifications(since: Instant? = null): List<AidenScheduledRunNotification> {
+    suspend fun scheduledRunNotifications(since: Instant? = null): AidenScheduledRunNotificationFeed {
         val query = since?.let { "?since=${it.toEpochMilli()}" } ?: ""
         return executeRequest("/scheduled-tasks/notifications$query") { bytes ->
             val resp = json.decodeFromString<ScheduledRunNotificationListResponse>(String(bytes, Charsets.UTF_8))
-            AidenScheduledTaskValidation.notifications(resp.notifications)
+            if (resp.now < 0) throw AidenRemoteClientException.InvalidResponse()
+            AidenScheduledRunNotificationFeed(
+                AidenScheduledTaskValidation.notifications(resp.notifications),
+                Instant.ofEpochMilli(resp.now)
+            )
         }
     }
 
@@ -1673,7 +1677,10 @@ class AidenRemoteClient(
     private data class ScheduledRunListResponse(val runs: List<AidenScheduledRun>)
 
     @Serializable
-    private data class ScheduledRunNotificationListResponse(val notifications: List<AidenScheduledRunNotification>)
+    private data class ScheduledRunNotificationListResponse(
+        val notifications: List<AidenScheduledRunNotification>,
+        val now: Long
+    )
 
     @Serializable
     private data class ScheduledScriptListResponse(val scripts: List<AidenScheduledScript>)

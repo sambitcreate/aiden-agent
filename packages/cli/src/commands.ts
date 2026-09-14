@@ -68,6 +68,9 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     case "bots": result = await remoteDaemonCommand(agentDir, "bots", rest); break;
     case "remote": {
       result = await remoteDaemonCommand(agentDir, "remote", rest);
+      if (rest[0] === "pair" && !process.stdout.isTTY) {
+        process.stderr.write("warning: the pairing payload below contains a single-use secret — keep it out of logs.\n");
+      }
       if (rest[0] === "pair" && process.stdout.isTTY) {
         const rendered = await renderPairingTerminal(result as AidenRemoteDesktopPairing).catch(() => undefined);
         if (rendered) { process.stdout.write(rendered + "\n"); return true; }

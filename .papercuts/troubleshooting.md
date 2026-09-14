@@ -275,3 +275,14 @@ needed to separate this change from that baseline noise.
 - Polling notification cursors should be inclusive (`finishedAt >= since`) with client-side run-id dedup; an exclusive cursor drops same-millisecond sibling runs permanently. Clients must baseline the first poll to "now" or first install replays history as a notification storm.
 - Serve-lease PIDs can be recycled by unrelated processes. Verify the recorded PID's cmdline (`/proc`/`ps`) shows the CLI entry + `serve` before reporting running or sending SIGTERM.
 - `gradlew` needs `JAVA_HOME` pointing at Android Studio's JBR and `ANDROID_HOME` set; neither is exported by default on this machine.
+
+### Adversarial review round 2 (2026-09-14)
+
+- `node --test` records relative argv[1] (`tests/parity.test.mjs`) in the process cmdline while test code often holds the absolute path; PID cmdline classifiers must generate BOTH absolute and cwd-relative entry candidates or the test's own process misclassifies as foreign.
+- A local `const relative` in the same function shadowed the imported `path.relative` — TDZ `ReferenceError` at call time. Avoid naming locals after imported helpers in converted/rewritten modules.
+- `Array.prototype.at` and `realpathSync(path, {throwIfNoEntry})` are unavailable under this repo's TS lib target and the vendored Node typings respectively — use index access and try/catch ENOENT.
+- `console.warn` violates the root `no-console` rule in `main/services`; use `process.stderr.write` for cross-context (Electron + CLI strip-types) diagnostics.
+- `realpathSync` throws on nonexistent paths on this Node version even when asked to tolerate missing entries — wrap in try/catch.
+- Android `String.length` is UTF-16 code units while the server bounds strings by Unicode code points — validate with `codePointCount` for server-bounded fields or non-BMP input poisons the client feed permanently.
+- Thin Mach-O cputype is little-endian; fat headers are big-endian. Reading both with one endianness silently rejects/accepts the wrong binaries.
+- Writing manifest checksums without any code path that verifies them is an integrity-control illusion — add the verification to BOTH the build path and a test that recomputes sha256 over the shipped bytes.

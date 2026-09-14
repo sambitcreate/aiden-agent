@@ -184,6 +184,96 @@ test("legacy CLI scope ids are absorbed into the shared folder-hash scope", asyn
   await shared.close();
 });
 
+test("a legacy scope unmapped at first import still remaps once the workspace is known", async (t) => {
+  const root = await fixture(t);
+  const legacyDir = path.join(root, "legacy");
+  const legacyFile = path.join(legacyDir, "memory-v1.sqlite");
+  const folder = path.join(root, "ws-b");
+  const cliScope = { kind: "workspace" as const, id: legacyCliWorkspaceScopeId(folder) };
+  const legacy = new MemoryStore({ root: () => legacyDir, now: () => 1_000 });
+  await legacy.put({ scope: cliScope, text: "Folder B fact", provenance: { kind: "user_edit", sourceId: "aiden-cli" } });
+  await legacy.close();
+
+  const sharedDir = path.join(root, "shared");
+  // First open with NO remap: the cli-* rows are preserved under their own scope.
+  const first = new MemoryStore({
+    root: () => sharedDir,
+    imports: async () => [{ file: legacyFile }],
+  });
+  assert.deepEqual((await first.list(cliScope)).map(({ text }) => text), ["Folder B fact"]);
+  await first.close();
+
+  // Reopening with the scope now mapped must re-import under the canonical
+  // ws-* scope despite the earlier import markers.
+  const wsScope = { kind: "workspace" as const, id: sharedWorkspaceScopeId(folder) };
+  const second = new MemoryStore({
+    root: () => sharedDir,
+    imports: async () => [{ file: legacyFile, scopeIds: { [cliScope.id]: wsScope.id } }],
+  });
+  assert.deepEqual((await second.list(wsScope)).map(({ text }) => text), ["Folder B fact"]);
+  await second.close();
+});
+
+test("a corrupt or invalid legacy row is skipped without poisoning the import", async (t) => {
+  const root = await fixture(t);
+  const legacyFile = path.join(root, "loose.sqlite");
+  // Build a schema-divergent legacy file with rows no valid store would write.
+  const { DatabaseSync } = await import("node:sqlite");
+  const loose = new DatabaseSync(legacyFile);
+  loose.exec(`
+    CREATE TABLE memory_facts (
+      id TEXT PRIMARY KEY, scope_kind TEXT, scope_id TEXT, normalized_text TEXT,
+      provenance_kind TEXT, source_id TEXT, source_chat_id TEXT, source_message_id TEXT,
+      created_at INTEGER, updated_at INTEGER, confidence REAL, expires_at INTEGER,
+      review_state TEXT, state TEXT, supersedes_id TEXT, always_on INTEGER
+    );
+    INSERT INTO memory_facts VALUES (
+      'good-1', 'workspace', 'ws-a', 'valid fact', 'user_edit', 'aiden', NULL, NULL,
+      1, 1, 0.5, NULL, 'approved', 'active', NULL, 0
+    );
+    INSERT INTO memory_facts VALUES (
+      'bad id with spaces', 'workspace', 'ws-a', 'unremovable id', 'user_edit', 'aiden', NULL, NULL,
+      1, 1, 0.5, NULL, 'approved', 'active', NULL, 0
+    );
+    INSERT INTO memory_facts VALUES (
+      'bad-2', 'workspace', 'ws-a', 'sk-ant-api03-AAAAAAAABBBBBBBBCCCCCCCC', 'user_edit', 'aiden', NULL, NULL,
+      1, 1, 0.5, NULL, 'approved', 'active', NULL, 0
+    );
+    INSERT INTO memory_facts VALUES (
+      'bad-3', 'workspace', 'ws-a', 'nine lives', 'nonsense_kind', NULL, NULL, NULL,
+      1, 1, 9.9, NULL, 'approved', 'active', NULL, 0
+    );
+  `);
+  loose.close();
+
+  const shared = new MemoryStore({
+    root: () => path.join(root, "shared"),
+    imports: async () => [{ file: legacyFile }],
+  });
+  const scope: MemoryScope = { kind: "workspace", id: "ws-a" };
+  // Only the valid row lands; the store stays usable afterwards.
+  assert.deepEqual((await shared.list(scope)).map(({ text }) => text), ["valid fact"]);
+  await shared.put({ scope, text: "post-import write works", provenance: { kind: "user_edit", sourceId: "aiden" } });
+  assert.equal((await shared.list(scope)).length, 2);
+  await shared.close();
+});
+
+test("a cross-kind scope alias is skipped instead of corrupting scoping", async (t) => {
+  const root = await fixture(t);
+  const scope: MemoryScope = { kind: "workspace", id: "workspace-x" };
+  const store = new MemoryStore({ root: () => root, now: () => 1_000 });
+  await store.put({ scope, text: "workspace fact", provenance: { kind: "user_edit", sourceId: "aiden" } });
+  await store.close();
+
+  const migrated = new MemoryStore({
+    root: () => root,
+    scopeAliases: async () => [{ from: scope, to: { kind: "bot", id: "bot-y" } }],
+  });
+  // No workspace rows may appear under a bot scope.
+  assert.equal((await migrated.list({ kind: "bot", id: "bot-y" })).length, 0);
+  await migrated.close();
+});
+
 test("two surfaces can write to the shared store concurrently", async (t) => {
   const root = await fixture(t);
   const scope: MemoryScope = { kind: "workspace", id: "ws-shared" };

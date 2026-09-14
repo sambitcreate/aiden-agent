@@ -2936,13 +2936,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Completed scheduled-task runs across all tasks, newest first (max 100)",
+            "description": "Completed scheduled-task runs across all tasks, newest first (max 100; when the window overflows, the oldest runs are kept and the remainder arrives on the next poll)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "required": [
-                    "notifications"
+                    "notifications",
+                    "now"
                   ],
                   "properties": {
                     "notifications": {
@@ -2950,6 +2951,10 @@
                       "items": {
                         "$ref": "#/components/schemas/ScheduleRunNotification"
                       }
+                    },
+                    "now": {
+                      "type": "integer",
+                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
                     }
                   },
                   "additionalProperties": false
