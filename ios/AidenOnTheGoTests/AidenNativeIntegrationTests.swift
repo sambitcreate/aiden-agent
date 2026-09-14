@@ -66,7 +66,10 @@ final class AidenNativeIntegrationTests: XCTestCase {
             return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
         }
         do {
-            _ = try await client.botAvatar(botId: "bot-1", assetRevision: "revision-1")
+            // A malformed asset revision fails closed before any request is made
+            // (and therefore records no diagnostic), so use a valid canonical
+            // revision to exercise the network-layer cache/security contract.
+            _ = try await client.botAvatar(botId: "bot-1", assetRevision: "avatar_revision_00112233445566778899aabbccddeeff")
             XCTFail("Expected the avatar cache/security contract to be rejected.")
         } catch AidenRemoteClientError.invalidResponse {}
 

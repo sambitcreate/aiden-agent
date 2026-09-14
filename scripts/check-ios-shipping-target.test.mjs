@@ -100,6 +100,7 @@ const testSources = [
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotImagePlaygroundTests.swift",
+  "AidenBotLiveActivityStateTests.swift",
   "AidenBotPrototypeSnapshotTests.swift",
   "AidenBotCacheTests.swift",
   "AidenChatTests.swift",
