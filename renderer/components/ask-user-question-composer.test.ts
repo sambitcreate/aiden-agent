@@ -17,10 +17,17 @@ test("structured questions fully replace the composer with the reference card", 
   assert.match(component, /rounded-sheet bg-popover/u);
   assert.match(styles, /--radius-sheet: 24px;/u);
   assert.match(component, /\{activeIndex \+ 1\} of \{prompt\.questions\.length\}/u);
-  assert.match(component, /Type your own answer/u);
+  assert.match(component, /OPTION_LETTERS = \["A", "B", "C", "D"\]/u);
+  assert.match(component, /aria-label="Other answer"/u);
+  assert.match(component, /placeholder="Other answer"/u);
   assert.match(component, /"Sending…" : "Skip"/u);
+  assert.match(component, /from "\.\/ui"/u);
   assert.match(component, /role=\{question\.multiSelect \? "checkbox" : "radio"\}/u);
   assert.match(component, /aria-checked=\{selected\}/u);
+  assert.match(component, /optionIndexFromKey/u);
+  assert.doesNotMatch(component, /ask-user-question-pill/u);
+  assert.doesNotMatch(component, /border border-field/u);
   assert.match(styles, /\.ask-user-question-option:focus-visible/u);
   assert.match(styles, /@keyframes ask-user-question-in/u);
+  assert.doesNotMatch(styles, /\.ask-user-question-pill/u);
 });
