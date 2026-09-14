@@ -97,7 +97,7 @@ and both chat-open and live snapshots report `storage_not_enabled`. The panel
 intentionally stays hidden because this expected capability state requires no
 user action; the closed reason and `todo-storage-disabled` diagnostic retain
 verification evidence.
-automatic and manual Pi checkpoints stay cohort-disabled, effect-recovery
+Automatic and manual Pi checkpoints stay cohort-disabled, effect-recovery
 boundaries are written only in-process and never acknowledged as durable, and
 the durable store can never be quarantined by an in-memory failure.
 
