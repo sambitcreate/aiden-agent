@@ -406,6 +406,27 @@ export class AidenRemoteScheduleService {
     catch (error) { mapError(error); }
   }
 
+  /**
+   * Completed runs across every task at or after an epoch-ms cursor — the
+   * polling feed paired devices turn into local notifications. The cursor is
+   * inclusive so sibling runs sharing a millisecond are never skipped; clients
+   * dedupe by run id, so boundary redelivery is harmless.
+   */
+  async notifications(since?: number) {
+    const tasks = await this.options.application.list();
+    const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> = [];
+    for (const task of tasks) {
+      const taskName = [...task.name].slice(0, 120).join("");
+      for (const run of await this.options.application.runs(task.id)) {
+        if (since !== undefined && run.finishedAt < since) continue;
+        if (run.result === "silent") continue;
+        notifications.push({ ...mapRun(run), taskName, notify: task.notify });
+      }
+    }
+    notifications.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+    return { notifications: notifications.slice(0, 100) };
+  }
+
   preview(value: unknown) {
     const record = ownRecord(value);
     if (!record || !exactKeys(record, ["cron", "timezone"], ["count"])

@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { nextScheduledRun, type ScheduleStore } from "./schedule-store.js";
+import { nextScheduledRun, type ScheduleStore } from "./schedule-store-core.js";
 import type {
   ScheduledRun,
   ScheduledTask,

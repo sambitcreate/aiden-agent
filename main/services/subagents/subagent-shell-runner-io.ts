@@ -247,6 +247,9 @@ export async function runSubagentShellProductionInert(input: {
       child.once("close", (code, signal) => resolve({ code, signal }));
     },
   );
+  // A rejected root may close its pipe before the control frame is written.
+  // The process outcome below remains the authority for the failed request.
+  child.stdin.on("error", () => { child.kill("SIGKILL"); });
   child.stdin.write(request);
   try {
     const ended = await closed;

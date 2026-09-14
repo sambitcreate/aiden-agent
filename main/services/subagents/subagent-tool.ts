@@ -122,7 +122,7 @@ function capabilitySchema(
 }
 
 export function createSubagentTool(
-  supervisor: SubagentSupervisor,
+  supervisor: Pick<SubagentSupervisor, "execute">,
   mcpInventory: readonly SubagentRequestableMcpInventoryV2[] = [],
   writeEnabled = false,
   mcpMutationInventory: readonly SubagentRequestableMcpInventoryV2[] = [],

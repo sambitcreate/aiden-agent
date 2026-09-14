@@ -225,3 +225,53 @@ needed to separate this change from that baseline noise.
 - Revision checks around settings writes need an explicit serialized lane; async read-then-write alone permits stale concurrent mutations.
 - Backticks in `gh api -f body=...` are evaluated by zsh before submission; use single-quoted plain text or standard input for review replies.
 - A merged feature does not auto-increment releases; bump both package manifests before merging when the current tag already exists.
+- `@earendil-works/pi-coding-agent` ships `npm-shrinkwrap.json`, so its dependency tree (including `pi-ai`) installs nested under `node_modules/@earendil-works/pi-coding-agent/node_modules/` instead of hoisting; resolve both layouts when reading its dist at build time.
+- The rebranded CLI's esbuild port needs `https-proxy-agent` resolvable from `packages/cli` at build time (pi's monorepo relies on hoisting); it is pinned as an exact devDependency there.
+- `node --test tests/` resolves the directory argument as a module and fails; list the test files explicitly or rely on directory auto-discovery without an argument.
+- Plain `.mjs` files under `eslint .` get `no-undef` without Node globals; follow the repo convention of `/* global console */` comments or `import process from "node:process"`.
+- Node's TypeScript stripping does not rewrite Aiden's `.js` specifiers to `.ts` (esbuild does); modules importing `main/services` code are bundle-only — test them through an esbuild-built selfcheck entry, not direct `--experimental-strip-types` imports.
+- `rm()` from `node:fs` (callback API) without a callback throws "callback is not a function" asynchronously after the calling test ends, poisoning the whole node:test file; use `rmSync`.
+- esbuild `alias` on a package name rewrites subpath imports as plain paths and bypasses package.json `exports` (`@earendil-works/pi-ai/compat` breaks); to share one copy of a multi-entry package, don't alias — verify identity-sensitivity instead.
+- esbuild's `.js`→`.ts` remap can fail for ONE sibling import inside an otherwise-identical directory (advisor-runtime.ts → advisor-attempt-store.js) while the same pattern resolves elsewhere in the same graph; `alias` cannot fix it (breaks subpath exports) — the escape hatch is a separate prebundle pass emitting a self-contained `.mjs` consumed as a marked external.
+- When authoring tests with shell heredocs, never use catch-all cleanup (`rm -rf tests/`) — the repo root has a real tracked `tests/` directory; restore with `git checkout -- tests/` if hit.
+
+## CLI parity port (2026-09-04)
+
+- The parity inventory overstated portability: `schedule-store.ts` instantiated desktop DataStores and carried a lazy config-store import. Split `schedule-store-core.ts` out and leave the desktop singleton wrapper/re-exports in place.
+- Pi 0.84.4's extension ModelRegistry exposes `find`, not `getModel`; registration-only smoke tests did not exercise the advisor/btw bridge. Branch context must use `getBranch()`, not the full journal.
+- The native worktree remover forwarded an injected helper path to removal but dropped it when finalizing the removal manifest. It passed core tests from repository cwd and failed only in the packaged CLI. Forward the same helper binary through finalization; keep the packaged CLI create/remove regression.
+- The pinned pi package has no built-in MCP configuration/client surface despite the initial parity inventory. The CLI needs its own MCP SDK adapter.
+- esbuild's input metafile marks erased unused imports as external; this caused false bundle failures and explains the earlier apparent resolver anomalies. Validate `metafile.outputs[*].imports` instead, which describes imports that actually ship.
+
+- CLI daemon tool gates must return `{ block: true, reason }` from pi `tool_call`; throwing an extension-handler error is not an authorization denial. Workspace authority is rechecked at tool time as well as admission.
+- The parity inventory overstated speech portability: `aiden-remote-speech.ts` and `local-models.ts` directly imported desktop singletons/platform. Extracting injectable cores preserves one implementation for desktop and CLI.
+- Xcode's selected toolchain reported an unaccepted license mid-validation. Separate installed Command Line Tools work with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`; the native helper build now preserves this standard build setting.
+
+### CLI daemon and child adapters (2026-09-05)
+
+- Remote turn IDs differ from stream IDs. The shared generation surface passes `options.turnId`; admission and handoff must use that ID rather than the transport stream ID. A real HTTPS replay test caught a silent start rejection.
+- Pi SDK `tools: []` is an explicit tool allowlist, including extension tools. Registering custom tools is insufficient: pass the positively selected names in `createAgentSession({ tools })`. Local-provider subprocess testing caught this in both the child worker and Bot assembly.
+- Node IPC emits `disconnect` after the worker calls `process.disconnect()` itself. Distinguish deliberate terminal shutdown from unexpected parent loss, or successful subagent runs exit as failures.
+- `subagent-supervisor.ts` was not actually a portable core: its default runner dynamically imported the Electron production graph. Split the injectable supervisor into `subagent-supervisor-core.ts`, retaining the original desktop wrapper and default runner. Constants now live in `subagent-child-policy.ts` so importing budgets does not instantiate a desktop child registry.
+
+- CLI parity: Pi session.dispose() does not emit session_shutdown; daemon-mounted MCP pools require an explicit awaited lifecycle event before disposal. Tool registration also needs an explicit custom-tool allowlist: tools: [] disables custom tools.
+- CLI provider credentials: serializing read/list behind a cross-process writer lease made subprocess startup fail and provider inventory take tens of seconds. Atomic encrypted reads require no writer lease; serialize migration/write/delete only.
+- Subagent history: completion projection is queued; /subagents must flush before reading durable snapshots. Native helper paths must remain stable through session teardown even if the embedding process restores its environment.
+- Identifier privacy: random UUID 69462a29-f592-481f-a81d-60527d897e4e is rejected by the shared encoded-text filter. Retry safe grant/tree IDs and deterministically alias unsafe external session IDs; do not bypass the privacy check.
+- Injected worktree-remover binaries also own finalize-manifest. Fake wrapper test helpers must implement that mode; otherwise safe cleanup appears to fail after successful removal.
+- Physical iOS tests compiled with Xcode-beta but awaited an unlocked phone. Earlier test failures were stale test-only assumptions (reversed JSON collection, invalidResponse wrapper, revision10 fixture), not production client regressions.
+- Linux native parity: OrbStack/btrfs assigns FS_NOCOW_FL to normal files. Treat EXTENT/NOCOW as filesystem allocation flags; unsupported user metadata flags still fail closed. Compilation-only checks missed this; portable native create/replace/recovery tests exposed it.
+- A native shell helper can reject pinned workspace identity before receiving its control frame. Handle stdin EPIPE and report failure from the verified process outcome rather than allowing an uncaught stream error.
+
+### CLI appearance studio / DialKit (2026-09-05)
+- DialKit's resolved boolean types retain literal types when configuration uses `satisfies DialConfig`; widen toggle defaults to boolean so preset updates can switch both ways.
+- DialKit select choices render as buttons, not ARIA options. Use their actual roles in browser tests. `DialRoot` needs `productionEnabled` for an intentionally shipped standalone playground.
+- React Doctor `--diff` skips an entirely untracked package; use `--scope full` to validate new sources. Two maintainability advisories remain; bug/accessibility findings were fixed.
+
+### CLI standalone phases (2026-09-10)
+
+- Node `--experimental-strip-types` eval tests require literal `.ts` specifiers end-to-end; `main/services/memory-shared.ts` imports `aiden-config-dir.ts` with a `.ts` extension for that reason. Root tsconfig has `allowImportingTsExtensions`, so tsx/esbuild accept it.
+- Memory alias copies must derive new primary keys (`substr(id,1,128)||':'||substr(scope,1,31)`); `INSERT OR IGNORE` with reused ids silently copies zero rows. Remap `supersedes_id` to the same derived form so chains stay inside the new scope.
+- Polling notification cursors should be inclusive (`finishedAt >= since`) with client-side run-id dedup; an exclusive cursor drops same-millisecond sibling runs permanently. Clients must baseline the first poll to "now" or first install replays history as a notification storm.
+- Serve-lease PIDs can be recycled by unrelated processes. Verify the recorded PID's cmdline (`/proc`/`ps`) shows the CLI entry + `serve` before reporting running or sending SIGTERM.
+- `gradlew` needs `JAVA_HOME` pointing at Android Studio's JBR and `ANDROID_HOME` set; neither is exported by default on this machine.

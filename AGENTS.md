@@ -24,6 +24,15 @@ models.dev may be contacted only by `npm run models:refresh`, the release refres
 
 OpenRouter benchmark insights are also manual-only. The live app may contact only the fixed `/api/v1/benchmarks?source=artificial-analysis&max_results=100` endpoint after the user explicitly chooses Connect & fetch or Fetch latest, using the dedicated encrypted Model Pad credential rather than any inference-provider credential. Never send prompts or model traffic during that action, never import OpenRouter's model catalog, never bundle the returned data, and serve ordinary model-info reads only from the normalized device-local cache.
 
+## Aiden CLI (`packages/cli`)
+
+The headless Aiden Agent lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. See `packages/cli/README.md` and `docs/plans/aiden-cli-plan.md` for architecture and phasing.
+
+- Never hand-edit `packages/cli/themes/*.json`: they are generated from `renderer/shared/appearance.ts` by `npm run themes` (in `packages/cli`), and the fidelity test fails on drift. Change palettes in `appearance.ts`, then regenerate.
+- The rebrand depends on the bundle layout: `dist/app/cli.js` plus the generated `dist/app/package.json` (`piConfig`) must stay the nearest package.json to the bundled code. Restructure `dist/app/` only with that contract and `tests/bundle.test.mjs` in mind.
+- Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
+- The CLI keeps the same manual-only network posture as the desktop for models.dev, Artificial Analysis, and OpenRouter benchmark data.
+
 ## Papercuts
 
 For complex workflows, record concise implementation friction in `.papercuts/troubleshooting.md` as it occurs.

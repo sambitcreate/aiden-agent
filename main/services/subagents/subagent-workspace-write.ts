@@ -107,6 +107,7 @@ export interface SubagentWorkspaceWriteApprovalBrokerV2Input {
     signal: AbortSignal | undefined,
     ownerDocumentId: string,
   ): Promise<boolean>;
+  binary?: string;
   runSignal?: AbortSignal;
   registry?: WorkspaceOperationRegistry;
   now?: () => number;
@@ -572,7 +573,7 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
     try {
       const workspace = await liveWorkspace(signal);
       const root = await pinSubagentWorkspaceRoot(input.workspaceRoot, signal);
-      client = createSubagentFileMutatorClient({ workspaceRoot: root });
+      client = createSubagentFileMutatorClient({ workspaceRoot: root, binary: input.binary });
       lifecycle.client = client;
       const preparer = new SubagentFileMutationPreparer();
       const inspection = await client.inspect(preparer.createEffectId(), args.path, signal);

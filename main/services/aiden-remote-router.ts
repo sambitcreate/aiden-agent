@@ -111,7 +111,7 @@ export interface AidenRemoteRouterDependencies {
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-  schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   speech?: Pick<
@@ -649,6 +649,20 @@ function usageQuery(query: string): UsageDateRange {
     throw new AidenRemoteServiceError("invalid_request", "The usage range is invalid.", 400);
   }
   return range as UsageDateRange;
+}
+
+function scheduledNotificationsQuery(query: string): { since?: number } {
+  if (!query) return {};
+  const separator = query.indexOf("=");
+  if (
+    separator <= 0 ||
+    query.slice(0, separator) !== "since" ||
+    query.indexOf("&") >= 0 ||
+    !/^(?:0|[1-9]\d{0,15})$/u.test(query.slice(separator + 1))
+  ) {
+    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+  }
+  return { since: Number(query.slice(separator + 1)) };
 }
 
 function scheduledScriptsQuery(query: string): { workspaceId?: string } {
@@ -1632,6 +1646,14 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.mcpServers());
+        return;
+      }
+      if (path === "/scheduled-tasks/notifications" && request.method === "GET") {
+        route = "scheduledTasks";
+        const device = await authenticate(request, dependencies.devices, "schedule:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, await dependencies.schedules.notifications(scheduledNotificationsQuery(query).since));
         return;
       }
       if (path === "/scheduled-tasks/settings" && request.method === "GET") {

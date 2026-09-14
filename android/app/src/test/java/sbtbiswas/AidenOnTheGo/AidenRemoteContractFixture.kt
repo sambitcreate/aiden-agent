@@ -217,5 +217,6 @@ data class AidenRemoteContractFixture(
     val botAvatarUpload: AidenBotAvatarUploadContractFixture,
     val botAvatarMetadata: AidenBotAvatarAsset,
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
+    val scheduleRunNotification: AidenScheduledRunNotification? = null,
     val error: AidenRemoteErrorEnvelope? = null
 )

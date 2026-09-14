@@ -380,7 +380,7 @@ export async function removeManagedWorktreeDirectory(
           finish(new ManagedWorktreeRemoverError("io_failed"), true);
           return;
         }
-        void finalizeManagedWorktreeRemovalManifest(identity.path, authorizedDigest)
+        void finalizeManagedWorktreeRemovalManifest(identity.path, authorizedDigest, binary)
           .then(() => finish())
           .catch((error: unknown) => finish(error, true));
         return;

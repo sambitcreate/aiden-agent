@@ -97,6 +97,18 @@ struct AidenScheduledRun: Codable, Identifiable, Equatable, Sendable {
     let errorCode: String?
 }
 
+struct AidenScheduledRunNotification: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let taskId: String
+    let taskName: String
+    let status: String
+    let startedAt: Date
+    let finishedAt: Date
+    let summary: String?
+    let errorCode: String?
+    let notify: Bool
+}
+
 struct AidenScheduledScript: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let name: String
@@ -405,6 +417,25 @@ enum AidenScheduledTaskValidation {
             throw AidenRemoteClientError.invalidResponse
         }
         return runs
+    }
+
+    static func notifications(_ notifications: [AidenScheduledRunNotification]) throws -> [AidenScheduledRunNotification] {
+        guard notifications.count <= 100,
+              Set(notifications.map(\.id)).count == notifications.count,
+              notifications.allSatisfy({ item in
+                  isOpaqueIdentifier(item.id, maximum: 160)
+                    && isTaskIdentifier(item.taskId)
+                    && !item.taskName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && item.taskName.count <= 120
+                    && (item.status == "succeeded" || item.status == "failed")
+                    && item.finishedAt >= item.startedAt
+                    && (item.summary.map({ $0.count <= 20_000 }) ?? true)
+                    && (item.errorCode.map({ isOpaqueIdentifier($0, maximum: 160) }) ?? true)
+                    && (item.status == "failed") == (item.errorCode != nil)
+              }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return notifications
     }
 
     private static func isTaskIdentifier(_ value: String) -> Bool {

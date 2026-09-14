@@ -55,13 +55,8 @@ import type {
 } from "./subagent-mcp-mutation.js";
 import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
-export const DEFAULT_SUBAGENT_CHILD_DEADLINE_MS = 10 * 60_000;
-export const DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS = 5_000;
-export const MAX_SUBAGENT_CHILD_TURNS = 24;
-export const MAX_SUBAGENT_CHILD_TOOL_CALLS = 64;
-export const MAX_SUBAGENT_CHILD_EVENTS = 512;
-export const MAX_SUBAGENT_CHILD_OUTPUT_CHARS = 120_000;
-export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
+import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
+export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 
 export interface SubagentChildRunnerPolicy {

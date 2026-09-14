@@ -1,4 +1,23 @@
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#else
+#define _GNU_SOURCE
+#include <openssl/sha.h>
+#include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+#define CC_SHA256 SHA256
+#define CC_SHA256_Init SHA256_Init
+#define CC_SHA256_Update SHA256_Update
+#define CC_SHA256_Final SHA256_Final
+#define CC_SHA256_CTX SHA256_CTX
+#define CC_SHA256_DIGEST_LENGTH SHA256_DIGEST_LENGTH
+#define CC_LONG size_t
+#define st_mtimespec st_mtim
+#define st_ctimespec st_ctim
+#define RENAME_EXCL 1
+#define RENAME_SWAP 2
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -6,11 +25,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
 #include <sys/acl.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+
+#ifndef __APPLE__
+static int renameatx_np(int a, const char *b, int c, const char *d, unsigned int flags) {
+  return (int)syscall(SYS_renameat2, a, b, c, d, flags);
+}
+#define flistxattr(fd, names, size, options) flistxattr(fd, names, size)
+#define fgetxattr(fd, name, value, size, position, options) fgetxattr(fd, name, value, size)
+#define fsetxattr(fd, name, value, size, position, options) fsetxattr(fd, name, value, size, options)
+#define fremovexattr(fd, name, options) fremovexattr(fd, name)
+#endif
+static unsigned long identity_flags(const struct stat *info) {
+#ifdef __APPLE__
+  return info->st_flags;
+#else
+  (void)info;
+  return 0;
+#endif
+}
+static struct timespec identity_birth(const struct stat *info) {
+#ifdef __APPLE__
+  return info->st_birthtimespec;
+#else
+  (void)info;
+  return (struct timespec){0, 0};
+#endif
+}
 
 #define MAX_CONTENT_BYTES 200000
 #define MAX_HTML_CONTENT_BYTES (512 * 1024)
@@ -74,22 +121,22 @@ static int same_read_identity(const struct stat *left,
   return S_ISREG(left->st_mode) && S_ISREG(right->st_mode) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
-         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
+         left->st_gid == right->st_gid && identity_flags(left) == identity_flags(right) &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(identity_birth(left), identity_birth(right));
 }
 
 static int same_identity(const struct stat *left, const struct stat *right) {
   return exclusive_regular(left) && exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
-         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
+         left->st_gid == right->st_gid && identity_flags(left) == identity_flags(right) &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(identity_birth(left), identity_birth(right));
 }
 
 /* renameatx_np may update ctime while preserving the underlying inode. */
@@ -98,10 +145,10 @@ static int same_renamed_identity(const struct stat *left,
   return exclusive_regular(left) && exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
-         left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
+         left->st_gid == right->st_gid && identity_flags(left) == identity_flags(right) &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(identity_birth(left), identity_birth(right));
 }
 
 static int same_file_object(const struct stat *left,
@@ -115,7 +162,7 @@ static int same_preserved_metadata(const struct stat *left,
   return (left->st_mode & (S_IFMT | 07777)) ==
              (right->st_mode & (S_IFMT | 07777)) &&
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
-         left->st_flags == right->st_flags;
+         identity_flags(left) == identity_flags(right);
 }
 
 static int same_renamed_entry(const struct stat *left,
@@ -123,10 +170,10 @@ static int same_renamed_entry(const struct stat *left,
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_nlink == right->st_nlink &&
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
-         left->st_flags == right->st_flags &&
+         identity_flags(left) == identity_flags(right) &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(identity_birth(left), identity_birth(right));
 }
 
 /*
@@ -184,7 +231,7 @@ static int read_supported_xattrs(int descriptor,
 }
 
 static int supported_metadata(int descriptor, const struct stat *identity) {
-  if (identity->st_flags != 0)
+  if (identity_flags(identity) != 0)
     return 0;
   unsigned char provenance[MAX_PROVENANCE_BYTES];
   size_t provenance_length;
@@ -193,6 +240,7 @@ static int supported_metadata(int descriptor, const struct stat *identity) {
                                      &provenance_length, &provenance_present);
   if (xattrs != 1)
     return xattrs;
+  #ifdef __APPLE__
   acl_t access_control = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED);
   if (access_control == NULL)
     return errno == ENOENT ? 1 : -1;
@@ -204,6 +252,14 @@ static int supported_metadata(int descriptor, const struct stat *identity) {
   if (entry_result == 0)
     return 0;
   return entry_error == EINVAL ? 1 : -1;
+  #else
+  /* Linux ACLs were rejected as xattrs. Permit filesystem allocation flags
+     (extents and inherited btrfs NOCOW), but reject user metadata flags. */
+  unsigned long flags = 0;
+  if (ioctl(descriptor, FS_IOC_GETFLAGS, &flags) != 0)
+    return (errno == ENOTTY || errno == EOPNOTSUPP) ? 1 : -1;
+  return (flags & ~((unsigned long)(FS_EXTENT_FL | FS_NOCOW_FL))) == 0 ? 1 : 0;
+  #endif
 }
 
 static int copy_supported_xattrs(int source, int destination) {

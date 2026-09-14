@@ -138,7 +138,7 @@ export interface AidenRemoteServiceOptions {
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
@@ -182,7 +182,7 @@ export interface AidenRemoteServiceOptions {
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+        schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;

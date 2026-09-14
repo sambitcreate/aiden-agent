@@ -136,6 +136,75 @@ final class AidenScheduledTaskTests: XCTestCase {
         ], taskId: "task-1"))
     }
 
+    func testScheduledRunNotificationValidationAndSharedFixture() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "contract", withExtension: "json")
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let notification = try AidenRemoteJSONDecoder.decode(
+            AidenScheduledRunNotification.self,
+            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(root["scheduleRunNotification"]))
+        )
+        XCTAssertEqual(notification.taskName, "Morning review")
+        XCTAssertEqual(notification.status, "succeeded")
+        XCTAssertTrue(notification.notify)
+        XCTAssertEqual(try AidenScheduledTaskValidation.notifications([notification]), [notification])
+
+        let succeeded = AidenScheduledRunNotification(
+            id: "run-1", taskId: "task-1", taskName: "Morning review", status: "succeeded",
+            startedAt: Date(timeIntervalSince1970: 1), finishedAt: Date(timeIntervalSince1970: 2),
+            summary: "Done", errorCode: nil, notify: true
+        )
+        let failed = AidenScheduledRunNotification(
+            id: "run-2", taskId: "task-2", taskName: "Evening sweep", status: "failed",
+            startedAt: Date(timeIntervalSince1970: 3), finishedAt: Date(timeIntervalSince1970: 4),
+            summary: "Blocked", errorCode: "execution_failed", notify: false
+        )
+        XCTAssertEqual(
+            try AidenScheduledTaskValidation.notifications([succeeded, failed]),
+            [succeeded, failed]
+        )
+
+        let invalid = [
+            AidenScheduledRunNotification(
+                id: "run\nunsafe", taskId: "task-1", taskName: "T", status: "succeeded",
+                startedAt: succeeded.startedAt, finishedAt: succeeded.finishedAt,
+                summary: nil, errorCode: nil, notify: true
+            ),
+            AidenScheduledRunNotification(
+                id: "run-3", taskId: "task/escape", taskName: "T", status: "succeeded",
+                startedAt: succeeded.startedAt, finishedAt: succeeded.finishedAt,
+                summary: nil, errorCode: nil, notify: true
+            ),
+            AidenScheduledRunNotification(
+                id: "run-4", taskId: "task-1", taskName: "T", status: "running",
+                startedAt: succeeded.startedAt, finishedAt: succeeded.finishedAt,
+                summary: nil, errorCode: nil, notify: true
+            ),
+            AidenScheduledRunNotification(
+                id: "run-5", taskId: "task-1", taskName: "", status: "succeeded",
+                startedAt: succeeded.startedAt, finishedAt: succeeded.finishedAt,
+                summary: nil, errorCode: nil, notify: true
+            ),
+            AidenScheduledRunNotification(
+                id: "run-6", taskId: "task-1", taskName: "T", status: "succeeded",
+                startedAt: Date(timeIntervalSince1970: 2), finishedAt: Date(timeIntervalSince1970: 1),
+                summary: nil, errorCode: nil, notify: true
+            ),
+            AidenScheduledRunNotification(
+                id: "run-7", taskId: "task-1", taskName: "T", status: "failed",
+                startedAt: succeeded.startedAt, finishedAt: succeeded.finishedAt,
+                summary: nil, errorCode: nil, notify: true
+            ),
+        ]
+        for item in invalid {
+            XCTAssertThrowsError(try AidenScheduledTaskValidation.notifications([item]))
+        }
+        XCTAssertThrowsError(try AidenScheduledTaskValidation.notifications([succeeded, succeeded]))
+    }
+
     func testLegacyGlobalFullTaskRequiresInventoryAndFreezesExactEnabledMCPServers() throws {
         let legacy = AidenScheduledTask(
             id: "task-legacy", revision: "rev_legacy", name: "Legacy monitor", enabled: true,

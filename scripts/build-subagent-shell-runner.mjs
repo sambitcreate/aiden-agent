@@ -16,52 +16,51 @@ const output = path.join(
   testing ? "aiden-subagent-shell-runner-test" : "aiden-subagent-shell-runner",
 );
 
-if (process.platform !== "darwin") {
-  console.log("Skipping the macOS subagent shell-runner build on this platform.");
+if (!["darwin", "linux"].includes(process.platform)) {
+  console.log("Unsupported platform for subagent shell-runner.");
   process.exit(0);
 }
 
 await mkdir(path.dirname(output), { recursive: true });
 await executeFile(
-  "/usr/bin/xcrun",
+  process.platform === "darwin" ? "/usr/bin/xcrun" : "cc",
   [
-    "clang",
+    ...(process.platform === "darwin" ? ["clang"] : []),
     "-std=c17",
     "-Wall",
     "-Wextra",
     "-Werror",
     "-O2",
-    "-mmacosx-version-min=14.4",
-    ...(testing ? [] : ["-arch", "arm64", "-arch", "x86_64"]),
+    ...(process.platform === "darwin" ? ["-mmacosx-version-min=14.4", ...(testing ? [] : ["-arch", "arm64", "-arch", "x86_64"])] : []),
     path.join(repositoryRoot, "native", "subagent-shell-runner", "main.c"),
     "-o",
     output,
   ],
   {
     cwd: repositoryRoot,
-    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+    env: { ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}), PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
     maxBuffer: 1024 * 1024,
     timeout: 120_000,
   },
 );
 if (testing) {
   await executeFile(
-    "/usr/bin/xcrun",
+    process.platform === "darwin" ? "/usr/bin/xcrun" : "cc",
     [
-      "clang",
+      ...(process.platform === "darwin" ? ["clang"] : []),
       "-std=c17",
       "-Wall",
       "-Wextra",
       "-Werror",
       "-O2",
-      "-mmacosx-version-min=14.4",
+      ...(process.platform === "darwin" ? ["-mmacosx-version-min=14.4"] : []),
       path.join(repositoryRoot, "native", "subagent-shell-runner", "setsid-fixture.c"),
       "-o",
       path.join(repositoryRoot, "build", "native", "aiden-subagent-shell-setsid-fixture"),
     ],
     {
       cwd: repositoryRoot,
-      env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+      env: { ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}), PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
       maxBuffer: 1024 * 1024,
       timeout: 120_000,
     },

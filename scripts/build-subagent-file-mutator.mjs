@@ -16,30 +16,31 @@ const output = path.join(
   testing ? "aiden-subagent-file-mutator-test" : "aiden-subagent-file-mutator",
 );
 
-if (process.platform !== "darwin") {
-  console.log("Skipping the macOS subagent file-mutator build on this platform.");
+if (!["darwin", "linux"].includes(process.platform)) {
+  console.log("Unsupported platform for subagent file-mutator.");
   process.exit(0);
 }
 
 await mkdir(path.dirname(output), { recursive: true });
 const args = [
-  "clang",
+  ...(process.platform === "darwin" ? ["clang"] : []),
   "-std=c17",
   "-Wall",
   "-Wextra",
   "-Werror",
   "-O2",
-  "-mmacosx-version-min=14.4",
+  ...(process.platform === "darwin" ? ["-mmacosx-version-min=14.4"] : ["-Wno-deprecated-declarations"]),
   ...(testing
     ? ["-DAIDEN_SUBAGENT_FILE_MUTATOR_TESTING=1"]
-    : ["-arch", "arm64", "-arch", "x86_64"]),
+    : process.platform === "darwin" ? ["-arch", "arm64", "-arch", "x86_64"] : []),
   path.join(repositoryRoot, "native", "subagent-file-mutator", "main.c"),
+  ...(process.platform === "linux" ? ["-lcrypto"] : []),
   "-o",
   output,
 ];
-await executeFile("/usr/bin/xcrun", args, {
+await executeFile(process.platform === "darwin" ? "/usr/bin/xcrun" : "cc", args, {
   cwd: repositoryRoot,
-  env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+  env: { ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}), PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
   maxBuffer: 1024 * 1024,
   timeout: 120_000,
 });

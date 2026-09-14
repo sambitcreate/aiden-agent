@@ -1712,6 +1712,7 @@ struct AidenRemoteContractFixture: Decodable {
     let events: [AidenRemoteStreamEvent]
     let speechStatus: AidenSpeechStatus
     let speechTranscription: AidenSpeechTranscription
+    let scheduleRunNotification: AidenScheduledRunNotification
     let error: AidenRemoteErrorEnvelope
 
     init(from decoder: Decoder) throws {
@@ -1773,6 +1774,10 @@ struct AidenRemoteContractFixture: Decodable {
         events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
         speechStatus = try values.decode(AidenSpeechStatus.self, forKey: .speechStatus)
         speechTranscription = try values.decode(AidenSpeechTranscription.self, forKey: .speechTranscription)
+        scheduleRunNotification = try values.decode(
+            AidenScheduledRunNotification.self,
+            forKey: .scheduleRunNotification
+        )
         error = try values.decode(AidenRemoteErrorEnvelope.self, forKey: .error)
 
         let botSummaryTimestamps = try values.decode(
@@ -1976,7 +1981,8 @@ struct AidenRemoteContractFixture: Decodable {
         case botChatSubset, botChatSubsetUpdate, botFavorites, botFavoritesUpdate
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
-        case streamStatus, streamApproval, events, speechStatus, speechTranscription, error
+        case streamStatus, streamApproval, events, speechStatus, speechTranscription
+        case scheduleRunNotification, error
     }
 }
 

@@ -626,6 +626,10 @@ async function fixture(options: {
         calls.push(`schedule-runs:${taskId}`);
         return { runs: [] };
       },
+      notifications: async (since) => {
+        calls.push(`schedule-notifications:${since ?? ""}`);
+        return { notifications: [] };
+      },
       preview: () => ({ dates: [new Date(2_000).toISOString()] }),
       scripts: async (deviceId, workspaceId) => {
         calls.push(`schedule-scripts:${deviceId}:${workspaceId ?? ""}`);

@@ -614,7 +614,7 @@ final class AidenRemoteClientTests: XCTestCase {
         do {
             _ = try await client.preferredChatSummaries(advertised: false)
             XCTFail("Legacy chat lists must reject private child projections.")
-        } catch AidenRemoteContractError.unsafePayloadField("childrenLatestMessages") {
+        } catch AidenRemoteClientError.invalidResponse {
             // Expected.
         }
     }
@@ -634,7 +634,7 @@ final class AidenRemoteClientTests: XCTestCase {
 
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenChatSummaryPage.self,
-            from: JSONSerialization.data(withJSONObject: ["summaries": summaries.reversed()])
+            from: JSONSerialization.data(withJSONObject: ["summaries": Array(summaries.reversed())])
         ))
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenChatSummaryPage.self,

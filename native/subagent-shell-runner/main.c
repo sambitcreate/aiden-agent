@@ -1,3 +1,6 @@
+#ifndef __APPLE__
+#define _GNU_SOURCE
+#endif
 #define _DARWIN_C_SOURCE
 
 #include <arpa/inet.h>
@@ -16,6 +19,14 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#define AIDEN_SHELL "/bin/zsh"
+#define AIDEN_SHELL_ENV "SHELL=/bin/zsh"
+#else
+#define AIDEN_SHELL "/bin/sh"
+#define AIDEN_SHELL_ENV "SHELL=/bin/sh"
+#endif
 
 #define COMMAND_LIMIT (64U * 1024U)
 #define STREAM_LIMIT (512U * 1024U)
@@ -316,16 +327,16 @@ static int run_shell(const char *root_path, int root_fd, const struct request *r
     snprintf(data, sizeof(data), "XDG_DATA_HOME=%s/data", private_root);
     char *environment[] = {
       "PATH=/usr/bin:/bin:/usr/sbin:/sbin", home, temporary, config, cache, data,
-      "LANG=C", "LC_ALL=C", "SHELL=/bin/zsh", "TERM=dumb", "NO_COLOR=1", "CI=1",
+      "LANG=C", "LC_ALL=C", AIDEN_SHELL_ENV, "TERM=dumb", "NO_COLOR=1", "CI=1",
       "PAGER=cat", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/usr/bin/false",
       "SSH_ASKPASS=/usr/bin/false", "SSH_ASKPASS_REQUIRE=force", "GIT_CONFIG_NOSYSTEM=1",
       "GIT_CONFIG_GLOBAL=/dev/null", "NPM_CONFIG_USERCONFIG=/dev/null",
       "NPM_CONFIG_UPDATE_NOTIFIER=false", "NPM_CONFIG_FUND=false", "NPM_CONFIG_AUDIT=false",
       "ZDOTDIR=/dev/null", NULL,
     };
-    char *arguments[] = {"/bin/zsh", "-f", "-c", (char *)request->command,
+    char *arguments[] = {AIDEN_SHELL, "-f", "-c", (char *)request->command,
                          "aiden-subagent", NULL};
-    execve("/bin/zsh", arguments, environment);
+    execve(AIDEN_SHELL, arguments, environment);
     _exit(126);
   }
   (void)setpgid(child, child);

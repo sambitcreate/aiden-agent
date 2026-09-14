@@ -524,6 +524,7 @@ export interface AidenRemoteContractFixture {
   scheduleSettings: unknown;
   scheduleRunAccepted: unknown;
   scheduleRun: unknown;
+  scheduleRunNotification: unknown;
   speechStatus: unknown;
   speechTranscription: unknown;
   botSummary: AidenRemoteBotSummary;
@@ -3578,6 +3579,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     scheduleSettings: value.scheduleSettings,
     scheduleRunAccepted: value.scheduleRunAccepted,
     scheduleRun: value.scheduleRun,
+    scheduleRunNotification: value.scheduleRunNotification,
     speechStatus: value.speechStatus,
     speechTranscription: value.speechTranscription,
     botSummary,

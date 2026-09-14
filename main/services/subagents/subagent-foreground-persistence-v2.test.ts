@@ -937,3 +937,18 @@ test("Phase 6B rejects every nested capability escalation instead of silently do
     );
   }
 });
+
+test("V2 grants retry random identities that accidentally match encoded private text", async () => {
+  let calls = 0;
+  const persistence = createForegroundSubagentPersistenceV2({
+    ...input(store("v2", [])),
+    randomUUID: () => ++calls === 1 ? "69462a29-f592-481f-a81d-60527d897e4e" : "00000000-0000-4000-8000-000000000001",
+  });
+  const prepared = await persistence.prepareRun({
+    identity: { runId: "run-one", groupId: "group-one", childId: "child-one" },
+    task: { role: "scout", label: "Scout", task: "Inspect" },
+    contextMode: "fresh", contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+  });
+  assert.equal(prepared.authority?.grantId, "grant-00000000-0000-4000-8000-000000000001");
+  assert.equal(calls, 2);
+});

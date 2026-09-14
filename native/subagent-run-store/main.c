@@ -1,3 +1,6 @@
+#if defined(__linux__)
+#define _GNU_SOURCE
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +12,26 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <sys/syscall.h>
+#define st_mtimespec st_mtim
+#define st_ctimespec st_ctim
+#define RENAME_EXCL 1
+#define RENAME_SWAP 2
+static int renameatx_np(int from_fd, const char *from, int to_fd, const char *to, unsigned int flags) {
+  return (int)syscall(SYS_renameat2, from_fd, from, to_fd, to, flags);
+}
+#endif
+
+static struct timespec birth_timestamp(const struct stat *identity) {
+#if defined(__APPLE__)
+  return identity->st_birthtimespec;
+#else
+  (void)identity;
+  return (struct timespec){0, 0};
+#endif
+}
 
 #define STORE_FILE "runs.json"
 #define STAGING_PREFIX ".runs.json."
@@ -46,7 +69,7 @@ static int same_file_identity(const struct stat *left,
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
          same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(birth_timestamp(left), birth_timestamp(right));
 }
 
 static int same_renamed_file_identity(const struct stat *left,
@@ -55,7 +78,7 @@ static int same_renamed_file_identity(const struct stat *left,
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
          same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         same_timestamp(birth_timestamp(left), birth_timestamp(right));
 }
 
 static int requested_contents_match(int descriptor,
@@ -124,8 +147,8 @@ static int make_token(const struct stat *identity, char *token,
                (unsigned long long)identity->st_mtimespec.tv_nsec,
                (unsigned long long)identity->st_ctimespec.tv_sec,
                (unsigned long long)identity->st_ctimespec.tv_nsec,
-               (unsigned long long)identity->st_birthtimespec.tv_sec,
-               (unsigned long long)identity->st_birthtimespec.tv_nsec);
+               (unsigned long long)birth_timestamp(identity).tv_sec,
+               (unsigned long long)birth_timestamp(identity).tv_nsec);
   return length > 0 && (size_t)length < capacity ? 0 : -1;
 }
 

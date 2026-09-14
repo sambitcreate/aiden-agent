@@ -96,6 +96,19 @@ data class AidenScheduledRun(
 )
 
 @Serializable
+data class AidenScheduledRunNotification(
+    val id: String,
+    val taskId: String,
+    val taskName: String,
+    val status: String,
+    @Serializable(with = InstantIso8601Serializer::class) val startedAt: Instant,
+    @Serializable(with = InstantIso8601Serializer::class) val finishedAt: Instant,
+    val summary: String? = null,
+    val errorCode: String? = null,
+    val notify: Boolean
+)
+
+@Serializable
 data class AidenScheduledScript(
     val id: String,
     val name: String
@@ -317,4 +330,27 @@ object AidenScheduledTaskValidation {
         }
         return runs
     }
+
+    fun notifications(items: List<AidenScheduledRunNotification>): List<AidenScheduledRunNotification> {
+        if (items.size > 100 || items.map { it.id }.toSet().size != items.size || items.any {
+            !isOpaqueNotificationField(it.id, 160) || !isTaskIdentifier(it.taskId) ||
+                it.taskName.isBlank() || it.taskName.length > 120 ||
+                (it.status != "succeeded" && it.status != "failed") ||
+                it.finishedAt.isBefore(it.startedAt) ||
+                (it.summary != null && it.summary.length > 20_000) ||
+                (it.errorCode != null && !isOpaqueNotificationField(it.errorCode, 160)) ||
+                (it.status == "failed") != (it.errorCode != null)
+        }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return items
+    }
+
+    private fun isTaskIdentifier(value: String): Boolean =
+        value.isNotEmpty() && value.length <= 160 &&
+            value.all { it.isDigit() && it.code < 128 || it in 'A'..'Z' || it in 'a'..'z' || it == '-' || it == '.' || it == '_' || it == ':' }
+
+    private fun isOpaqueNotificationField(value: String, maximum: Int): Boolean =
+        value.isNotBlank() && value.trim() == value && value.length <= maximum &&
+            value.none { it.code <= 0x1f || it.code in 0x7f..0x9f || it.code in 0x202a..0x202e || it.code in 0x2066..0x2069 }
 }

@@ -1,4 +1,21 @@
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#elif defined(__linux__)
+#define _GNU_SOURCE
+#define OPENSSL_SUPPRESS_DEPRECATED
+#include <openssl/sha.h>
+#include <sys/syscall.h>
+#include <linux/fs.h>
+#define CC_SHA256_CTX SHA256_CTX
+#define CC_SHA256_Init SHA256_Init
+#define CC_SHA256_Update SHA256_Update
+#define CC_SHA256_Final SHA256_Final
+#define CC_SHA256_DIGEST_LENGTH SHA256_DIGEST_LENGTH
+#define CC_LONG unsigned int
+#define RENAME_EXCL RENAME_NOREPLACE
+#else
+#error "The managed-worktree remover supports macOS and Linux."
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -10,6 +27,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#ifdef __linux__
+static int renameatx_np(int olddir, const char *oldname, int newdir,
+                        const char *newname, unsigned int flags) {
+  return (int)syscall(SYS_renameat2, olddir, oldname, newdir, newname, flags);
+}
+#endif
 
 #define EXIT_IDENTITY_CHANGED 20
 #define EXIT_MUTATION_DETECTED 21

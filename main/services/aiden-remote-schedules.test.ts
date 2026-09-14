@@ -179,6 +179,37 @@ test("accepted execution remains scheduler-owned after the remote caller disconn
   assert.equal((await value.service.runs(created.id)).runs[0]?.id, accepted.runId);
 });
 
+test("scheduled notifications aggregate completed runs across tasks since a cursor", async () => {
+  const value = fixture();
+  const first = await value.service.create("device-1", "create-key-123456", llmMutation);
+  const second = await value.service.create("device-1", "create-key-654321", { ...llmMutation, name: "Evening sweep" });
+  await value.service.run("device-1", first.id, first.revision, "run-key-12345678");
+  await value.service.run("device-1", second.id, second.revision, "run-key-87654321");
+
+  const all = await value.service.notifications();
+  assert.equal(all.notifications.length, 2);
+  assert.deepEqual(
+    all.notifications.map((item) => item.taskName).sort(),
+    ["Evening sweep", "Morning review"],
+  );
+  assert.ok(all.notifications.every((item) => item.status === "succeeded" && item.notify === true));
+
+  // Inclusive cursor: runs exactly at the boundary are re-delivered (clients
+  // dedupe by run id) so same-millisecond siblings can never be skipped.
+  const boundary = await value.service.notifications(2);
+  assert.equal(boundary.notifications.length, 2);
+
+  const filtered = await value.service.notifications(3);
+  assert.equal(filtered.notifications.length, 0);
+
+  const future = await value.service.notifications(1);
+  assert.equal(future.notifications.length, 2);
+
+  const serialized = JSON.stringify(all);
+  assert.doesNotMatch(serialized, /fingerprint|private-chat/u);
+  assert.match(serialized, /\[local path\]/u);
+});
+
 test("scheduled task mutations require foreground confirmation and stale edits fail explicitly", async () => {
   const value = fixture();
   await assert.rejects(

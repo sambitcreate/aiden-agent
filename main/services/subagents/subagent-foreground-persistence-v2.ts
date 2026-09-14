@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   adaptSubagentRunSnapshotV2ToV1,
+  isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV2,
   type SubagentRunSnapshotV1,
   type SubagentRunSnapshotV2,
@@ -22,7 +23,7 @@ import {
   MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
   MAX_SUBAGENT_CHILD_TOOL_CALLS,
   MAX_SUBAGENT_CHILD_TURNS,
-} from "./subagent-child-runner.js";
+} from "./subagent-child-policy.js";
 import {
   MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
   MAX_SUBAGENT_SUMMARY_CHARS,
@@ -104,6 +105,7 @@ export interface ForegroundSubagentPersistenceV2Input {
   onControlSnapshot?: (snapshot: SubagentRunSnapshotV1) => void;
   webEnabled?: boolean;
   writeEnabled?: boolean;
+  fileMutatorBinary?: string;
   mcpInventory?: readonly SubagentMcpScopeV2[];
   mcpMutationsEnabled?: boolean;
   mcpMutationHost?: SubagentMcpMutationHostV2;
@@ -148,6 +150,20 @@ export function createForegroundSubagentPersistenceV2(
 ) {
   const now = input.now ?? Date.now;
   const allocateUuid = input.randomUUID ?? randomUUID;
+  const safeGrantId = () => {
+    for (let attempt = 0; attempt < 128; attempt++) {
+      const candidate = `grant-${allocateUuid()}`;
+      if (isSafeSubagentIdentifier(candidate)) return candidate;
+    }
+    throw new Error("Could not allocate a safe subagent grant identity.");
+  };
+  const safeTreeId = () => {
+    for (let attempt = 0; attempt < 128; attempt++) {
+      const candidate = `tree-${fingerprint(attempt === 0 ? input.generationId : [input.generationId, attempt]).slice(0, 32)}`;
+      if (isSafeSubagentIdentifier(candidate)) return candidate;
+    }
+    throw new Error("Could not allocate a safe subagent tree identity.");
+  };
   const authorities = new Map<string, SubagentAuthorityV2>();
   const approvals = new SubagentApprovalLedgerV2(now);
   const revokedRuns = new Set<string>();
@@ -267,10 +283,10 @@ export function createForegroundSubagentPersistenceV2(
           : "unavailable",
     });
     const authority = createSubagentAuthorityV2({
-      grantId: `grant-${allocateUuid()}`,
+      grantId: safeGrantId(),
       treeRootId:
         parentAuthority?.treeRootId ??
-        `tree-${fingerprint(input.generationId).slice(0, 32)}`,
+        safeTreeId(),
       runId: identity.runId,
       ...(parentAuthority ? { parentRunId: parentAuthority.runId } : {}),
       depth: parentAuthority ? 2 : 1,
@@ -599,6 +615,7 @@ export function createForegroundSubagentPersistenceV2(
             workspace: input.workspace,
             workspaceRoot: input.workspace.folderPath,
             bindings,
+            binary: input.fileMutatorBinary,
             ledger: approvals,
             currentAuthority: (runId) =>
               revokedRuns.has(runId) ? undefined : authorities.get(runId),

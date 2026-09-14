@@ -271,6 +271,7 @@ Git mutations reuse the workspace operation registry and mutation gate plus cano
 - `GET|PATCH|DELETE /scheduled-tasks/{taskId}`
 - `POST /scheduled-tasks/{taskId}/pause|resume|run`
 - `GET /scheduled-tasks/{taskId}/runs`
+- `GET /scheduled-tasks/notifications?since=<epoch-ms>` — completed runs across all tasks, newest first (max 100). The cursor is inclusive so same-millisecond runs are never skipped; clients dedupe by run id and baseline their first poll to "now" to avoid replaying history.
 - `POST /scheduled-tasks/preview`
 - `GET /scheduled-tasks/scripts?workspaceId=...`
 - `GET|PATCH /scheduled-tasks/settings`

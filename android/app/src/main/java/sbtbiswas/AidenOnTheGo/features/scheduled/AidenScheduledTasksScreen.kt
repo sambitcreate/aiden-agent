@@ -30,8 +30,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -52,6 +54,8 @@ fun AidenScheduledTasksScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val notifier = remember { AidenScheduledRunNotifier(context.applicationContext) }
     val client by coordinator.client.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val installations by coordinator.installationStore.installations.collectAsState()
@@ -106,6 +110,7 @@ fun AidenScheduledTasksScreen(
         try {
             val accepted = activeClient.scheduledTasks()
             if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) retainSnapshot(accepted)
+            instanceId?.let { notifier.deliver(it, activeClient) }
         } catch (error: Exception) {
             if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) {
                 errorMessage = error.message ?: "Aiden couldn't load scheduled tasks."

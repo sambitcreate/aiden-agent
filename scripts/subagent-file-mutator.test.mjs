@@ -171,7 +171,7 @@ async function waitForFile(file) {
 }
 
 test("creates an absent file only after a matching prepare", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-create-");
   await mkdir(path.join(root, "src"));
   const helper = startHelper(t, root);
@@ -193,7 +193,7 @@ test("creates an absent file only after a matching prepare", async (t) => {
 });
 
 test("inspect pins descriptor-relative content before preparing a postimage", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-inspect-");
   const target = path.join(root, "file.txt");
   await writeFile(target, "original\n");
@@ -230,7 +230,7 @@ test("inspect pins descriptor-relative content before preparing a postimage", as
 });
 
 test("inspect refuses to prepare after the pinned path is replaced", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-inspect-race-");
   const target = path.join(root, "file.txt");
   await writeFile(target, "original\n");
@@ -253,7 +253,7 @@ test("inspect refuses to prepare after the pinned path is replaced", async (t) =
 });
 
 test("atomically replaces an expected revision and retains recovery until finalize", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-replace-");
   const target = path.join(root, "file.txt");
   const original = "original\n";
@@ -281,7 +281,7 @@ test("atomically replaces an expected revision and retains recovery until finali
 });
 
 test("preserve revalidates and retains the exact displaced inode", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-preserve-");
   await writeFile(path.join(root, "file.txt"), "original\n");
   const helper = startHelper(t, root);
@@ -305,7 +305,7 @@ test("preserve revalidates and retains the exact displaced inode", async (t) => 
 });
 
 test("preserve and finalize reject a modified recovery", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-recovery-tamper-");
   await writeFile(path.join(root, "file.txt"), "original\n");
   const helper = startHelper(t, root);
@@ -326,7 +326,7 @@ test("preserve and finalize reject a modified recovery", async (t) => {
 });
 
 test("preserve and finalize reject a missing recovery", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-recovery-delete-");
   await writeFile(path.join(root, "file.txt"), "original\n");
   const helper = startHelper(t, root);
@@ -345,7 +345,8 @@ test("preserve and finalize reject a missing recovery", async (t) => {
 });
 
 test("preserve and finalize reject recovery metadata drift", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
+  if (process.platform !== "darwin") return t.skip("macOS recovery metadata contract");
   for (const variant of ["mode", "provenance", "unknown-xattr", "acl"]) {
     const root = await fixture(t, `aiden-file-mutator-recovery-${variant}-`);
     await writeFile(path.join(root, "file.txt"), "original\n", { mode: 0o640 });
@@ -401,7 +402,7 @@ test("preserve and finalize reject recovery metadata drift", async (t) => {
 });
 
 test("finalize fsync failure stays indeterminate and can be reconciled", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-finalize-fsync-");
   const marker = path.join(root, "finalize-fsync-failed.marker");
   await writeFile(path.join(root, "file.txt"), "original\n");
@@ -425,7 +426,7 @@ test("finalize fsync failure stays indeterminate and can be reconciled", async (
 });
 
 test("replacement commit fsync failure requires a successful preserve sync", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-commit-fsync-");
   const marker = path.join(root, "commit-fsync-failed.marker");
   await writeFile(path.join(root, "file.txt"), "original\n");
@@ -466,7 +467,7 @@ test("replacement commit fsync failure requires a successful preserve sync", asy
 });
 
 test("active, cancel, replay, and double-effect transitions fail closed", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-state-");
   const helper = startHelper(t, root);
   assert.match(
@@ -491,7 +492,7 @@ test("active, cancel, replay, and double-effect transitions fail closed", async 
 });
 
 test("a replayed replacement commit cannot clear its recovery transaction", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-commit-replay-");
   await writeFile(path.join(root, "file.txt"), "original\n");
   const helper = startHelper(t, root);
@@ -522,7 +523,7 @@ test("a replayed replacement commit cannot clear its recovery transaction", asyn
 });
 
 test("rejects stale revisions, symlinks, and multiply-linked targets", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-links-");
   await mkdir(path.join(root, "real"));
   await writeFile(path.join(root, "real", "file.txt"), "current\n");
@@ -551,7 +552,7 @@ test("rejects stale revisions, symlinks, and multiply-linked targets", async (t)
 });
 
 test("a path replacement after prepare is reported as a conflict and preserved", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-race-");
   const target = path.join(root, "file.txt");
   const moved = path.join(root, "prepared-original.txt");
@@ -572,7 +573,7 @@ test("a path replacement after prepare is reported as a conflict and preserved",
 });
 
 test("a replacement in the final install race is atomically rolled back", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-install-race-");
   const target = path.join(root, "file.txt");
   const moved = path.join(root, "prepared-original.txt");
@@ -603,7 +604,7 @@ test("a replacement in the final install race is atomically rolled back", async 
 });
 
 test("a late mode change to the staged inode is rejected before install", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-stage-mode-race-");
   const target = path.join(root, "file.txt");
   const marker = path.join(root, "stage-mode-before-install.marker");
@@ -641,7 +642,7 @@ test("a late mode change to the staged inode is rejected before install", async 
 });
 
 test("a late target mode change is rejected before staging", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-target-mode-race-");
   const target = path.join(root, "file.txt");
   const marker = path.join(root, "target-mode-before-stage.marker");
@@ -671,7 +672,7 @@ test("a late target mode change is rejected before staging", async (t) => {
 });
 
 test("metadata policy preserves provenance and rejects drift, unknown xattrs, and ACLs", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (process.platform !== "darwin") return t.skip("macOS provenance and ACL contract");
   const root = await fixture(t, "aiden-file-mutator-metadata-");
   const ordinary = path.join(root, "ordinary.txt");
   await writeFile(ordinary, "original\n");
@@ -780,7 +781,7 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
 });
 
 test("moving a prepared parent directory makes commit roll back", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-parent-race-");
   const directory = path.join(root, "src");
   const moved = path.join(root, "moved-src");
@@ -816,7 +817,7 @@ test("moving a prepared parent directory makes commit roll back", async (t) => {
 });
 
 test("replacing the pinned workspace root invalidates commit", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const outer = await fixture(t, "aiden-file-mutator-root-race-");
   const root = path.join(outer, "workspace");
   const moved = path.join(outer, "moved-workspace");
@@ -839,7 +840,7 @@ test("replacing the pinned workspace root invalidates commit", async (t) => {
 });
 
 test("two absent prepares cannot overwrite the winning create", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-create-race-");
   const first = startHelper(t, root);
   const second = startHelper(t, root);
@@ -859,7 +860,7 @@ test("two absent prepares cannot overwrite the winning create", async (t) => {
 });
 
 test("a crash after replacement leaves the new target and old recovery intact", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-crash-");
   const target = path.join(root, "file.txt");
   const marker = path.join(root, "installed.marker");
@@ -887,7 +888,7 @@ test("a crash after replacement leaves the new target and old recovery intact", 
 });
 
 test("multiple crash recoveries remain attributable to request and parent path", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-multi-crash-");
   const alpha = path.join(root, "alpha");
   const beta = path.join(root, "beta");
@@ -945,7 +946,7 @@ test("multiple crash recoveries remain attributable to request and parent path",
 });
 
 test("fixed input bounds reject oversized content and non-normal paths", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-bounds-");
   const helper = startHelper(t, root);
   assert.equal(
@@ -967,7 +968,7 @@ test("fixed input bounds reject oversized content and non-normal paths", async (
 });
 
 test("startup refuses a root whose pinned identity does not match", async (t) => {
-  if (process.platform !== "darwin") return;
+  if (!["darwin", "linux"].includes(process.platform)) return t.skip("POSIX helper required");
   const root = await fixture(t, "aiden-file-mutator-root-");
   const identity = await rootIdentity(root);
   const child = spawn(
