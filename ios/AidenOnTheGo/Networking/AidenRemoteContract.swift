@@ -1085,14 +1085,22 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             throw AidenRemoteContractError.invalidTerminalClassification
         }
         if type == .taskUpdate {
-            taskProgress = try values.decode(AidenRemoteChatTaskProgress.self, forKey: .payload)
+            let progress = try values.decode(AidenRemoteChatTaskProgress.self, forKey: .payload)
+            guard progress.chatId == streamId else {
+                throw AidenRemoteContractError.invalidStreamIdentity
+            }
+            taskProgress = progress
             agentRoster = nil
             payload = nil
             return
         }
         if type == .agentsUpdate {
+            let roster = try values.decode(AidenRemoteChatAgentRoster.self, forKey: .payload)
+            guard roster.chatId == streamId else {
+                throw AidenRemoteContractError.invalidStreamIdentity
+            }
             taskProgress = nil
-            agentRoster = try values.decode(AidenRemoteChatAgentRoster.self, forKey: .payload)
+            agentRoster = roster
             payload = nil
             return
         }
@@ -1687,7 +1695,8 @@ struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendabl
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accepts = try values.decode([AidenRemoteCapability].self, forKey: .accepts)
         let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
-        guard accepts.count <= allowed.count,
+        guard !accepts.isEmpty,
+              accepts.count <= allowed.count,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {
             throw AidenRemoteContractError.unsafePayloadField("accepts")

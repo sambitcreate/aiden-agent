@@ -936,6 +936,119 @@ test("chat progress reads and its dedicated stream require negotiated grants", a
   }
 });
 
+test("bot chats still require bot authority on progress reads and events", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  // A device with negotiated progress grants but no bot:read can never reach
+  // a retained bot chat's progress projections.
+  const withoutBotRead = await fixture({
+    botChat: true,
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${withoutBotRead.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      withoutBotRead.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await withoutBotRead.close();
+  }
+
+  // bot:read alone is not enough: the retained bot chat authorization must
+  // also pass before any progress projection or stream opens.
+  const unauthorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: () => false,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${unauthorized.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      unauthorized.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await unauthorized.close();
+  }
+
+  // A fully authorized bot chat serves progress projections through the same
+  // negotiated-grant path as a workspace chat.
+  const authorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: (request) =>
+      request.botId === "bot-1" && request.access === "read",
+  });
+  try {
+    const tasks = await fetch(`${authorized.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 200);
+    await tasks.json();
+    const agents = await fetch(`${authorized.base}/chats/chat-1/agents`, { headers });
+    assert.equal(agents.status, 200);
+    await agents.json();
+    const events = await fetch(
+      `${authorized.base}/chats/chat-1/progress/events?after=0`,
+      { headers },
+    );
+    assert.equal(events.status, 200);
+    await events.text();
+    assert.equal(
+      authorized.calls.includes("task-snapshot:chat-1") &&
+        authorized.calls.includes("agent-roster:chat-1:") &&
+        authorized.calls.includes(
+          "progress-events:chat-1:0:tasks:read,agents:read",
+        ),
+      true,
+    );
+  } finally {
+    await authorized.close();
+  }
+});
+
 test("progress stream forwards only the granted progress projections", async () => {
   const app = await fixture({
     capabilities: ["server:read", "chat:read", "tasks:read"],

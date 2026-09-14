@@ -882,6 +882,10 @@ const AIDEN_REMOTE_PRIVATE_CHILD_PROJECTION_PARTS = [
   "generations",
   "workspaces",
   "milestones",
+  "transcripts",
+  "transcript",
+  "sessions",
+  "session",
   "interrupted",
   "completed",
   "authority",
@@ -3487,13 +3491,19 @@ function parseLegacyNonNegotiatingFixture(
   };
 }
 
-function validateEventPayload(type: AidenRemoteEventType, payload: Record<string, unknown>): void {
+function validateEventPayload(type: AidenRemoteEventType, payload: Record<string, unknown>, streamId: string): void {
   if (type === "task_update") {
-    parseAidenRemoteChatTaskProgress(payload, "task_update payload");
+    const progress = parseAidenRemoteChatTaskProgress(payload, "task_update payload");
+    if (progress.chatId !== streamId) {
+      throw new Error("task_update payload chatId must match the event streamId.");
+    }
     return;
   }
   if (type === "agents_update") {
-    parseAidenRemoteChatAgentRoster(payload, "agents_update payload");
+    const roster = parseAidenRemoteChatAgentRoster(payload, "agents_update payload");
+    if (roster.chatId !== streamId) {
+      throw new Error("agents_update payload chatId must match the event streamId.");
+    }
     return;
   }
   const keys = EVENT_PAYLOAD_KEYS[type];
@@ -3696,7 +3706,7 @@ export function parseAidenRemoteStreamEvent(value: unknown): AidenRemoteStreamEv
   if (value.terminal !== TERMINAL_EVENT_TYPES.has(knownType)) {
     throw new Error(`Aiden Remote event ${type} has an invalid terminal classification.`);
   }
-  validateEventPayload(knownType, value.payload);
+  validateEventPayload(knownType, value.payload, streamId);
   assertNoForbiddenWireKeys(value, "event");
   return {
     protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -3779,6 +3789,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "protocolVersion",
       "instanceId",
       "name",
+      "deviceName",
       "appVersion",
       "capabilities",
       "serverCapabilities",
@@ -3796,6 +3807,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Fixture server instance does not match bootstrap.");
   }
   assertBoundedString(server, "name", 80);
+  if (server.deviceName !== undefined) {
+    assertBoundedString(server, "deviceName", 80);
+  }
   assertBoundedString(server, "appVersion", 40);
   if (server.minimumClientVersion !== undefined) {
     assertBoundedString(server, "minimumClientVersion", 40);

@@ -140,7 +140,8 @@ class AidenRemoteCoordinator(
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
                     serverCapabilities = serverCapabilities,
-                    serverName = server.name
+                    serverName = server.name,
+                    deviceCapabilities = server.capabilities
                 )
                 val negotiatedServer = negotiateProgressCapabilities(
                     generation = generation,
@@ -152,7 +153,8 @@ class AidenRemoteCoordinator(
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
                     serverCapabilities = negotiatedServer.serverCapabilities ?: negotiatedServer.capabilities,
-                    serverName = negotiatedServer.name
+                    serverName = negotiatedServer.name,
+                    deviceCapabilities = negotiatedServer.capabilities
                 )
                 // Persist the negotiated grant before publishing serverInfo;
                 // progress consumers use both values as one capability gate.
@@ -210,7 +212,8 @@ class AidenRemoteCoordinator(
             installationStore.updateServerCapabilities(
                 instanceId = installation.instanceId,
                 serverCapabilities = refreshedServerCapabilities,
-                serverName = refreshed.name
+                serverName = refreshed.name,
+                deviceCapabilities = refreshed.capabilities
             )
             installationStore.updateDeviceCapabilities(installation.instanceId, completeCapabilities)
             refreshed

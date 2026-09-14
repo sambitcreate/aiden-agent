@@ -258,6 +258,37 @@ final class AidenRemotePhase0Tests: XCTestCase {
         )
     }
 
+    func testAgentRosterPreviousTurnsEnforceNewestFirstButAcceptTies() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let roster = try XCTUnwrap(root["agentRoster"] as? [String: Any])
+
+        var oldestFirst = roster
+        oldestFirst["previousTurns"] = [
+            ["turnId": "turn_fixture_older", "startedAt": "2026-08-18T18:00:00Z"],
+            ["turnId": "turn_fixture_newer", "startedAt": "2026-08-18T19:00:00Z"],
+        ]
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatAgentRoster.self,
+                from: JSONSerialization.data(withJSONObject: oldestFirst)
+            )
+        )
+
+        var tied = roster
+        tied["previousTurns"] = [
+            ["turnId": "turn_fixture_a", "startedAt": "2026-08-18T19:00:00Z"],
+            ["turnId": "turn_fixture_b", "startedAt": "2026-08-18T19:00:00Z"],
+        ]
+        let decoded = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: JSONSerialization.data(withJSONObject: tied)
+        )
+        XCTAssertEqual(decoded.previousTurns.count, 2)
+    }
+
     func testParentVisibleMessageTextPreservesExactSemanticContent() throws {
         let samples = [
             "NFC café | NFD cafe\u{301} | हिन्दी | 日本語 | العربية",

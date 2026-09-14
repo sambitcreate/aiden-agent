@@ -101,6 +101,13 @@ export interface AidenRemoteStreamSnapshot {
     updatedAt: number;
     events: AidenRemoteStreamEvent[];
   }>;
+  /**
+   * Durable public turn identities for remote-created generations. Stream
+   * records are pruned after terminal retention, but progress rosters must
+   * keep echoing the issued `turnId` for as long as the chat's durable agent
+   * history survives.
+   */
+  turnIndex?: Array<{ streamId: string; chatId: string; turnId: string }>;
 }
 
 interface StreamSubscriber {
@@ -334,7 +341,37 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
       events,
     });
   }
-  return { version: 1, streams };
+  const identifier = /^[A-Za-z0-9._:-]{1,128}$/u;
+  const turnIndex: NonNullable<AidenRemoteStreamSnapshot["turnIndex"]> = [];
+  if (record.turnIndex !== undefined) {
+    if (!Array.isArray(record.turnIndex) || record.turnIndex.length > MAX_STREAMS * 4) {
+      throw new Error("Invalid Aiden Remote stream snapshot.");
+    }
+    const indexed = new Set<string>();
+    for (const rawEntry of record.turnIndex) {
+      const entry = ownRecord(rawEntry);
+      if (
+        !entry ||
+        Object.keys(entry).some((key) => !["streamId", "chatId", "turnId"].includes(key)) ||
+        typeof entry.streamId !== "string" ||
+        !identifier.test(entry.streamId) ||
+        indexed.has(entry.streamId) ||
+        typeof entry.chatId !== "string" ||
+        !identifier.test(entry.chatId) ||
+        typeof entry.turnId !== "string" ||
+        !identifier.test(entry.turnId)
+      ) {
+        throw new Error("Invalid Aiden Remote stream snapshot.");
+      }
+      indexed.add(entry.streamId);
+      turnIndex.push({
+        streamId: entry.streamId,
+        chatId: entry.chatId,
+        turnId: entry.turnId,
+      });
+    }
+  }
+  return { version: 1, streams, turnIndex };
 }
 
 export function normalizeAidenRemoteStreamSnapshot(value: unknown): AidenRemoteStreamSnapshot {
@@ -349,6 +386,9 @@ export function removeRevokedDeviceStreams(
   return {
     version: 1,
     streams: snapshot.streams.filter(({ deviceId }) => !revokedDeviceIds.has(deviceId)),
+    // Turn identities are per-chat public facts other paired devices still
+    // need for roster correlation after the issuing device is revoked.
+    turnIndex: snapshot.turnIndex,
   };
 }
 
@@ -358,6 +398,7 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
+  private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
   private readonly approvals = new Map<string, ApprovalRecord>();
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
@@ -453,7 +494,11 @@ export class AidenRemoteStreamService {
   }
 
   private restore(snapshot: AidenRemoteStreamSnapshot): void {
-    for (const saved of parseSnapshot(snapshot).streams) {
+    const parsed = parseSnapshot(snapshot);
+    for (const entry of parsed.turnIndex ?? []) {
+      this.indexTurn(entry.streamId, entry.chatId, entry.turnId);
+    }
+    for (const saved of parsed.streams) {
       const base: Omit<StreamRecord, "owner"> = {
         ...saved,
         eventBytes: saved.events.reduce(
@@ -468,6 +513,7 @@ export class AidenRemoteStreamService {
       };
       const record: StreamRecord = { ...base, owner: this.ownerFor(base) };
       this.streams.set(record.streamId, record);
+      this.indexTurn(record.streamId, record.chatId, record.turnId);
       if (!terminal(record.state)) {
         this.append(
           record,
@@ -478,6 +524,15 @@ export class AidenRemoteStreamService {
         );
       }
     }
+  }
+
+  private indexTurn(streamId: string, chatId: string, turnId: string): void {
+    if (this.turnIndex.has(streamId)) return;
+    // Bounded oldest-first eviction; the index outlives stream records.
+    if (this.turnIndex.size >= MAX_STREAMS * 4) {
+      this.turnIndex.delete(this.turnIndex.keys().next().value!);
+    }
+    this.turnIndex.set(streamId, { chatId, turnId });
   }
 
   snapshot(): AidenRemoteStreamSnapshot {
@@ -491,6 +546,11 @@ export class AidenRemoteStreamService {
         state: stream.state,
         updatedAt: stream.updatedAt,
         events: structuredClone(stream.events),
+      })),
+      turnIndex: [...this.turnIndex.entries()].map(([streamId, entry]) => ({
+        streamId,
+        chatId: entry.chatId,
+        turnId: entry.turnId,
       })),
     };
   }
@@ -624,6 +684,7 @@ export class AidenRemoteStreamService {
     const owner = this.ownerFor(base);
     const record: StreamRecord = { ...base, owner };
     this.streams.set(streamId, record);
+    this.indexTurn(streamId, chatId, turnId);
     this.append(record, "status", { state: "queued" }, false, "queued");
     return owner;
   }
@@ -897,6 +958,14 @@ export class AidenRemoteStreamService {
       true,
       "error",
     );
+  }
+
+  /** Server-side identity correlation; not a device-authorized read. */
+  turnIdFor(chatId: string, streamId: string): string | undefined {
+    const stream = this.streams.get(streamId);
+    if (stream) return stream.chatId === chatId ? stream.turnId : undefined;
+    const indexed = this.turnIndex.get(streamId);
+    return indexed?.chatId === chatId ? indexed.turnId : undefined;
   }
 
   status(deviceId: string, streamId: string): AidenRemoteStreamStatus {

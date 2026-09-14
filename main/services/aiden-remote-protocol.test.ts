@@ -1196,6 +1196,22 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   const unsafeDetails = clone();
   record(record(unsafeDetails.error, "error envelope").error, "error").details = { absolutePath: "/private/secret" };
   assert.throws(() => parseAidenRemoteContractFixture(unsafeDetails), /unsupported field/);
+
+  // The new progress projections are bounded public surfaces: private or
+  // additive unknown fields fail closed at every level, not only on legacy
+  // transcript shapes.
+  for (const [mutate, label] of [
+    [(draft: Record<string, unknown>) => { record(draft.taskProgress, "taskProgress").absolutePath = "/private/secret"; }, "taskProgress root"],
+    [(draft: Record<string, unknown>) => { record((record(draft.taskProgress, "taskProgress").tasks as unknown[])[0], "task").childTranscript = ["secret"]; }, "taskProgress task"],
+    [(draft: Record<string, unknown>) => { record(draft.agentRoster, "agentRoster").providerCredential = "secret"; }, "agentRoster root"],
+    [(draft: Record<string, unknown>) => { record((record(draft.agentRoster, "agentRoster").agents as unknown[])[0], "agent").childResult = "secret"; }, "agentRoster agent"],
+    [(draft: Record<string, unknown>) => { record((draft.chatProgressEvents as unknown[])[0], "event").payload = { ...record(record((draft.chatProgressEvents as unknown[])[0], "event").payload, "payload"), hiddenPrompt: "secret" }; }, "chatProgressEvents payload"],
+    [(draft: Record<string, unknown>) => { record(draft.deviceCapabilitiesUpdate, "deviceCapabilitiesUpdate").sessionId = "private"; }, "deviceCapabilitiesUpdate"],
+  ] as const) {
+    const mutated = clone();
+    mutate(mutated);
+    assert.throws(() => parseAidenRemoteContractFixture(mutated), /Forbidden private Bot wire key|private child field|unsupported field|unsupported key/i, label);
+  }
   for (const requiredField of ["message", "requestId", "retryable"]) {
     const malformed = clone();
     delete record(record(malformed.error, "error envelope").error, "error")[requiredField];
@@ -1265,7 +1281,7 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   ];
   assert.throws(
     () => parseAidenRemoteContractFixture(ordinaryProgress),
-    /Ordinary turn streams must not carry chat progress projections/u,
+    /task_update payload chatId must match the event streamId/u,
   );
 });
 

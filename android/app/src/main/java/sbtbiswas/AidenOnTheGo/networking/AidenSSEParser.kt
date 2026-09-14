@@ -242,8 +242,11 @@ class AidenSSEParser {
             }
             val type = AidenRemoteEventType(typeRaw)
 
+            // The terminal bit is required on every event. A missing or
+            // malformed bit fails closed for both known and unknown types —
+            // an unknown type must never be silently treated as nonterminal.
             val terminal = rootObj["terminal"]?.jsonPrimitive?.booleanOrNull
-                ?: (type.isTerminal)
+                ?: throw AidenRemoteContractException.InvalidJson("Missing terminal")
 
             if (!AidenRemoteEventType.V1_KNOWN.contains(type)) {
                 if (terminal) {
@@ -300,6 +303,16 @@ class AidenSSEParser {
                     throw error
                 } catch (_: Exception) {
                     throw AidenRemoteContractException.InvalidJson("Invalid ${type.rawValue} payload")
+                }
+                // Progress events are chat-scoped: the payload must carry the
+                // stream's chat identity, never a different chat's snapshot.
+                val payloadChatId = when (decodedProgress) {
+                    is AidenChatTaskProgress -> decodedProgress.chatId
+                    is AidenChatAgentRoster -> decodedProgress.chatId
+                    else -> null
+                }
+                if (payloadChatId != streamId) {
+                    throw AidenRemoteContractException.InvalidStreamIdentity
                 }
                 val decodedPayload = if (decodedProgress is AidenChatTaskProgress) {
                     AidenRemoteEventPayload(taskProgress = decodedProgress)

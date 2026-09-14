@@ -35,6 +35,11 @@ interface ProgressPorts {
   ): Promise<ProgressChat>;
   readTodo(chatId: string): Promise<TodoSnapshotViewV1>;
   readAgents(chatId: string): Promise<SubagentRunSnapshot[]>;
+  /**
+   * Public turn identity already issued for a generation (remote-created
+   * turns). Other generations get a stable minted identity instead.
+   */
+  publicTurnId?(chatId: string, generationId: string): string | undefined;
   now?: () => number;
 }
 
@@ -75,6 +80,13 @@ export class AidenRemoteChatProgressService {
     return `${kind}_${createHash("sha256")
       .update(JSON.stringify([this.ports.instanceId, kind, chatId, privateId]))
       .digest("base64url")}`;
+  }
+
+  private turnPublicId(chatId: string, generationId: string): string {
+    return (
+      this.ports.publicTurnId?.(chatId, generationId) ??
+      this.publicId("turn", chatId, generationId)
+    );
   }
 
   private version(key: string, value: unknown) {
@@ -188,7 +200,7 @@ export class AidenRemoteChatProgressService {
     const active = this.ports.events.current(chatId);
     const generationId = turnId
       ? snapshots.find(
-          (run) => this.publicId("turn", chatId, run.generationId) === turnId,
+          (run) => this.turnPublicId(chatId, run.generationId) === turnId,
         )?.generationId
       : (active?.generationId ??
         chat.latestGenerationId ??
@@ -250,7 +262,16 @@ export class AidenRemoteChatProgressService {
         turns: run.turns,
         tools: run.tools,
         tokens: run.tokens,
-        ...(run.milestones ? { milestones: run.milestones } : {}),
+        // The contract requires unique kinds; the upstream journal only skips
+        // consecutive duplicates, so dedupe first-occurrence before emitting.
+        ...(run.milestones
+          ? { milestones: [...new Set(run.milestones)] }
+          : {}),
+        // Closed producer facts (truncation/filtering) are safe to project;
+        // raw error and warning strings stay private to the parent chat.
+        ...(run.projectionNotices?.length
+          ? { notices: [...new Set(run.projectionNotices)] }
+          : {}),
       };
     });
     await this.ports.authorize(deviceId, chatId, "agents:read");
@@ -270,14 +291,14 @@ export class AidenRemoteChatProgressService {
       )
       .slice(0, 16)
       .map(([id, startedAt]) => ({
-        turnId: this.publicId("turn", chatId, id),
+        turnId: this.turnPublicId(chatId, id),
         startedAt: new Date(startedAt).toISOString(),
       }));
     const value = {
       version: 1,
       chatId,
       ...(generationId
-        ? { turnId: this.publicId("turn", chatId, generationId) }
+        ? { turnId: this.turnPublicId(chatId, generationId) }
         : {}),
       availability: "ready",
       agents,

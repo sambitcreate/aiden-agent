@@ -1223,8 +1223,11 @@ final class AidenChatViewModel {
             .first(where: { $0.turnId == turnId }) {
             return turn.startedAt.date.formatted(date: .abbreviated, time: .shortened)
         }
-        let suffix = String(turnId.suffix(8))
-        return String(localized: "Turn \(suffix)")
+        // Opaque turn IDs never surface in display text. Fall back to the
+        // turn's position in the retained list so the label stays stable.
+        let earlier = availableAgentTurnIds.filter { $0 != currentAgentTurnId }
+        let index = earlier.firstIndex(of: turnId).map { $0 + 1 } ?? earlier.count
+        return String(localized: "Earlier turn \(index)")
     }
 
     func agentRoster(for turnId: String?) -> AidenRemoteChatAgentRoster? {
@@ -1263,6 +1266,8 @@ final class AidenChatViewModel {
     ) async {
         guard isCurrentProgressObservation(observationGeneration, context: context),
               canReadTaskProgress || canReadAgentRoster else { return }
+        var taskFetchFailed = false
+        var rosterFetchFailed = false
         do {
             let client = try coordinator.remoteClient(for: context)
             if canReadTaskProgress {
@@ -1270,10 +1275,10 @@ final class AidenChatViewModel {
                     let snapshot = try await client.taskProgress(chatId: chat.id)
                     guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
                     acceptTaskProgress(snapshot)
-                    isProgressStale = false
                 } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {
+                    taskFetchFailed = true
                     clearProgressStateIfCredentialRevoked(error)
                     if await coordinator.handleCredentialRevocation(error, context: context) { return }
                     if isProgressAccessDenied(error) { clearTaskProgressState() }
@@ -1284,10 +1289,10 @@ final class AidenChatViewModel {
                     let snapshot = try await client.agentRoster(chatId: chat.id)
                     guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
                     acceptAgentRoster(snapshot)
-                    isProgressStale = false
                 } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {
+                    rosterFetchFailed = true
                     clearProgressStateIfCredentialRevoked(error)
                     if await coordinator.handleCredentialRevocation(error, context: context) { return }
                     if isProgressAccessDenied(error) { clearAgentProgressState() }
@@ -1300,6 +1305,13 @@ final class AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             if isProgressAccessDenied(error) { clearProgressStateForLostAccess() }
         }
+        // One flag covers both surfaces: only clear it when every surface that
+        // still holds data refreshed. A denied surface is cleared above and no
+        // longer contributes, while a failed refresh keeps retained data
+        // labelled last-known rather than presenting it as fresh.
+        isProgressStale =
+            (taskFetchFailed && taskProgress != nil) ||
+            (rosterFetchFailed && agentRoster != nil)
     }
 
     private func observeProgress(generation: UInt64) async {
@@ -1475,7 +1487,11 @@ final class AidenChatViewModel {
         } catch {
             clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            if isProgressAccessDenied(error) { clearAgentProgressState() }
+            if isProgressAccessDenied(error) {
+                clearAgentProgressState()
+            } else {
+                presentedError = String(localized: "That agent session is no longer available.")
+            }
         }
     }
 

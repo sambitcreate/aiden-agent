@@ -452,22 +452,19 @@ class AidenChatViewModel(
 
     private fun acceptTaskProgress(snapshot: AidenChatTaskProgress) {
         if (snapshot.chatId != chatId) return
-        val previousEpoch = taskEpoch
-        if (previousEpoch == snapshot.epoch && snapshot.revision < taskRevision) return
-        if (previousEpoch == snapshot.epoch && snapshot.revision == taskRevision) return
-        if (previousEpoch != snapshot.epoch) taskRevision = 0L
+        if (!AidenProgressFencing.accepts(taskEpoch, taskRevision, snapshot.epoch, snapshot.revision)) return
+        if (taskEpoch != snapshot.epoch) taskRevision = 0L
         taskEpoch = snapshot.epoch
         taskRevision = snapshot.revision
         _taskProgress.value = snapshot
     }
 
-    private fun acceptAgentRoster(snapshot: AidenChatAgentRoster, historical: Boolean = false) {
-        if (snapshot.chatId != chatId) return
+    private fun acceptAgentRoster(snapshot: AidenChatAgentRoster, historical: Boolean = false): Boolean {
+        if (snapshot.chatId != chatId) return false
+        val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
         if (!historical) {
-            val previousEpoch = agentEpoch
-            if (previousEpoch == snapshot.epoch && snapshot.revision < agentRevision) return
-            if (previousEpoch == snapshot.epoch && snapshot.revision == agentRevision) return
-            if (previousEpoch != snapshot.epoch) agentRevision = 0L
+            if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
+            if (agentEpoch != snapshot.epoch) agentRevision = 0L
             agentEpoch = snapshot.epoch
             agentRevision = snapshot.revision
             val previousTurnId = currentRosterTurnId
@@ -477,18 +474,30 @@ class AidenChatViewModel(
                 selectedRosterTurnId = snapshot.turnId
                 _selectedAgentRoster.value = snapshot
             }
+        } else {
+            // A retained-turn fetch can resolve after a fresher snapshot for the
+            // same turn was already applied. Revisions are ordered within an
+            // epoch:turn key, so never let a late response move history or the
+            // user's selected roster backwards.
+            val existing = _agentRosterHistory.value.firstOrNull {
+                AidenProgressFencing.rosterKey(it.epoch, it.turnId) == key
+            }
+            if (existing != null && !AidenProgressFencing.accepts(
+                    existing.epoch, existing.revision, snapshot.epoch, snapshot.revision
+                )
+            ) return false
         }
-        val key = "${snapshot.epoch}:${snapshot.turnId ?: "empty"}"
         val updated = buildList {
             add(snapshot)
             addAll(_agentRosterHistory.value.filter {
-                "${it.epoch}:${it.turnId ?: "empty"}" != key
+                AidenProgressFencing.rosterKey(it.epoch, it.turnId) != key
             })
         }.take(MAX_AGENT_ROSTER_HISTORY)
         _agentRosterHistory.value = updated
         if (historical && selectedRosterTurnId == snapshot.turnId) {
             _selectedAgentRoster.value = snapshot
         }
+        return true
     }
 
     /** Select a current or retained turn; an absent retained turn is fetched by opaque ID. */
@@ -518,9 +527,15 @@ class AidenChatViewModel(
                     coordinator.installationStore.activeInstallation?.deviceId != deviceId ||
                     agentRosterSelectionTicket != selectionTicket
                 ) return@launch
-                acceptAgentRoster(roster, historical = true)
-                selectedRosterTurnId = turnId
-                _selectedAgentRoster.value = roster
+                if (acceptAgentRoster(roster, historical = true)) {
+                    selectedRosterTurnId = turnId
+                    _selectedAgentRoster.value = roster
+                } else {
+                    // The fetch resolved to a stale snapshot: keep the newer
+                    // cached roster for this turn instead of regressing it.
+                    selectedRosterTurnId = turnId
+                    _selectedAgentRoster.value = _agentRosterHistory.value.firstOrNull { it.turnId == turnId }
+                }
             } catch (error: Exception) {
                 if (isProgressCredentialRevoked(error)) {
                     clearProgressState()
@@ -532,36 +547,6 @@ class AidenChatViewModel(
                     agentCapabilityDeniedObservationToken = progressObservationToken
                 } else if (error !is CancellationException && agentRosterSelectionTicket == selectionTicket) {
                     _presentedError.value = "That agent session is no longer available."
-                }
-            }
-        }
-    }
-
-    fun refreshAgentRoster(turnId: String? = null) {
-        if (!canReadAgentRoster) return
-        val client = activeClient() ?: return
-        val contextClient = client
-        val selectionTicket = agentRosterSelectionTicket
-        viewModelScope.launch {
-            try {
-                val roster = contextClient.chatAgents(chatId, turnId)
-                if (activeClient() !== contextClient || coordinator.activeInstanceId != instanceId ||
-                    coordinator.installationStore.activeInstallation?.deviceId != deviceId
-                ) return@launch
-                if (turnId == null) acceptAgentRoster(roster) else acceptAgentRoster(roster, historical = true)
-                if (turnId != null && agentRosterSelectionTicket == selectionTicket) {
-                    selectedRosterTurnId = turnId
-                    _selectedAgentRoster.value = roster
-                }
-            } catch (error: Exception) {
-                if (isProgressCredentialRevoked(error)) {
-                    clearProgressState()
-                    if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
-                        coordinator.removeInstallation(instanceId)
-                    }
-                } else if (isProgressCapabilityDenied(error)) {
-                    clearAgentRosterState()
-                    agentCapabilityDeniedObservationToken = progressObservationToken
                 }
             }
         }
@@ -600,7 +585,7 @@ class AidenChatViewModel(
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
             responseText.isNotBlank() -> "Writing a response"
             else -> status.title
-        } ?: status.title
+        }
         liveNotificationManager?.showAgentProgressNotification(
             instanceId = instanceId,
             sessionId = chatId,
