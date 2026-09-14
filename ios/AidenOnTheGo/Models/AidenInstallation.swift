@@ -298,6 +298,36 @@ final class AidenInstallationStore {
         }
     }
 
+    /// Persists the complete grant list returned by the authenticated additive
+    /// capability-negotiation endpoint. Ordinary `/server` refreshes remain
+    /// narrowing-only; this separate path records the server's explicit grant
+    /// decision without allowing a cached support inventory to widen access.
+    func updateNegotiatedDeviceCapabilities(
+        _ capabilities: [AidenRemoteCapability],
+        for instanceId: String
+    ) throws {
+        guard let index = installations.firstIndex(where: { $0.id == instanceId }) else { return }
+        let known = Set(AidenRemoteCapability.v1Known)
+        guard Set(capabilities).count == capabilities.count,
+              Set(capabilities).isSubset(of: known),
+              !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let progress = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)
+        guard existingNonProgress.isSubset(of: Set(capabilities)) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let previousInstallations = installations
+        installations[index].deviceCapabilities = capabilities
+        do {
+            try persist()
+        } catch {
+            installations = previousInstallations
+            throw error
+        }
+    }
+
     private static func sortInstallations(
         _ lhs: AidenInstallation,
         _ rhs: AidenInstallation

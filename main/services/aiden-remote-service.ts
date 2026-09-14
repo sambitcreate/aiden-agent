@@ -133,6 +133,7 @@ export interface AidenRemoteServiceOptions {
           "listRoots" | "listChildren" | "createSelection"
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
@@ -177,6 +178,7 @@ export interface AidenRemoteServiceOptions {
           "listRoots" | "listChildren" | "createSelection"
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;

@@ -880,6 +880,8 @@ final class AidenChatViewModel {
     private let draftStore: AidenChatDraftStore
     private let hapticScope: UUID
     @ObservationIgnored private var streamTask: Task<Void, Never>?
+    @ObservationIgnored private var progressTask: Task<Void, Never>?
+    @ObservationIgnored private var progressObservationGeneration: UInt64 = 0
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
     @ObservationIgnored private var activeStreamID: String?
@@ -908,6 +910,10 @@ final class AidenChatViewModel {
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
     private(set) var isUploadingAttachment = false
+    private(set) var taskProgress: AidenRemoteChatTaskProgress?
+    private(set) var agentRoster: AidenRemoteChatAgentRoster?
+    private(set) var historicalAgentRosters: [AidenRemoteChatAgentRoster] = []
+    private(set) var isProgressStale = false
     var draft = "" {
         didSet {
             guard draft != oldValue else { return }
@@ -1008,6 +1014,14 @@ final class AidenChatViewModel {
     }
 #endif
 
+    deinit {
+        streamTask?.cancel()
+        progressTask?.cancel()
+        titleRefreshTask?.cancel()
+        terminalReconciliationTask?.cancel()
+        draftPersistenceTask?.cancel()
+    }
+
     var isConnected: Bool {
         guard !isReadOnlyFixture else { return false }
         return coordinator.connectionState == .connected
@@ -1091,10 +1105,14 @@ final class AidenChatViewModel {
         }
     }
 
-    func load() async {
+    func load(observeProgress: Bool = true) async {
         guard !isReadOnlyFixture else { return }
         guard !instanceId.isEmpty, !isLoading else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard let context = try? coordinator.requestContext(for: instanceId) else {
+            clearProgressState()
+            return
+        }
+        let observationGeneration = progressObservationGeneration
         isLoading = true
         defer { isLoading = false }
         if draftSession == nil {
@@ -1119,12 +1137,332 @@ final class AidenChatViewModel {
             catalog = remoteCatalog
             await acceptRemoteChat(remoteChat, context: context)
         } catch {
+            clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         guard coordinator.isCurrent(context) else { return }
         await restoreStreamIfNeeded()
+        guard observeProgress,
+              isCurrentProgressObservation(observationGeneration, context: context) else { return }
+        await loadProgressSnapshot(
+            context: context,
+            observationGeneration: observationGeneration
+        )
+        guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
+        startProgressObservation()
+    }
+
+    var canReadTaskProgress: Bool {
+        guard let server = coordinator.server,
+              server.supportsChatTasks,
+              let installation = coordinator.installationStore.activeInstallation else { return false }
+        return installation.hasNegotiatedAccess(to: .tasksRead)
+    }
+
+    var canReadAgentRoster: Bool {
+        guard let server = coordinator.server,
+              server.supportsChatAgents,
+              let installation = coordinator.installationStore.activeInstallation else { return false }
+        return installation.hasNegotiatedAccess(to: .agentsRead)
+    }
+
+    /// Progress projections are independently negotiated read-only data. A
+    /// revoked or switched installation must never leave child state visible
+    /// while the parent transcript is being purged or reloaded.
+    func clearProgressState() {
+        taskProgress = nil
+        agentRoster = nil
+        historicalAgentRosters = []
+        isProgressStale = false
+    }
+
+    private func clearProgressStateIfCredentialRevoked(_ error: Error) {
+        guard (error as? AidenRemoteClientError)?.isCredentialRevoked == true else { return }
+        clearProgressState()
+    }
+
+    private func clearTaskProgressState() {
+        taskProgress = nil
+        if agentRoster == nil { isProgressStale = false }
+    }
+
+    private func clearAgentProgressState() {
+        agentRoster = nil
+        historicalAgentRosters = []
+        if taskProgress == nil { isProgressStale = false }
+    }
+
+    private func clearProgressStateForLostAccess() {
+        if !canReadTaskProgress { clearTaskProgressState() }
+        if !canReadAgentRoster { clearAgentProgressState() }
+    }
+
+    private func isProgressAccessDenied(_ error: Error) -> Bool {
+        guard let clientError = error as? AidenRemoteClientError,
+              case .server(_, let body) = clientError else { return false }
+        return body.code.rawValue == "capability_denied"
+    }
+
+    var currentAgentTurnId: String? { agentRoster?.turnId }
+
+    var availableAgentTurnIds: [String] {
+        guard canReadAgentRoster else { return [] }
+        var seen = Set<String>()
+        let knownRosters = ([agentRoster].compactMap { $0 } + historicalAgentRosters)
+        let advertisedTurns = knownRosters.flatMap { $0.previousTurns.map(\.turnId) }
+        return ([agentRoster].compactMap { $0?.turnId } + advertisedTurns + historicalAgentRosters.compactMap { $0.turnId })
+            .filter { seen.insert($0).inserted }
+    }
+
+    func turnLabel(_ turnId: String) -> String {
+        if let turn = ([agentRoster].compactMap { $0 } + historicalAgentRosters)
+            .flatMap({ $0.previousTurns })
+            .first(where: { $0.turnId == turnId }) {
+            return turn.startedAt.date.formatted(date: .abbreviated, time: .shortened)
+        }
+        let suffix = String(turnId.suffix(8))
+        return String(localized: "Turn \(suffix)")
+    }
+
+    func agentRoster(for turnId: String?) -> AidenRemoteChatAgentRoster? {
+        guard canReadAgentRoster else { return nil }
+        guard let turnId else { return agentRoster }
+        if agentRoster?.turnId == turnId { return agentRoster }
+        return historicalAgentRosters.first { $0.turnId == turnId }
+    }
+
+    func startProgressObservation() {
+        guard !isReadOnlyFixture else { return }
+        clearProgressStateForLostAccess()
+        guard progressTask == nil,
+              canReadTaskProgress || canReadAgentRoster else { return }
+        progressObservationGeneration &+= 1
+        let generation = progressObservationGeneration
+        progressTask = Task { [weak self] in
+            await self?.observeProgress(generation: generation)
+        }
+    }
+
+    func stopProgressObservation() {
+        progressObservationGeneration &+= 1
+        progressTask?.cancel()
+        progressTask = nil
+        clearProgressStateForLostAccess()
+        if taskProgress != nil || agentRoster != nil {
+            isProgressStale = true
+        }
+    }
+
+    private func loadProgressSnapshot(
+        context: AidenRemoteRequestContext,
+        observationGeneration: UInt64? = nil
+    ) async {
+        guard isCurrentProgressObservation(observationGeneration, context: context),
+              canReadTaskProgress || canReadAgentRoster else { return }
+        do {
+            let client = try coordinator.remoteClient(for: context)
+            if canReadTaskProgress {
+                do {
+                    let snapshot = try await client.taskProgress(chatId: chat.id)
+                    guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
+                    acceptTaskProgress(snapshot)
+                    isProgressStale = false
+                } catch let error where aidenIsCancellation(error) {
+                    return
+                } catch {
+                    clearProgressStateIfCredentialRevoked(error)
+                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
+                    if isProgressAccessDenied(error) { clearTaskProgressState() }
+                }
+            }
+            if canReadAgentRoster {
+                do {
+                    let snapshot = try await client.agentRoster(chatId: chat.id)
+                    guard isCurrentProgressObservation(observationGeneration, context: context) else { return }
+                    acceptAgentRoster(snapshot)
+                    isProgressStale = false
+                } catch let error where aidenIsCancellation(error) {
+                    return
+                } catch {
+                    clearProgressStateIfCredentialRevoked(error)
+                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
+                    if isProgressAccessDenied(error) { clearAgentProgressState() }
+                }
+            }
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if isProgressAccessDenied(error) { clearProgressStateForLostAccess() }
+        }
+    }
+
+    private func observeProgress(generation: UInt64) async {
+        while !Task.isCancelled {
+            guard let context = try? coordinator.requestContext(for: instanceId) else {
+                clearProgressState()
+                return
+            }
+            guard isCurrentProgressObservation(generation, context: context),
+                  canReadTaskProgress || canReadAgentRoster else { return }
+            await loadProgressSnapshot(context: context, observationGeneration: generation)
+            guard isCurrentProgressObservation(generation, context: context) else { return }
+            do {
+                let events = try coordinator.remoteClient(for: context).progressEvents(
+                    chatId: chat.id,
+                    after: 0
+                )
+                for try await event in events {
+                    try Task.checkCancellation()
+                    guard isCurrentProgressObservation(generation, context: context),
+                          event.streamId == chat.id else { return }
+                    applyProgress(event)
+                }
+                if isCurrentProgressObservation(generation, context: context) {
+                    isProgressStale = true
+                }
+            } catch let error where aidenIsCancellation(error) {
+                return
+            } catch {
+                clearProgressStateIfCredentialRevoked(error)
+                if await coordinator.handleCredentialRevocation(error, context: context) { return }
+                guard isCurrentProgressObservation(generation, context: context) else { return }
+                if isProgressAccessDenied(error) {
+                    clearProgressState()
+                    return
+                }
+                isProgressStale = true
+            }
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func isCurrentProgressObservation(
+        _ generation: UInt64?,
+        context: AidenRemoteRequestContext
+    ) -> Bool {
+        guard coordinator.isCurrent(context) else {
+            clearProgressState()
+            return false
+        }
+        guard let generation else { return true }
+        guard generation == progressObservationGeneration && !Task.isCancelled else { return false }
+        clearProgressStateForLostAccess()
+        return canReadTaskProgress || canReadAgentRoster
+    }
+
+    private func applyProgress(_ event: AidenRemoteStreamEvent) {
+        guard event.shouldApply else { return }
+        switch event.type {
+        case .taskUpdate:
+            guard canReadTaskProgress else {
+                clearTaskProgressState()
+                return
+            }
+            guard let snapshot = event.taskProgress,
+                  snapshot.chatId == chat.id else { return }
+            acceptTaskProgress(snapshot)
+            isProgressStale = false
+        case .agentsUpdate:
+            guard canReadAgentRoster else {
+                clearAgentProgressState()
+                return
+            }
+            guard let snapshot = event.agentRoster,
+                  snapshot.chatId == chat.id else { return }
+            acceptAgentRoster(snapshot)
+            isProgressStale = false
+        case .heartbeat:
+            break
+        default:
+            break
+        }
+    }
+
+    private func acceptTaskProgress(_ snapshot: AidenRemoteChatTaskProgress) {
+        guard snapshot.chatId == chat.id else { return }
+        guard AidenProgressPresentation.acceptsSnapshot(
+            currentEpoch: taskProgress?.epoch,
+            currentRevision: taskProgress?.revision,
+            incomingEpoch: snapshot.epoch,
+            incomingRevision: snapshot.revision
+        ) else { return }
+        taskProgress = snapshot
+    }
+
+    private func acceptAgentRoster(_ snapshot: AidenRemoteChatAgentRoster) {
+        guard snapshot.chatId == chat.id else { return }
+        guard let current = agentRoster else {
+            agentRoster = snapshot
+            return
+        }
+        // Roster revision is global for the chat projection, including when a
+        // new turn replaces the current roster. Fence stale responses before
+        // considering turn transitions so an old turn can never roll back the
+        // current view.
+        guard AidenProgressPresentation.acceptsSnapshot(
+            currentEpoch: current.epoch,
+            currentRevision: current.revision,
+            incomingEpoch: snapshot.epoch,
+            incomingRevision: snapshot.revision
+        ) else { return }
+        if current.turnId != snapshot.turnId {
+            if current.turnId != nil {
+                upsertHistoricalRoster(current)
+            }
+            agentRoster = snapshot
+            return
+        }
+        agentRoster = snapshot
+    }
+
+    private func upsertHistoricalRoster(_ roster: AidenRemoteChatAgentRoster) {
+        guard roster.turnId != nil else { return }
+        if let existing = historicalAgentRosters.first(where: { $0.turnId == roster.turnId }),
+           !AidenProgressPresentation.acceptsSnapshot(
+               currentEpoch: existing.epoch,
+               currentRevision: existing.revision,
+               incomingEpoch: roster.epoch,
+               incomingRevision: roster.revision
+           ) {
+            return
+        }
+        historicalAgentRosters.removeAll { $0.turnId == roster.turnId }
+        historicalAgentRosters.insert(roster, at: 0)
+        if historicalAgentRosters.count > 8 {
+            historicalAgentRosters.removeLast(historicalAgentRosters.count - 8)
+        }
+    }
+
+    func loadAgentRoster(turnId: String) async {
+        clearProgressStateForLostAccess()
+        guard canReadAgentRoster,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else {
+            clearAgentProgressState()
+            return
+        }
+        do {
+            let snapshot = try await coordinator.remoteClient(for: context).agentRoster(
+                chatId: chat.id,
+                turnId: turnId
+            )
+            guard coordinator.isCurrent(context), snapshot.chatId == chat.id, snapshot.turnId == turnId else { return }
+            upsertHistoricalRoster(snapshot)
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            clearProgressStateIfCredentialRevoked(error)
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if isProgressAccessDenied(error) { clearAgentProgressState() }
+        }
     }
 
     private func scheduleDraftPersistence() {
@@ -2252,10 +2590,12 @@ struct AidenWorkspaceChatsView: View {
 struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
+    @State private var progressSheet: AidenProgressSheet?
     @State private var isScrolledAwayFromLatest = false
     @FocusState private var composerIsFocused: Bool
     @State private var coordinator: AidenRemoteCoordinator?
@@ -2342,13 +2682,26 @@ struct AidenChatDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
-        .task { await model.load() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else {
+                model.stopProgressObservation()
+                return
+            }
+            await model.load(observeProgress: true)
+        }
+        .task(id: coordinator?.server?.serverTime) {
+            guard scenePhase == .active else { return }
+            model.startProgressObservation()
+        }
         .task(id: botToolsSessionIdentity) {
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
         }
         .sheet(item: $botSheet) { botSheetContent($0) }
+        .sheet(item: $progressSheet) { progressSheet in
+            AidenChatProgressSheet(kind: progressSheet, model: model)
+        }
         .alert("Aiden On The Go", isPresented: Binding(
             get: { model.presentedError != nil },
             set: { if !$0 { model.presentedError = nil } }
@@ -2365,8 +2718,20 @@ struct AidenChatDetailView: View {
         } message: {
             Text("This Bot’s primary model reads text only. Choose a vision model for photos and screenshots; attached images and a focused question will go to that model, while replies keep using the current primary model.")
         }
-        .onAppear { model.setHapticsActive(true) }
-        .onDisappear { model.setHapticsActive(false) }
+        .onAppear {
+            model.setHapticsActive(true)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                model.startProgressObservation()
+            } else {
+                model.stopProgressObservation()
+            }
+        }
+        .onDisappear {
+            model.setHapticsActive(false)
+            model.stopProgressObservation()
+        }
     }
 
     private var chatStack: some View {
@@ -2460,11 +2825,22 @@ struct AidenChatDetailView: View {
     }
 
     private var composer: some View {
-        AidenComposerView(
-            model: model,
-            autoStartVoice: autoStartVoice,
-            composerFocus: $composerIsFocused
-        )
+        VStack(spacing: 0) {
+            AidenChatProgressControls(
+                taskProgress: model.taskProgress,
+                agentRoster: model.agentRoster,
+                canReadTasks: model.canReadTaskProgress,
+                canReadAgents: model.canReadAgentRoster,
+                isStale: model.isProgressStale,
+                openTasks: { progressSheet = .tasks },
+                openAgents: { progressSheet = .agents }
+            )
+            AidenComposerView(
+                model: model,
+                autoStartVoice: autoStartVoice,
+                composerFocus: $composerIsFocused
+            )
+        }
         .disabled(model.isReadOnlyPresentation)
         .padding(.horizontal, 16)
         .padding(.bottom, 10)

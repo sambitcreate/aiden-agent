@@ -8,8 +8,10 @@ import {
 } from "./aiden-remote-pairing.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
+  AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
+  AIDEN_REMOTE_PROGRESS_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 
 const endpoint = "https://aiden.example.test/api/aiden/v1";
@@ -19,6 +21,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
   let now = 1_000;
   let issued = 0;
   let issuedAcceptsBotCapabilities: boolean | undefined;
+  let issuedAcceptsProgressCapabilities: boolean | undefined;
   let randomCounter = 0;
   let statusChanges = 0;
   const service = new AidenRemotePairingService(
@@ -27,6 +30,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
       issueDevice: async (input) => {
         issued += 1;
         issuedAcceptsBotCapabilities = input.acceptsBotCapabilities;
+        issuedAcceptsProgressCapabilities = input.acceptsProgressCapabilities;
         if (options.issueFails) throw new Error("disk failed");
         return {
           credential: Buffer.alloc(32, 8).toString("base64url"),
@@ -55,6 +59,7 @@ function fixture(options: { issueFails?: boolean } = {}) {
     service,
     issued: () => issued,
     issuedAcceptsBotCapabilities: () => issuedAcceptsBotCapabilities,
+    issuedAcceptsProgressCapabilities: () => issuedAcceptsProgressCapabilities,
     statusChanges: () => statusChanges,
     advance: (milliseconds: number) => {
       now += milliseconds;
@@ -66,6 +71,7 @@ function exchange(
   secret: string,
   acceptsDisplayName = true,
   acceptsBotCapabilities = false,
+  acceptsProgressCapabilities = false,
 ) {
   return {
     secret,
@@ -74,6 +80,7 @@ function exchange(
     clientVersion: "1.0",
     ...(acceptsDisplayName ? { acceptsDisplayName: true } : {}),
     ...(acceptsBotCapabilities ? { acceptsBotCapabilities: true } : {}),
+    ...(acceptsProgressCapabilities ? { acceptsProgressCapabilities: true } : {}),
   };
 }
 
@@ -233,10 +240,39 @@ test("pairing grants Bot authority only to clients that explicitly accept its vo
     exchange(currentWindow.bootstrap.secret, true, true),
     "bot-aware-client",
   );
-  assert.deepEqual(currentResult.capabilities, AIDEN_REMOTE_CAPABILITIES);
+  assert.deepEqual(currentResult.capabilities, [
+    ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
+    ...AIDEN_REMOTE_BOT_CAPABILITIES,
+  ]);
   assert.equal(currentResult.capabilities.includes("bot:read"), true);
   assert.equal(currentResult.capabilities.includes("bot:write"), true);
+  assert.equal((currentResult.capabilities as readonly string[]).includes("tasks:read"), false);
   assert.equal(current.issuedAcceptsBotCapabilities(), true);
+  assert.equal(current.issuedAcceptsProgressCapabilities(), false);
+});
+
+test("pairing grants progress authority only to clients that explicitly accept its vocabulary", async () => {
+  const progress = fixture();
+  const progressWindow = progress.service.begin(endpoint, fingerprint);
+  const progressResult = await progress.service.exchange(
+    exchange(progressWindow.bootstrap.secret, true, false, true),
+    "progress-aware-client",
+  );
+  assert.deepEqual(progressResult.capabilities, [
+    ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
+    ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+  ]);
+  assert.equal((progressResult.capabilities as readonly string[]).includes("bot:read"), false);
+  assert.equal(progress.issuedAcceptsProgressCapabilities(), true);
+  assert.equal(progress.issuedAcceptsBotCapabilities(), false);
+
+  const full = fixture();
+  const fullWindow = full.service.begin(endpoint, fingerprint);
+  const fullResult = await full.service.exchange(
+    exchange(fullWindow.bootstrap.secret, true, true, true),
+    "fully-aware-client",
+  );
+  assert.deepEqual(fullResult.capabilities, AIDEN_REMOTE_CAPABILITIES);
 });
 
 test("an expired, closed, or invalid pairing window fails with stable safe codes", async () => {

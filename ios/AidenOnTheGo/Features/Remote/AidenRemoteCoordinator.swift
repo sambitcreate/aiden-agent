@@ -305,6 +305,12 @@ final class AidenRemoteCoordinator {
         self.server = validatedServer
         applyWorkspaceSnapshot(validatedWorkspaces, instanceId: installation.id)
         connectionState = .connected
+        await negotiateProgressCapabilitiesIfNeeded(
+            server: validatedServer,
+            client: stagedClient,
+            installationId: installation.id,
+            generation: connectionGeneration
+        )
     }
 
     private static let pendingCredentialRecoveryMessage = String(localized:
@@ -764,6 +770,61 @@ final class AidenRemoteCoordinator {
         applyWorkspaceSnapshot(workspaces, instanceId: installation.id)
         connectionState = .connected
         await refreshDeviceIdentity(using: client, currentName: server.deviceName)
+        await negotiateProgressCapabilitiesIfNeeded(
+            server: server,
+            client: client,
+            installationId: installation.id,
+            generation: generation
+        )
+    }
+
+    /// Existing pairings predate the progress opt-in field. Upgrade them only
+    /// after the authenticated server advertises the matching feature. A
+    /// failed additive negotiation is non-fatal and leaves progress hidden.
+    private func negotiateProgressCapabilitiesIfNeeded(
+        server: AidenServer,
+        client: AidenRemoteClient,
+        installationId: String,
+        generation: Int
+    ) async {
+        guard isCurrentContext(installationId: installationId, generation: generation) else { return }
+        var requested: [AidenRemoteCapability] = []
+        if server.supportsChatTasks { requested.append(.tasksRead) }
+        if server.supportsChatAgents { requested.append(.agentsRead) }
+        guard !requested.isEmpty,
+              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
+            return
+        }
+        let missing = requested.filter {
+            !installation.deviceCapabilities.contains($0)
+                || installation.serverCapabilities?.contains($0) != true
+        }
+        guard !missing.isEmpty else { return }
+        do {
+            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
+            guard isCurrentContext(installationId: installationId, generation: generation) else {
+                return
+            }
+            try installationStore.updateNegotiatedDeviceCapabilities(
+                negotiatedCapabilities,
+                for: installationId
+            )
+            let refreshedServer = try await client.server()
+            guard isCurrentContext(installationId: installationId, generation: generation),
+                  refreshedServer.instanceId == installationId else { return }
+            try installationStore.updateServer(refreshedServer)
+            self.server = refreshedServer
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if let context = try? requestContext(for: installationId),
+               isCurrentContext(installationId: installationId, generation: generation),
+               await handleCredentialRevocation(error, context: context) {
+                return
+            }
+            // Feature discovery and the device-capability update are additive;
+            // older Macs remain connected with the existing feature set.
+        }
     }
 
     private func refreshDeviceIdentity(

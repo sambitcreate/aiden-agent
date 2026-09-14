@@ -5,6 +5,115 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
+        let progress = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatTaskProgress.self,
+            from: Data(
+                """
+                {"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":4,"updatedAt":"2026-09-14T12:00:00Z","tasks":[
+                  {"id":10,"subject":"Finished first","status":"completed"},
+                  {"id":20,"subject":"Pending second","status":"pending"},
+                  {"id":30,"subject":"Active third","status":"in_progress","activeForm":"Working third"},
+                  {"id":40,"subject":"Removed fourth","status":"deleted"}
+                ]}
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(AidenProgressPresentation.visibleTasks(progress).map(\.id), [10, 20, 30])
+        XCTAssertEqual(AidenProgressPresentation.completedTaskCount(progress), 1)
+        XCTAssertEqual(AidenProgressPresentation.remainingTaskCount(progress), 2)
+        XCTAssertEqual(AidenProgressPresentation.activeTask(progress)?.id, 30)
+        XCTAssertTrue(AidenProgressPresentation.showsTaskChip(progress))
+    }
+
+    func testProgressCompletionAnnouncementRequiresAnIncompleteToCompletedTransition() throws {
+        let incomplete = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatTaskProgress.self,
+            from: Data(
+                """
+                {"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[
+                  {"id":1,"subject":"First","status":"in_progress","activeForm":"Working first"},
+                  {"id":2,"subject":"Second","status":"pending"}
+                ]}
+                """.utf8
+            )
+        )
+        let complete = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatTaskProgress.self,
+            from: Data(
+                """
+                {"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":2,"updatedAt":"2026-09-14T12:01:00Z","tasks":[
+                  {"id":1,"subject":"First","status":"completed"},
+                  {"id":2,"subject":"Second","status":"completed"}
+                ]}
+                """.utf8
+            )
+        )
+
+        XCTAssertTrue(
+            AidenProgressPresentation.transitionedToAllTasksCompleted(
+                previous: incomplete,
+                current: complete
+            )
+        )
+        XCTAssertFalse(
+            AidenProgressPresentation.transitionedToAllTasksCompleted(
+                previous: nil,
+                current: complete
+            )
+        )
+        XCTAssertFalse(
+            AidenProgressPresentation.transitionedToAllTasksCompleted(
+                previous: complete,
+                current: complete
+            )
+        )
+    }
+
+    func testProgressRevisionFenceRejectsLateTurnAndDuplicateSnapshots() {
+        XCTAssertFalse(
+            AidenProgressPresentation.acceptsSnapshot(
+                currentEpoch: "epoch-1",
+                currentRevision: 8,
+                incomingEpoch: "epoch-1",
+                incomingRevision: 8
+            )
+        )
+        XCTAssertFalse(
+            AidenProgressPresentation.acceptsSnapshot(
+                currentEpoch: "epoch-1",
+                currentRevision: 8,
+                incomingEpoch: "epoch-1",
+                incomingRevision: 7
+            )
+        )
+        XCTAssertTrue(
+            AidenProgressPresentation.acceptsSnapshot(
+                currentEpoch: "epoch-1",
+                currentRevision: 8,
+                incomingEpoch: "epoch-1",
+                incomingRevision: 9
+            )
+        )
+        XCTAssertTrue(
+            AidenProgressPresentation.acceptsSnapshot(
+                currentEpoch: "epoch-1",
+                currentRevision: 8,
+                incomingEpoch: "epoch-2",
+                incomingRevision: 1
+            )
+        )
+        XCTAssertTrue(
+            AidenProgressPresentation.acceptsSnapshot(
+                currentEpoch: nil,
+                currentRevision: nil,
+                incomingEpoch: "epoch-1",
+                incomingRevision: 1
+            )
+        )
+    }
+
     func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
         XCTAssertFalse(
             aidenChatIsScrolledAwayFromLatest(

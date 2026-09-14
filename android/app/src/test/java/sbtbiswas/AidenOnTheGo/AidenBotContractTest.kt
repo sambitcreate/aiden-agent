@@ -16,6 +16,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseValidator
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import java.io.File
 import java.time.Instant
@@ -109,7 +110,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(10, fixture.contractRevision)
+        assertEquals(11, fixture.contractRevision)
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -149,6 +150,15 @@ class AidenBotContractTest {
         assertTrue(fixture.botNotice.requiresAcknowledgement)
         assertEquals(AidenBotDecision.CONTINUE_FULL, fixture.botNoticeAcknowledgement.response.acceptedDecision)
         assertEquals(fixture.botAvatarMetadata, fixture.botAvatarUpload.response)
+        val taskProgress = requireNotNull(fixture.taskProgress)
+        val agentRoster = requireNotNull(fixture.agentRoster)
+        assertEquals(AidenChatProgressAvailability.READY, taskProgress.availability)
+        assertEquals(3, taskProgress.tasks.size)
+        assertEquals(AidenChatAgentRole.SCOUT, agentRoster.agents.first().role)
+        assertEquals(2, agentRoster.previousTurns.size)
+        assertEquals(2, fixture.chatProgressEvents.size)
+        assertEquals(AidenRemoteEventType.TASK_UPDATE, fixture.chatProgressEvents.first().type)
+        assertEquals(AidenRemoteEventType.AGENTS_UPDATE, fixture.chatProgressEvents[1].type)
         assertFalse(fixture.legacyNonNegotiating.server.capabilities.contains(AidenRemoteCapability.BOT_READ))
     }
 

@@ -8,7 +8,7 @@ Reference: `@juicesharp/rpiv-todo` 2.8.0 in `rpiv-mono/packages/rpiv-todo` (MIT)
 
 For an ordinary renderer-owned desktop chat, the model can maintain a durable task graph with one current task. A floating elevated chip above the composer shows the current step without changing transcript or footer geometry; hover or keyboard focus opens the complete task list in a portal overlay. The chip stays visible while any task is pending or in progress and removes its visual chrome once all visible tasks are completed or deleted. The state survives generation boundaries, reload, and Pi compaction because every successful or rejected tool call returns the complete post-call snapshot in the private Pi journal. Empty and completed task lists stay out of the way. There is no setup, network access, onboarding tile, or renderer access to private descriptions, owners, or metadata.
 
-The extension is deliberately excluded from Assistant mode, Bots, Telegram/mobile, scheduled or child work, non-renderer-owned generations, and requests that explicitly exclude the `todo` tool. Those surfaces need separate product and authority decisions rather than silently inheriting a desktop capability.
+The original delivery deliberately excluded Assistant mode, Bots, Telegram/mobile, scheduled or child work, non-renderer-owned generations, and requests explicitly excluding `todo`. The [mobile task progress follow-on](mobile-task-progress-and-subagents-plan.md) now adds authenticated Remote owners and explicitly admitted Bot **Task tracking** capability. Assistant, Telegram, scheduled/child work, unclassified headless owners, and explicit tool exclusions remain excluded. The original packaged acceptance gate above is unchanged.
 
 ## Delivered architecture
 

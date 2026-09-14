@@ -220,6 +220,8 @@ privacy validation is recursive and normalized, but visible parent text stays
 opaque and exact. Aggregate desktop gates, Android 104/104 unit tests, and a
 physical-iPhone Phase 0 run (26 pass, 2 expected skips) are green.
 
+Mobile progress follow-on (2026-09-14): [Mobile Task Progress and Subagents](mobile-task-progress-and-subagents-plan.md) introduces a separately negotiated, read-only public roster with opaque public identities and bounded display facts. Ordinary parent transcripts and turn streams retain the historical parent-only contract; private child histories, raw prompts/results, and child mutation authority remain excluded. Follow-on validation does not replace the historical evidence above or activate background controls.
+
 Foreground failure remediation (2026-09-01): installed-production evidence
 showed three independent failures in one attended turn. `share_image` was being
 treated as an image-inspection tool and every non-allow approval outcome became

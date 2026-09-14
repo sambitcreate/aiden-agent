@@ -4,7 +4,7 @@ import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { PiRuntimeEventEnvelope } from "../pi-runtime-events.js";
 import { createTodoExtensionRuntime, shouldEnableTodoExtension } from "./extension.js";
 
-test("todo is admitted only to attended renderer-owned ordinary desktop chat", () => {
+test("todo requires an attended desktop or authenticated Remote origin and explicit Bot capability", () => {
   const base = {
     usageSource: "chat",
     interactionSurface: "desktop",
@@ -21,6 +21,13 @@ test("todo is admitted only to attended renderer-owned ordinary desktop chat", (
   assert.equal(shouldEnableTodoExtension({ ...base, excluded: true }), false);
   assert.equal(shouldEnableTodoExtension({ ...base, usageSource: "scheduled" }), false);
   assert.equal(shouldEnableTodoExtension({ ...base, usageSource: undefined }), false);
+  assert.equal(shouldEnableTodoExtension({ ...base, rendererOwner: false, remoteOwner: true }), true);
+  assert.equal(shouldEnableTodoExtension({ ...base, botBound: true, botTaskTrackingAllowed: true }), true);
+  assert.equal(shouldEnableTodoExtension({ ...base, botBound: true, botTaskTrackingAllowed: false, remoteOwner: true }), false);
+  assert.equal(shouldEnableTodoExtension({ ...base, rendererOwner: false, remoteOwner: true, botBound: true, botTaskTrackingAllowed: true }), true);
+  for (const excludedScope of [{ interactionSurface: "telegram" }, { assistantMode: true }, { excluded: true }, { usageSource: "scheduled" }]) {
+    assert.equal(shouldEnableTodoExtension({ ...base, rendererOwner: false, remoteOwner: true, botBound: true, botTaskTrackingAllowed: true, ...excludedScope }), false);
+  }
 });
 
 test("extension contributes a replay-safe native tool and durable snapshots", async () => {

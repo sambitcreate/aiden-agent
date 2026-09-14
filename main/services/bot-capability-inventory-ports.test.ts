@@ -94,6 +94,8 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(other.find(({ kind }) => kind === "web")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
+  assert.equal(other.find(({ kind }) => kind === "tasks")?.available, true);
+  assert.equal(other.find(({ kind }) => kind === "tasks")?.label, "Task tracking");
   assert.match(
     other.find(({ kind }) => kind === "schedules")?.description ?? "",
     /re-check this Bot's access/u,
