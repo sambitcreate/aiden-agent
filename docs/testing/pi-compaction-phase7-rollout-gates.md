@@ -92,9 +92,11 @@ It engages exactly when a chat cannot yet hold a durable journal:
 
 Semantics of a journalless run: the request path is identical, visible turns
 persist through the chat store exactly as with journaled runs, but VCC history
-recall is omitted (nothing durable to recall), the durable todo tool is omitted
-and both chat-open and live snapshots report `storage_not_enabled` (the panel
-explains that saved task tracking is not enabled for this chat),
+recall is omitted (nothing durable to recall), the durable todo tool is omitted,
+and both chat-open and live snapshots report `storage_not_enabled`. The panel
+intentionally stays hidden because this expected capability state requires no
+user action; the closed reason and `todo-storage-disabled` diagnostic retain
+verification evidence.
 automatic and manual Pi checkpoints stay cohort-disabled, effect-recovery
 boundaries are written only in-process and never acknowledged as durable, and
 the durable store can never be quarantined by an in-memory failure.
