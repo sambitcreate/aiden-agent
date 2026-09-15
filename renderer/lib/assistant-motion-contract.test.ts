@@ -77,7 +77,7 @@ test("both directions are gated on the app's reduce-motion switch", () => {
   );
 });
 
-test("the Rive trigger has tactile motion and a reduced-motion override", () => {
+test("the Live orb trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
   const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
   assert.match(trigger, /transition:/u);

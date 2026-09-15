@@ -1,5 +1,5 @@
 // Aiden's window-level Gemini Live control. Before setup it presents the app
-// mark; after setup it becomes a stateful Rive orb.
+// mark; after setup it becomes a stateful blue Libraries.dev orb.
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";

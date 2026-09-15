@@ -474,6 +474,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-15 — Gemini Live orb shell
 
 - Rebasing the long-lived Gemini Live branch replayed 79 commits and conflicted in the frequently updated plan index; preserve the current `origin/main` inventory and reapply only the missing Gemini Live row.
-- `@rive-app/react-webgl2` re-exports runtime layout types in declarations, but its Node ESM surface does not expose `Alignment`, `Fit`, or `Layout` as named exports. Rely on the runtime's default centered layout so renderer tests can import the component.
-- Adding the Rive WebGL2 runtime surfaced eight npm audit findings that need a separate dependency-security review; do not fold an automatic audit fix into this UI change.
-- A CLI-verified scripted `.riv` can still fail in the WebGL2 runtime with a missing generator; prefer native RML shapes for this orb and validate the live renderer console in addition to `rive --verify`.
+- The published `thinking-orbs` 0.3.1 package includes `breathing` but not the repository's newer `color` prop. Reuse its canvas animation and apply Aiden's blue tint at the presentation layer until the tint API is published; do not vendor unreleased package internals.

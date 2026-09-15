@@ -77,7 +77,7 @@ test("Live transcript follows only when the viewport remains near the latest tur
   assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 700, 200), false);
 });
 
-test("dock replaces the retired Assistant panel with setup logo then Rive orb", () => {
+test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
   assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
   assert.match(dock, /GEMINI_LIVE_SETUP_COMPLETE_KEY/u);
@@ -98,8 +98,10 @@ test("setup discloses macOS access and per-action approval", () => {
   assert.match(live, /still require Allow once/u);
 });
 
-test("the Rive source exposes all eight visual states", () => {
+test("the Live orb maps all eight states onto the shared Libraries.dev orb", () => {
   const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+  const packageJson = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
   for (const state of [
     "ready",
     "connecting",
@@ -112,4 +114,10 @@ test("the Rive source exposes all eight visual states", () => {
   ]) {
     assert.match(orb, new RegExp(`\\b${state}\\b`, "u"));
   }
+  assert.match(orb, /import \{ AidenOrb \} from "\.\.\/aiden-orb"/u);
+  assert.match(orb, /listening: \{ state: "breathing", active: true \}/u);
+  assert.doesNotMatch(orb, /Rive|\.riv/u);
+  assert.match(styles, /\.aiden-live-orb-canvas[\s\S]*filter:[\s\S]*hue-rotate\(209deg\)/u);
+  assert.match(packageJson, /"thinking-orbs": "0\.3\.1"/u);
+  assert.doesNotMatch(packageJson, /@rive-app/u);
 });

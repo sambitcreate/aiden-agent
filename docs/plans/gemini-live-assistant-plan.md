@@ -421,11 +421,14 @@ Status: Implemented (2026-09-15). The separate Assistant panel/composer is no
 longer reachable from the window-level entry point. Before setup, the canonical
 Aiden logo opens a one-time guided model, microphone, Screen Recording,
 Accessibility, and Computer Use checklist. After the first successful Live
-start, it permanently hands off to a
-Rive-authored orb with ready, connecting, listening, thinking, acting,
+start, it permanently hands off to a blue Libraries.dev `thinking-orbs`
+presence with ready, connecting, listening, thinking, acting,
 approval, error, and unavailable states. Active sessions use a compact
 caption/Stop HUD. A dedicated Gemini Live settings destination consolidates
 the related provider, permissions, scheduled-task, and shortcut entry points.
+Listening uses the package's calm `breathing` animation; the remaining Live
+states map to its purpose-built connecting, solving, working, and shaping
+motions. The previous Rive runtime and authored assets are not shipped.
 
 Live can operate Aiden itself through the existing approval-gated Computer Use
 tool—for example, focus the main composer, select the current web model or

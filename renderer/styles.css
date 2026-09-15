@@ -3157,7 +3157,7 @@ textarea {
 }
 
 /* Gemini Live replaces the previous Assistant panel with one persistent,
-   stateful control. Rive owns the artwork; CSS owns layout and focus. */
+   stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
 .aiden-live-trigger {
   position: relative;
   display: grid;
@@ -3208,30 +3208,24 @@ textarea {
   border-radius: 9999px;
   background: var(--color-support-warning);
 }
-.aiden-live-rive-orb {
+.aiden-live-orb {
   position: relative;
   display: block;
   width: 100%;
   height: 100%;
   min-width: 2.5rem;
   min-height: 2.5rem;
+  transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
+  transition: opacity 180ms ease, transform 100ms ease;
 }
-.aiden-live-rive-canvas {
+.aiden-live-orb-canvas {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  transform: scale(calc(1 + var(--aiden-live-level, 0) * 0.04));
-  transition: filter 180ms ease, transform 100ms ease;
-}
-.aiden-live-rive-fallback {
-  position: absolute;
-  inset: 13%;
-  border-radius: 9999px;
-  background:
-    radial-gradient(circle at 36% 28%, rgb(255 255 255 / 88%), transparent 20%),
-    radial-gradient(circle at 62% 66%, #6558e8, #303aa9 62%, #1c225c);
-  box-shadow: 0 8px 24px rgb(62 55 190 / 30%);
+  width: 100% !important;
+  height: 100% !important;
+  /* thinking-orbs 0.3.1 is monochrome; normalize its ink, then tint it blue. */
+  filter: brightness(0) saturate(100%) invert(48%) sepia(97%) saturate(3187%)
+    hue-rotate(209deg) brightness(102%) contrast(101%);
 }
 .gemini-live-setup-hero {
   display: grid;
@@ -3240,40 +3234,18 @@ textarea {
   gap: 0.75rem;
   padding: 0.25rem 0 0.75rem;
 }
-@keyframes aiden-live-breathe {
-  0%, 100% { transform: scale(0.98); }
-  50% { transform: scale(1.035); }
+.aiden-live-orb[data-state="ready"] {
+  opacity: 0.82;
 }
-@keyframes aiden-live-think {
-  0%, 100% { transform: rotate(-2deg) scale(0.99); }
-  50% { transform: rotate(2deg) scale(1.025); }
+.aiden-live-orb[data-state="listening"] {
+  transform: scale(calc(0.98 + var(--aiden-live-level, 0) * 0.08));
 }
-.aiden-live-rive-orb[data-state="connecting"] .aiden-live-rive-canvas {
-  filter: hue-rotate(10deg) saturate(0.9);
-  animation: aiden-live-think 900ms ease-in-out infinite;
+.aiden-live-orb[data-state="approval"] {
+  filter: drop-shadow(0 0 7px rgb(79 125 255 / 32%));
 }
-.aiden-live-rive-orb[data-state="listening"] .aiden-live-rive-canvas {
-  filter: hue-rotate(-8deg) saturate(1.18);
-  animation: aiden-live-breathe 720ms ease-in-out infinite;
-}
-.aiden-live-rive-orb[data-state="thinking"] .aiden-live-rive-canvas {
-  filter: hue-rotate(34deg) saturate(1.12);
-  animation: aiden-live-think 1.15s ease-in-out infinite;
-}
-.aiden-live-rive-orb[data-state="acting"] .aiden-live-rive-canvas {
-  filter: hue-rotate(108deg) saturate(0.95);
-  animation: aiden-live-breathe 580ms ease-in-out infinite;
-}
-.aiden-live-rive-orb[data-state="approval"] .aiden-live-rive-canvas {
-  filter: sepia(0.58) hue-rotate(342deg) saturate(1.24);
-  animation: aiden-live-breathe 940ms ease-in-out infinite;
-}
-.aiden-live-rive-orb[data-state="error"] .aiden-live-rive-canvas {
-  filter: sepia(0.5) hue-rotate(300deg) saturate(1.35);
-}
-.aiden-live-rive-orb[data-state="unavailable"] .aiden-live-rive-canvas {
-  filter: grayscale(0.9) saturate(0.35);
-  opacity: 0.78;
+.aiden-live-orb[data-state="error"],
+.aiden-live-orb[data-state="unavailable"] {
+  opacity: 0.5;
 }
 .gemini-live-readiness-list {
   overflow: hidden;
@@ -3353,7 +3325,7 @@ textarea {
   padding: 0.75rem;
   border-bottom: 1px solid var(--color-separator);
 }
-.gemini-live-hud-header > .aiden-live-rive-orb {
+.gemini-live-hud-header > .aiden-live-orb {
   width: 2.5rem;
   height: 2.5rem;
 }
@@ -3382,8 +3354,7 @@ textarea {
 :root[data-reduce-motion="true"] .aiden-live-trigger:active {
   transform: none;
 }
-:root[data-reduce-motion="true"] .aiden-live-rive-canvas {
-  animation: none !important;
+:root[data-reduce-motion="true"] .aiden-live-orb {
   transform: none;
   transition: none;
 }

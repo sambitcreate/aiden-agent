@@ -285,7 +285,7 @@ export function AssistantLive({
   );
 }
 
-/** @deprecated The window-level Rive trigger is now the only entry point. */
+/** @deprecated The window-level Live orb is now the only entry point. */
 export function AssistantLiveEntryPoint({
   live,
 }: {
