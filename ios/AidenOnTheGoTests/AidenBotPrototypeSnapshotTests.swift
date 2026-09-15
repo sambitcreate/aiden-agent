@@ -50,11 +50,17 @@ final class AidenBotPrototypeSnapshotTests: XCTestCase {
         XCTAssertEqual(regularIPadTraits.horizontalSizeClass, .regular)
         XCTAssertEqual(regularIPadTraits.verticalSizeClass, .regular)
 
+        // Host the capture window on the actual app-hosted window scene. XCTest
+        // launches the host app for testing, but the scene may be mid-transition
+        // (foregroundInactive) when the suite starts, so prefer foregroundActive
+        // and fall back rather than failing a legitimate render.
+        let allWindowScenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
         let windowScene = try XCTUnwrap(
-            UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first(where: { $0.activationState == .foregroundActive }),
-            "Expected the app-hosted test to have an active window scene"
+            allWindowScenes.first(where: { $0.activationState == .foregroundActive })
+                ?? allWindowScenes.first(where: { $0.activationState == .foregroundInactive })
+                ?? allWindowScenes.first,
+            "Expected the app-hosted test to expose a UIWindowScene"
         )
         let previousKeyWindow = windowScene.windows.first(where: \.isKeyWindow)
         let hostingController = UIHostingController(rootView: content)

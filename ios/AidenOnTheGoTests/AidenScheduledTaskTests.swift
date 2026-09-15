@@ -180,39 +180,28 @@ final class AidenScheduledTaskTests: XCTestCase {
     }
 
     func testScheduledTaskPresentationHumanizesCommonCadencesWithoutExposingUnknownCron() {
-        let locale = Locale(identifier: "en_US")
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "*/15 * * * *", locale: locale),
-            "Every 15 minutes"
+        // Compare the humanized meaning, not the locale-sensitive separator glyphs:
+        // en_US DateFormatter emits a narrow no-break space (U+202F) before AM/PM.
+        XCTAssertEqual(cadence("*/15 * * * *"), "Every 15 minutes")
+        XCTAssertEqual(cadence("0 */2 * * *"), "Every 2 hours")
+        XCTAssertEqual(cadence("20 * * * *"), "Every hour at 20 minutes past")
+        XCTAssertEqual(cadence("0 9 * * *"), "Every day at 9:00 AM")
+        XCTAssertEqual(cadence("0 16 * * 1-5"), "Weekdays at 4:00 PM")
+        XCTAssertEqual(cadence("0 9 * * 1"), "Every Monday at 9:00 AM")
+        XCTAssertEqual(cadence("0 9 1 * *"), "Custom schedule")
+        XCTAssertEqual(cadence("5 0 9 * * *"), "Custom schedule")
+    }
+
+    /// Normalizes U+202F / U+00A0 and other whitespace to a single regular space
+    /// so cadence assertions test the semantic label, never the exact separator.
+    private func cadence(_ schedule: String) -> String {
+        AidenScheduledTaskPresentation.cadence(
+            schedule: schedule,
+            locale: Locale(identifier: "en_US")
         )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 */2 * * *", locale: locale),
-            "Every 2 hours"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "20 * * * *", locale: locale),
-            "Every hour at 20 minutes past"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * *", locale: locale),
-            "Every day at 9:00 AM"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 16 * * 1-5", locale: locale),
-            "Weekdays at 4:00 PM"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 * * 1", locale: locale),
-            "Every Monday at 9:00 AM"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "0 9 1 * *", locale: locale),
-            "Custom schedule"
-        )
-        XCTAssertEqual(
-            AidenScheduledTaskPresentation.cadence(schedule: "5 0 9 * * *", locale: locale),
-            "Custom schedule"
-        )
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
     }
 
     func testScheduledMcpSelectionEnforcesFullGlobalScopeCapAndUnavailableNarrowing() {

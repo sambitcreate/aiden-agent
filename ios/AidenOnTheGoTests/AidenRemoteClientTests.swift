@@ -597,6 +597,20 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     func testLegacyChatListFallbackRejectsNestedPrivateChildAliases() async throws {
+        // Pin the specific private child field at direct decode, where the
+        // validator surfaces the exact rejected key.
+        let direct = Data("""
+        {"id":"chat-regular","workspaceId":"workspace-regular","title":"Regular",
+        "messages":[],"createdAt":"2026-08-19T07:00:00.000Z",
+        "updatedAt":"2026-08-19T07:01:00.000Z","revision":"legacy-revision",
+        "futurePresentation":{"nested":{"childrenLatestMessages":[]}}}
+        """.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChat.self, from: direct)) {
+            guard case AidenRemoteContractError.unsafePayloadField("childrenLatestMessages") = $0 else {
+                return XCTFail("Expected private child alias rejection, got \($0)")
+            }
+        }
+
         let client = makeClient()
         AidenRemoteMockURLProtocol.handler = { request in
             Self.response(
@@ -614,8 +628,9 @@ final class AidenRemoteClientTests: XCTestCase {
         do {
             _ = try await client.preferredChatSummaries(advertised: false)
             XCTFail("Legacy chat lists must reject private child projections.")
-        } catch AidenRemoteContractError.unsafePayloadField("childrenLatestMessages") {
-            // Expected.
+        } catch AidenRemoteClientError.invalidResponse {
+            // The authenticated client boundary records the contract diagnostic
+            // and surfaces a generic invalidResponse for the rejected projection.
         }
     }
 
@@ -634,7 +649,7 @@ final class AidenRemoteClientTests: XCTestCase {
 
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenChatSummaryPage.self,
-            from: JSONSerialization.data(withJSONObject: ["summaries": summaries.reversed()])
+            from: JSONSerialization.data(withJSONObject: ["summaries": Array(summaries.reversed())])
         ))
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(
             AidenChatSummaryPage.self,
