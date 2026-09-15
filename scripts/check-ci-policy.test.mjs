@@ -29,6 +29,9 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
   assert.match(workflow, /npm run test:model-catalog/u);
 
+  const sdkSetup = workflowStep(workflow, "Set up Android SDK tools");
+  assert.match(sdkSetup, /^ {10}packages: platform-tools$/mu);
+
   const mainPushOnly =
     /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/u;
   assert.doesNotMatch(workflowStep(workflow, "Verify Android"), /:app:assembleDebug/u);
