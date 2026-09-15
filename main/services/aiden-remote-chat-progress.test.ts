@@ -85,6 +85,62 @@ test("idle task reads replay durable state and unchanged reads retain revisions"
   assert.deepEqual(await service.taskSnapshot("device-1", "chat-1"), first);
 });
 
+test("remote-issued public turn identities round-trip through roster selection", async () => {
+  const { service } = fixture({
+    publicTurnId: (chatId, generationId) =>
+      chatId === "chat-1" && generationId === "generation-1"
+        ? "turn_public_01"
+        : undefined,
+  });
+  const roster = await service.agentRoster("device-1", "chat-1");
+  // The roster echoes the protocol's public turn identity (turnStart/streamStatus),
+  // not a projection-minted surrogate, so clients can correlate by turnId.
+  assert.equal(roster.turnId, "turn_public_01");
+  const selected = await service.agentRoster(
+    "device-1",
+    "chat-1",
+    "turn_public_01",
+  );
+  assert.equal(selected.turnId, "turn_public_01");
+  await assert.rejects(
+    service.agentRoster("device-1", "chat-1", "turn_missing_01"),
+    /unavailable/,
+  );
+});
+
+test("roster dedupes milestone kinds and projects closed producer notices", async () => {
+  const { service } = fixture({
+    readAgents: async () => [{
+      ...run,
+      // The upstream journal only skips consecutive duplicates; the public
+      // contract requires unique kinds, so the projection must dedupe.
+      milestones: ["reading", "searching", "reading"],
+      projectionNotices: ["task_truncated", "report_truncated"],
+    }],
+  });
+  const roster = await service.agentRoster("device-1", "chat-1");
+  assert.deepEqual(roster.agents[0]?.milestones, ["reading", "searching"]);
+  assert.deepEqual(roster.agents[0]?.notices, [
+    "task_truncated",
+    "report_truncated",
+  ]);
+});
+
+test("generations without an issued public turn get a stable minted identity", async () => {
+  const { service } = fixture();
+  const roster = await service.agentRoster("device-1", "chat-1");
+  assert.match(roster.turnId ?? "", /^turn_[A-Za-z0-9._:-]+$/u);
+  // The minted identity still round-trips through the selector so earlier
+  // turns remain inspectable without leaking the private generation id.
+  const selected = await service.agentRoster(
+    "device-1",
+    "chat-1",
+    roster.turnId!,
+  );
+  assert.equal(selected.turnId, roster.turnId);
+  assert.equal(selected.agents.length, roster.agents.length);
+});
+
 test("inactive background coordinator runs do not appear in foreground mobile rosters", async () => {
   const { service } = fixture({
     readAgents: async () => [{

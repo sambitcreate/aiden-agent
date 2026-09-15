@@ -744,8 +744,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> AidenRemoteChatAgentRoster {
         var query: [URLQueryItem] = []
         if let turnId {
-            guard !turnId.isEmpty,
-                  turnId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            guard turnId.wholeMatch(of: /^[A-Za-z0-9._:-]{1,128}$/) != nil else {
                 throw AidenRemoteClientError.invalidResponse
             }
             query = [URLQueryItem(name: "turnId", value: turnId)]

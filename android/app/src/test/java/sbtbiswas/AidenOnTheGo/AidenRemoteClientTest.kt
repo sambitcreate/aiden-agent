@@ -190,19 +190,19 @@ class AidenRemoteClientTest {
         val sseBody = """
             event: text_delta
             id: 1
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","payload":{"text":"Hello "}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"Hello "}}
 
             event: text_delta
             id: 2
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":2,"timestamp":"2026-08-24T00:00:01Z","type":"text_delta","payload":{"text":"World!"}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":2,"timestamp":"2026-08-24T00:00:01Z","type":"text_delta","terminal":false,"payload":{"text":"World!"}}
 
             event: subagent_update
             id: 3
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":3,"timestamp":"2026-08-24T00:00:02Z","type":"subagent_update","payload":{"childRunId":"run-private","childTranscript":["private child text"],"childResult":"private child result"}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":3,"timestamp":"2026-08-24T00:00:02Z","type":"subagent_update","terminal":false,"payload":{"childRunId":"run-private","childTranscript":["private child text"],"childResult":"private child result"}}
 
             event: done
             id: 4
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":4,"timestamp":"2026-08-24T00:00:03Z","type":"done","payload":{"messageId":"msg_done"}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":4,"timestamp":"2026-08-24T00:00:03Z","type":"done","terminal":true,"payload":{"messageId":"msg_done"}}
 
         """.trimIndent()
 
@@ -310,7 +310,7 @@ class AidenRemoteClientTest {
                     """
                     event: task_update
                     id: 1
-                    data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","payload":{"version":1,"chatId":"chat_progress","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[{"id":1,"subject":"Check progress","status":"completed"}]}}
+                    data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_progress","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[{"id":1,"subject":"Check progress","status":"completed"}]}}
 
                     """.trimIndent()
                 )
@@ -328,10 +328,12 @@ class AidenRemoteClientTest {
 
     @Test
     fun testSSEChannelsRejectEventsFromTheOtherStream() = runBlocking {
+        // The payload chatId intentionally matches the foreign streamId so the
+        // event survives envelope parsing and reaches the channel check.
         val taskEvent = """
             event: task_update
             id: 1
-            data: {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","payload":{"version":1,"chatId":"chat_progress","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[]}}
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"stream_test","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[]}}
 
         """.trimIndent()
         server.enqueue(
@@ -352,7 +354,7 @@ class AidenRemoteClientTest {
         val parentEvent = """
             event: text_delta
             id: 1
-            data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","payload":{"text":"parent text"}}
+            data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"parent text"}}
 
         """.trimIndent()
         server.enqueue(

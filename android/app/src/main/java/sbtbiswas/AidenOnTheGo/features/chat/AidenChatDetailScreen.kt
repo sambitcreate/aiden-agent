@@ -634,11 +634,14 @@ fun AidenChatDetailScreen(
                 AidenTaskProgressSheet(progress = progress, onDismiss = { progressSheet = null })
             }
         "agents" -> {
-            val current = currentAgentRoster
-            val selected = selectedAgentRoster ?: current
-            if (canReadAgentRoster && current != null && selected != null && selected.availability == AidenChatProgressAvailability.READY) {
+            // The sheet stays reachable for an unavailable current roster so
+            // retained earlier turns remain inspectable, and for retained
+            // history when no current roster was ever accepted.
+            val selected = selectedAgentRoster ?: currentAgentRoster
+                ?: agentRosterHistory.firstOrNull()
+            if (canReadAgentRoster && selected != null) {
                 AidenAgentRosterSheet(
-                    currentRoster = current,
+                    currentRoster = currentAgentRoster ?: selected,
                     selectedRoster = selected,
                     history = agentRosterHistory,
                     onSelectTurn = { turnId ->

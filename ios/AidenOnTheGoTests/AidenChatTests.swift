@@ -114,6 +114,24 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testInvalidAgentProjectionStaysReachableWhileUnsupportedRemainsHidden() throws {
+        let invalid = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"unavailable","unavailableReason":"invalid_snapshot","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}"#.utf8
+            )
+        )
+        let unsupported = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"unavailable","unavailableReason":"unsupported","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}"#.utf8
+            )
+        )
+
+        XCTAssertTrue(AidenProgressPresentation.showsAgentChip(invalid))
+        XCTAssertFalse(AidenProgressPresentation.showsAgentChip(unsupported))
+    }
+
     @MainActor
     func testProgressObservationReleasesCompletedHandleAndCanRestart() async throws {
         let model = try await makeProgressLifecycleModel(mode: .denied)
@@ -157,6 +175,48 @@ final class AidenChatTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertTrue(model.isProgressObservationRunning)
         XCTAssertTrue(model.isProgressStale, "A finished stream should retain a last-known label while reconnecting.")
+    }
+
+    @MainActor
+    func testRosterRefreshFailureDoesNotMarkFreshTaskProgressStale() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .rosterFailsAfterFirst)
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        model.startProgressObservation()
+        try await waitForAgentRequestCount(2)
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertFalse(model.isTaskProgressStale)
+        XCTAssertTrue(model.isAgentRosterStale)
+    }
+
+    @MainActor
+    func testRosterEpochRotationPrunesHistoryAndRejectsSupersededFetch() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .rosterEpochRotates)
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        model.startProgressObservation()
+        try await waitForAgentRequestCount(2)
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(model.agentRoster?.epoch, "epoch-old")
+        XCTAssertTrue(model.historicalAgentRosters.contains { $0.turnId == "turn-current-old" })
+
+        try await waitForAgentRequestCount(3)
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(model.agentRoster?.epoch, "epoch-new")
+        XCTAssertTrue(model.historicalAgentRosters.isEmpty)
+
+        await model.loadAgentRoster(turnId: "turn-old")
+        XCTAssertTrue(model.historicalAgentRosters.isEmpty)
+        XCTAssertFalse(model.availableAgentTurnIds.contains("turn-old"))
     }
 
     @MainActor
@@ -225,6 +285,15 @@ final class AidenChatTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for the progress observer to finish.")
+    }
+
+    @MainActor
+    private func waitForAgentRequestCount(_ expected: Int) async throws {
+        for _ in 0..<200 {
+            if AidenChatProgressLifecycleURLProtocol.agentRequestCount >= expected { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for agent snapshot requests (expected).")
     }
 
     func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
@@ -2549,11 +2618,14 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     enum Mode: Sendable, Equatable {
         case denied
         case finite
+        case rosterFailsAfterFirst
+        case rosterEpochRotates
     }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
+    nonisolated(unsafe) private static var _agentRequestCount = 0
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -2561,10 +2633,17 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         return _progressRequestCount
     }
 
+    static var agentRequestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _agentRequestCount
+    }
+
     static func reset(mode: Mode = .denied) {
         lock.lock()
         self.mode = mode
         _progressRequestCount = 0
+        _agentRequestCount = 0
         lock.unlock()
     }
 
@@ -2575,6 +2654,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     override func startLoading() {
         let path = request.url?.path ?? ""
         let result: (HTTPURLResponse, Data)
+        var shouldFinish = true
         switch path {
         case "/api/aiden/v1/server":
             result = Self.response(
@@ -2602,16 +2682,58 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 data: Self.taskSnapshot
             )
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
-            result = Self.response(
-                for: request,
-                status: 200,
-                contentType: "application/json",
-                data: Self.rosterSnapshot
-            )
+            let requestedTurn = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false
+            )?.queryItems?.first(where: { $0.name == "turnId" })?.value
+            let currentMode: Mode
+            let requestCount: Int
+            Self.lock.lock()
+            Self._agentRequestCount += 1
+            requestCount = Self._agentRequestCount
+            currentMode = Self.mode
+            Self.lock.unlock()
+            if currentMode == .rosterEpochRotates, requestedTurn == "turn-old" {
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "application/json",
+                    data: Self.oldHistoricalRosterSnapshot
+                )
+            } else if currentMode == .rosterEpochRotates {
+                let snapshot = switch requestCount {
+                case 1: Self.oldRosterSnapshot
+                case 2: Self.sameEpochRosterSnapshot
+                default: Self.newRosterSnapshot
+                }
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "application/json",
+                    data: snapshot
+                )
+            } else if currentMode == .rosterFailsAfterFirst, requestCount > 1 {
+                result = Self.response(
+                    for: request,
+                    status: 500,
+                    contentType: "application/json",
+                    data: Data(
+                        #"{"error":{"code":"internal_error","message":"Roster unavailable.","requestId":"progress-request-2","retryable":true}}"#.utf8
+                    )
+                )
+            } else {
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "application/json",
+                    data: Self.rosterSnapshot
+                )
+            }
         case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
             let currentMode: Mode
             Self.lock.lock()
             Self._progressRequestCount += 1
+            let requestCount = Self._progressRequestCount
             currentMode = Self.mode
             Self.lock.unlock()
             if currentMode == .denied {
@@ -2625,6 +2747,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             } else {
                 let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
+                shouldFinish = currentMode != .rosterFailsAfterFirst || requestCount < 2
+                if currentMode == .rosterEpochRotates {
+                    shouldFinish = requestCount < 3
+                }
                 result = Self.response(
                     for: request,
                     status: 200,
@@ -2643,7 +2769,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
 
         client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: result.1)
-        client?.urlProtocolDidFinishLoading(self)
+        if shouldFinish {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
 
     override func stopLoading() {}
@@ -2657,6 +2785,30 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     private static let rosterSnapshot = Data(
         """
         {"version":1,"chatId":"chat-progress-lifecycle","availability":"unavailable","unavailableReason":"unsupported","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let oldRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-old","previousTurns":[{"turnId":"turn-old","startedAt":"2026-09-14T11:00:00Z"}],"availability":"ready","epoch":"epoch-old","revision":4,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let newRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-new","previousTurns":[],"availability":"ready","epoch":"epoch-new","revision":1,"updatedAt":"2026-09-14T12:01:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let sameEpochRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-middle","previousTurns":[{"turnId":"turn-current-old","startedAt":"2026-09-14T12:00:00Z"},{"turnId":"turn-old","startedAt":"2026-09-14T11:00:00Z"}],"availability":"ready","epoch":"epoch-old","revision":5,"updatedAt":"2026-09-14T12:00:30Z","agents":[]}
+        """.utf8
+    )
+
+    private static let oldHistoricalRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-old","previousTurns":[],"availability":"ready","epoch":"epoch-old","revision":5,"updatedAt":"2026-09-14T11:30:00Z","agents":[]}
         """.utf8
     )
 

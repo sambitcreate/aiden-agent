@@ -3822,6 +3822,7 @@
           "appVersion",
           "capabilities",
           "connectionMode",
+          "features",
           "serverTime"
         ],
         "properties": {
@@ -3839,7 +3840,9 @@
             "maxLength": 80
           },
           "appVersion": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
           },
           "capabilities": {
             "type": "array",
@@ -3919,7 +3922,9 @@
             ]
           },
           "minimumClientVersion": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
           },
           "serverTime": {
             "type": "string",
@@ -5911,7 +5916,8 @@
           "chatId": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
           },
           "availability": {
             "enum": [
@@ -6171,6 +6177,16 @@
                   { "required": ["finishedAt"] },
                   { "required": ["error"] }
                 ]
+              },
+              "properties": {
+                "warnings": {
+                  "type": "array",
+                  "maxItems": 0
+                },
+                "notices": {
+                  "type": "array",
+                  "not": { "contains": { "const": "report_truncated" } }
+                }
               }
             }
           },
@@ -6218,12 +6234,14 @@
           "chatId": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
           },
           "turnId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$",
             "description": "Public identity of the turn the roster is bound to. Required while agents are listed."
           },
           "previousTurns": {

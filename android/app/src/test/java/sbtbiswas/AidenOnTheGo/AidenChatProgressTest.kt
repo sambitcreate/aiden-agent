@@ -15,6 +15,7 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenChatAgentRole
 import sbtbiswas.AidenOnTheGo.models.AidenChatProgressCodec
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
+import sbtbiswas.AidenOnTheGo.models.AidenProgressFencing
 import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 
@@ -154,6 +155,122 @@ class AidenChatProgressTest {
         }
         assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
             AidenChatProgressCodec.parseTaskProgress(cycle)
+        }
+    }
+
+    @Test
+    fun agentRosterRejectsOldestFirstPreviousTurns() {
+        val base = fixtureRoot().getValue("agentRoster").jsonObject
+        val oldestFirst = buildJsonObject {
+            base.forEach { (key, value) -> put(key, value) }
+            put("previousTurns", buildJsonArray {
+                add(buildJsonObject {
+                    put("turnId", "turn_fixture_older")
+                    put("startedAt", "2026-08-18T18:00:00Z")
+                })
+                add(buildJsonObject {
+                    put("turnId", "turn_fixture_newer")
+                    put("startedAt", "2026-08-18T19:00:00Z")
+                })
+            })
+        }
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenChatProgressCodec.parseAgentRoster(oldestFirst)
+        }
+    }
+
+    @Test
+    fun agentRosterAcceptsEqualPreviousTurnTimestamps() {
+        // The contract orders previousTurns newest-first with non-increasing
+        // timestamps; ties are valid and must not be rejected.
+        val base = fixtureRoot().getValue("agentRoster").jsonObject
+        val tied = buildJsonObject {
+            base.forEach { (key, value) -> put(key, value) }
+            put("previousTurns", buildJsonArray {
+                add(buildJsonObject {
+                    put("turnId", "turn_fixture_a")
+                    put("startedAt", "2026-08-18T19:00:00Z")
+                })
+                add(buildJsonObject {
+                    put("turnId", "turn_fixture_b")
+                    put("startedAt", "2026-08-18T19:00:00Z")
+                })
+            })
+        }
+        val roster = AidenChatProgressCodec.parseAgentRoster(tied)
+        assertEquals(2, roster.previousTurns.size)
+    }
+
+    @Test
+    fun progressFencingOrdersRevisionsWithinOneEpoch() {
+        assertTrue(AidenProgressFencing.accepts("epoch_a", 3, "epoch_a", 4))
+        assertTrue(AidenProgressFencing.accepts("epoch_a", 3, "epoch_b", 1))
+        assertTrue(AidenProgressFencing.accepts(null, 0, "epoch_a", 1))
+        assertTrue(!AidenProgressFencing.accepts("epoch_a", 3, "epoch_a", 3))
+        assertTrue(!AidenProgressFencing.accepts("epoch_a", 4, "epoch_a", 3))
+    }
+
+    @Test
+    fun rosterKeysNeverConflateEpochAndTurnBoundaries() {
+        assertTrue(
+            AidenProgressFencing.rosterKey("a:b", "c") !=
+                AidenProgressFencing.rosterKey("a", "b:c")
+        )
+        assertTrue(
+            AidenProgressFencing.rosterKey("epoch_a", null) !=
+                AidenProgressFencing.rosterKey("epoch_a", "turn_1")
+        )
+    }
+
+    @Test
+    fun retainedRosterSelectionIsScopedToCurrentEpoch() {
+        val base = AidenChatProgressCodec.parseAgentRoster(fixtureRoot().getValue("agentRoster"))
+        val old = base.copy(epoch = "epoch_old", turnId = "turn_shared")
+        val current = base.copy(epoch = "epoch_current", turnId = "turn_shared")
+
+        assertEquals(
+            current,
+            AidenProgressFencing.retainedRoster(
+                listOf(old, current),
+                currentEpoch = "epoch_current",
+                turnId = "turn_shared"
+            )
+        )
+        assertEquals(
+            null,
+            AidenProgressFencing.retainedRoster(
+                listOf(old),
+                currentEpoch = "epoch_current",
+                turnId = "turn_shared"
+            )
+        )
+    }
+
+    @Test
+    fun progressSseEventRejectsPayloadFromAnotherChat() {
+        val mismatched = """
+            {"protocolVersion":1,"streamId":"chat_a","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_b","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[]}}
+        """.trimIndent()
+        assertThrows(AidenRemoteContractException.InvalidStreamIdentity::class.java) {
+            AidenSSEParser.decodeStreamEvent(mismatched.toByteArray())
+        }
+    }
+
+    @Test
+    fun sseEventWithoutTerminalBitFailsClosed() {
+        val missingTerminal = """
+            {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","payload":{"text":"Hello"}}
+        """.trimIndent()
+        assertThrows(AidenRemoteContractException.InvalidJson::class.java) {
+            AidenSSEParser.decodeStreamEvent(missingTerminal.toByteArray())
+        }
+
+        // An unknown event type must not silently default to nonterminal.
+        val unknownWithoutTerminal = """
+            {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"future_terminal","payload":{}}
+        """.trimIndent()
+        assertThrows(AidenRemoteContractException.InvalidJson::class.java) {
+            AidenSSEParser.decodeStreamEvent(unknownWithoutTerminal.toByteArray())
         }
     }
 }

@@ -714,3 +714,37 @@ test("restart filtering durably excludes journals owned by authoritative revoked
   const filtered = removeRevokedDeviceStreams(app.service.snapshot(), new Set(["device-a"]));
   assert.deepEqual(filtered.streams.map(({ deviceId }) => deviceId), ["device-b"]);
 });
+
+test("turnIdFor resolves issued turn identities and survives pruning and restart", () => {
+  const app = fixture();
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  assert.equal(app.service.turnIdFor("chat-1", "stream-1"), "turn-1");
+  // Cross-chat and unknown generations resolve to nothing.
+  assert.equal(app.service.turnIdFor("chat-2", "stream-1"), undefined);
+  assert.equal(app.service.turnIdFor("chat-1", "stream-9"), undefined);
+
+  const owner = app.service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-2", role: "assistant" }] },
+  });
+  // Terminal retention pruning drops the stream record but keeps the identity.
+  app.setNow(1_000 + 30 * 24 * 60 * 60 * 1000);
+  app.service.create("device-1", "stream-3", "chat-1", "turn-3");
+  assert.equal(
+    app.service.snapshot().streams.some(({ streamId }) => streamId === "stream-2"),
+    false,
+    "the aged terminal stream is pruned",
+  );
+  assert.equal(app.service.turnIdFor("chat-1", "stream-2"), "turn-2");
+
+  // The index round-trips through the durable snapshot into a fresh service.
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    snapshot: app.service.snapshot(),
+  });
+  assert.equal(restored.turnIdFor("chat-1", "stream-2"), "turn-2");
+  assert.equal(restored.turnIdFor("chat-1", "stream-1"), "turn-1");
+  assert.equal(restored.turnIdFor("chat-2", "stream-2"), undefined);
+});

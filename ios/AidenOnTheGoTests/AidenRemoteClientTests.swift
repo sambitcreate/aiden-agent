@@ -2328,6 +2328,45 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testProgressEventsRejectPayloadsBoundToAnotherChat() async throws {
+        let client = makeClient()
+        // The event's stream identity is the chat ID; a payload carrying a
+        // different chatId must fail closed even though the channel matches.
+        let mismatchedJSON = #"{"protocolVersion":1,"streamId":"chat_fixture_01","sequence":1,"timestamp":"2026-09-14T12:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_other","availability":"ready","epoch":"epoch_fixture_01","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[]}}"#
+        let mismatchedRosterJSON = #"{"protocolVersion":1,"streamId":"chat_fixture_01","sequence":1,"timestamp":"2026-09-14T12:00:00Z","type":"agents_update","terminal":false,"payload":{"version":1,"chatId":"chat_other","availability":"ready","epoch":"epoch_fixture_01","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}}"#
+
+        for (sseType, eventJSON) in [("task_update", mismatchedJSON), ("agents_update", mismatchedRosterJSON)] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("id: 1\nevent: \(sseType)\ndata: \(eventJSON)\n\n".utf8))
+            }
+            do {
+                var events: [AidenRemoteStreamEvent] = []
+                for try await event in client.progressEvents(chatId: "chat_fixture_01", after: 0) {
+                    events.append(event)
+                }
+                XCTFail("Expected invalidStreamIdentity for \(sseType).")
+            } catch {
+                XCTAssertEqual(error as? AidenRemoteContractError, .invalidStreamIdentity)
+            }
+        }
+    }
+
+    func testProgressNegotiationRejectsEmptyAndInvalidRequests() async throws {
+        let client = makeClient()
+        await assertInvalidResponse {
+            try await client.updateDeviceCapabilities(accepts: [])
+        }
+        await assertInvalidResponse {
+            try await client.agentRoster(chatId: "chat_fixture_01", turnId: "not a valid turn id")
+        }
+    }
+
     func testPhysicalDevicePairingAndWorkspaceCRUDWhenConfigured() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let payloadValue = environment["AIDEN_PHASE6_PAIRING_PAYLOAD"] else {

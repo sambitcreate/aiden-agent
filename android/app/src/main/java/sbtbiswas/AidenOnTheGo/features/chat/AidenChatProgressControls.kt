@@ -21,9 +21,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Pending
@@ -397,11 +399,12 @@ private fun AidenAgentRosterContent(
             if (agents.isEmpty()) {
                 item {
                     Text(
-                        text = if (turnOptions.isNotEmpty() || historicalSnapshots.isNotEmpty()) {
-                            "No agents in this session. Choose an earlier session above."
-                        } else {
-                            "No agents in this session."
-                        },
+                        text = selectedRoster.unavailableReason?.let { agentUnavailableMessage(it) }
+                            ?: if (turnOptions.isNotEmpty() || historicalSnapshots.isNotEmpty()) {
+                                "No agents in this session. Choose an earlier session above."
+                            } else {
+                                "No agents in this session."
+                            },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
                         modifier = Modifier.padding(vertical = 12.dp)
@@ -464,7 +467,9 @@ private fun AidenAgentRow(agent: AidenChatAgent, onClick: (AidenChatAgent) -> Un
         AidenChatAgentState.FAILED, AidenChatAgentState.TIMED_OUT -> Icons.Default.ErrorOutline
         AidenChatAgentState.NEEDS_ATTENTION -> Icons.Default.ErrorOutline
         AidenChatAgentState.QUEUED, AidenChatAgentState.STARTING -> Icons.Default.HourglassEmpty
-        else -> Icons.Default.PlayArrow
+        AidenChatAgentState.INTERRUPTED, AidenChatAgentState.STOPPED -> Icons.Default.Cancel
+        AidenChatAgentState.UNKNOWN -> Icons.AutoMirrored.Filled.HelpOutline
+        AidenChatAgentState.RUNNING -> Icons.Default.PlayArrow
     }
     val status = agentStateLabel(agent.state)
     Row(

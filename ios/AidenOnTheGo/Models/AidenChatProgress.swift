@@ -55,7 +55,12 @@ enum AidenProgressPresentation {
     }
 
     static func showsAgentChip(_ roster: AidenRemoteChatAgentRoster?) -> Bool {
-        guard let roster, roster.isAvailable else { return false }
+        guard let roster else { return false }
+        if !roster.isAvailable {
+            return roster.unavailableReason != .unsupported
+        }
+        // Retained earlier turns must remain inspectable rather than hiding
+        // the surface entirely.
         return !roster.agents.isEmpty || !roster.previousTurns.isEmpty
     }
 
@@ -85,7 +90,8 @@ struct AidenChatProgressControls: View {
     let agentRoster: AidenRemoteChatAgentRoster?
     let canReadTasks: Bool
     let canReadAgents: Bool
-    let isStale: Bool
+    let taskIsStale: Bool
+    let agentIsStale: Bool
     let openTasks: () -> Void
     let openAgents: () -> Void
 
@@ -93,6 +99,7 @@ struct AidenChatProgressControls: View {
         Group {
             if (canReadTasks && taskProgress?.isAvailable == true
                 && AidenProgressPresentation.showsTaskChip(taskProgress))
+                || (canReadTasks && showsUnavailableTaskChip)
                 || (canReadAgents && AidenProgressPresentation.showsAgentChip(agentRoster)) {
                 HStack(spacing: 8) {
                     if let taskProgress,
@@ -103,11 +110,25 @@ struct AidenChatProgressControls: View {
                             AidenProgressChipLabel(
                                 systemImage: "checklist",
                                 title: taskTitle(taskProgress),
-                                stale: isStale
+                                stale: taskIsStale
                             )
                         }
                         .accessibilityLabel(Text(taskAccessibilityLabel(taskProgress)))
                         .accessibilityHint(Text("Opens task progress"))
+                        .buttonStyle(.plain)
+                    } else if showsUnavailableTaskChip {
+                        // An unavailable projection keeps a reachable affordance
+                        // so the sheet can explain why; unsupported servers stay
+                        // hidden entirely.
+                        Button(action: openTasks) {
+                            AidenProgressChipLabel(
+                                systemImage: "checklist",
+                                title: String(localized: "Tasks unavailable"),
+                                stale: taskIsStale
+                            )
+                        }
+                        .accessibilityLabel(Text("Task progress unavailable"))
+                        .accessibilityHint(Text("Opens task progress details"))
                         .buttonStyle(.plain)
                     }
                     if let agentRoster, canReadAgents, AidenProgressPresentation.showsAgentChip(agentRoster) {
@@ -115,7 +136,7 @@ struct AidenChatProgressControls: View {
                             AidenProgressChipLabel(
                                 systemImage: "person.2",
                                 title: agentTitle(agentRoster),
-                                stale: isStale
+                                stale: agentIsStale
                             )
                         }
                         .accessibilityLabel(Text(agentAccessibilityLabel(agentRoster)))
@@ -139,6 +160,11 @@ struct AidenChatProgressControls: View {
         }
     }
 
+    private var showsUnavailableTaskChip: Bool {
+        guard let taskProgress, !taskProgress.isAvailable else { return false }
+        return taskProgress.unavailableReason != .unsupported
+    }
+
     private func taskTitle(_ progress: AidenRemoteChatTaskProgress) -> String {
         if let active = AidenProgressPresentation.activeTask(progress) {
             let tasks = AidenProgressPresentation.visibleTasks(progress)
@@ -149,6 +175,9 @@ struct AidenChatProgressControls: View {
     }
 
     private func agentTitle(_ roster: AidenRemoteChatAgentRoster) -> String {
+        if !roster.isAvailable {
+            return String(localized: "Agents unavailable")
+        }
         let active = AidenProgressPresentation.activeAgentCount(roster)
         if roster.agents.isEmpty, !roster.previousTurns.isEmpty {
             return String(localized: "Earlier agents")
@@ -163,6 +192,9 @@ struct AidenChatProgressControls: View {
     }
 
     private func agentAccessibilityLabel(_ roster: AidenRemoteChatAgentRoster) -> String {
+        if !roster.isAvailable {
+            return String(localized: "Delegated-agent status unavailable")
+        }
         if roster.agents.isEmpty, !roster.previousTurns.isEmpty {
             return String(localized: "Earlier delegated agents: \(roster.previousTurns.count) turns available")
         }
@@ -250,7 +282,7 @@ struct AidenChatProgressSheet: View {
                 } header: {
                     Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(AidenProgressPresentation.visibleTasks(progress).count) completed")
                 } footer: {
-                    if model.isProgressStale {
+                    if model.isTaskProgressStale {
                         Text("Last known progress")
                     }
                 }
@@ -277,6 +309,20 @@ struct AidenChatProgressSheet: View {
         case .unsupported:
             "Task tracking is unavailable on this Aiden Agent."
         }
+    }
+
+    private func rosterUnavailableMessage(_ roster: AidenRemoteChatAgentRoster?) -> String {
+        if let reason = roster?.unavailableReason {
+            switch reason {
+            case .invalidSnapshot:
+                return String(localized: "Agent progress is temporarily unavailable.")
+            case .unsupported:
+                return String(localized: "Delegated-agent status is unavailable on this Aiden Agent.")
+            }
+        }
+        return roster?.previousTurns.isEmpty == false
+            ? String(localized: "No delegated agents are available in this turn. Choose an earlier turn to inspect its roster.")
+            : String(localized: "No delegated agents are available for this chat.")
     }
 
     @ViewBuilder
@@ -333,11 +379,7 @@ struct AidenChatProgressSheet: View {
                         }
                     }
                 } else {
-                    AidenProgressUnavailableView(
-                        text: roster?.previousTurns.isEmpty == false
-                            ? "No delegated agents are available in this turn. Choose an earlier turn to inspect its roster."
-                            : "No delegated agents are available for this chat."
-                    )
+                    AidenProgressUnavailableView(text: rosterUnavailableMessage(roster))
                 }
             }
         }
@@ -453,7 +495,16 @@ private struct AidenAgentRosterRow: View {
     }
 
     private var iconName: String {
-        agent.state.isTerminal ? "checkmark.circle" : "person.crop.circle"
+        switch agent.state {
+        case .queued: "clock"
+        case .starting, .running: "person.crop.circle"
+        case .needsAttention: "exclamationmark.circle"
+        case .completed: "checkmark.circle"
+        case .failed: "xmark.circle"
+        case .timedOut: "clock.badge.exclamationmark"
+        case .interrupted, .stopped: "stop.circle"
+        case .unknown: "questionmark.circle"
+        }
     }
 
     private var statusColor: Color {
@@ -505,16 +556,8 @@ private struct AidenAgentDetailView: View {
                         .foregroundStyle(palette.warning)
                 }
             }
-            if let error = agent.error {
-                Section("Error") { Text(error).foregroundStyle(palette.danger) }
-            }
-            if let warnings = agent.warnings, !warnings.isEmpty {
-                Section("Warnings") {
-                    ForEach(warnings, id: \.self) { warning in
-                        Text(warning).foregroundStyle(palette.warning)
-                    }
-                }
-            }
+            // Raw error/warning strings can carry private child-run text; like
+            // Android, they are decoded for contract tolerance but never shown.
         }
         .listStyle(.insetGrouped)
         .navigationTitle(agent.label)

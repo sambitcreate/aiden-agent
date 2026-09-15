@@ -163,6 +163,29 @@ data class AidenChatAgentRoster(
     val agents: List<AidenChatAgent>
 )
 
+/**
+ * Revision fences shared by task and roster reconciliation. Revisions order
+ * within one epoch; a new epoch always resets the fence.
+ */
+object AidenProgressFencing {
+    fun accepts(currentEpoch: String?, currentRevision: Long, epoch: String, revision: Long): Boolean {
+        if (currentEpoch == epoch) return revision > currentRevision
+        return true
+    }
+
+    /** Identity for one retained roster within a chat. The separator is
+     * outside the epoch/turnId grammar so components can never be confused. */
+    fun rosterKey(epoch: String, turnId: String?): String = "$epoch\u0000${turnId ?: ""}"
+
+    fun retainedRoster(
+        rosters: List<AidenChatAgentRoster>,
+        currentEpoch: String?,
+        turnId: String
+    ): AidenChatAgentRoster? = rosters.firstOrNull {
+        currentEpoch != null && it.epoch == currentEpoch && it.turnId == turnId
+    }
+}
+
 /** Strict decoder for the progress DTOs. Unknown fields are rejected. */
 object AidenChatProgressCodec {
     private val json = Json {

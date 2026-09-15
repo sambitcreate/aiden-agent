@@ -57,9 +57,8 @@ import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
-import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
+import { createChatProgressAuthorizer } from "./aiden-remote-chat-progress-authorize.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
@@ -475,45 +474,23 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           });
           activeChats = chats;
           activeProgress?.close();
-          const latestProgressGenerations = new Map<string, { updatedAt: number; generationId?: string }>();
           const chatProgress = new AidenRemoteChatProgressService({
             instanceId,
             events: chatProgressEvents,
-            authorize: async (deviceId, chatId, capability) => {
-              const release = state.acquireDeviceAuthorization(deviceId, false);
-              try {
-                const device = (await state.snapshot()).devices.find((entry) => entry.id === deviceId);
-                if (!device || device.revokedAt !== undefined) throw new AidenRemoteServiceError("credential_revoked", "This device is no longer paired.", 403);
-                if (!device.acceptsProgressCapabilities || !device.capabilities.includes("chat:read") || !device.capabilities.includes(capability)) {
-                  throw new AidenRemoteServiceError("capability_denied", "Progress access is unavailable.", 403);
-                }
-                const metadata = (await chatStore.listSummaryMetadata()).find((entry) => entry.id === chatId);
-                if (!metadata || persistedChatWorkspaceId(metadata.workspaceId) === ASSISTANT_WORKSPACE_ID) {
-                  throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
-                }
-                if (metadata.botId && (!device.capabilities.includes("bot:read") || !(await chats.authorizeRetainedBotChat({ deviceId, chatId, botId: metadata.botId, access: "read" })))) {
-                  throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
-                }
-                // Reading the ordinary chat service can wait for an inactive
-                // renderer's generation to finish. Progress must observe that
-                // generation immediately, without reading its whole transcript.
-                let latest = latestProgressGenerations.get(chatId);
-                if (!chatProgressEvents.current(chatId) && latest?.updatedAt !== metadata.updatedAt) {
-                  const readRevision = chatProgressEvents.revision(chatId);
-                  const chat = await chatStore.get(chatId);
-                  if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
-                  // Discard an idle read if a generation began or settled while
-                  // it was pending. The projection's revision fence retries it.
-                  if (readRevision === chatProgressEvents.revision(chatId) && !chatProgressEvents.current(chatId)) {
-                    latest = { updatedAt: metadata.updatedAt, generationId: [...chat.messages].reverse().find((message) => message.role === "assistant" && message.timeline)?.timeline?.generationId };
-                    if (latestProgressGenerations.size >= 128) latestProgressGenerations.delete(latestProgressGenerations.keys().next().value!);
-                    latestProgressGenerations.set(chatId, latest);
-                  }
-                }
-                state.acquireDeviceAuthorization(deviceId, false)();
-                return { id: chatId, latestGenerationId: latest?.generationId };
-              } finally { release(); }
-            },
+            authorize: createChatProgressAuthorizer({
+              acquireDeviceAuthorization: (deviceId) =>
+                state.acquireDeviceAuthorization(deviceId, false),
+              device: async (deviceId) =>
+                (await state.snapshot()).devices.find(
+                  (entry) => entry.id === deviceId,
+                ),
+              chatMetadata: () => chatStore.listSummaryMetadata(),
+              readChat: async (chatId) =>
+                (await chatStore.get(chatId)) ?? undefined,
+              authorizeRetainedBotChat: (input) =>
+                chats.authorizeRetainedBotChat(input),
+              events: chatProgressEvents,
+            }),
             readTodo: async (chatId) => {
               const chat = await chatStore.get(chatId);
               if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
@@ -521,6 +498,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
             },
             readAgents: (chatId) => subagentRunStore.listByChat(chatId),
+            // Remote-created turns already have a public turn identity; the
+            // roster must echo it so clients can correlate turnStart with agents.
+            publicTurnId: (chatId, generationId) => streams.turnIdFor(chatId, generationId),
           });
           activeProgress = chatProgress;
           const projectBotHealth = async (
