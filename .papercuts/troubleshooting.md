@@ -481,3 +481,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Deleting the Assistant panel also removed the only listener for Scheduled Tasks' compose handoff; keep entry-point events covered end to end through draft creation, navigation, and composer seeding before removing their prior owner.
 - The full Electron E2E gate still encoded the retired Assistant panel and old Aiden settings destination even though focused source-contract tests passed; update user-journey E2E whenever a top-level surface is replaced, not only its component tests.
 - A clean latest Pullfrog summary can coexist with unresolved older inline threads; query `reviewThreads` directly before declaring the review gate clear.
+- Replacing a shipped surface must update the authoritative plan index and add an explicit supersession note to the historical plan; code and tests alone leave misleading implementation claims.
