@@ -16,7 +16,7 @@ import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { TodoPanel } from "../components/todo-panel";
+import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
@@ -1929,14 +1929,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
-      scrollToBottomButtonOffset={
-        todoSnapshot?.availability === "unavailable" ||
-        todoSnapshot?.tasks.some(
-          (task) => task.status !== "deleted" && task.status !== "completed",
-        )
-          ? 44
-          : 0
-      }
+      scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
       footer={
         <>
           <EventPresence
