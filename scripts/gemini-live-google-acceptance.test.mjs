@@ -107,6 +107,12 @@ test("acceptance arguments allow only an explicit confirmation and reviewed mode
     new RegExp(`GEMINI_LIVE_MODEL = "${GOOGLE_LIVE_ACCEPTANCE_MODEL}"`, "u"),
     "the acceptance model must stay identical to the app's pinned model",
   );
+  const runner = readFileSync(
+    new URL("./gemini-live-google-acceptance.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(runner, new RegExp(`--model ${GOOGLE_LIVE_ACCEPTANCE_MODEL}`, "u"));
+  assert.doesNotMatch(runner, /<reviewed-model>/u);
 });
 
 test("receipt schema permits only content-free evidence and requires visible Stop proof", () => {

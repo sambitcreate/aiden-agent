@@ -299,7 +299,7 @@ try {
   parsed = parseGoogleLiveAcceptanceArgs(process.argv.slice(2));
 } catch {
   console.error(
-    "Usage: AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE=1 npm run test:gemini-live:google:acceptance -- --i-understand-real-google-call --model <reviewed-model>",
+    "Usage: AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE=1 npm run test:gemini-live:google:acceptance -- --i-understand-real-google-call --model gemini-3.8-live",
   );
   process.exitCode = 2;
 }
