@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -265,4 +266,10 @@ test("automation confirmation fails closed when normalized details are missing",
   assert.match(html, /invalid and cannot be confirmed/u);
   assert.match(html, /aria-label="Confirm automation"[^>]*disabled=""/u);
   assert.doesNotMatch(html, /Create something else/u);
+});
+
+test("the assistant dock steals typing only inside its panel", () => {
+  const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
+  assert.match(dock, /useComposerTypeFocus\(inputRef, open && present, panelRef\)/u);
+  assert.match(dock, /ref=\{panelRef\}/u);
 });

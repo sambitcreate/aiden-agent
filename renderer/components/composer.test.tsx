@@ -52,6 +52,7 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   const composer = source("./composer.tsx");
   const styles = source("../styles.css");
   assert.match(composer, /composer-shell/u);
+  assert.match(composer, /data-aiden-composer="true"/u);
   assert.match(
     composer,
     /className="max-h-48 border-0 bg-transparent px-1\.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"/u,

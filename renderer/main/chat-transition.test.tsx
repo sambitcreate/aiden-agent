@@ -58,6 +58,11 @@ test("chat-scoped transcript UI remounts so previews cannot cross navigation", (
   assert.doesNotMatch(pane, /<ScrollArea[^>]*\bkey=\{chatId\}/u);
 });
 
+test("typing outside another field focuses the chat composer", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /useComposerTypeFocus\(composerRef, questionnaire === null\)/u);
+});
+
 test("per-chat reset runs before paint so no frame carries the outgoing chat", () => {
   const pane = source("./chat-pane.tsx");
   const reset = between(pane, "// Reset transient state when switching chats.", "}, [chatId]);");

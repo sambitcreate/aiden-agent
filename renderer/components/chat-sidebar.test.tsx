@@ -241,6 +241,9 @@ test("chat shortcuts follow the rows rendered by the active organization", () =>
     /const shortcutGroups = React\.useMemo\(\(\) => groupChats\(renderedChats\)/u,
   );
   assert.match(sidebar, /createSidebarChatShortcutAssignments\(shortcutGroups\)/u);
+  assert.match(sidebar, /useHeldModifierReveal\(/u);
+  assert.match(sidebar, /prettyAccelerator\(shortcutBinding\)/u);
+  assert.match(sidebar, /data-chat-shortcut-hint="true"/u);
 });
 
 test("workspace actions and destructive confirmations disambiguate duplicate names", () => {
