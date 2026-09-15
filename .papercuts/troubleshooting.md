@@ -468,3 +468,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - The default development user-data profile contained unreadable visual-artifact state and disabled chat mutations; use isolated `build/peer-dev-profile` and `build/peer-dev-config` paths for branch testing without modifying shared state.
 - Whole-file formatting reflowed unrelated JSX and broke whitespace-sensitive sidebar source assertions; keep those assertions tolerant of formatter line wrapping during focused UI edits.
 - OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.
+
+- Mobile progress implementation (2026-09-14): this worktree had no node_modules; initial type-check was dependency-incomplete. Run npm ci before interpreting its missing-module output as source failures. Dedicated progress SSE uses the snapshot directly as payload; do not wrap it or reuse device-owned parent turn events.

@@ -136,12 +136,27 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 9)
+        XCTAssertEqual(fixture.contractRevision, 11)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertEqual(Set(fixture.capabilities), Set(AidenRemoteCapability.v1Known))
-        XCTAssertEqual(Set(fixture.events.map(\.type)), Set(AidenRemoteEventType.v1Known))
+        let allEvents = fixture.events + fixture.chatProgressEvents
+        XCTAssertEqual(Set(allEvents.map(\.type)), Set(AidenRemoteEventType.v1Known))
+        XCTAssertEqual(fixture.taskProgress?.chatId, fixture.chat.id)
+        XCTAssertEqual(fixture.taskProgress?.tasks.count, 3)
+        XCTAssertEqual(fixture.agentRoster?.chatId, fixture.chat.id)
+        XCTAssertEqual(fixture.agentRoster?.agents.count, 2)
+        XCTAssertEqual(fixture.agentRoster?.previousTurns.map(\.turnId), [
+            "turn_fixture_previous_02",
+            "turn_fixture_previous_01",
+        ])
+        XCTAssertEqual(
+            fixture.deviceCapabilitiesUpdate?.request.accepts,
+            [.tasksRead, .agentsRead]
+        )
+        XCTAssertTrue(fixture.server.supportsChatTasks)
+        XCTAssertTrue(fixture.server.supportsChatAgents)
         XCTAssertTrue(fixture.botCapabilityCatalog.fileScopes.contains { $0.kind == .fullMac })
         XCTAssertEqual(fixture.speechStatus.selectedModelId, "parakeet-v3")
         XCTAssertEqual(fixture.speechStatus.input.sampleRate, 16_000)
@@ -170,12 +185,77 @@ final class AidenRemotePhase0Tests: XCTestCase {
 
         var lastSequence: [String: Int] = [:]
         var terminalStreams = Set<String>()
-        for event in fixture.events {
+        for event in allEvents {
             XCTAssertFalse(terminalStreams.contains(event.streamId))
             XCTAssertEqual(event.sequence, (lastSequence[event.streamId] ?? 0) + 1)
             lastSequence[event.streamId] = event.sequence
             if event.terminal { terminalStreams.insert(event.streamId) }
         }
+    }
+
+    func testProgressSnapshotsRejectPrivateOrMalformedProjectionFields() throws {
+        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(root["taskProgress"])
+        let valid = try JSONSerialization.data(withJSONObject: progress)
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(AidenRemoteChatTaskProgress.self, from: valid))
+
+        var privateField = try XCTUnwrap(progress as? [String: Any])
+        privateField["subagents"] = ["runId": "private-child-run"]
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatTaskProgress.self,
+                from: JSONSerialization.data(withJSONObject: privateField)
+            )
+        )
+
+        var malformedTask = try XCTUnwrap(progress as? [String: Any])
+        var tasks = try XCTUnwrap(malformedTask["tasks"] as? [[String: Any]])
+        tasks[1]["blockedBy"] = [999]
+        malformedTask["tasks"] = tasks
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatTaskProgress.self,
+                from: JSONSerialization.data(withJSONObject: malformedTask)
+            )
+        )
+
+        var multipleActiveTasks = try XCTUnwrap(progress as? [String: Any])
+        var activeTasks = try XCTUnwrap(multipleActiveTasks["tasks"] as? [[String: Any]])
+        activeTasks[2]["status"] = "in_progress"
+        multipleActiveTasks["tasks"] = activeTasks
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatTaskProgress.self,
+                from: JSONSerialization.data(withJSONObject: multipleActiveTasks)
+            )
+        )
+
+        var cyclicTasks = try XCTUnwrap(progress as? [String: Any])
+        var cycle = try XCTUnwrap(cyclicTasks["tasks"] as? [[String: Any]])
+        cycle[1]["blockedBy"] = [3]
+        cycle[2]["blockedBy"] = [2]
+        cyclicTasks["tasks"] = cycle
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatTaskProgress.self,
+                from: JSONSerialization.data(withJSONObject: cyclicTasks)
+            )
+        )
+
+        let roster = try XCTUnwrap(root["agentRoster"] as? [String: Any])
+        var malformedAgent = roster
+        var agents = try XCTUnwrap(malformedAgent["agents"] as? [[String: Any]])
+        agents[0]["parentAgentId"] = "agent_fixture_01"
+        malformedAgent["agents"] = agents
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteChatAgentRoster.self,
+                from: JSONSerialization.data(withJSONObject: malformedAgent)
+            )
+        )
     }
 
     func testParentVisibleMessageTextPreservesExactSemanticContent() throws {

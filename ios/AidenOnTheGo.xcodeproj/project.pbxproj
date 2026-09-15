@@ -17,6 +17,7 @@
 		A0D600000000000000000005 /* AidenPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000015 /* AidenPairingView.swift */; };
 		A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000016 /* AidenWorkspaceShellView.swift */; };
 		A0D700000000000000000001 /* AidenChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000011 /* AidenChat.swift */; };
+		A0DC00000000000000000001 /* AidenChatProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DC00000000000000000011 /* AidenChatProgress.swift */; };
 		A0D700000000000000000002 /* AidenSSEParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000012 /* AidenSSEParser.swift */; };
 		A0D700000000000000000003 /* AidenChatCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000013 /* AidenChatCache.swift */; };
 		A0D700000000000000000004 /* AidenChatFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000014 /* AidenChatFeature.swift */; };
@@ -132,6 +133,7 @@
 		A0D600000000000000000015 /* AidenPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenPairingView.swift; sourceTree = "<group>"; };
 		A0D600000000000000000016 /* AidenWorkspaceShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceShellView.swift; sourceTree = "<group>"; };
 		A0D700000000000000000011 /* AidenChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChat.swift; sourceTree = "<group>"; };
+		A0DC00000000000000000011 /* AidenChatProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatProgress.swift; sourceTree = "<group>"; };
 		A0D700000000000000000012 /* AidenSSEParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSSEParser.swift; sourceTree = "<group>"; };
 		A0D700000000000000000013 /* AidenChatCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatCache.swift; sourceTree = "<group>"; };
 		A0D700000000000000000014 /* AidenChatFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatFeature.swift; sourceTree = "<group>"; };
@@ -332,6 +334,7 @@
 				A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */,
 				A0D600000000000000000012 /* AidenInstallation.swift */,
 				A0D700000000000000000011 /* AidenChat.swift */,
+				A0DC00000000000000000011 /* AidenChatProgress.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -721,6 +724,7 @@
 				A0D600000000000000000005 /* AidenPairingView.swift in Sources */,
 				A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */,
 				A0D700000000000000000001 /* AidenChat.swift in Sources */,
+				A0DC00000000000000000001 /* AidenChatProgress.swift in Sources */,
 				A0D700000000000000000002 /* AidenSSEParser.swift in Sources */,
 				A0D700000000000000000003 /* AidenChatCache.swift in Sources */,
 				A0D700000000000000000004 /* AidenChatFeature.swift in Sources */,

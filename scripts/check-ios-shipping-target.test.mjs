@@ -84,6 +84,7 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
+  "AidenOnTheGo/Models/AidenChatProgress.swift",
   "AidenOnTheGo/Models/AidenInstallation.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
   "AidenOnTheGo/Models/AidenWorkspaceEnvironment.swift",
@@ -361,7 +362,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
   );
-  assert.match(chat, /func load\(\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
+  assert.match(chat, /func load\(observeProgress: Bool = true\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
   assert.match(
     chat,
     /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u,

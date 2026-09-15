@@ -12,7 +12,7 @@
     "atomic": true
   },
   "x-aiden-context-private-response-fields": {
-    "appliesTo": ["Chat", "ChatSummary", "Bot"],
+    "appliesTo": ["Chat", "ChatSummary", "Bot", "ChatTaskProgress", "ChatAgentRoster"],
     "recursive": true,
     "normalization": "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
     "forbiddenNormalizedNames": [
@@ -255,6 +255,43 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DeviceIdentityResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/device/capabilities": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "updateDeviceCapabilities",
+        "x-aiden-capability": "server:read",
+        "description": "Additive post-pairing negotiation for the progress capability vocabulary. Only tasks:read and agents:read may be requested; Bot and legacy grants remain pairing-bound. The response returns the authenticated device's complete updated grant list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCapabilitiesUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Complete updated capability grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCapabilitiesUpdateResponse"
                 }
               }
             }
@@ -841,6 +878,132 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Chat"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/tasks": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatTasks",
+        "description": "Authoritative bounded task-progress snapshot for one chat. Requires the negotiated tasks:read grant in addition to chat:read.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-capabilities": ["chat:read", "tasks:read"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical chat task projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatTaskProgress"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/agents": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatAgents",
+        "description": "Authoritative bounded delegated-agent roster for one chat's active or most recent turn. Requires the negotiated agents:read grant in addition to chat:read.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-capabilities": ["chat:read", "agents:read"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/PublicTurnId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical chat agent roster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAgentRoster"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/progress/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "chatProgressEvents",
+    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+      {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "required": false,
+        "description": "Accepted for client compatibility; progress subscriptions still hydrate current snapshots rather than replaying a durable journal.",
+        "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+      {
+        "name": "after",
+        "in": "query",
+        "required": false,
+        "description": "Accepted for client compatibility; the progress channel does not provide durable replay or missing-change detection.",
+        "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+        "description": "Live chat progress snapshot event stream; each subscription starts with current snapshots. Last-Event-ID and after are accepted for compatibility but do not replay a durable progress journal.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3291,6 +3454,18 @@
           "maxLength": 128
         }
       },
+      "PublicTurnId": {
+        "name": "turnId",
+        "in": "query",
+        "required": false,
+        "description": "Opaque public turn identity. Omit to read the active or most recent public turn.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      },
       "BotId": {
         "name": "botId",
         "in": "path",
@@ -3543,6 +3718,10 @@
           "acceptsBotCapabilities": {
             "type": "boolean",
             "description": "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false."
+          },
+          "acceptsProgressCapabilities": {
+            "type": "boolean",
+            "description": "Explicitly accepts the task/agent progress capability vocabulary and the additive serverCapabilities projection. Progress grants are never issued when this field is absent or false. Already-paired devices negotiate the same vocabulary through POST /device/capabilities."
           }
         },
         "additionalProperties": false
@@ -3595,7 +3774,9 @@
                 "schedule:read",
                 "schedule:write",
                 "bot:read",
-                "bot:write"
+                "bot:write",
+                "tasks:read",
+                "agents:read"
               ]
             },
             "uniqueItems": true
@@ -3679,14 +3860,16 @@
                 "schedule:read",
                 "schedule:write",
                 "bot:read",
-                "bot:write"
+                "bot:write",
+                "tasks:read",
+                "agents:read"
               ]
             },
             "uniqueItems": true
           },
           "serverCapabilities": {
             "type": "array",
-            "description": "Server-supported inventory. Present only for devices that explicitly negotiated the Bot capability vocabulary.",
+            "description": "Server-supported inventory. Present only for devices that explicitly negotiated the Bot or progress capability vocabulary; it never grants authority.",
             "items": {
               "enum": [
                 "server:read",
@@ -3703,14 +3886,16 @@
                 "schedule:read",
                 "schedule:write",
                 "bot:read",
-                "bot:write"
+                "bot:write",
+                "tasks:read",
+                "agents:read"
               ]
             },
             "uniqueItems": true
           },
           "features": {
             "type": "array",
-            "description": "Bounded additive API feature advertisements. Clients recognize supported values and ignore other bounded values.",
+            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority.",
             "maxItems": 32,
             "items": {
               "type": "string",
@@ -3794,6 +3979,63 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 80
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeviceCapabilitiesUpdateRequest": {
+        "type": "object",
+        "required": [
+          "accepts"
+        ],
+        "properties": {
+          "accepts": {
+            "type": "array",
+            "description": "Progress capability vocabulary the device accepts. Only additive progress grants are negotiable after pairing; legacy and Bot grants are never modified by this route.",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": {
+              "enum": [
+                "tasks:read",
+                "agents:read"
+              ]
+            },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeviceCapabilitiesUpdateResponse": {
+        "type": "object",
+        "required": [
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "description": "Complete updated capability grants for the authenticated device.",
+            "items": {
+              "enum": [
+                "server:read",
+                "chat:read",
+                "chat:write",
+                "approval:respond",
+                "workspace:read",
+                "workspace:browse",
+                "workspace:manage",
+                "files:read",
+                "files:write",
+                "git:read",
+                "git:write",
+                "schedule:read",
+                "schedule:write",
+                "bot:read",
+                "bot:write",
+                "tasks:read",
+                "agents:read"
+              ]
+            },
+            "uniqueItems": true
           }
         },
         "additionalProperties": false
@@ -5606,6 +5848,488 @@
         },
         "additionalProperties": true
       },
+      "ChatTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "subject",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "deleted"
+            ]
+          },
+          "activeForm": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "blockedBy": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatTaskProgress": {
+        "type": "object",
+        "description": "Bounded renderer-safe projection of the Mac-owned durable todo view for one chat. Never a transcript, private journal, or child-history channel. Task ids must be unique, at most one task may be in_progress, and blockedBy entries must reference distinct listed task ids whose dependency graph is acyclic.",
+        "required": [
+          "version",
+          "chatId",
+          "availability",
+          "epoch",
+          "revision",
+          "updatedAt",
+          "tasks"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "availability": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          },
+          "unavailableReason": {
+            "enum": [
+              "storage_not_enabled",
+              "invalid_snapshot",
+              "unsupported"
+            ]
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "description": "Opaque projection-authority epoch. Clients reset revision comparisons whenever it changes."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tasks": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ChatTask"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "availability": { "const": "ready" }
+              },
+              "required": ["availability"]
+            },
+            "then": {
+              "not": { "required": ["unavailableReason"] }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "availability": { "const": "unavailable" }
+              },
+              "required": ["availability"]
+            },
+            "then": {
+              "required": ["unavailableReason"],
+              "properties": {
+                "tasks": { "maxItems": 0 }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "ChatAgent": {
+        "type": "object",
+        "description": "One delegated-agent record in the public roster. agentId is a projection-minted public identifier; private run/session/group/generation/child/workspace identifiers never cross this boundary. parentAgentId is required exactly when depth is at least 2, and finishedAt exactly for terminal states.",
+        "required": [
+          "agentId",
+          "depth",
+          "revision",
+          "role",
+          "label",
+          "taskPreview",
+          "state",
+          "startedAt",
+          "updatedAt",
+          "modelId",
+          "turns",
+          "tools",
+          "tokens"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "parentAgentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "role": {
+            "enum": [
+              "scout",
+              "planner",
+              "reviewer"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "taskPreview": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "starting",
+              "running",
+              "needs_attention",
+              "completed",
+              "failed",
+              "timed_out",
+              "interrupted",
+              "stopped",
+              "unknown"
+            ]
+          },
+          "activity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "turns": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "tools": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "milestones": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "enum": [
+                "reading",
+                "listing",
+                "matching",
+                "searching",
+                "inspecting",
+                "composing"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "notices": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "enum": [
+                "task_truncated",
+                "report_truncated",
+                "display_filtered"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "warnings": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "completed",
+                    "failed",
+                    "timed_out",
+                    "interrupted",
+                    "stopped",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": ["state"]
+            },
+            "then": {
+              "required": ["finishedAt"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "queued",
+                    "starting",
+                    "running",
+                    "needs_attention"
+                  ]
+                }
+              },
+              "required": ["state"]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  { "required": ["finishedAt"] },
+                  { "required": ["error"] }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "depth": { "const": 1 }
+              },
+              "required": ["depth"]
+            },
+            "then": {
+              "not": { "required": ["parentAgentId"] }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "depth": { "minimum": 2 }
+              },
+              "required": ["depth"]
+            },
+            "then": {
+              "required": ["parentAgentId"]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "ChatAgentRoster": {
+        "type": "object",
+        "description": "Bounded projection of renderer-safe delegated-agent state for one chat's active or most recent turn. Agent ids must be unique, parentAgentId must reference an agent in the same roster, a non-empty roster requires turnId, and previousTurns is a newest-first bounded list of selectable historical public turns excluding turnId.",
+        "required": [
+          "version",
+          "chatId",
+          "availability",
+          "epoch",
+          "revision",
+          "updatedAt",
+          "agents"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "turnId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Public identity of the turn the roster is bound to. Required while agents are listed."
+          },
+          "previousTurns": {
+            "type": "array",
+            "maxItems": 16,
+            "description": "Optional newest-first list of historical public turns whose rosters can be requested with GET /chats/{chatId}/agents?turnId=...; entries are unique and exclude the current turnId.",
+            "items": {
+              "$ref": "#/components/schemas/ChatPreviousTurn"
+            }
+          },
+          "availability": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          },
+          "unavailableReason": {
+            "enum": [
+              "unsupported",
+              "invalid_snapshot"
+            ]
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agents": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/ChatAgent"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "availability": { "const": "ready" }
+              },
+              "required": ["availability"]
+            },
+            "then": {
+              "not": { "required": ["unavailableReason"] }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "availability": { "const": "unavailable" }
+              },
+              "required": ["availability"]
+            },
+            "then": {
+              "required": ["unavailableReason"],
+              "properties": {
+                "agents": { "maxItems": 0 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "agents": { "minItems": 1 }
+              },
+              "required": ["agents"]
+            },
+            "then": {
+              "required": ["turnId"]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "ChatPreviousTurn": {
+        "type": "object",
+        "description": "Opaque public turn selector for a historical roster. It contains no transcript or private generation identity.",
+        "required": [
+          "turnId",
+          "startedAt"
+        ],
+        "properties": {
+          "turnId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "TurnStartRequest": {
         "type": "object",
         "required": [
@@ -5788,6 +6512,7 @@
       },
       "StreamEvent": {
         "type": "object",
+        "description": "An ordinary parent-turn event or, for task_update and agents_update, an event on the dedicated chat-scoped progress channel. Progress event streamId values are chat IDs; they never appear on ordinary parent turn streams.",
         "required": [
           "protocolVersion",
           "streamId",
@@ -6223,6 +6948,50 @@
             "if": {
               "properties": {
                 "type": {
+                  "const": "task_update"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "$ref": "#/components/schemas/ChatTaskProgress"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "agents_update"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "terminal": {
+                  "const": false
+                },
+                "payload": {
+                  "$ref": "#/components/schemas/ChatAgentRoster"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
                   "not": {
                     "enum": [
                       "snapshot",
@@ -6233,6 +7002,8 @@
                       "tool_finished",
                       "timeline",
                       "approval_required",
+                      "task_update",
+                      "agents_update",
                       "done",
                       "error",
                       "cancelled",

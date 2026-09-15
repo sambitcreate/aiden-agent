@@ -127,6 +127,22 @@ class AidenInstallationStore(
         }
     }
 
+    fun updateDeviceCapabilities(
+        instanceId: String,
+        deviceCapabilities: List<AidenRemoteCapability>
+    ) {
+        val list = _installations.value.toMutableList()
+        val index = list.indexOfFirst { it.instanceId == instanceId }
+        if (index == -1) return
+        val item = list[index]
+        // A non-null serverCapabilities list is authoritative. Do not persist
+        // a grant until the server has advertised it after negotiation.
+        if (item.serverCapabilities != null && !item.serverCapabilities!!.containsAll(deviceCapabilities)) return
+        list[index] = item.copy(deviceCapabilities = deviceCapabilities)
+        _installations.value = list
+        save()
+    }
+
     fun getCredential(installation: AidenInstallation): String? {
         return secureStore.getCredential(installation.credentialScope)
     }

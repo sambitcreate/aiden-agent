@@ -149,7 +149,7 @@ export function registerChatHistoryHandlers(): void {
     );
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (!chat || chat.botId || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
+    if (!chat || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");

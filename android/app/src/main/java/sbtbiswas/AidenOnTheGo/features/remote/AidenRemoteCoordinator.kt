@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,7 +132,6 @@ class AidenRemoteCoordinator(
             try {
                 val server = newClient.server()
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
-                _serverInfo.value = server
                 _connectionState.value = AidenConnectionState.CONNECTED
                 val serverCapabilities = server.serverCapabilities ?: server.capabilities
                 if (!serverCapabilities.contains(AidenRemoteCapability.SCHEDULE_READ)) {
@@ -142,6 +142,21 @@ class AidenRemoteCoordinator(
                     serverCapabilities = serverCapabilities,
                     serverName = server.name
                 )
+                val negotiatedServer = negotiateProgressCapabilities(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = server
+                )
+                if (!isCurrent(generation, installation.id, newClient)) return@launch
+                installationStore.updateServerCapabilities(
+                    instanceId = installation.instanceId,
+                    serverCapabilities = negotiatedServer.serverCapabilities ?: negotiatedServer.capabilities,
+                    serverName = negotiatedServer.name
+                )
+                // Persist the negotiated grant before publishing serverInfo;
+                // progress consumers use both values as one capability gate.
+                _serverInfo.value = negotiatedServer
                 refreshWorkspaces(generation)
             } catch (e: AidenRemoteClientException.Server) {
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
@@ -155,6 +170,61 @@ class AidenRemoteCoordinator(
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 _connectionState.value = AidenConnectionState.OFFLINE
             }
+        }
+    }
+
+    /**
+     * Existing pairings may opt into progress only after /server advertises the
+     * corresponding feature. A failed or legacy negotiation leaves the pairing
+     * usable with the existing chat surface.
+     */
+    private suspend fun negotiateProgressCapabilities(
+        generation: Long,
+        installation: AidenInstallation,
+        client: AidenRemoteClient,
+        server: AidenServer
+    ): AidenServer {
+        if (!isCurrent(generation, installation.id, client)) return server
+        val requested = buildList {
+            if (server.supportsChatTasks && !installation.hasNegotiatedAccess(AidenRemoteCapability.TASKS_READ)) {
+                add(AidenRemoteCapability.TASKS_READ)
+            }
+            if (server.supportsChatAgents && !installation.hasNegotiatedAccess(AidenRemoteCapability.AGENTS_READ)) {
+                add(AidenRemoteCapability.AGENTS_READ)
+            }
+        }
+        if (requested.isEmpty()) return server
+        return try {
+            val completeCapabilities = client.updateDeviceCapabilities(requested)
+            if (!isCurrent(generation, installation.id, client)) return server
+            val refreshed = client.server()
+            if (!isCurrent(generation, installation.id, client)) return server
+            // The legacy aggregate can keep Bot/chat clients working, but it
+            // is not proof that the new progress grant was accepted. Require
+            // the explicit server capability projection before persisting the
+            // device grant used by the progress UI.
+            val refreshedServerCapabilities = refreshed.serverCapabilities
+            if (refreshedServerCapabilities == null || !refreshedServerCapabilities.containsAll(completeCapabilities)) {
+                return refreshed
+            }
+            installationStore.updateServerCapabilities(
+                instanceId = installation.instanceId,
+                serverCapabilities = refreshedServerCapabilities,
+                serverName = refreshed.name
+            )
+            installationStore.updateDeviceCapabilities(installation.instanceId, completeCapabilities)
+            refreshed
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: AidenRemoteClientException.Server) {
+            // Capability denial is a normal legacy/policy outcome. Only an
+            // explicit revocation response should invalidate this pairing.
+            if (error.statusCode == 401 ||
+                error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
+            ) throw error
+            server
+        } catch (_: Exception) {
+            server
         }
     }
 

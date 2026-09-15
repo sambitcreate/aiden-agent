@@ -74,6 +74,12 @@ data class AidenServer(
     val supportsChatSummaries: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE)
 
+    val supportsChatTasks: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_TASKS_FEATURE)
+
+    val supportsChatAgents: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_AGENTS_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

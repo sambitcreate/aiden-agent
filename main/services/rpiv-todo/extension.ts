@@ -24,6 +24,8 @@ export interface TodoExtensionScope {
   assistantMode: boolean;
   botBound: boolean;
   rendererOwner: boolean;
+  remoteOwner?: boolean;
+  botTaskTrackingAllowed?: boolean;
   excluded: boolean;
 }
 
@@ -32,8 +34,8 @@ export function shouldEnableTodoExtension(scope: TodoExtensionScope): boolean {
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.assistantMode &&
-    !scope.botBound &&
-    scope.rendererOwner &&
+    (!scope.botBound || scope.botTaskTrackingAllowed === true) &&
+    (scope.rendererOwner || scope.remoteOwner === true) &&
     !scope.excluded
   );
 }

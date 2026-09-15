@@ -128,6 +128,16 @@ fun AidenChatDetailScreen(
     val draft by viewModel.draft.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
+    val taskProgress by viewModel.taskProgress.collectAsState()
+    val currentAgentRoster by viewModel.agentRoster.collectAsState()
+    val selectedAgentRoster by viewModel.selectedAgentRoster.collectAsState()
+    val agentRosterHistory by viewModel.agentRosterHistory.collectAsState()
+    val progressConnectionState by viewModel.progressConnectionState.collectAsState()
+    // The coordinator updates /server after grant negotiation, which drives the
+    // progress capability gate and makes the controls appear without a reload.
+    val serverInfo by coordinator.serverInfo.collectAsState()
+    val canReadTaskProgress = viewModel.canReadTaskProgress
+    val canReadAgentRoster = viewModel.canReadAgentRoster
 
     val listState = rememberLazyListState()
 
@@ -135,6 +145,8 @@ fun AidenChatDetailScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
@@ -146,6 +158,35 @@ fun AidenChatDetailScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             voiceInput.destroy()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
+                Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            viewModel.startProgressObservation()
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.stopProgressObservation()
+        }
+    }
+
+    LaunchedEffect(serverInfo) {
+        viewModel.reconcileProgressAccess()
+        if (progressSheet == "tasks" && !viewModel.canReadTaskProgress) progressSheet = null
+        if (progressSheet == "agents" && !viewModel.canReadAgentRoster) progressSheet = null
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+            (viewModel.canReadTaskProgress || viewModel.canReadAgentRoster)
+        ) {
+            viewModel.startProgressObservation()
         }
     }
 
@@ -416,6 +457,20 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                if (canReadTaskProgress || canReadAgentRoster) {
+                    AidenChatProgressControls(
+                        taskProgress = taskProgress.takeIf { canReadTaskProgress },
+                        currentRoster = currentAgentRoster.takeIf { canReadAgentRoster },
+                        rosterHistory = if (canReadAgentRoster) agentRosterHistory else emptyList(),
+                        connectionState = progressConnectionState,
+                        onTasksClick = { progressSheet = "tasks" },
+                        onAgentsClick = { progressSheet = "agents" },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+
                 // 1:1 Parity iOS Glass Composer
                 AidenComposerView(
                     draft = draft,
@@ -570,6 +625,33 @@ fun AidenChatDetailScreen(
                     .padding(bottom = padding.calculateBottomPadding() + 8.dp)
             )
         }
+    }
+
+    when (progressSheet) {
+        "tasks" -> taskProgress
+            ?.takeIf { canReadTaskProgress && it.availability == AidenChatProgressAvailability.READY }
+            ?.let { progress ->
+                AidenTaskProgressSheet(progress = progress, onDismiss = { progressSheet = null })
+            }
+        "agents" -> {
+            val current = currentAgentRoster
+            val selected = selectedAgentRoster ?: current
+            if (canReadAgentRoster && current != null && selected != null && selected.availability == AidenChatProgressAvailability.READY) {
+                AidenAgentRosterSheet(
+                    currentRoster = current,
+                    selectedRoster = selected,
+                    history = agentRosterHistory,
+                    onSelectTurn = { turnId ->
+                        viewModel.selectAgentRosterTurn(turnId)
+                    },
+                    onAgentClick = { agent -> selectedAgent = agent },
+                    onDismiss = { progressSheet = null }
+                )
+            }
+        }
+    }
+    selectedAgent?.let { agent ->
+        AidenAgentDetailSheet(agent = agent, onDismiss = { selectedAgent = null })
     }
 }
 
