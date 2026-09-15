@@ -194,6 +194,26 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRosterEpochRotationPrunesHistoryAndRejectsSupersededFetch() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .rosterEpochRotates)
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        model.startProgressObservation()
+        try await waitForAgentRequestCount(2)
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(model.agentRoster?.epoch, "epoch-new")
+        XCTAssertTrue(model.historicalAgentRosters.isEmpty)
+
+        await model.loadAgentRoster(turnId: "turn-old")
+        XCTAssertTrue(model.historicalAgentRosters.isEmpty)
+        XCTAssertFalse(model.availableAgentTurnIds.contains("turn-old"))
+    }
+
+    @MainActor
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode
     ) async throws -> AidenChatViewModel {
@@ -2593,6 +2613,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case denied
         case finite
         case rosterFailsAfterFirst
+        case rosterEpochRotates
     }
 
     private static let lock = NSLock()
@@ -2655,6 +2676,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 data: Self.taskSnapshot
             )
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
+            let requestedTurn = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false
+            )?.queryItems?.first(where: { $0.name == "turnId" })?.value
             let currentMode: Mode
             let requestCount: Int
             Self.lock.lock()
@@ -2662,7 +2687,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             requestCount = Self._agentRequestCount
             currentMode = Self.mode
             Self.lock.unlock()
-            if currentMode == .rosterFailsAfterFirst, requestCount > 1 {
+            if currentMode == .rosterEpochRotates, requestedTurn == "turn-old" {
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "application/json",
+                    data: Self.oldHistoricalRosterSnapshot
+                )
+            } else if currentMode == .rosterEpochRotates {
+                result = Self.response(
+                    for: request,
+                    status: 200,
+                    contentType: "application/json",
+                    data: requestCount == 1 ? Self.oldRosterSnapshot : Self.newRosterSnapshot
+                )
+            } else if currentMode == .rosterFailsAfterFirst, requestCount > 1 {
                 result = Self.response(
                     for: request,
                     status: 500,
@@ -2697,7 +2736,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             } else {
                 let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
-                shouldFinish = currentMode != .rosterFailsAfterFirst || requestCount < 2
+                shouldFinish = ![.rosterFailsAfterFirst, .rosterEpochRotates].contains(currentMode)
+                    || requestCount < 2
                 result = Self.response(
                     for: request,
                     status: 200,
@@ -2732,6 +2772,24 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     private static let rosterSnapshot = Data(
         """
         {"version":1,"chatId":"chat-progress-lifecycle","availability":"unavailable","unavailableReason":"unsupported","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let oldRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-old","previousTurns":[{"turnId":"turn-old","startedAt":"2026-09-14T11:00:00Z"}],"availability":"ready","epoch":"epoch-old","revision":4,"updatedAt":"2026-09-14T12:00:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let newRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-new","previousTurns":[],"availability":"ready","epoch":"epoch-new","revision":1,"updatedAt":"2026-09-14T12:01:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let oldHistoricalRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-old","previousTurns":[],"availability":"ready","epoch":"epoch-old","revision":5,"updatedAt":"2026-09-14T11:30:00Z","agents":[]}
         """.utf8
     )
 
