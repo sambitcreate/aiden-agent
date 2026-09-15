@@ -255,10 +255,11 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   assert.match(composer, /key=\{chatId\}/u);
   assert.match(pane, /slashPaletteBlocked=\{Boolean\(pending\)\}/u);
 
-  // The key is load-bearing: Composer holds this state with no chatId reset.
+  // The key is load-bearing: Composer holds this state with no chatId reset,
+  // including a one-time seed owned by that exact renderer draft.
   const composerSource = source("../components/composer.tsx");
   assert.match(composerSource, /const \[draft, dispatchDraft\] = React\.useReducer/u);
-  assert.match(composerSource, /text: ""/u);
+  assert.match(composerSource, /text: initialText/u);
   assert.match(
     composerSource,
     /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u,

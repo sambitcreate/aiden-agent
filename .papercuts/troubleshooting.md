@@ -478,3 +478,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Pullfrog's incremental review retained two must-address findings from the prior head: fail closed when a Computer Use result lands during Live transport rotation, and re-read authoritative status after audio-start rollback so a stopped session remains restartable.
 - Replacing a window-level surface can leave unreachable components and motion selectors behind; remove the retired Assistant panel files and assert the dock does not regain those imports or styles.
 - `gh api graphql -F name="$VALUE"` does not read an unexported shell placeholder; pass resolved review-thread variables directly with `-f` before replying or resolving.
+- Deleting the Assistant panel also removed the only listener for Scheduled Tasks' compose handoff; keep entry-point events covered end to end through draft creation, navigation, and composer seeding before removing their prior owner.
