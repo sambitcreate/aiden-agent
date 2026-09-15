@@ -15,6 +15,7 @@ const writable: ComposerTypeFocusContext = {
   overlayOpen: false,
   reservedSurface: false,
   composing: false,
+  activationControl: false,
 };
 
 const key = (value: string, extras: Partial<Parameters<typeof decideComposerTypeFocus>[0]> = {}) =>
@@ -45,6 +46,31 @@ test("navigation, submit, and modifier chords never steal into the composer", ()
   assert.deepEqual(key("k", { altKey: true }), { action: "ignore" });
   assert.deepEqual(key("k", { defaultPrevented: true }), { action: "ignore" });
   assert.deepEqual(key("k", { isComposing: true }), { action: "ignore" });
+  assert.deepEqual(key("k", { keyCode: 229 }), { action: "ignore" });
+});
+
+test("Space stays with focused buttons while other printable keys still enter the composer", () => {
+  assert.deepEqual(
+    decideComposerTypeFocus(
+      { key: " ", metaKey: false, ctrlKey: false, altKey: false },
+      { ...writable, activationControl: true },
+    ),
+    { action: "ignore" },
+  );
+  assert.deepEqual(
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      { ...writable, activationControl: true },
+    ),
+    { action: "focus-and-insert", text: "a" },
+  );
+});
+
+test("AltGr printable characters can still type-to-focus", () => {
+  assert.deepEqual(key("{", { ctrlKey: true, altKey: true }), {
+    action: "focus-and-insert",
+    text: "{",
+  });
 });
 
 test("type-to-focus stays out of overlays, other editors, and an already focused composer", () => {
@@ -108,4 +134,6 @@ test("the type-focus hook captures keydown and writes through the native value s
   assert.match(hook, /\.assistant-dock-panel/u);
   const core = readFileSync(new URL("./composer-type-focus.ts", import.meta.url), "utf8");
   assert.match(core, /HTMLTextAreaElement\.prototype, "value"/u);
+  assert.match(core, /isActivationControl/u);
+  assert.match(core, /keyCode === 229/u);
 });

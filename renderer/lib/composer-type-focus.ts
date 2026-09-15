@@ -9,6 +9,7 @@ export interface ComposerTypeFocusEvent {
   defaultPrevented?: boolean;
   isComposing?: boolean;
   repeat?: boolean;
+  keyCode?: number;
 }
 
 export interface ComposerTypeFocusContext {
@@ -19,6 +20,7 @@ export interface ComposerTypeFocusContext {
   overlayOpen: boolean;
   reservedSurface: boolean;
   composing: boolean;
+  activationControl: boolean;
 }
 
 export type ComposerTypeFocusDecision =
@@ -94,6 +96,19 @@ export function isEditableTypingTarget(target: EventTarget | null): boolean {
   ].includes(type);
 }
 
+export function isActivationControl(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (
+    target.closest(
+      "button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], [role='radio'], [role='checkbox'], [role='switch'], [role='link'], a[href]",
+    )
+  ) {
+    return true;
+  }
+  if (!(target instanceof HTMLInputElement)) return false;
+  return ["button", "submit", "reset", "checkbox", "radio", "image"].includes(target.type);
+}
+
 export function isReservedTypingSurface(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
@@ -103,12 +118,27 @@ export function isReservedTypingSurface(target: EventTarget | null): boolean {
   );
 }
 
-export function typingRedirectBlockedByOverlay(root: ParentNode): boolean {
-  return Boolean(
-    root.querySelector('[data-slot="dialog-content"][data-state="open"]') ||
-      root.querySelector('[data-slot="popover-content"][data-state="open"]') ||
-      root.querySelector('[role="menu"][data-state="open"]'),
-  );
+export function typingRedirectBlockedByOverlay(
+  root: ParentNode,
+  active: Element | null = null,
+): boolean {
+  if (root.querySelector('[data-slot="dialog-content"][data-state="open"]')) return true;
+  if (root.querySelector('[role="menu"][data-state="open"]')) return true;
+  const popovers = root.querySelectorAll('[data-slot="popover-content"][data-state="open"]');
+  for (const popover of popovers) {
+    if (!(popover instanceof Element)) continue;
+    const role = popover.getAttribute("role");
+    if (
+      role === "menu" ||
+      role === "listbox" ||
+      role === "dialog" ||
+      popover.querySelector("[role='menu'], [role='listbox']") ||
+      (active instanceof Node && popover.contains(active))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function composerCanAcceptTyping(composer: HTMLTextAreaElement | null): boolean {
@@ -123,6 +153,7 @@ export function decideComposerTypeFocus(
   event: ComposerTypeFocusEvent,
   context: ComposerTypeFocusContext,
 ): ComposerTypeFocusDecision {
+  const altGr = event.ctrlKey && event.altKey;
   if (
     !context.composerAvailable ||
     context.composerFocused ||
@@ -132,14 +163,16 @@ export function decideComposerTypeFocus(
     context.composing ||
     event.defaultPrevented ||
     event.isComposing ||
+    event.keyCode === 229 ||
     event.metaKey ||
-    event.ctrlKey ||
-    event.altKey
+    (event.ctrlKey && !altGr) ||
+    (event.altKey && !altGr)
   ) {
     return { action: "ignore" };
   }
   const text = composerInsertTextFromKey(event.key);
   if (text === null) return { action: "ignore" };
+  if (text === " " && context.activationControl) return { action: "ignore" };
   if (!context.composerWritable) return { action: "focus" };
   return { action: "focus-and-insert", text };
 }

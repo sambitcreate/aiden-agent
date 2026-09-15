@@ -4,6 +4,7 @@ import {
   decideComposerTypeFocus,
   insertTextIntoTextarea,
   isEditableTypingTarget,
+  isActivationControl,
   isReservedTypingSurface,
   typingRedirectBlockedByOverlay,
 } from "./composer-type-focus";
@@ -31,7 +32,10 @@ export function useComposerTypeFocus(
         composerAvailable: composerCanAcceptTyping(composer),
         composerWritable: Boolean(composer && !composer.disabled && !composer.readOnly),
         editable: isEditableTypingTarget(event.target),
-        overlayOpen: typingRedirectBlockedByOverlay(document),
+        overlayOpen: typingRedirectBlockedByOverlay(
+          document,
+          document.activeElement instanceof Element ? document.activeElement : null,
+        ),
         reservedSurface:
           isReservedTypingSurface(event.target) ||
           Boolean(
@@ -39,7 +43,9 @@ export function useComposerTypeFocus(
               event.target instanceof Element &&
               event.target.closest(".assistant-dock-panel"),
           ),
-        composing: event.isComposing || event.key === "Dead",
+        composing: event.isComposing || event.key === "Dead" || event.keyCode === 229,
+        activationControl:
+          isActivationControl(event.target) || isActivationControl(document.activeElement),
       });
       if (decision.action === "ignore" || !composer) return;
       composer.focus({ preventScroll: true });

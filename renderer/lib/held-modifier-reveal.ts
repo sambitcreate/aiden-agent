@@ -10,7 +10,7 @@ export interface HeldModifierEvent {
 }
 
 export function namedModifierKey(key: string): "Meta" | "Control" | "Alt" | "Shift" | null {
-  if (key === "Meta" || key === "OS") return "Meta";
+  if (key === "Meta" || key === "OS" || key === "Super" || key === "Hyper") return "Meta";
   if (key === "Control") return "Control";
   if (key === "Alt") return "Alt";
   if (key === "Shift") return "Shift";
@@ -31,17 +31,17 @@ export function completeHeldModifierSet(
 }
 
 export function heldModifiersAfterKeydown(
-  held: ReadonlySet<string>,
+  _held: ReadonlySet<string>,
   event: HeldModifierEvent,
   tracked: ReadonlySet<string>,
 ): Set<string> {
-  const next = new Set(held);
+  const next = new Set<string>();
   const named = namedModifierKey(event.key);
   if (named && tracked.has(named)) next.add(named);
-  if (event.metaKey && tracked.has("Meta")) next.add("Meta");
-  if (event.ctrlKey && tracked.has("Control")) next.add("Control");
-  if (event.altKey && tracked.has("Alt")) next.add("Alt");
-  if (event.shiftKey && tracked.has("Shift")) next.add("Shift");
+  if (tracked.has("Meta") && event.metaKey) next.add("Meta");
+  if (tracked.has("Control") && event.ctrlKey) next.add("Control");
+  if (tracked.has("Alt") && event.altKey) next.add("Alt");
+  if (tracked.has("Shift") && event.shiftKey) next.add("Shift");
   return next;
 }
 

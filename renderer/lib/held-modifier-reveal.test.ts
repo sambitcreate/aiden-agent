@@ -20,6 +20,7 @@ const meta = {
 test("maps left-OS Command keys onto Meta", () => {
   assert.equal(namedModifierKey("Meta"), "Meta");
   assert.equal(namedModifierKey("OS"), "Meta");
+  assert.equal(namedModifierKey("Super"), "Meta");
   assert.equal(namedModifierKey("a"), null);
 });
 
@@ -63,6 +64,19 @@ test("releasing Command or leaving a customized chord hides the hint", () => {
     tracked,
   );
   assert.equal(held.size, 0);
+});
+
+test("a later keydown without Command clears a stuck Meta hold", () => {
+  const required = [["Meta"]];
+  const tracked = trackedModifiersFromSets(required);
+  const held = heldModifiersAfterKeydown(new Set(["Meta"]), {
+    key: "a",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+  }, tracked);
+  assert.equal(completeHeldModifierSet(held, required), false);
 });
 
 test("the reveal hook waits for a complete hold, uses capture, and clears on blur", () => {
