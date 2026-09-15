@@ -29,7 +29,16 @@ test("extension contributes a replay-safe native tool and durable snapshots", as
   assert.ok(tool);
   assert.equal(tool.name, "todo");
   assert.equal(piRuntimeReplayPolicy(tool), "safe");
+  assert.match(runtime.extension.systemPrompt ?? "", /at least three distinct, verifiable checkpoints/u);
+  assert.match(runtime.extension.systemPrompt ?? "", /explicit request[\s\S]*meets this same threshold/u);
+  assert.doesNotMatch(runtime.extension.systemPrompt ?? "", /or when the user explicitly/u);
+  assert.match(runtime.extension.systemPrompt ?? "", /Normally skip todo for questions/u);
+  assert.match(runtime.extension.systemPrompt ?? "", /Request type or file count alone does not decide eligibility/u);
+  assert.match(runtime.extension.systemPrompt ?? "", /research or a single-file change qualifies only when/u);
+  assert.match(runtime.extension.systemPrompt ?? "", /individual tool calls/u);
   assert.match(runtime.extension.systemPrompt ?? "", /at most one task in_progress/u);
+  assert.match(tool.description, /longer-running work/u);
+  assert.match(tool.description, /at least three distinct verifiable checkpoints/u);
   const created = await tool.execute("create", { action: "create", subject: "Write tests" });
   assert.equal(created.details.tasks[0]?.subject, "Write tests");
   assert.equal(runtime.snapshot().nextId, 2);

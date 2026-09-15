@@ -1,4 +1,4 @@
-import { Check, Circle, Info, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
+import { Check, Circle, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
 import type { TodoSnapshotViewV1, TodoTaskViewV1 } from "../shared/todo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
@@ -48,14 +48,26 @@ function floatingAnchor(children: React.ReactNode) {
   );
 }
 
+export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): boolean {
+  if (!snapshot) return false;
+  if (snapshot.availability === "unavailable") {
+    return snapshot.unavailableReason !== "storage_not_enabled";
+  }
+  return snapshot.tasks.some(
+    (task) => task.status !== "deleted" && task.status !== "completed",
+  );
+}
+
 export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null }) {
   if (!snapshot) return null;
   if (snapshot.availability === "unavailable") {
-    const storageNotEnabled = snapshot.unavailableReason === "storage_not_enabled";
-    const title = storageNotEnabled ? "Task tracking not enabled" : "Task tracking unavailable";
-    const explanation = storageNotEnabled
-      ? "Saved task tracking is not enabled for this chat on this Mac. You can continue chatting, but Aiden cannot save or update a task list here."
-      : "Aiden could not verify this chat’s private task state, so it will not display or update an older snapshot.";
+    // Rollout-ineligible and other intentionally journalless chats need no
+    // user action. Keep that expected capability state out of the composer;
+    // verified corruption remains visible because it can affect saved work.
+    if (snapshot.unavailableReason === "storage_not_enabled") return null;
+    const title = "Task tracking unavailable";
+    const explanation =
+      "Aiden could not verify this chat’s private task state, so it will not display or update an older snapshot.";
     return floatingAnchor(
       <>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -68,12 +80,8 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
               className="pointer-events-auto flex min-h-9 max-w-full items-center gap-2 rounded-pill bg-popover/95 px-3.5 text-small text-secondary shadow-popover outline-none backdrop-blur-xl transition-[background-color,box-shadow] duration-150 hover:bg-popover motion-reduce:transition-none"
               aria-label={`${title}. Focus or hover for details.`}
             >
-              {storageNotEnabled ? (
-                <Info className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
-              ) : (
-                <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
-              )}
-              <span className="truncate">{storageNotEnabled ? "Task tracking not enabled" : "Tasks unavailable"}</span>
+              <LockKeyhole className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
+              <span className="truncate">Tasks unavailable</span>
             </button>
           </HoverCardTrigger>
           <HoverCardContent align="center" side="top" className="w-[min(28rem,calc(100vw-2rem))]">
