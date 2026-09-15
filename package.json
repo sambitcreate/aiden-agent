@@ -155,6 +155,7 @@
     "@google/genai": "2.19.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@radix-ui/colors": "^3.0.0",
+    "@rive-app/react-webgl2": "4.34.2",
     "@tanstack/react-query": "^5.87.4",
     "@tanstack/react-router": "^1.131.36",
     "acorn": "8.17.0",

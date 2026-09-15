@@ -170,8 +170,8 @@ export type GeminiLiveWireSession = Pick<
 >;
 
 /**
- * Gemini 3.1 requires this setup field before client-content history is used.
- * @google/genai 2.16.0 declares it on LiveClientSetup but omits it from the
+ * Gemini Live requires this setup field before initial client-content history is used.
+ * @google/genai 2.19.0 declares it on LiveClientSetup but omits it from the
  * public LiveConnectConfig shape and its setup serializer.
  */
 export interface GeminiLiveConnectConfig extends LiveConnectConfig {

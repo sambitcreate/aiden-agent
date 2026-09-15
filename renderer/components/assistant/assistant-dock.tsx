@@ -1,27 +1,32 @@
-// Aiden's home inside the main window: a panel docked to the bottom-right that
-// collapses to a circular app mark. It is anchored to the window rather than to
-// the chat pane, so it survives route changes and follows the window's size.
+// Aiden's window-level Gemini Live control. Before setup it presents the app
+// mark; after setup it becomes a stateful Rive orb.
 
 import * as React from "react";
-import {
-  assistantAutomationDraft,
-  assistantPreviewText,
-  onAssistantAutomationComposerRequested,
-} from "../../lib/assistant-dock";
-import { AssistantBubble } from "./assistant-bubble";
-import { AssistantPanel } from "./assistant-panel";
-import { useAssistantChat } from "./use-assistant-chat";
-import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
+import { useNavigate } from "@tanstack/react-router";
 import { useCommandHandler } from "../../lib/command-system";
-import type { AssistantChat } from "./use-assistant-chat";
-import { assistantThreadChangeBlockedReason } from "./assistant-live-ownership";
+import type { SettingsSection } from "../../lib/settings-section";
+import { AidenLiveOrb } from "./aiden-live-orb";
+import {
+  AssistantLiveHud,
+  AssistantLiveSetupDialog,
+  assistantLiveOrbState,
+} from "./assistant-live";
+import { useAssistantChat, type AssistantChat } from "./use-assistant-chat";
+import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
 
-/** How long a reply preview stays beside the collapsed mark. */
-const PREVIEW_VISIBLE_MS = 8_000;
-/** Must match aiden-assistant-dock-out in styles.css. */
-const PANEL_EXIT_MS = 120;
+const AIDEN_LOGO_URL = new URL("../../../resources/aiden-sidebar-logo.png", import.meta.url).href;
+const GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
+
+function storedSetupComplete(): boolean {
+  try {
+    return window.localStorage.getItem(GEMINI_LIVE_SETUP_COMPLETE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
+  const navigate = useNavigate();
   const chat = useAssistantChat();
   const ordinaryApprovalPending = chat.approvals.some(
     (approval) => approval.toolName !== "computer_use",
@@ -34,147 +39,106 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
         ? "Finish or stop the current Aiden response before starting Live."
         : null,
   );
-  return <AssistantDockPresentation chat={chat} live={live} rightInset={rightInset} />;
+  const openSettings = React.useCallback(
+    (section: SettingsSection) => {
+      live.setSetupOpen(false);
+      void navigate({ to: "/settings", search: { section } });
+    },
+    [live, navigate],
+  );
+  return (
+    <AssistantDockPresentation
+      chat={chat}
+      live={live}
+      rightInset={rightInset}
+      onOpenSettings={openSettings}
+    />
+  );
 }
 
 export function AssistantDockPresentation({
   chat,
   live,
   rightInset = 0,
-  initiallyOpen = false,
-  panelComponent: PanelComponent = AssistantPanel,
+  onOpenSettings = () => undefined,
   useCommand = useCommandHandler,
 }: {
   chat: AssistantChat;
   live: AssistantLiveController;
   rightInset?: number;
-  initiallyOpen?: boolean;
-  panelComponent?: typeof AssistantPanel;
+  onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
   useCommand?: typeof useCommandHandler;
 }): React.ReactElement {
-  const [open, setOpen] = React.useState(initiallyOpen);
-  const [present, setPresent] = React.useState(initiallyOpen);
-  const [unread, setUnread] = React.useState(0);
-  const [preview, setPreview] = React.useState<string | null>(null);
-  const [draft, setDraft] = React.useState("");
-  const inputRef = React.useRef<HTMLTextAreaElement>(null);
-  const bubbleRef = React.useRef<HTMLButtonElement>(null);
-  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
-  const restoreFocusPendingRef = React.useRef(false);
-  const lastSeenReplyRef = React.useRef<number | null>(null);
-  const threadChangeBlockedReason = assistantThreadChangeBlockedReason(chat, live);
-  const panelChat = React.useMemo<AssistantChat>(() => {
-    if (!threadChangeBlockedReason) return chat;
-    return {
-      ...chat,
-      canChangeThread: false,
-      newThread: () => undefined,
-      openThread: () => undefined,
-    };
-  }, [chat, threadChangeBlockedReason]);
+  const [hudOpen, setHudOpen] = React.useState(false);
+  const [setupCompleted, setSetupCompleted] = React.useState(storedSetupComplete);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const approvalPending = chat.approvals.some((approval) => approval.toolName === "computer_use");
+  const orbState = assistantLiveOrbState(live, approvalPending);
+
+  React.useEffect(() => {
+    if (approvalPending || live.error) setHudOpen(true);
+    if (!live.active) setHudOpen(false);
+  }, [approvalPending, live.active, live.error]);
+
+  React.useEffect(() => {
+    if (!live.active || !live.microphoneActive || setupCompleted) return;
+    setSetupCompleted(true);
+    try {
+      window.localStorage.setItem(GEMINI_LIVE_SETUP_COMPLETE_KEY, "true");
+    } catch {
+      // A private/locked storage context should not prevent the active session.
+    }
+  }, [live.active, live.microphoneActive, setupCompleted]);
 
   const openPanel = React.useCallback(() => {
-    if (!open) {
-      const activeElement = document.activeElement;
-      restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null;
-      restoreFocusPendingRef.current = false;
-    } else {
-      inputRef.current?.focus();
+    if (!setupCompleted) {
+      live.setSetupOpen(true);
+      return;
     }
-    setOpen(true);
-    setUnread(0);
-    setPreview(null);
-  }, [open]);
-
-  const minimizePanel = React.useCallback(() => {
-    if (live.active || live.busy || live.setupOpen) return;
-    restoreFocusPendingRef.current = true;
-    setOpen(false);
-  }, [live.active, live.busy, live.setupOpen]);
+    if (live.active) {
+      setHudOpen((open) => !open);
+      return;
+    }
+    if (live.setupComplete) {
+      void live.start();
+      return;
+    }
+    onOpenSettings(live.available ? "computerUse" : "providers");
+  }, [live, onOpenSettings, setupCompleted]);
   useCommand("assistant.open", openPanel);
-  React.useEffect(
-    () =>
-      onAssistantAutomationComposerRequested(() => {
-        setDraft(assistantAutomationDraft);
-        openPanel();
-      }),
-    [openPanel],
-  );
-
-  // Keep the panel mounted through its exit animation, exactly as the
-  // Quick View does, so minimizing settles instead of vanishing.
-  React.useLayoutEffect(() => {
-    if (open) {
-      setPresent(true);
-      return;
-    }
-    if (!present) return;
-    if (document.documentElement.dataset.reduceMotion === "true") {
-      setPresent(false);
-      return;
-    }
-    const timeout = window.setTimeout(() => setPresent(false), PANEL_EXIT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [open, present]);
-
-  React.useLayoutEffect(() => {
-    if (open && present) {
-      inputRef.current?.focus();
-      return;
-    }
-    if (!open && !present && restoreFocusPendingRef.current) {
-      restoreFocusPendingRef.current = false;
-      const priorFocus = restoreFocusRef.current;
-      if (priorFocus?.isConnected) priorFocus.focus();
-      else bubbleRef.current?.focus();
-    }
-  }, [open, present]);
-
-  // Replies AND failures both badge. An error raised while minimized is
-  // otherwise invisible — the panel that renders it is unmounted — so the user
-  // sits watching nothing, believing Aiden is still thinking.
-  React.useEffect(() => {
-    const notice = chat.lastNotice;
-    if (!notice || notice.at === lastSeenReplyRef.current) return;
-    lastSeenReplyRef.current = notice.at;
-    if (open) return;
-    setUnread((count) => count + 1);
-    setPreview(assistantPreviewText(notice.text));
-  }, [chat.lastNotice, open]);
-
-  React.useEffect(() => {
-    if (!preview) return;
-    const timer = setTimeout(() => setPreview(null), PREVIEW_VISIBLE_MS);
-    return () => clearTimeout(timer);
-  }, [preview]);
 
   return (
     <div
-      className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end transition-[right] duration-300 ease-out motion-reduce:transition-none"
+      className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
       style={{ right: `calc(1rem + ${Math.max(0, rightInset)}px)` }}
     >
-      {present ? (
-        <div
-          className="assistant-dock-panel"
-          data-state={open ? "open" : "closed"}
-          inert={!open ? true : undefined}
-          aria-hidden={!open ? true : undefined}
-          style={{ pointerEvents: open ? "auto" : "none" }}
-        >
-          <PanelComponent
-            chat={panelChat}
-            live={live}
-            draft={draft}
-            inputRef={inputRef}
-            onDraftChange={setDraft}
-            onMinimize={minimizePanel}
-          />
-        </div>
-      ) : (
-        // Held back until the panel has finished leaving, so the two surfaces
-        // hand over in the same corner rather than overlapping mid-animation.
-        <AssistantBubble ref={bubbleRef} unread={unread} preview={preview} onOpen={openPanel} />
-      )}
+      {live.active && hudOpen ? <AssistantLiveHud live={live} orbState={orbState} /> : null}
+      <button
+        ref={triggerRef}
+        type="button"
+        className="aiden-live-trigger pointer-events-auto"
+        data-kind={setupCompleted ? "orb" : "logo"}
+        data-state={orbState}
+        aria-label={
+          !setupCompleted
+            ? "Set up Gemini Live"
+            : live.active
+              ? `${hudOpen ? "Hide" : "Show"} Gemini Live controls`
+              : "Start Gemini Live"
+        }
+        aria-expanded={live.active ? hudOpen : live.setupOpen}
+        onClick={openPanel}
+      >
+        {setupCompleted ? (
+          <AidenLiveOrb state={orbState} level={live.microphoneLevel} />
+        ) : (
+          <img src={AIDEN_LOGO_URL} alt="" draggable={false} />
+        )}
+        {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
+      </button>
+      {!setupCompleted ? (
+        <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
+      ) : null}
     </div>
   );
 }

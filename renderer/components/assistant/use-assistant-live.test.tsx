@@ -110,9 +110,7 @@ interface HookFixture {
   unmount(): Promise<void>;
 }
 
-async function mountHook(
-  overrides: Partial<AssistantLiveDependencies> = {},
-): Promise<HookFixture> {
+async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Promise<HookFixture> {
   const document = new DOMImplementation().createDocument(
     null,
     "html",
@@ -145,20 +143,11 @@ async function mountHook(
     configurable: true,
     value: windowValue,
   });
-  const keys = [
-    "window",
-    "document",
-    "navigator",
-    "Node",
-    "Element",
-    "HTMLElement",
-  ] as const;
+  const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
   const previous = new Map(
     keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
   );
-  const ElementConstructor = Object.getPrototypeOf(
-    document.documentElement,
-  ).constructor;
+  const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
   Object.defineProperties(globalThis, {
     window: { configurable: true, value: windowValue },
     document: { configurable: true, value: document },
@@ -190,8 +179,7 @@ async function mountHook(
     enabled: true,
     beta: true,
     state: "ready",
-    detail:
-      "Accessibility and Screen Recording are available to Aiden Computer Use.",
+    detail: "Accessibility and Screen Recording are available to Aiden Computer Use.",
     ready: true,
     available: true,
     retryable: false,
@@ -284,8 +272,7 @@ async function mountHook(
       dependencies = {
         ...dependencies,
         availabilityRefreshReady: true,
-        availabilityRefreshToken:
-          (dependencies.availabilityRefreshToken ?? 0) + 1,
+        availabilityRefreshToken: (dependencies.availabilityRefreshToken ?? 0) + 1,
       };
       flushSync(() => root.render(<Harness />));
       await settle();
@@ -342,20 +329,14 @@ test("provider refresh rechecks Live availability without remounting or reconnec
     },
   });
   assert.equal(fixture.controller().available, false);
-  assert.match(
-    fixture.controller().availabilityDetail,
-    /Connect Google with an API key/u,
-  );
+  assert.match(fixture.controller().availabilityDetail, /Connect Google with an API key/u);
 
   hasGoogleCredential = true;
   await fixture.refreshAvailability();
 
   assert.equal(statusCalls, 2);
   assert.equal(fixture.controller().available, true);
-  assert.match(
-    fixture.controller().availabilityDetail,
-    /Approved model: gemini-live-test/u,
-  );
+  assert.match(fixture.controller().availabilityDetail, /Approved model: gemini-live-test/u);
   assert.equal(starts, 0, "a credential refresh must never start Live");
   assert.equal(fixture.controller().active, false);
   await fixture.unmount();
@@ -367,27 +348,16 @@ test("fixed provider-start diagnostics remain actionable without exposing raw de
   assert.equal(assistantLiveStartErrorDetail(new Error(message)), message);
   const networkMessage =
     "Error invoking remote method: Aiden could not establish a connection to Google Live. Check your network, VPN, or firewall and try again.";
+  assert.equal(assistantLiveStartErrorDetail(new Error(networkMessage)), networkMessage);
   assert.equal(
-    assistantLiveStartErrorDetail(new Error(networkMessage)),
-    networkMessage,
-  );
-  assert.equal(
-    assistantLiveStartErrorDetail(
-      new Error("wss://private.example?key=SECRET provider internals"),
-    ),
+    assistantLiveStartErrorDetail(new Error("wss://private.example?key=SECRET provider internals")),
     "Live could not start. Nothing is capturing; try again when you’re ready.",
   );
 });
 
 test("runtime diagnostics preserve fixed actionable categories without raw detail", () => {
-  assert.match(
-    assistantLiveRuntimeErrorDetail("idle_timeout"),
-    /stopped responding/iu,
-  );
-  assert.match(
-    assistantLiveRuntimeErrorDetail("malformed_server_event"),
-    /unsupported event/iu,
-  );
+  assert.match(assistantLiveRuntimeErrorDetail("idle_timeout"), /stopped responding/iu);
+  assert.match(assistantLiveRuntimeErrorDetail("malformed_server_event"), /unsupported event/iu);
   assert.equal(
     assistantLiveRuntimeErrorDetail("private-provider-secret"),
     "The Live session encountered a provider error.",
@@ -500,10 +470,7 @@ test("Computer Use stays off until a deliberate per-chat change and reports glob
   const fixture = await mountHook();
   assert.equal(fixture.controller().computerUseEnabled, false);
   assert.equal(fixture.controller().computerUseReady, true);
-  assert.match(
-    fixture.controller().computerUseDetail,
-    /Accessibility and Screen Recording/u,
-  );
+  assert.match(fixture.controller().computerUseDetail, /Accessibility and Screen Recording/u);
   assert.deepEqual(fixture.computerUseChanges(), []);
 
   await fixture.controller().setComputerUse(true);
@@ -560,8 +527,7 @@ test("Computer Use cannot be enabled when the global helper is unavailable", asy
     enabled: false,
     beta: true,
     state: "disabled",
-    detail:
-      "Turn on the Computer Use beta to make it available in individual chats.",
+    detail: "Turn on the Computer Use beta to make it available in individual chats.",
     ready: false,
     available: false,
     retryable: false,
@@ -572,16 +538,13 @@ test("Computer Use cannot be enabled when the global helper is unavailable", asy
     computerUse: { status: async () => unavailable },
   });
   assert.equal(fixture.controller().computerUseReady, false);
-  assert.match(
-    fixture.controller().computerUseDetail,
-    /Turn on the Computer Use beta/u,
-  );
+  assert.match(fixture.controller().computerUseDetail, /Turn on the Computer Use beta/u);
   await fixture.controller().setComputerUse(true);
   assert.deepEqual(fixture.computerUseChanges(), []);
   await fixture.unmount();
 });
 
-test("mounted Live hook blocks setup and start during an ordinary Assistant collision", async () => {
+test("mounted Live hook allows readiness review but blocks start during an ordinary collision", async () => {
   for (const reason of [
     "Finish or stop the current Aiden response before starting Live.",
     "Decide the pending automation approval before starting Live.",
@@ -590,7 +553,7 @@ test("mounted Live hook blocks setup and start during an ordinary Assistant coll
     fixture.controller().setSetupOpen(true);
     await fixture.controller().start();
     await settle();
-    assert.equal(fixture.controller().setupOpen, false);
+    assert.equal(fixture.controller().setupOpen, true);
     assert.equal(fixture.startCalls(), 0);
     assert.equal(fixture.controller().startBlockedReason, reason);
     await fixture.unmount();
@@ -628,11 +591,7 @@ test("a gate-revocation terminal snapshot stops local media and leaves manual re
   assert.equal(fixture.controller().microphoneActive, false);
   assert.deepEqual(fixture.controller().captions, []);
   assert.equal(fixture.tracks[0]?.stopped, true);
-  assert.equal(
-    fixture.startCalls(),
-    1,
-    "a terminal event must never auto-restart Live",
-  );
+  assert.equal(fixture.startCalls(), 1, "a terminal event must never auto-restart Live");
   await fixture.unmount();
 });
 
@@ -677,10 +636,7 @@ test("enabled experimental Live stays visible but blocked for unavailable model 
   await settle();
   assert.equal(unavailableFixture.controller().visible, true);
   assert.equal(unavailableFixture.controller().available, false);
-  assert.match(
-    unavailableFixture.controller().startBlockedReason ?? "",
-    /Connect Google/u,
-  );
+  assert.match(unavailableFixture.controller().startBlockedReason ?? "", /Connect Google/u);
   unavailableFixture.controller().setSetupOpen(true);
   await unavailableFixture.controller().start();
   assert.equal(unavailableFixture.controller().setupOpen, false);
@@ -691,10 +647,7 @@ test("enabled experimental Live stays visible but blocked for unavailable model 
   });
   assert.equal(deniedFixture.controller().microphonePermission, "denied");
   assert.equal(deniedFixture.controller().microphonePermissionReady, false);
-  assert.match(
-    deniedFixture.controller().startBlockedReason ?? "",
-    /System Settings/u,
-  );
+  assert.match(deniedFixture.controller().startBlockedReason ?? "", /System Settings/u);
   await deniedFixture.controller().start();
   assert.equal(deniedFixture.startCalls(), 0);
   await deniedFixture.unmount();
@@ -708,11 +661,7 @@ test("a busy setup close transition aborts pending microphone permission and sto
   await settle();
   fixture.controller().setSetupOpen(true);
   const starting = fixture.controller().start();
-  for (
-    let attempt = 0;
-    attempt < 3 && !fixture.controller().busy;
-    attempt += 1
-  ) {
+  for (let attempt = 0; attempt < 3 && !fixture.controller().busy; attempt += 1) {
     await settle();
   }
   assert.equal(fixture.controller().busy, true);
@@ -721,11 +670,7 @@ test("a busy setup close transition aborts pending microphone permission and sto
   await starting;
   await settle();
   assert.equal(fixture.stopCalls() >= 1, true);
-  assert.equal(
-    fixture.tracks.length,
-    0,
-    "cancelled permission must not proceed to getUserMedia",
-  );
+  assert.equal(fixture.tracks.length, 0, "cancelled permission must not proceed to getUserMedia");
   assert.equal(fixture.controller().active, false);
   await fixture.unmount();
 });
@@ -827,11 +772,7 @@ test("old audio rejection cannot tear down replacement media and reconnect never
   const replacementTrack = fixture.tracks[1];
   oldSend.reject(new Error("old request rejected"));
   await settle();
-  assert.equal(
-    replacementTrack?.stopped,
-    false,
-    "old rejection cannot stop replacement capture",
-  );
+  assert.equal(replacementTrack?.stopped, false, "old rejection cannot stop replacement capture");
   handler({
     type: "reconnect_required",
     sessionId: "replacement-2",
@@ -886,8 +827,7 @@ test("microphone activity is measured locally, throttled, and reset on Stop", as
   const oldWorklet = fixture.worklets[0];
   const data = new ArrayBuffer(640);
   const view = new DataView(data);
-  for (let offset = 0; offset < data.byteLength; offset += 2)
-    view.setInt16(offset, 8_192, true);
+  for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, 8_192, true);
   fixture.worklets[0]?.emit({ type: "pcm", data });
   await settle();
   assert.equal(fixture.controller().microphoneLevel > 0.7, true);
@@ -1064,10 +1004,7 @@ test("audio-failure stop rejection preserves a conservative open-session warning
   await settle();
   assert.equal(fixture.controller().active, true);
   assert.equal(fixture.controller().microphoneActive, false);
-  assert.match(
-    fixture.controller().error ?? "",
-    /provider session may still be open.*Stop Live/iu,
-  );
+  assert.match(fixture.controller().error ?? "", /provider session may still be open.*Stop Live/iu);
   await fixture.unmount();
 });
 
@@ -1098,21 +1035,9 @@ test("deferred disconnect cleanup cannot close replacement playback after reconn
   });
   oldContextClose.resolve();
   await settle();
-  assert.equal(
-    fixture.player.closes,
-    0,
-    "stale cleanup must not close replacement playback",
-  );
-  assert.equal(
-    fixture.player.enqueues,
-    1,
-    "replacement session audio remains admitted",
-  );
-  assert.equal(
-    fixture.tracks[1]?.stopped,
-    false,
-    "replacement microphone remains active",
-  );
+  assert.equal(fixture.player.closes, 0, "stale cleanup must not close replacement playback");
+  assert.equal(fixture.player.enqueues, 1, "replacement session audio remains admitted");
+  assert.equal(fixture.tracks[1]?.stopped, false, "replacement microphone remains active");
   await fixture.unmount();
 });
 
@@ -1199,11 +1124,7 @@ test("unmount during a pending start stops main and fences the stale start respo
     state: "open",
   });
   await Promise.all([starting, unmounting]);
-  assert.equal(
-    stops >= 1,
-    true,
-    "cleanup stops main while the stale response stays inert",
-  );
+  assert.equal(stops >= 1, true, "cleanup stops main while the stale response stays inert");
 });
 
 test("a stale start response cannot stop or replace a newer renderer session", async () => {
@@ -1249,11 +1170,7 @@ test("a stale start response cannot stop or replace a newer renderer session", a
   await settle();
   assert.equal(fixture.controller().active, true);
   assert.equal(stops, 1, "only the explicit cancellation stops main");
-  assert.equal(
-    fixture.tracks[0]?.stopped,
-    false,
-    "replacement media remains active",
-  );
+  assert.equal(fixture.tracks[0]?.stopped, false, "replacement media remains active");
   await fixture.unmount();
 });
 
@@ -1269,26 +1186,10 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
     text,
     final,
   });
-  let captions = reconcileAssistantLiveCaption(
-    [],
-    event("hel", false),
-    () => ++id,
-  );
-  captions = reconcileAssistantLiveCaption(
-    captions,
-    event("hello", false),
-    () => ++id,
-  );
-  captions = reconcileAssistantLiveCaption(
-    captions,
-    event("hello", true),
-    () => ++id,
-  );
-  captions = reconcileAssistantLiveCaption(
-    captions,
-    event("world", true),
-    () => ++id,
-  );
+  let captions = reconcileAssistantLiveCaption([], event("hel", false), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("hello", false), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("hello", true), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("world", true), () => ++id);
   assert.deepEqual(captions, [
     {
       id: 1,
@@ -1299,11 +1200,7 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
     },
   ]);
   captions = sealAssistantLiveCaption(captions);
-  captions = reconcileAssistantLiveCaption(
-    captions,
-    event("A separate turn", true),
-    () => ++id,
-  );
+  captions = reconcileAssistantLiveCaption(captions, event("A separate turn", true), () => ++id);
   assert.equal(captions.length, 2);
   assert.equal(captions[0]?.sealed, true);
   assert.equal(captions[1]?.text, "A separate turn");

@@ -15,7 +15,7 @@ import { app } from "../../platform.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
 
 const LIVE_COMPUTER_USE_DESCRIPTION =
-  "Use Aiden's approval-gated Computer Use controller. Capture an exact window first. Every click, key, type, drag, scroll, focus, or other mutation pauses for a fresh user Allow once decision.";
+  "Use Aiden's approval-gated Computer Use controller. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Every click, key, type, drag, scroll, focus, or other mutation pauses for a fresh user Allow once decision.";
 
 /**
  * Production stays fail-closed until an authorized real-model probe records a
@@ -32,10 +32,7 @@ export const geminiLiveService = new GeminiLiveService({
   createConnector: (apiKey) => createOwnedGoogleGenAIConnector({ apiKey }),
   prepareComputerUse: async ({ chatId, owner, sessionId, signal }) => {
     if (!chatId || signal.aborted || owner.isDestroyed()) return null;
-    const [settings, chat] = await Promise.all([
-      configStore.getSettings(),
-      chatStore.get(chatId),
-    ]);
+    const [settings, chat] = await Promise.all([configStore.getSettings(), chatStore.get(chatId)]);
     if (
       signal.aborted ||
       owner.isDestroyed() ||
@@ -68,11 +65,9 @@ export const geminiLiveService = new GeminiLiveService({
     );
     // The bridge cannot receive a provider call before setup completes, while
     // bindSendResult runs synchronously before protocol.start().
-    let sendToolResult: ((result: {
-      id: string;
-      name: string;
-      response: Record<string, unknown>;
-    }) => void) | null = null;
+    let sendToolResult:
+      | ((result: { id: string; name: string; response: Record<string, unknown> }) => void)
+      | null = null;
     const isAuthorized = async () => {
       const [currentSettings, currentChat] = await Promise.all([
         configStore.getSettings(),
@@ -90,12 +85,12 @@ export const geminiLiveService = new GeminiLiveService({
       sessionId,
       controller,
       isAuthorized,
-      requestApproval: ({ streamId, toolCallId, toolName, summary, signal: callSignal }) =>
-        approvals.request(
+      requestApproval: async ({ streamId, toolCallId, toolName, summary, signal: callSignal }) =>
+        (await approvals.request(
           { streamId, toolCallId, toolName, summary },
           callSignal,
           owner.documentId,
-        ),
+        )) === "allowed",
       sendResult: (result) => sendToolResult?.(result),
     });
     return {

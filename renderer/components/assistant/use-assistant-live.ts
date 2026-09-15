@@ -46,10 +46,14 @@ export interface AssistantLiveController {
   computerUseConversationAvailable: boolean;
   computerUseBusy: boolean;
   computerUseDetail: string;
+  computerUsePermissions: ComputerUseStatus["permissions"] | null;
   computerUseError: string | null;
+  setupComplete: boolean;
   setSetupOpen(open: boolean): void;
   setMicrophone(enabled: boolean): void;
   setComputerUse(enabled: boolean): Promise<void>;
+  requestMicrophonePermission(): Promise<boolean>;
+  prepareComputerUse(): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
   cancelSetup(): Promise<void>;
@@ -63,9 +67,7 @@ export type AssistantLiveMicrophonePermission =
   | "restricted"
   | "unavailable";
 
-export function assistantLiveAvailabilityDetail(
-  snapshot: AssistantLiveSnapshot,
-): string {
+export function assistantLiveAvailabilityDetail(snapshot: AssistantLiveSnapshot): string {
   switch (snapshot.reason) {
     case "available":
       return snapshot.model
@@ -82,9 +84,7 @@ export function assistantLiveAvailabilityDetail(
   }
 }
 
-function normalizeMicrophonePermission(
-  status: string,
-): AssistantLiveMicrophonePermission {
+function normalizeMicrophonePermission(status: string): AssistantLiveMicrophonePermission {
   return ["granted", "not-determined", "denied", "restricted"].includes(status)
     ? (status as AssistantLiveMicrophonePermission)
     : "unavailable";
@@ -110,17 +110,13 @@ export function assistantLiveMicrophonePermissionDetail(
 }
 
 export function assistantLiveStartErrorDetail(error: unknown): string {
-  const message =
-    error instanceof Error ? error.message : "Live could not start.";
+  const message = error instanceof Error ? error.message : "Live could not start.";
   if (/Google rejected this API key for Live/u.test(message)) return message;
   if (/Google Live quota is unavailable/u.test(message)) return message;
-  if (/approved Google Live model is unavailable/u.test(message))
-    return message;
+  if (/approved Google Live model is unavailable/u.test(message)) return message;
   if (/Google Live is temporarily unavailable/u.test(message)) return message;
-  if (/Google Live rejected Aiden's session configuration/u.test(message))
-    return message;
-  if (/could not establish a connection to Google Live/u.test(message))
-    return message;
+  if (/Google Live rejected Aiden's session configuration/u.test(message)) return message;
+  if (/could not establish a connection to Google Live/u.test(message)) return message;
   if (/permission|denied|notallowed/iu.test(message)) {
     return "Microphone access was not granted. You can try again after allowing it in System Settings.";
   }
@@ -166,10 +162,7 @@ export class PcmPlayer {
   private epoch = 0;
   private readonly queue = new GeminiLivePcmPlaybackQueue();
 
-  constructor(
-    private readonly createContext = () =>
-      new AudioContext({ sampleRate: 24_000 }),
-  ) {}
+  constructor(private readonly createContext = () => new AudioContext({ sampleRate: 24_000 })) {}
 
   enqueue(pcm: Uint8Array): void {
     if (this.paused) return;
@@ -287,8 +280,15 @@ export interface AssistantLiveDependencies {
   createWorklet(context: AudioContext): AudioWorkletNode;
   loadWorklet(context: AudioContext): Promise<void>;
   createPlayer(): PcmPlayer;
-  computerUse: Pick<typeof computerUseApi, "status">;
-  chats: Pick<typeof chatsApi, "get" | "setComputerUse">;
+  computerUse: {
+    status(): Promise<ComputerUseStatus>;
+    setEnabled?(enabled: boolean): Promise<ComputerUseStatus>;
+    requestPermissions?(): Promise<ComputerUseStatus>;
+  };
+  chats: {
+    get(id: string): Promise<Chat | null>;
+    setComputerUse(id: string, enabled: boolean): Promise<Chat>;
+  };
   activeChatId?: string | null;
   ordinaryBusyReason?: string | null;
 }
@@ -297,10 +297,8 @@ function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
   return {
     geminiLive,
     api: assistantLiveApi,
-    askForMicrophone: () =>
-      window.aidenAPI.systemPreferences.askForMediaAccess("microphone"),
-    getMicrophoneStatus: () =>
-      window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone"),
+    askForMicrophone: () => window.aidenAPI.systemPreferences.askForMediaAccess("microphone"),
+    getMicrophoneStatus: () => window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone"),
     getUserMedia: () =>
       navigator.mediaDevices.getUserMedia({
         audio: {
@@ -311,10 +309,8 @@ function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
         video: false,
       }),
     createCaptureContext: () => new AudioContext(),
-    createWorklet: (context) =>
-      new AudioWorkletNode(context, GEMINI_LIVE_PCM_WORKLET_NAME),
-    loadWorklet: (context) =>
-      loadGeminiLivePcmWorklet(context, window.location.href),
+    createWorklet: (context) => new AudioWorkletNode(context, GEMINI_LIVE_PCM_WORKLET_NAME),
+    loadWorklet: (context) => loadGeminiLivePcmWorklet(context, window.location.href),
     createPlayer: () => new PcmPlayer(),
     computerUse: computerUseApi,
     chats: chatsApi,
@@ -332,10 +328,7 @@ const MAX_ASSISTANT_LIVE_TRANSCRIPT_TURNS = 40;
 const MAX_ASSISTANT_LIVE_TRANSCRIPT_CHARACTERS = 64 * 1_024;
 const MAX_ASSISTANT_LIVE_TURN_CHARACTERS = 32 * 1_024;
 
-function joinAssistantLiveCaptionFragments(
-  current: string,
-  next: string,
-): string {
+function joinAssistantLiveCaptionFragments(current: string, next: string): string {
   const left = current.trim();
   const right = next.trim();
   if (!left) return right;
@@ -346,27 +339,17 @@ function joinAssistantLiveCaptionFragments(
   return `${left}${separator}${right}`;
 }
 
-function boundAssistantLiveTranscript(
-  captions: AssistantLiveCaption[],
-): AssistantLiveCaption[] {
-  const bounded = captions
-    .slice(-MAX_ASSISTANT_LIVE_TRANSCRIPT_TURNS)
-    .map((caption) =>
-      caption.text.length <= MAX_ASSISTANT_LIVE_TURN_CHARACTERS
-        ? caption
-        : {
-            ...caption,
-            text: `${caption.text.slice(0, MAX_ASSISTANT_LIVE_TURN_CHARACTERS - 1)}…`,
-          },
-    );
-  let characters = bounded.reduce(
-    (total, caption) => total + caption.text.length,
-    0,
+function boundAssistantLiveTranscript(captions: AssistantLiveCaption[]): AssistantLiveCaption[] {
+  const bounded = captions.slice(-MAX_ASSISTANT_LIVE_TRANSCRIPT_TURNS).map((caption) =>
+    caption.text.length <= MAX_ASSISTANT_LIVE_TURN_CHARACTERS
+      ? caption
+      : {
+          ...caption,
+          text: `${caption.text.slice(0, MAX_ASSISTANT_LIVE_TURN_CHARACTERS - 1)}…`,
+        },
   );
-  while (
-    bounded.length > 1 &&
-    characters > MAX_ASSISTANT_LIVE_TRANSCRIPT_CHARACTERS
-  ) {
+  let characters = bounded.reduce((total, caption) => total + caption.text.length, 0);
+  while (bounded.length > 1 && characters > MAX_ASSISTANT_LIVE_TRANSCRIPT_CHARACTERS) {
     characters -= bounded.shift()?.text.length ?? 0;
   }
   return bounded;
@@ -391,14 +374,11 @@ export function reconcileAssistantLiveCaption(
     updated[updated.length - 1] = {
       ...last,
       final: event.final,
-      text: last.final
-        ? joinAssistantLiveCaptionFragments(last.text, event.text)
-        : event.text,
+      text: last.final ? joinAssistantLiveCaptionFragments(last.text, event.text) : event.text,
     };
     return boundAssistantLiveTranscript(updated);
   }
-  const sealedCurrent =
-    last && !last.sealed ? sealAssistantLiveCaption(current) : [...current];
+  const sealedCurrent = last && !last.sealed ? sealAssistantLiveCaption(current) : [...current];
   return boundAssistantLiveTranscript([
     ...sealedCurrent,
     {
@@ -448,13 +428,10 @@ export function useAssistantLiveWithDependencies(
   const [captions, setCaptions] = React.useState<AssistantLiveCaption[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [reconnectRequired, setReconnectRequired] = React.useState(false);
-  const [computerUseStatus, setComputerUseStatus] =
-    React.useState<ComputerUseStatus | null>(null);
+  const [computerUseStatus, setComputerUseStatus] = React.useState<ComputerUseStatus | null>(null);
   const [computerUseEnabled, setComputerUseEnabled] = React.useState(false);
   const [computerUseBusy, setComputerUseBusy] = React.useState(false);
-  const [computerUseError, setComputerUseError] = React.useState<string | null>(
-    null,
-  );
+  const [computerUseError, setComputerUseError] = React.useState<string | null>(null);
 
   const teardownMedia = React.useCallback(
     async (expected?: { sessionId: string; generation: number }) => {
@@ -476,10 +453,7 @@ export function useAssistantLiveWithDependencies(
         setMicrophoneLevel(0);
       }
       await record?.cleanup();
-      if (
-        mediaGeneration.current === teardownGeneration &&
-        !mediaCleanupRef.current
-      ) {
+      if (mediaGeneration.current === teardownGeneration && !mediaCleanupRef.current) {
         await playerRef.current?.close();
       }
     },
@@ -490,27 +464,16 @@ export function useAssistantLiveWithDependencies(
     (event: AssistantLiveRendererEvent) => {
       if (!mounted.current) return;
       if (event.type === "snapshot") {
-        if (
-          event.snapshot.sessionId &&
-          event.snapshot.sessionId !== sessionRef.current
-        )
-          return;
+        if (event.snapshot.sessionId && event.snapshot.sessionId !== sessionRef.current) return;
         setSnapshot(event.snapshot);
-        if (event.snapshot.state === "resuming")
-          playerRef.current?.pauseAndFlush();
+        if (event.snapshot.state === "resuming") playerRef.current?.pauseAndFlush();
         else if (event.snapshot.state === "open") playerRef.current?.resume();
-        if (
-          ["closed", "failed", "disconnected"].includes(event.snapshot.state)
-        ) {
+        if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
           setCaptions([]);
           if (event.snapshot.state !== "closed") {
             setReconnectRequired(true);
-            setError(
-              (current) =>
-                current ??
-                "Live disconnected. Nothing restarted automatically.",
-            );
+            setError((current) => current ?? "Live disconnected. Nothing restarted automatically.");
           }
           void teardownMedia();
         }
@@ -524,11 +487,7 @@ export function useAssistantLiveWithDependencies(
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
         setCaptions((current) =>
-          reconcileAssistantLiveCaption(
-            current,
-            event,
-            () => ++captionId.current,
-          ),
+          reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
         );
       } else if (event.type === "turn") {
         setCaptions(sealAssistantLiveCaption);
@@ -538,10 +497,7 @@ export function useAssistantLiveWithDependencies(
         sessionRef.current = null;
         setCaptions([]);
         setReconnectRequired(true);
-        setError(
-          (current) =>
-            current ?? "Live disconnected. Nothing restarted automatically.",
-        );
+        setError((current) => current ?? "Live disconnected. Nothing restarted automatically.");
         setSnapshot((current) => ({
           ...current,
           sessionId: undefined,
@@ -574,10 +530,7 @@ export function useAssistantLiveWithDependencies(
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
-    if (
-      !dependencies.geminiLive ||
-      dependencies.availabilityRefreshReady === false
-    )
+    if (!dependencies.geminiLive || dependencies.availabilityRefreshReady === false)
       return () => undefined;
     void dependencies.api
       .status()
@@ -612,8 +565,7 @@ export function useAssistantLiveWithDependencies(
         }
       },
       () => {
-        if (!cancelled && mounted.current)
-          setMicrophonePermission("unavailable");
+        if (!cancelled && mounted.current) setMicrophonePermission("unavailable");
       },
     );
     return () => {
@@ -632,24 +584,18 @@ export function useAssistantLiveWithDependencies(
     const chatId = dependencies.activeChatId ?? null;
     void Promise.all([
       dependencies.computerUse.status(),
-      chatId
-        ? dependencies.chats.get(chatId)
-        : Promise.resolve<Chat | null>(null),
+      chatId ? dependencies.chats.get(chatId) : Promise.resolve<Chat | null>(null),
     ])
       .then(([status, chat]) => {
-        if (!mounted.current || computerUseGeneration.current !== generation)
-          return;
+        if (!mounted.current || computerUseGeneration.current !== generation) return;
         setComputerUseStatus(status);
         setComputerUseEnabled(chat?.computerUseEnabled === true);
       })
       .catch(() => {
-        if (!mounted.current || computerUseGeneration.current !== generation)
-          return;
+        if (!mounted.current || computerUseGeneration.current !== generation) return;
         setComputerUseStatus(null);
         setComputerUseEnabled(false);
-        setComputerUseError(
-          "Aiden could not check Computer Use readiness. Try again.",
-        );
+        setComputerUseError("Aiden could not check Computer Use readiness. Try again.");
       });
     return () => {
       computerUseGeneration.current += 1;
@@ -664,12 +610,7 @@ export function useAssistantLiveWithDependencies(
   const setComputerUse = React.useCallback(
     async (enabled: boolean) => {
       const chatId = dependencies.activeChatId ?? null;
-      if (
-        !chatId ||
-        computerUseBusy ||
-        (enabled && computerUseStatus?.ready !== true)
-      )
-        return;
+      if (!chatId || computerUseBusy || (enabled && computerUseStatus?.ready !== true)) return;
       setComputerUseBusy(true);
       setComputerUseError(null);
       // Disable is an authority-removal intent. Reflect it immediately while
@@ -702,13 +643,69 @@ export function useAssistantLiveWithDependencies(
         if (mounted.current) setComputerUseBusy(false);
       }
     },
-    [
-      computerUseBusy,
-      computerUseStatus?.ready,
-      dependencies.activeChatId,
-      dependencies.chats,
-    ],
+    [computerUseBusy, computerUseStatus?.ready, dependencies.activeChatId, dependencies.chats],
   );
+
+  const requestMicrophonePermission = React.useCallback(async () => {
+    setError(null);
+    try {
+      const granted = await dependencies.askForMicrophone();
+      if (mounted.current) setMicrophonePermission(granted ? "granted" : "denied");
+      return granted;
+    } catch {
+      if (mounted.current) setMicrophonePermission("unavailable");
+      return false;
+    }
+  }, [dependencies.askForMicrophone]);
+
+  const prepareComputerUse = React.useCallback(async () => {
+    if (computerUseBusy) return;
+    const chatId = dependencies.activeChatId ?? null;
+    setComputerUseBusy(true);
+    setComputerUseError(null);
+    try {
+      let status = computerUseStatus;
+      if (!status?.enabled) {
+        if (!dependencies.computerUse.setEnabled)
+          throw new Error("Computer Use setup is unavailable.");
+        status = await dependencies.computerUse.setEnabled(true);
+      }
+      if (!status.ready && status.canRequestPermissions) {
+        if (!dependencies.computerUse.requestPermissions)
+          throw new Error("macOS permission setup is unavailable.");
+        status = await dependencies.computerUse.requestPermissions();
+      }
+      if (mounted.current) setComputerUseStatus(status);
+      if (!status.ready) {
+        if (mounted.current) setComputerUseError(status.detail);
+        return;
+      }
+      if (!chatId) {
+        if (mounted.current) {
+          setComputerUseError("Start an Aiden conversation before enabling Live actions.");
+        }
+        return;
+      }
+      const chat = await dependencies.chats.setComputerUse(chatId, true);
+      if (mounted.current && dependencies.activeChatId === chatId) {
+        setComputerUseEnabled(chat.computerUseEnabled === true);
+      }
+    } catch (cause) {
+      if (mounted.current) {
+        setComputerUseError(
+          cause instanceof Error ? cause.message : "Aiden could not prepare Computer Use.",
+        );
+      }
+    } finally {
+      if (mounted.current) setComputerUseBusy(false);
+    }
+  }, [
+    computerUseBusy,
+    computerUseStatus,
+    dependencies.activeChatId,
+    dependencies.chats,
+    dependencies.computerUse,
+  ]);
 
   const startMicrophone = React.useCallback(
     async (sessionId: string, signal: AbortSignal) => {
@@ -720,10 +717,7 @@ export function useAssistantLiveWithDependencies(
         mediaGeneration.current === generation;
       const assertCurrent = () => {
         if (!isCurrent())
-          throw new DOMException(
-            "Live microphone setup was cancelled.",
-            "AbortError",
-          );
+          throw new DOMException("Live microphone setup was cancelled.", "AbortError");
       };
       const granted = await dependencies.askForMicrophone();
       assertCurrent();
@@ -769,9 +763,7 @@ export function useAssistantLiveWithDependencies(
               operationGeneration.current === operation &&
               sessionRef.current === sessionId
             ) {
-              sessionRef.current = activeSnapshot(next)
-                ? (next.sessionId ?? null)
-                : null;
+              sessionRef.current = activeSnapshot(next) ? (next.sessionId ?? null) : null;
               setSnapshot(next);
               if (!activeSnapshot(next)) setCaptions([]);
               setError(
@@ -799,8 +791,7 @@ export function useAssistantLiveWithDependencies(
         worklet.port.onmessage = (message: MessageEvent<unknown>) => {
           if (stopped || !isCurrent()) return;
           const data = message.data as { type?: unknown; data?: unknown };
-          if (data?.type !== "pcm" || !(data.data instanceof ArrayBuffer))
-            return;
+          if (data?.type !== "pcm" || !(data.data instanceof ArrayBuffer)) return;
           const pcm = new Uint8Array(data.data);
           const measured = measureGeminiLivePcmLevel(pcm);
           const previous = microphoneLevelRef.current;
@@ -812,8 +803,7 @@ export function useAssistantLiveWithDependencies(
           microphoneLevelFrame.current += 1;
           if (
             mounted.current &&
-            (microphoneLevelFrame.current === 1 ||
-              microphoneLevelFrame.current % 4 === 0)
+            (microphoneLevelFrame.current === 1 || microphoneLevelFrame.current % 4 === 0)
           ) {
             setMicrophoneLevel(smoothed);
           }
@@ -941,9 +931,7 @@ export function useAssistantLiveWithDependencies(
       await dependencies.api.stop();
       const next = await dependencies.api.status();
       if (mounted.current && operationGeneration.current === generation) {
-        sessionRef.current = activeSnapshot(next)
-          ? (next.sessionId ?? null)
-          : null;
+        sessionRef.current = activeSnapshot(next) ? (next.sessionId ?? null) : null;
         setSnapshot(next);
         if (!activeSnapshot(next)) setCaptions([]);
         setError(null);
@@ -952,9 +940,7 @@ export function useAssistantLiveWithDependencies(
       try {
         const reconciled = await dependencies.api.status();
         if (mounted.current && operationGeneration.current === generation) {
-          sessionRef.current = activeSnapshot(reconciled)
-            ? (reconciled.sessionId ?? null)
-            : null;
+          sessionRef.current = activeSnapshot(reconciled) ? (reconciled.sessionId ?? null) : null;
           setSnapshot(reconciled);
           if (!activeSnapshot(reconciled)) setCaptions([]);
           setError(
@@ -992,35 +978,24 @@ export function useAssistantLiveWithDependencies(
 
   const setSetupOpen = React.useCallback(
     (open: boolean) => {
-      if (
-        open &&
-        (dependencies.ordinaryBusyReason ||
-          !snapshot.available ||
-          !["granted", "not-determined"].includes(microphonePermission))
-      )
-        return;
       if (!open && busy) {
         void cancelSetup();
         return;
       }
       setSetupOpenState(open);
     },
-    [
-      busy,
-      cancelSetup,
-      dependencies.ordinaryBusyReason,
-      microphonePermission,
-      snapshot.available,
-    ],
+    [busy, cancelSetup],
   );
 
   const active = Boolean(sessionRef.current) && activeSnapshot(snapshot);
   const availabilityDetail = assistantLiveAvailabilityDetail(snapshot);
-  const microphonePermissionReady = ["granted", "not-determined"].includes(
-    microphonePermission,
-  );
-  const microphonePermissionDetail =
-    assistantLiveMicrophonePermissionDetail(microphonePermission);
+  const microphonePermissionReady = ["granted", "not-determined"].includes(microphonePermission);
+  const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission);
+  const setupComplete =
+    snapshot.available &&
+    microphonePermission === "granted" &&
+    computerUseStatus?.ready === true &&
+    computerUseEnabled;
   return {
     visible: dependencies.geminiLive,
     available: snapshot.available,
@@ -1047,16 +1022,18 @@ export function useAssistantLiveWithDependencies(
           ? microphonePermissionDetail
           : null),
     computerUseEnabled,
-    computerUseReady:
-      computerUseStatus?.ready === true && Boolean(dependencies.activeChatId),
+    computerUseReady: computerUseStatus?.ready === true && Boolean(dependencies.activeChatId),
     computerUseConversationAvailable: Boolean(dependencies.activeChatId),
     computerUseBusy,
-    computerUseDetail:
-      computerUseStatus?.detail ?? "Checking global Computer Use readiness…",
+    computerUseDetail: computerUseStatus?.detail ?? "Checking global Computer Use readiness…",
+    computerUsePermissions: computerUseStatus?.permissions ?? null,
     computerUseError,
+    setupComplete,
     setSetupOpen,
     setMicrophone,
     setComputerUse,
+    requestMicrophonePermission,
+    prepareComputerUse,
     start,
     stop,
     cancelSetup,
@@ -1077,13 +1054,7 @@ export function useAssistantLive(
       activeChatId,
       ordinaryBusyReason,
     }),
-    [
-      activeChatId,
-      geminiLive,
-      ordinaryBusyReason,
-      providers.dataUpdatedAt,
-      providers.fetchStatus,
-    ],
+    [activeChatId, geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
   );
   return useAssistantLiveWithDependencies(dependencies);
 }

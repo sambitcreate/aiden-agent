@@ -1,0 +1,69 @@
+<Rive version="1" kind="fragment">
+    <Artboard defaultStateMachineId="0:7" viewModelId="0:40" viewModelInstanceId="0:41" clip="true" width="160" height="160" styleId="0:5" name="Aiden Orb" id="0:2">
+        <Fill name="Transparent Background">
+            <SolidColor colorValue="00000000" name="Color"/>
+        </Fill>
+        <LayoutComponentStyle name="Artboard Style" id="0:5"/>
+        <Shape x="80" y="80" name="Highlight" id="0:30">
+            <Ellipse x="-25" y="-27" width="24" height="20" originX="0.5" originY="0.5" name="Highlight Path"/>
+            <Fill name="Highlight Fill">
+                <RadialGradient startX="-30" startY="-31" endX="-10" endY="-10" name="Highlight Gradient">
+                    <GradientStop colorValue="F7FFFFFF" position="0"/>
+                    <GradientStop colorValue="00FFFFFF" position="1"/>
+                </RadialGradient>
+            </Fill>
+            <Feather strength="5" name="Highlight Feather"/>
+        </Shape>
+        <Shape x="80" y="80" name="Light Pool" id="0:24">
+            <Ellipse x="17" y="-15" width="78" height="72" originX="0.5" originY="0.5" name="Light Pool Path"/>
+            <Fill name="Light Pool Fill">
+                <RadialGradient startX="2" startY="-29" endX="48" endY="22" name="Light Pool Gradient">
+                    <GradientStop colorValue="B8FFFFFF" position="0"/>
+                    <GradientStop colorValue="344E7FFF" position="0.58"/>
+                    <GradientStop colorValue="004E7FFF" position="1"/>
+                </RadialGradient>
+            </Fill>
+            <Feather strength="7" name="Light Pool Feather"/>
+        </Shape>
+        <Shape x="80" y="80" name="Orb" id="0:20">
+            <Ellipse width="106" height="106" originX="0.5" originY="0.5" name="Orb Path"/>
+            <Fill name="Orb Fill">
+                <LinearGradient startX="-48" startY="-48" endX="48" endY="48" name="Orb Gradient">
+                    <GradientStop colorValue="FF4678FF" position="0"/>
+                    <GradientStop colorValue="FF6F54FF" position="0.52"/>
+                    <GradientStop colorValue="FF52C7DE" position="1"/>
+                </LinearGradient>
+            </Fill>
+            <Feather inner="true" strength="4" name="Orb Feather"/>
+        </Shape>
+        <Shape x="80" y="80" name="Halo" id="0:14">
+            <Ellipse width="136" height="136" originX="0.5" originY="0.5" name="Halo Path"/>
+            <Fill name="Halo Fill">
+                <RadialGradient startX="0" startY="0" endX="68" endY="0" name="Halo Gradient">
+                    <GradientStop colorValue="586F63FF" position="0"/>
+                    <GradientStop colorValue="1F5368FF" position="0.62"/>
+                    <GradientStop colorValue="005368FF" position="1"/>
+                </RadialGradient>
+            </Fill>
+            <Feather strength="10" name="Halo Feather"/>
+        </Shape>
+        <StateMachine name="Aiden Orb Machine" id="0:7">
+            <StateMachineLayer name="Orb" id="0:8">
+                <AnyState x="320" y="-120"/>
+                <ExitState x="520" y="-120"/>
+                <EntryState x="0" y="0"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <ViewModel defaultInstanceId="0:41" name="AidenOrb" id="0:40">
+        <ViewModelPropertyNumber name="state" id="0:42"/>
+        <ViewModelPropertyNumber name="level" id="0:43"/>
+        <ViewModelPropertyBoolean name="reduceMotion" id="0:44"/>
+        <ViewModelInstance exports="true" name="Default" id="0:41">
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:42"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:43"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="0:44"/>
+        </ViewModelInstance>
+    </ViewModel>
+</Rive>

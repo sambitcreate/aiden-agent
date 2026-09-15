@@ -198,7 +198,7 @@ test("abort withdraws a published Live approval immediately", async () => {
   );
   assert.equal(published.length, 1);
   abort.abort();
-  assert.equal(await decision, false);
+  assert.equal(await decision, "cancelled");
   assert.deepEqual(withdrawn, published);
   assert.equal(coordinator.pendingCount, 0);
 });
@@ -222,6 +222,6 @@ test("owner loss still settles when the withdrawal channel is gone", async () =>
     "document-1",
   );
   abort.abort();
-  assert.equal(await decision, false);
+  assert.equal(await decision, "cancelled");
   assert.equal(coordinator.pendingCount, 0);
 });

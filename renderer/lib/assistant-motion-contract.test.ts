@@ -77,51 +77,19 @@ test("both directions are gated on the app's reduce-motion switch", () => {
   );
 });
 
-test("the panel's exit timeout matches the CSS it waits on", () => {
+test("the Rive trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
-  const rule = between(
-    styles,
-    ':root[data-reduce-motion="false"] .assistant-dock-panel[data-state="closed"]',
-    "}",
-  );
-  const cssDuration = /(\d+)ms/u.exec(rule)?.[1];
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const jsDuration = /const PANEL_EXIT_MS = (\d+);/u.exec(dock)?.[1];
-  assert.ok(cssDuration, "no duration in the closed-state rule");
-  // Unmounting early truncates the exit; unmounting late leaves a dead panel
-  // sitting over the composer. The two values have to move together.
-  assert.equal(jsDuration, cssDuration);
+  const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
+  assert.match(trigger, /transition:/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.aiden-live-trigger/u);
+  assert.match(styles, /\.aiden-live-trigger:focus-visible/u);
 });
 
-test("the dock keeps the panel mounted while it animates out", () => {
+test("the dock has one trigger and no longer owns a competing composer", () => {
   const dock = source("../components/assistant/assistant-dock.tsx");
-  assert.match(dock, /setTimeout\(\(\) => setPresent\(false\), PANEL_EXIT_MS\)/u);
-  // Reduce Motion must skip the wait entirely rather than hold a static panel.
-  assert.match(dock, /dataset\.reduceMotion === "true"/u);
-});
-
-test("the dock owns the draft so minimizing cannot discard it", () => {
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(dock, /const \[draft, setDraft\] = React\.useState\(""\)/u);
-  assert.match(dock, /draft=\{draft\}/u);
-  assert.match(dock, /onDraftChange=\{setDraft\}/u);
-  assert.doesNotMatch(panel, /const \[draft, setDraft\] = React\.useState/u);
-});
-
-test("opening the dock moves focus to its composer and minimizing restores focus", () => {
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(dock, /inputRef\.current\?\.focus\(\)/u);
-  assert.match(dock, /if \(priorFocus\?\.isConnected\) priorFocus\.focus\(\)/u);
-  assert.match(dock, /else bubbleRef\.current\?\.focus\(\)/u);
-  assert.match(panel, /ref=\{inputRef\}/u);
-});
-
-test("hovering a reply preview cannot remove its click target", () => {
-  const bubble = source("../components/assistant/assistant-bubble.tsx");
-  assert.doesNotMatch(bubble, /onMouseEnter/u);
-  assert.match(bubble, /onClick=\{onOpen\}/u);
+  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
+  assert.match(dock, /AssistantLiveSetupDialog/u);
+  assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble|setDraft|textarea/u);
 });
 
 test("an empty conversation still surfaces its error", () => {
@@ -146,7 +114,7 @@ test("the hotkey waits for the central command listener and uses the dock comman
   assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);
 });
 
-test("Scheduled Tasks can open Aiden's composer without discarding an existing draft", () => {
+test("Scheduled Tasks remains a visible control surface for Live Computer Use", () => {
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
   const dock = source("../components/assistant/assistant-dock.tsx");
   assert.match(scheduledTasks, /Create with Aiden/u);
@@ -154,8 +122,11 @@ test("Scheduled Tasks can open Aiden's composer without discarding an existing d
   assert.match(scheduledTasks, /requestAssistantAutomationComposer/u);
   assert.match(scheduledTasks, /onCloseAutoFocus/u);
   assert.match(scheduledTasks, /event\.preventDefault\(\)/u);
-  assert.match(dock, /onAssistantAutomationComposerRequested/u);
-  assert.match(dock, /setDraft\(assistantAutomationDraft\)/u);
+  assert.match(dock, /scheduledTasks/u);
+  assert.match(
+    source("../../main/services/gemini-live/service-main.ts"),
+    /create or review scheduled tasks/u,
+  );
 });
 
 test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {

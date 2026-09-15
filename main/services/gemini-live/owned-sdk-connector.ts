@@ -338,7 +338,7 @@ function cancellationError(): Error {
 
 /**
  * Uses the reviewed SDK transforms and Session implementation while replacing
- * its private Node socket factory with an attempt-owned socket. SDK 2.16.0 does
+ * its private Node socket factory with an attempt-owned socket. The SDK does
  * not settle `live.connect()` when abort/close happens before setupComplete;
  * this adapter races that promise and always terminates the owned socket.
  */

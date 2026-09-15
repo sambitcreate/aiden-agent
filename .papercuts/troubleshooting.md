@@ -470,3 +470,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.
 
 - Mobile progress implementation (2026-09-14): this worktree had no node_modules; initial type-check was dependency-incomplete. Run npm ci before interpreting its missing-module output as source failures. Dedicated progress SSE uses the snapshot directly as payload; do not wrap it or reuse device-owned parent turn events.
+
+## 2026-09-15 — Gemini Live orb shell
+
+- Rebasing the long-lived Gemini Live branch replayed 79 commits and conflicted in the frequently updated plan index; preserve the current `origin/main` inventory and reapply only the missing Gemini Live row.
+- `@rive-app/react-webgl2` re-exports runtime layout types in declarations, but its Node ESM surface does not expose `Alignment`, `Fit`, or `Layout` as named exports. Rely on the runtime's default centered layout so renderer tests can import the component.
+- Adding the Rive WebGL2 runtime surfaced eight npm audit findings that need a separate dependency-security review; do not fold an automatic audit fix into this UI change.
+- A CLI-verified scripted `.riv` can still fail in the WebGL2 runtime with a missing generator; prefer native RML shapes for this orb and validate the live renderer console in addition to `rive --verify`.

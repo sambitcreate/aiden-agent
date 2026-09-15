@@ -1,13 +1,13 @@
 # Gemini Live Assistant Plan
 
-Status: Partial — Phases 0–4 implementation and automated/package verification complete; authorized macOS screen capture and real Google beta receipts remain operator-owned
-Date: 2026-08-11
+Status: Partial — Phases 0–4 plus the Gemini Live orb/setup shell are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
+Date: 2026-09-15
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`
 
 ## Outcome
 
-The attended **Aiden Assistant** dock becomes the single entry point for a
+The bottom-right **Aiden orb** becomes the single entry point for a
 user-started Gemini Live session. Aiden streams microphone PCM and a
 user-approved screen/window as bounded JPEG frames to Gemini Live, plays Gemini
 native audio, and shows its input/output captions. When Gemini needs to act, it
@@ -28,7 +28,7 @@ operator-owned permission acceptance:
 
 - Current Pi was reviewed at `@earendil-works/pi-ai` 0.84.1 and Aiden remains
   exact-pinned to 0.80.10; neither Google adapter implements Live.
-- Aiden now exact-pins the independently reviewed `@google/genai` 2.16.0 while
+- Aiden now exact-pins the independently reviewed `@google/genai` 2.19.0 while
   Pi retains its private 1.52.0 copy. Installed declarations, runtime exports,
   and an isolated loopback WebSocket prove the Live setup/realtime/response/
   resumption/close surface without contacting Google.
@@ -51,7 +51,7 @@ operator-owned permission acceptance:
   malformed input, deadlines, cancellation, controlled GoAway resumption, and
   unexpected-disconnect no-autorestart. Normal Pi Google regression remains
   green.
-- The SDK connector owns its Node WebSocket rather than relying on 2.16.0's
+- The SDK connector owns its Node WebSocket rather than relying on the SDK's
   pre-`setupComplete` abort behavior. Real loopback wire tests prove abort and
   timeout terminate and settle the attempt while setup is withheld, and verify
   tool-response plus resumption wire shapes. Every attempt has a fixed 1 MiB
@@ -80,10 +80,10 @@ Stop, manual reconnect, and exact-session renderer teardown/late-event fencing.
 The UI and main service both keep screen capture unavailable until the native
 macOS picker acceptance is recorded. No capture resumes automatically.
 
-The guide's `gemini-3.1-flash-live-preview` string remains fake-test evidence,
-not a production default. An operator may supply a separately accepted model
-only through both `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` and
-`AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL`; the ordinary app remains fail-closed.
+The approved stable model is now `gemini-3.8-live`. It is enabled only through
+`AIDEN_EXPERIMENTAL_GEMINI_LIVE=1`; the ordinary app remains fail-closed.
+Extended Thinking remains out of scope until its non-blocking tool declarations
+and interaction-status lifecycle have their own compatibility review.
 
 ## Evidence and architecture decision
 
@@ -180,9 +180,8 @@ Add a pure protocol/parser core plus `GeminiLiveService`:
 - strict inbound/outbound event schemas, finite size/count/rate budgets,
   heartbeat/error normalization, connection and idle deadlines, AbortSignal
   propagation, and an explicit close state machine;
-- a dedicated Live model resolver, initially pinned only after a real contract
-  probe proves the supported model (Google's current SDK guide uses
-  `gemini-3.1-flash-live-preview`). It is not inferred from a normal chat model
+- a dedicated Live model resolver pinned to `gemini-3.8-live` after the stable
+  model contract was published. It is not inferred from a normal chat model
   name or a generic Pi image capability;
 - bounded, latest-frame-wins, activity/change-aware screen queue. Renderer
   capture starts only from an explicit Electron display/window picker approved
@@ -415,6 +414,24 @@ test:*`, package verification, and signed-package permission acceptance.
   [`../gemini-live-google-acceptance.md`](../gemini-live-google-acceptance.md)
   runbook. Record content-free evidence (versions, timing, pass/fail), never
   media or prompts.
+
+### Phase 4.5 — orb shell and guided setup
+
+Status: Implemented (2026-09-15). The separate Assistant panel/composer is no
+longer reachable from the window-level entry point. Before setup, the canonical
+Aiden logo opens a one-time guided model, microphone, Screen Recording,
+Accessibility, and Computer Use checklist. After the first successful Live
+start, it permanently hands off to a
+Rive-authored orb with ready, connecting, listening, thinking, acting,
+approval, error, and unavailable states. Active sessions use a compact
+caption/Stop HUD. A dedicated Gemini Live settings destination consolidates
+the related provider, permissions, scheduled-task, and shortcut entry points.
+
+Live can operate Aiden itself through the existing approval-gated Computer Use
+tool—for example, focus the main composer, select the current web model or
+Actions menu, send a prompt, or navigate the Scheduled Tasks UI. This does not
+grant a second direct scheduling authority: every mutation remains a fresh
+Allow once decision and scheduled-task confirmation remains in its existing UI.
 
 ## Completion gates
 
