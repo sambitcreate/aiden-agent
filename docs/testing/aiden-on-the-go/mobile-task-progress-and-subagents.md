@@ -55,7 +55,7 @@ Reviewed and dismissed: the claimed revocation-fence gap is not exploitable — 
 
 Validation after this round: `npm run test:aiden-remote` 417 passing with 1 expected skip (including new `turnIdFor` prune/restart, minted-fallback round-trip, milestone-dedupe/notices, and authorizer suites); type-check clean; Android `:app:testDebugUnitTest` all tests green; iOS `AidenOnTheGoTests` passed on the physical iPhone 13 Pro (360 tests, 0 failures) and a clean device build succeeded.
 
-Committed as `18b4f8bc1` ("Harden mobile progress contract, turn identity, and roster reachability") and pushed to PR #123. Post-push CI: all `ci.yml` checks passed — `verify` (both workflows), `Detect changed areas`, `Android build and APK`, and `Deterministic Electron E2E`. The external `pullfrog` review-agent check failed twice with provider activity timeouts ("the provider never returned a first token"); it is a `workflow_dispatch`-only workflow, not a required check, and unrelated to the PR contents.
+Committed as `18b4f8bc1` ("Harden mobile progress contract, turn identity, and roster reachability") and moved to stacked PR #124, based on feature PR #123. Post-push CI: all `ci.yml` checks passed — `verify` (both workflows), `Detect changed areas`, `Android build and APK`, and `Deterministic Electron E2E`. The external `pullfrog` review-agent check failed twice with provider activity timeouts ("the provider never returned a first token"); it is a `workflow_dispatch`-only workflow, not a required check, and unrelated to the PR contents.
 
 ## Remaining physical acceptance
 
