@@ -205,6 +205,12 @@ final class AidenChatTests: XCTestCase {
         try await waitForAgentRequestCount(2)
         try await Task.sleep(for: .milliseconds(150))
 
+        XCTAssertEqual(model.agentRoster?.epoch, "epoch-old")
+        XCTAssertTrue(model.historicalAgentRosters.contains { $0.turnId == "turn-current-old" })
+
+        try await waitForAgentRequestCount(3)
+        try await Task.sleep(for: .milliseconds(150))
+
         XCTAssertEqual(model.agentRoster?.epoch, "epoch-new")
         XCTAssertTrue(model.historicalAgentRosters.isEmpty)
 
@@ -2695,11 +2701,16 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                     data: Self.oldHistoricalRosterSnapshot
                 )
             } else if currentMode == .rosterEpochRotates {
+                let snapshot = switch requestCount {
+                case 1: Self.oldRosterSnapshot
+                case 2: Self.sameEpochRosterSnapshot
+                default: Self.newRosterSnapshot
+                }
                 result = Self.response(
                     for: request,
                     status: 200,
                     contentType: "application/json",
-                    data: requestCount == 1 ? Self.oldRosterSnapshot : Self.newRosterSnapshot
+                    data: snapshot
                 )
             } else if currentMode == .rosterFailsAfterFirst, requestCount > 1 {
                 result = Self.response(
@@ -2736,8 +2747,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             } else {
                 let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
-                shouldFinish = ![.rosterFailsAfterFirst, .rosterEpochRotates].contains(currentMode)
-                    || requestCount < 2
+                shouldFinish = currentMode != .rosterFailsAfterFirst || requestCount < 2
+                if currentMode == .rosterEpochRotates {
+                    shouldFinish = requestCount < 3
+                }
                 result = Self.response(
                     for: request,
                     status: 200,
@@ -2784,6 +2797,12 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     private static let newRosterSnapshot = Data(
         """
         {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-new","previousTurns":[],"availability":"ready","epoch":"epoch-new","revision":1,"updatedAt":"2026-09-14T12:01:00Z","agents":[]}
+        """.utf8
+    )
+
+    private static let sameEpochRosterSnapshot = Data(
+        """
+        {"version":1,"chatId":"chat-progress-lifecycle","turnId":"turn-current-middle","previousTurns":[{"turnId":"turn-current-old","startedAt":"2026-09-14T12:00:00Z"},{"turnId":"turn-old","startedAt":"2026-09-14T11:00:00Z"}],"availability":"ready","epoch":"epoch-old","revision":5,"updatedAt":"2026-09-14T12:00:30Z","agents":[]}
         """.utf8
     )
 
