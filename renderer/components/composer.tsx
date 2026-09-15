@@ -1719,6 +1719,7 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
+              data-aiden-composer="true"
               value={text}
               readOnly={sessionCommandBusy || firstSendPending}
               aria-busy={sessionCommandBusy || firstSendPending || undefined}

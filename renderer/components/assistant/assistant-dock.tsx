@@ -12,6 +12,7 @@ import { AssistantBubble } from "./assistant-bubble";
 import { AssistantPanel } from "./assistant-panel";
 import { useAssistantChat } from "./use-assistant-chat";
 import { useCommandHandler } from "../../lib/command-system";
+import { useComposerTypeFocus } from "../../lib/use-composer-type-focus";
 
 /** How long a reply preview stays beside the collapsed mark. */
 const PREVIEW_VISIBLE_MS = 8_000;
@@ -26,6 +27,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const [preview, setPreview] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState("");
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
   const bubbleRef = React.useRef<HTMLButtonElement>(null);
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const restoreFocusPendingRef = React.useRef(false);
@@ -49,6 +51,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
     setOpen(false);
   }, []);
   useCommandHandler("assistant.open", openPanel);
+  useComposerTypeFocus(inputRef, open && present, panelRef);
   React.useEffect(
     () =>
       onAssistantAutomationComposerRequested(() => {
@@ -112,6 +115,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
     >
       {present ? (
         <div
+          ref={panelRef}
           className="assistant-dock-panel"
           data-state={open ? "open" : "closed"}
           inert={!open ? true : undefined}
