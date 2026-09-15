@@ -327,8 +327,9 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden settings uses the canonical sidebar logo", () => {
+test("Gemini Live settings has a dedicated destination and the dock keeps the canonical logo", () => {
   const settings = source("../main/settings-view.tsx");
+  const dock = source("./assistant/assistant-dock.tsx");
   const rendererLogo = readFileSync(
     new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
   );
@@ -339,9 +340,9 @@ test("Aiden settings uses the canonical sidebar logo", () => {
     ),
   );
 
-  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
-  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
-  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
+  assert.match(settings, /geminiLive: <AudioWaveform/u);
+  assert.match(dock, /resources\/aiden-sidebar-logo\.png/u);
+  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
   assert.deepEqual(rendererLogo, canonicalLogo);
 });
 

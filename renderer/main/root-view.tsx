@@ -34,6 +34,10 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import {
+  ASSISTANT_AUTOMATION_DRAFT,
+  onAssistantAutomationComposerRequested,
+} from "../lib/assistant-dock";
 
 export function RootView() {
   useTheme();
@@ -156,15 +160,21 @@ function RootContent() {
     }
     void navigate({ to: "/settings" });
   });
-  useCommandHandler(
-    "chat.new",
-    async () => {
-      if (!activeId) return;
+  const openNewChat = React.useCallback(
+    async (initialText?: string) => {
+      if (!activeId) {
+        toast.info("Choose a workspace before starting a chat.");
+        return;
+      }
+      if (appendReconciliationRequired) {
+        toast.error("Reload Aiden before creating another chat.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
       }
-      const chat = createChatDraft(activeId).chat;
+      const chat = createChatDraft(activeId, undefined, initialText).chat;
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
       } catch (error) {
@@ -172,7 +182,19 @@ function RootContent() {
         throw error;
       }
     },
+    [activeId, appendReconciliationRequired, navigate, navigationBlockedReason],
+  );
+  useCommandHandler(
+    "chat.new",
+    () => openNewChat(),
     Boolean(activeId) && !appendReconciliationRequired,
+  );
+  React.useEffect(
+    () =>
+      onAssistantAutomationComposerRequested(() => {
+        void openNewChat(ASSISTANT_AUTOMATION_DRAFT);
+      }),
+    [openNewChat],
   );
   React.useEffect(() => {
     void appApi.setCloseGuard({

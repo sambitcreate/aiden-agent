@@ -20,6 +20,7 @@ import {
   Clock3,
   Send,
   Smartphone,
+  AudioWaveform,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -33,7 +34,7 @@ import { ComputerUseSettings } from "../components/settings/computer-use-setting
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
-import { AssistantSettings } from "../components/settings/assistant-settings";
+import { GeminiLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import { SettingsPage } from "../components/settings/settings-page";
@@ -41,28 +42,6 @@ import { MemorySettings } from "../components/settings/memory-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
-
-const AIDEN_SIDEBAR_LOGO_URL = new URL("../../resources/aiden-sidebar-logo.png", import.meta.url)
-  .href;
-
-function AidenSidebarLogo() {
-  return (
-    <span
-      aria-hidden="true"
-      className="block size-5 shrink-0 bg-current"
-      style={{
-        WebkitMaskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
-        maskImage: `url(${AIDEN_SIDEBAR_LOGO_URL})`,
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-      }}
-    />
-  );
-}
 
 type NavItem = {
   id: SettingsSection;
@@ -81,7 +60,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
-  assistant: <AidenSidebarLogo />,
+  geminiLive: <AudioWaveform className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
@@ -109,7 +88,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   computerUse: ComputerUseSettings,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
-  assistant: AssistantSettings,
+  geminiLive: GeminiLiveSettings,
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
@@ -127,7 +106,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   memory: "Control what Aiden remembers and how long chats stay manageable.",
   scheduledTasks: "Manage when Aiden works in the background.",
-  assistant: "Choose how your Aiden companion works with you.",
+  geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Shape Aiden’s light and dark interfaces independently. Changes apply live.",
@@ -238,7 +217,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
     >
       <ScrollArea className="h-full" title="Settings">
         <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
-          <SettingsPage heading={!["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(section)} title={NAV.find((item) => item.id === section)?.title ?? "Settings"} description={DESCRIPTIONS[section]}>
+          <SettingsPage
+            heading={
+              !["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(
+                section,
+              )
+            }
+            title={NAV.find((item) => item.id === section)?.title ?? "Settings"}
+            description={DESCRIPTIONS[section]}
+          >
             <ActiveSection />
           </SettingsPage>
         </div>

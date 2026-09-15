@@ -2097,6 +2097,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             hasMessages={hasMessages}
             chatId={chatId}
+            initialText={draft?.initialText}
             onSend={handleSend}
             freezeWhileSending={Boolean(draft)}
             firstMessageSaving={draft?.sending === true}

@@ -1,4 +1,5 @@
 import {
+  AudioWaveform,
   Bot,
   Blocks,
   Lightbulb,
@@ -96,7 +97,7 @@ const FEATURE_ILLUSTRATIONS = {
   webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
-  assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
   bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
@@ -332,12 +333,13 @@ const featureBentos: FeatureBento[] = [
     size: "wide",
   },
   {
-    id: "assistant",
+    id: "geminiLive",
     group: "control",
-    title: "Aiden Assistant",
-    description: "Ask about the app and prepare confirmed automations from a private dock.",
-    icon: Bot,
-    imageUrl: FEATURE_ILLUSTRATIONS.assistant,
+    title: "Gemini Live",
+    description:
+      "Talk to Aiden, share screen context, and approve each app action one at a time from the new orb.",
+    icon: AudioWaveform,
+    imageUrl: FEATURE_ILLUSTRATIONS.geminiLive,
     size: "hero",
   },
   {

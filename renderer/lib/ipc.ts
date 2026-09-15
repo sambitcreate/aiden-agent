@@ -129,6 +129,11 @@ import {
   type AppUpdateRestartResult,
   type AppUpdateSnapshot,
 } from "../shared/app-update";
+import type {
+  AssistantLiveRendererEvent,
+  AssistantLiveSnapshot,
+  AssistantLiveStartIntent,
+} from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
   parseChatReadResponse,
@@ -180,7 +185,8 @@ export const peerHostsApi = {
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
   remove: (id: string) => invoke<void>("remote:peersRemove", id),
-  operation: (hostId: string, operation: PeerOperation) => invoke<unknown>("remote:peerOperation", hostId, operation),
+  operation: (hostId: string, operation: PeerOperation) =>
+    invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
 };
 
@@ -300,6 +306,17 @@ export const assistantApi = {
   config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
   setConfig: (patch: Partial<AssistantConfig>) =>
     invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
+};
+
+export const assistantLiveApi = {
+  status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
+  start: (intent: AssistantLiveStartIntent) =>
+    invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
+  stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
+  sendAudio: (sessionId: string, pcm: Uint8Array) =>
+    invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
+  onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
+    onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
 
 export const modelInsightsApi = {
@@ -487,9 +504,14 @@ export const telegramApi = {
 };
 
 export const aidenRemoteApi = {
-  setupPairing: (transport: "lan" | "tailscale", expected: {
-    instanceId: string; enabled: boolean; connectionMode: AidenRemoteConnectionMode;
-  }) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
+  setupPairing: (
+    transport: "lan" | "tailscale",
+    expected: {
+      instanceId: string;
+      enabled: boolean;
+      connectionMode: AidenRemoteConnectionMode;
+    },
+  ) => invoke<AidenRemotePairingBootstrapView>("remote:setupPairing", transport, expected),
   get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
   setEnabled: (enabled: boolean) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
@@ -682,9 +704,16 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
-  getState: (workspaceId: string) => invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
-  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) => invoke<import("../shared/browser").BrowserCommandResult>("browser:command", workspaceId, command),
-  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) => onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  getState: (workspaceId: string) =>
+    invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
+    invoke<import("../shared/browser").BrowserCommandResult>(
+      "browser:command",
+      workspaceId,
+      command,
+    ),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
+    onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
 export const terminalApi = {
@@ -893,7 +922,8 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: (botId?: string) => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
+  getCapabilityCatalog: (botId?: string) =>
+    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),

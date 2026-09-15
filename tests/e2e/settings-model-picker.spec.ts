@@ -8,7 +8,7 @@ const SETTINGS_SECTIONS = [
   "Web Search",
   "Aiden On The Go",
   "Scheduled tasks",
-  "Aiden",
+  "Gemini Live",
   "Computer Use",
   "Voice",
   "Keyboard shortcuts",
@@ -70,10 +70,11 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Scheduled tasks", exact: true }),
       ).toBeVisible();
       return;
-    case "Aiden":
+    case "Gemini Live":
       await expect(
-        page.getByRole("heading", { level: 2, name: "How Aiden works", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Gemini Live", exact: true }),
       ).toBeVisible();
+      await expect(page.getByText("Beta", { exact: true })).toBeVisible();
       return;
     case "Computer Use":
       await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();

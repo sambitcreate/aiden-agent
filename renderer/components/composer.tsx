@@ -122,6 +122,8 @@ interface ComposerProps {
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
+  /** Initial text for an explicitly seeded renderer-only chat draft. */
+  initialText?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
@@ -277,6 +279,7 @@ export function Composer({
   readinessSettingsSection,
   hasMessages,
   chatId,
+  initialText = "",
   onSend,
   onStop,
   onQueue,
@@ -329,8 +332,8 @@ export function Composer({
   slashActionBusy = false,
 }: ComposerProps) {
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: "",
-    slashTracker: { epoch: 0, active: false },
+    text: initialText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, initialText),
   });
   const { text, slashTracker } = draft;
   const draftRef = React.useRef(draft);

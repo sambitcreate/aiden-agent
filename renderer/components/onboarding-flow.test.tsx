@@ -13,7 +13,7 @@ const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 const featureAssetPaths = [
   "aiden-workspace.png",
-  "features/aiden-assistant.png",
+  "features/gemini-live.png",
   "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
@@ -355,7 +355,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Web Search",
     "Reusable Skills",
     "MCP Connectors",
-    "Aiden Assistant",
+    "Gemini Live",
     "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
@@ -416,7 +416,6 @@ test("project guidance keeps the feature bento current as Aiden evolves", () => 
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
 });
-
 
 test("primary AI choices include custom setup without opening advanced providers", () => {
   assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);

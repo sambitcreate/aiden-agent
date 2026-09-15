@@ -470,3 +470,15 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - OpenCode Workers passed the removed `opencode run --dir` flag to OpenCode v2.0.3, so the isolated review had to run directly from the worker worktree.
 
 - Mobile progress implementation (2026-09-14): this worktree had no node_modules; initial type-check was dependency-incomplete. Run npm ci before interpreting its missing-module output as source failures. Dedicated progress SSE uses the snapshot directly as payload; do not wrap it or reuse device-owned parent turn events.
+
+## 2026-09-15 — Gemini Live orb shell
+
+- Rebasing the long-lived Gemini Live branch replayed 79 commits and conflicted in the frequently updated plan index; preserve the current `origin/main` inventory and reapply only the missing Gemini Live row.
+- The published `thinking-orbs` 0.3.1 package includes `breathing` but not the repository's newer `color` prop. Reuse its canvas animation and apply Aiden's blue tint at the presentation layer until the tint API is published; do not vendor unreleased package internals.
+- Pullfrog's incremental review retained two must-address findings from the prior head: fail closed when a Computer Use result lands during Live transport rotation, and re-read authoritative status after audio-start rollback so a stopped session remains restartable.
+- Replacing a window-level surface can leave unreachable components and motion selectors behind; remove the retired Assistant panel files and assert the dock does not regain those imports or styles.
+- `gh api graphql -F name="$VALUE"` does not read an unexported shell placeholder; pass resolved review-thread variables directly with `-f` before replying or resolving.
+- Deleting the Assistant panel also removed the only listener for Scheduled Tasks' compose handoff; keep entry-point events covered end to end through draft creation, navigation, and composer seeding before removing their prior owner.
+- The full Electron E2E gate still encoded the retired Assistant panel and old Aiden settings destination even though focused source-contract tests passed; update user-journey E2E whenever a top-level surface is replaced, not only its component tests.
+- A clean latest Pullfrog summary can coexist with unresolved older inline threads; query `reviewThreads` directly before declaring the review gate clear.
+- Replacing a shipped surface must update the authoritative plan index and add an explicit supersession note to the historical plan; code and tests alone leave misleading implementation claims.

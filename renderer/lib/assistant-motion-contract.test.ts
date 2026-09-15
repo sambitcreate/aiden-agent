@@ -18,20 +18,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("the panel rises into place as it fades in", () => {
-  const keyframes = between(
-    source("../styles.css"),
-    "@keyframes aiden-assistant-dock-in",
-    "@keyframes aiden-assistant-dock-out",
-  );
-  assert.match(keyframes, /opacity:\s*0/u);
-  assert.match(keyframes, /opacity:\s*1/u);
-  // Positive Y start = below its resting place, so it travels upward. The dock
-  // is bottom-anchored; a negative offset here would drop it in from above.
-  assert.match(keyframes, /translateY\(8px\)/u);
-  assert.match(keyframes, /translateY\(0\)/u);
-});
-
 test("automation approvals reuse the app surface entrance motion", () => {
   const styles = source("../styles.css");
   assert.match(
@@ -39,8 +25,8 @@ test("automation approvals reuse the app surface entrance motion", () => {
     /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
   );
   assert.match(
-    source("../components/assistant/assistant-automation-approval.tsx"),
-    /className="assistant-automation-approval/u,
+    source("../components/assistant/assistant-computer-use-approval.tsx"),
+    /data-state="open"[\s\S]*className="assistant-automation-approval/u,
   );
 });
 
@@ -54,82 +40,22 @@ test("scheduled task details reuse the reduced-motion-gated surface entrance", (
   assert.match(scheduledTasks, /className="scheduled-task-detail/u);
 });
 
-test("the panel settles downward as it fades out", () => {
-  const keyframes = between(
-    source("../styles.css"),
-    "@keyframes aiden-assistant-dock-out",
-    "@keyframes aiden-assistant-bubble-in",
-  );
-  assert.match(keyframes, /translateY\(0\)/u);
-  assert.match(keyframes, /translateY\(6px\)/u);
-  assert.match(keyframes, /opacity:\s*0/u);
-});
-
-test("both directions are gated on the app's reduce-motion switch", () => {
+test("the Live orb trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-dock-panel\[data-state="open"\]/u,
-  );
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-dock-panel\[data-state="closed"\]/u,
-  );
+  const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
+  assert.match(trigger, /transition:/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.aiden-live-trigger/u);
+  assert.match(styles, /\.aiden-live-trigger:focus-visible/u);
 });
 
-test("the panel's exit timeout matches the CSS it waits on", () => {
+test("the dock has one trigger and no longer owns a competing composer", () => {
+  const dock = source("../components/assistant/assistant-dock.tsx");
   const styles = source("../styles.css");
-  const rule = between(
-    styles,
-    ':root[data-reduce-motion="false"] .assistant-dock-panel[data-state="closed"]',
-    "}",
-  );
-  const cssDuration = /(\d+)ms/u.exec(rule)?.[1];
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const jsDuration = /const PANEL_EXIT_MS = (\d+);/u.exec(dock)?.[1];
-  assert.ok(cssDuration, "no duration in the closed-state rule");
-  // Unmounting early truncates the exit; unmounting late leaves a dead panel
-  // sitting over the composer. The two values have to move together.
-  assert.equal(jsDuration, cssDuration);
-});
-
-test("the dock keeps the panel mounted while it animates out", () => {
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  assert.match(dock, /setTimeout\(\(\) => setPresent\(false\), PANEL_EXIT_MS\)/u);
-  // Reduce Motion must skip the wait entirely rather than hold a static panel.
-  assert.match(dock, /dataset\.reduceMotion === "true"/u);
-});
-
-test("the dock owns the draft so minimizing cannot discard it", () => {
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(dock, /const \[draft, setDraft\] = React\.useState\(""\)/u);
-  assert.match(dock, /draft=\{draft\}/u);
-  assert.match(dock, /onDraftChange=\{setDraft\}/u);
-  assert.doesNotMatch(panel, /const \[draft, setDraft\] = React\.useState/u);
-});
-
-test("opening the dock moves focus to its composer and minimizing restores focus", () => {
-  const dock = source("../components/assistant/assistant-dock.tsx");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(dock, /inputRef\.current\?\.focus\(\)/u);
-  assert.match(dock, /if \(priorFocus\?\.isConnected\) priorFocus\.focus\(\)/u);
-  assert.match(dock, /else bubbleRef\.current\?\.focus\(\)/u);
-  assert.match(panel, /ref=\{inputRef\}/u);
-});
-
-test("hovering a reply preview cannot remove its click target", () => {
-  const bubble = source("../components/assistant/assistant-bubble.tsx");
-  assert.doesNotMatch(bubble, /onMouseEnter/u);
-  assert.match(bubble, /onClick=\{onOpen\}/u);
-});
-
-test("an empty conversation still surfaces its error", () => {
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(panel, /chat\.error/u);
-  assert.match(panel, /role="alert"/u);
-  assert.match(thread, /role="alert"/u);
+  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
+  assert.match(dock, /AssistantLiveSetupDialog/u);
+  assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble|setDraft|textarea/u);
+  assert.doesNotMatch(styles, /\.assistant-live-(?:entry|presence|orb|control|signal)/u);
+  assert.doesNotMatch(styles, /\.assistant-dock-(?:panel|bubble)/u);
 });
 
 test("the hotkey waits for the central command listener and uses the dock command", () => {
@@ -140,31 +66,32 @@ test("the hotkey waits for the central command listener and uses the dock comman
   const readySignal = commands.indexOf("appApi.rendererReady()");
   const readinessWait = main.indexOf("await rendererReadiness.wait()");
   const assistantCommand = main.indexOf('commandId: "assistant.open"');
-  assert.match(dock, /useCommandHandler\("assistant\.open", openPanel\)/u);
+  assert.match(dock, /useCommand\("assistant\.open", openPanel\)/u);
   assert.doesNotMatch(dock, /interactionBlocked/u);
   assert.ok(listener >= 0 && readySignal > listener);
   assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);
 });
 
-test("Scheduled Tasks can open Aiden's composer without discarding an existing draft", () => {
+test("Scheduled Tasks remains a visible control surface for Live Computer Use", () => {
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
   const dock = source("../components/assistant/assistant-dock.tsx");
+  const root = source("../main/root-view.tsx");
+  const chatPane = source("../main/chat-pane.tsx");
+  const composer = source("../components/composer.tsx");
   assert.match(scheduledTasks, /Create with Aiden/u);
   assert.match(scheduledTasks, /Set up with controls/u);
   assert.match(scheduledTasks, /requestAssistantAutomationComposer/u);
   assert.match(scheduledTasks, /onCloseAutoFocus/u);
   assert.match(scheduledTasks, /event\.preventDefault\(\)/u);
-  assert.match(dock, /onAssistantAutomationComposerRequested/u);
-  assert.match(dock, /setDraft\(assistantAutomationDraft\)/u);
-});
-
-test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {
-  const chat = source("../components/assistant/use-assistant-chat.ts");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(chat, /stoppedPersistingTurnRef\.current === turnRef\.current/u);
-  assert.match(chat, /setTurnSaving\(true\)/u);
-  assert.match(chat, /const ready =\s*modelReady &&\s*!conversationLoading &&\s*!turnSaving/u);
-  assert.match(panel, /"turn-saving": "Saving conversation…"/u);
+  assert.match(root, /onAssistantAutomationComposerRequested/u);
+  assert.match(root, /openNewChat\(ASSISTANT_AUTOMATION_DRAFT\)/u);
+  assert.match(chatPane, /initialText=\{draft\?\.initialText\}/u);
+  assert.match(composer, /text: initialText/u);
+  assert.match(dock, /scheduledTasks/u);
+  assert.match(
+    source("../../main/services/gemini-live/service-main.ts"),
+    /create or review scheduled tasks/u,
+  );
 });
 
 test("stopping an active generation waits for its terminal persistence event", () => {
@@ -188,22 +115,4 @@ test("assistant notices use a collision-free monotonic marker", () => {
   assert.match(chat, /noticeSequenceRef/u);
   assert.match(chat, /at: \+\+noticeSequenceRef\.current/u);
   assert.doesNotMatch(chat, /at: Date\.now\(\)/u);
-});
-
-test("the Assistant composer does not send an in-progress IME composition", () => {
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(panel, /!event\.nativeEvent\.isComposing/u);
-});
-
-test("streamed Assistant replies stay busy through the formatting handoff", () => {
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(thread, /role="log"/u);
-  assert.match(thread, /aria-live="polite"/u);
-  assert.match(thread, /aria-busy=\{streaming \|\| streamComplete\}/u);
-});
-
-test("every Assistant turn exposes its speaker without relying on bubble styling", () => {
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(thread, /message\.role === "user" \? "You" : "Aiden"/u);
-  assert.match(thread, /<span className="sr-only">\{speaker\}: <\/span>/u);
 });

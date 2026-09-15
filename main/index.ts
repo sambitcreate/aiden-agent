@@ -118,6 +118,7 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import { geminiLiveService } from "./services/gemini-live/service-main.js";
 import {
   getOnboardingSnapshot,
   setOnboardingOutcome,
@@ -284,6 +285,7 @@ function cleanupApplication(): void {
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
+  geminiLiveService.shutdown();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
@@ -308,6 +310,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       return;
     }
   }
+  geminiLiveService.shutdown();
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
