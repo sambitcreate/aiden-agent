@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { URL } from "node:url";
 
 import {
   GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION,
+  GOOGLE_LIVE_ACCEPTANCE_MODEL,
   assertGoogleLiveAcceptanceReceipt,
   buildGoogleLiveAcceptanceReceipt,
   googleLiveAcceptanceEnabled,
@@ -78,9 +81,9 @@ test("acceptance arguments allow only an explicit confirmation and reviewed mode
     parseGoogleLiveAcceptanceArgs([
       GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION,
       "--model",
-      "gemini-3.1-flash-live-preview",
+      GOOGLE_LIVE_ACCEPTANCE_MODEL,
     ]),
-    { confirmed: true, model: "gemini-3.1-flash-live-preview" },
+    { confirmed: true, model: GOOGLE_LIVE_ACCEPTANCE_MODEL },
   );
   assert.throws(
     () => parseGoogleLiveAcceptanceArgs(["--api-key", "SECRET"]),
@@ -91,9 +94,18 @@ test("acceptance arguments allow only an explicit confirmation and reviewed mode
       parseGoogleLiveAcceptanceArgs([
         GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION,
         "--model",
-        "bad model",
+        "gemini-3.1-flash-live-preview",
       ]),
-    /valid --model/u,
+    /must match the pinned gemini-3\.8-live/u,
+  );
+  const featureFlag = readFileSync(
+    new URL("../main/services/gemini-live/feature-flag.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    featureFlag,
+    new RegExp(`GEMINI_LIVE_MODEL = "${GOOGLE_LIVE_ACCEPTANCE_MODEL}"`, "u"),
+    "the acceptance model must stay identical to the app's pinned model",
   );
 });
 

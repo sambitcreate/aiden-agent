@@ -18,20 +18,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("the panel rises into place as it fades in", () => {
-  const keyframes = between(
-    source("../styles.css"),
-    "@keyframes aiden-assistant-dock-in",
-    "@keyframes aiden-assistant-dock-out",
-  );
-  assert.match(keyframes, /opacity:\s*0/u);
-  assert.match(keyframes, /opacity:\s*1/u);
-  // Positive Y start = below its resting place, so it travels upward. The dock
-  // is bottom-anchored; a negative offset here would drop it in from above.
-  assert.match(keyframes, /translateY\(8px\)/u);
-  assert.match(keyframes, /translateY\(0\)/u);
-});
-
 test("automation approvals reuse the app surface entrance motion", () => {
   const styles = source("../styles.css");
   assert.match(
@@ -39,8 +25,8 @@ test("automation approvals reuse the app surface entrance motion", () => {
     /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
   );
   assert.match(
-    source("../components/assistant/assistant-automation-approval.tsx"),
-    /className="assistant-automation-approval/u,
+    source("../components/assistant/assistant-computer-use-approval.tsx"),
+    /data-state="open"[\s\S]*className="assistant-automation-approval/u,
   );
 });
 
@@ -54,29 +40,6 @@ test("scheduled task details reuse the reduced-motion-gated surface entrance", (
   assert.match(scheduledTasks, /className="scheduled-task-detail/u);
 });
 
-test("the panel settles downward as it fades out", () => {
-  const keyframes = between(
-    source("../styles.css"),
-    "@keyframes aiden-assistant-dock-out",
-    "@keyframes aiden-assistant-bubble-in",
-  );
-  assert.match(keyframes, /translateY\(0\)/u);
-  assert.match(keyframes, /translateY\(6px\)/u);
-  assert.match(keyframes, /opacity:\s*0/u);
-});
-
-test("both directions are gated on the app's reduce-motion switch", () => {
-  const styles = source("../styles.css");
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-dock-panel\[data-state="open"\]/u,
-  );
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-dock-panel\[data-state="closed"\]/u,
-  );
-});
-
 test("the Live orb trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
   const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
@@ -87,17 +50,12 @@ test("the Live orb trigger has tactile motion and a reduced-motion override", ()
 
 test("the dock has one trigger and no longer owns a competing composer", () => {
   const dock = source("../components/assistant/assistant-dock.tsx");
+  const styles = source("../styles.css");
   assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble|setDraft|textarea/u);
-});
-
-test("an empty conversation still surfaces its error", () => {
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(panel, /chat\.error/u);
-  assert.match(panel, /role="alert"/u);
-  assert.match(thread, /role="alert"/u);
+  assert.doesNotMatch(styles, /\.assistant-live-(?:entry|presence|orb|control|signal)/u);
+  assert.doesNotMatch(styles, /\.assistant-dock-(?:panel|bubble)/u);
 });
 
 test("the hotkey waits for the central command listener and uses the dock command", () => {
@@ -129,15 +87,6 @@ test("Scheduled Tasks remains a visible control surface for Live Computer Use", 
   );
 });
 
-test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {
-  const chat = source("../components/assistant/use-assistant-chat.ts");
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(chat, /stoppedPersistingTurnRef\.current === turnRef\.current/u);
-  assert.match(chat, /setTurnSaving\(true\)/u);
-  assert.match(chat, /const ready =\s*modelReady &&\s*!conversationLoading &&\s*!turnSaving/u);
-  assert.match(panel, /"turn-saving": "Saving conversation…"/u);
-});
-
 test("stopping an active generation waits for its terminal persistence event", () => {
   const chat = source("../components/assistant/use-assistant-chat.ts");
   const stop = between(chat, "const stop = React.useCallback", "return {");
@@ -159,22 +108,4 @@ test("assistant notices use a collision-free monotonic marker", () => {
   assert.match(chat, /noticeSequenceRef/u);
   assert.match(chat, /at: \+\+noticeSequenceRef\.current/u);
   assert.doesNotMatch(chat, /at: Date\.now\(\)/u);
-});
-
-test("the Assistant composer does not send an in-progress IME composition", () => {
-  const panel = source("../components/assistant/assistant-panel.tsx");
-  assert.match(panel, /!event\.nativeEvent\.isComposing/u);
-});
-
-test("streamed Assistant replies stay busy through the formatting handoff", () => {
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(thread, /role="log"/u);
-  assert.match(thread, /aria-live="polite"/u);
-  assert.match(thread, /aria-busy=\{streaming \|\| streamComplete\}/u);
-});
-
-test("every Assistant turn exposes its speaker without relying on bubble styling", () => {
-  const thread = source("../components/assistant/assistant-thread.tsx");
-  assert.match(thread, /message\.role === "user" \? "You" : "Aiden"/u);
-  assert.match(thread, /<span className="sr-only">\{speaker\}: <\/span>/u);
 });

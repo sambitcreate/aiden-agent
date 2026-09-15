@@ -28,6 +28,7 @@ export function AssistantComputerUseApproval({
       aria-labelledby={`assistant-live-computer-use-title-${prompt.approvalId}`}
       aria-describedby={`assistant-live-computer-use-summary-${prompt.approvalId}`}
       aria-busy={deciding}
+      data-state="open"
       className="assistant-automation-approval mx-2.5 shrink-0 rounded-card bg-control/70 p-3"
     >
       <div className="flex items-start justify-between gap-3">

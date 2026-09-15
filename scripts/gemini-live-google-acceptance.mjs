@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import electronPath from "electron";
 
 import {
+  GOOGLE_LIVE_ACCEPTANCE_MODEL,
   GOOGLE_LIVE_ACCEPTANCE_TOTAL_DEADLINE_MS,
   buildGoogleLiveAcceptanceReceipt,
   googleLiveAcceptanceEnabled,
@@ -122,7 +123,7 @@ function gitValue(args, fallback) {
   return result.status === 0 ? result.stdout.trim() : fallback;
 }
 
-function childEnvironment(root, model, evidencePath) {
+function childEnvironment(root, evidencePath) {
   const environment = {};
   for (const name of [
     "HOME",
@@ -139,7 +140,6 @@ function childEnvironment(root, model, evidencePath) {
     ...environment,
     AIDEN_CONFIG_DIR: path.join(root, "portable-config"),
     AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1",
-    AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL: model,
     AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1",
     AIDEN_GEMINI_LIVE_ACCEPTANCE_EVIDENCE_PATH: evidencePath,
   };
@@ -366,7 +366,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
         path.join(repositoryRoot, "node_modules"),
         path.join(repositoryRoot, "package-lock.json"),
       ]),
-      model: parsed.model,
+      model: GOOGLE_LIVE_ACCEPTANCE_MODEL,
     };
     let result = "fail";
     let code = "launch_failed";
@@ -381,7 +381,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
         [repositoryRoot, `--user-data-dir=${userData}`],
         {
           cwd: repositoryRoot,
-          env: childEnvironment(temporary, parsed.model, appEvidencePath),
+          env: childEnvironment(temporary, appEvidencePath),
           stdio: "ignore",
         },
       );

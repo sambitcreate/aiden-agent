@@ -3,8 +3,8 @@ export const GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION =
   "--i-understand-real-google-call";
 export const GOOGLE_LIVE_ACCEPTANCE_SCHEMA_VERSION = 1;
 export const GOOGLE_LIVE_ACCEPTANCE_TOTAL_DEADLINE_MS = 12 * 60 * 1_000;
+export const GOOGLE_LIVE_ACCEPTANCE_MODEL = "gemini-3.8-live";
 
-const MODEL_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,127}$/iu;
 const RESULT_VALUES = new Set(["pass", "fail"]);
 const FAILURE_CODES = new Set([
   "app_exited",
@@ -90,15 +90,15 @@ export function parseGoogleLiveAcceptanceArgs(argv) {
     }
     if (arg === "--model") {
       const value = argv[index + 1]?.trim();
-      if (!value || !MODEL_PATTERN.test(value))
-        throw new Error("A valid --model is required.");
+      if (value !== GOOGLE_LIVE_ACCEPTANCE_MODEL)
+        throw new Error(`--model must match the pinned ${GOOGLE_LIVE_ACCEPTANCE_MODEL}.`);
       model = value;
       index += 1;
       continue;
     }
     throw new Error("Unknown Google Live acceptance argument.");
   }
-  if (!model) throw new Error("A valid --model is required.");
+  if (!model) throw new Error(`--model ${GOOGLE_LIVE_ACCEPTANCE_MODEL} is required.`);
   return { confirmed, model };
 }
 

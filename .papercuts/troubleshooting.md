@@ -475,3 +475,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Rebasing the long-lived Gemini Live branch replayed 79 commits and conflicted in the frequently updated plan index; preserve the current `origin/main` inventory and reapply only the missing Gemini Live row.
 - The published `thinking-orbs` 0.3.1 package includes `breathing` but not the repository's newer `color` prop. Reuse its canvas animation and apply Aiden's blue tint at the presentation layer until the tint API is published; do not vendor unreleased package internals.
+- Pullfrog's incremental review retained two must-address findings from the prior head: fail closed when a Computer Use result lands during Live transport rotation, and re-read authoritative status after audio-start rollback so a stopped session remains restartable.
+- Replacing a window-level surface can leave unreachable components and motion selectors behind; remove the retired Assistant panel files and assert the dock does not regain those imports or styles.

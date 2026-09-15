@@ -98,6 +98,17 @@ test("setup discloses macOS access and per-action approval", () => {
   assert.match(live, /still require Allow once/u);
 });
 
+test("Gemini Live is visibly marked beta in setup and settings", () => {
+  const setup = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  const settings = readFileSync(
+    new URL("../settings/gemini-live-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(setup, /<Badge color="blue">Beta<\/Badge>/u);
+  assert.match(settings, /<Badge color="blue">Beta<\/Badge>/u);
+  assert.match(settings, /Availability and supported actions may change during beta\./u);
+});
+
 test("the Live orb maps all eight states onto the shared Libraries.dev orb", () => {
   const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
   const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");

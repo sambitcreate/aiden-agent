@@ -343,7 +343,18 @@ export class GeminiLiveService {
         onEvent: (event) => this.handleProtocolEvent(session, event),
         tools: computerUse?.tools,
       });
-      computerUse?.bindSendResult((result) => protocol.sendToolResult(result));
+      computerUse?.bindSendResult((result) => {
+        if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) return;
+        try {
+          protocol.sendToolResult(result);
+        } catch {
+          // A result produced while GoAway is rotating the transport cannot be
+          // correlated safely after an arbitrary delay. Terminate the owned
+          // session so no detached bridge promise rejects and the provider is
+          // never left waiting on an issued function call.
+          this.closeSession(session, true);
+        }
+      });
       session.protocol = protocol;
       await protocol.start();
       if (!this.sessions.isCurrent(session) || owner.isDestroyed()) {

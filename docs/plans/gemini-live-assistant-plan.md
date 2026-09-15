@@ -1,6 +1,6 @@
 # Gemini Live Assistant Plan
 
-Status: Partial — Phases 0–4 plus the Gemini Live orb/setup shell are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
+Status: Partial — Phases 0–4 plus the beta-labeled Gemini Live orb/setup shell are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
 Date: 2026-09-15
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`
@@ -417,10 +417,12 @@ test:*`, package verification, and signed-package permission acceptance.
 
 ### Phase 4.5 — orb shell and guided setup
 
-Status: Implemented (2026-09-15). The separate Assistant panel/composer is no
-longer reachable from the window-level entry point. Before setup, the canonical
-Aiden logo opens a one-time guided model, microphone, Screen Recording,
-Accessibility, and Computer Use checklist. After the first successful Live
+Status: Implemented (2026-09-15). The retired Assistant panel/composer and its
+orphan presentation code are removed. Before setup, the canonical Aiden logo
+opens a one-time guided model, microphone, Screen Recording, Accessibility,
+and Computer Use checklist. Both that first-time surface and the dedicated
+Settings destination label Gemini Live as **Beta** and explain that
+availability and supported actions may change. After the first successful Live
 start, it permanently hands off to a blue Libraries.dev `thinking-orbs`
 presence with ready, connecting, listening, thinking, acting,
 approval, error, and unavailable states. Active sessions use a compact

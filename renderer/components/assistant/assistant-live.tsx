@@ -121,7 +121,10 @@ export function AssistantLiveSetupDialog({
       <div className="gemini-live-setup-hero">
         <AidenLiveOrb state={live.setupComplete ? "ready" : "connecting"} />
         <div>
-          <p className="text-sm font-medium text-primary">Aiden, ready to listen and act</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium text-primary">Aiden, ready to listen and act</p>
+            <Badge color="blue">Beta</Badge>
+          </div>
           <p className="mt-0.5 text-xs leading-4 text-secondary">
             Voice, screen context, and accessibility actions stay visible and stoppable.
           </p>

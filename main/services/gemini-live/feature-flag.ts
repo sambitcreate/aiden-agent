@@ -12,5 +12,5 @@ export function experimentalGeminiLiveModel(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): string | null {
   if (!geminiLiveEnabled(environment)) return null;
-  return geminiLiveEnabled(environment) ? GEMINI_LIVE_MODEL : null;
+  return GEMINI_LIVE_MODEL;
 }

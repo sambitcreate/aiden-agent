@@ -68,10 +68,13 @@ export function GeminiLiveSettings(): React.ReactElement {
             <AidenLiveOrb state={liveReady ? "ready" : "unavailable"} />
           </span>
           <div>
-            <Text variant="strong">Gemini Live is Aiden’s voice and action layer</Text>
+            <div className="flex flex-wrap items-center gap-2">
+              <Text variant="strong">Gemini Live is Aiden’s voice and action layer</Text>
+              <Badge color="blue">Beta</Badge>
+            </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
               Speak naturally, let Aiden read the current screen, and approve each click or typed
-              action one at a time.
+              action one at a time. Availability and supported actions may change during beta.
             </Text>
           </div>
         </div>

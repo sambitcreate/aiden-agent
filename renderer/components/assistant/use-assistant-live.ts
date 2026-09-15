@@ -757,7 +757,8 @@ export function useAssistantLiveWithDependencies(
               sessionRef.current !== sessionId
             )
               return;
-            const next = await dependencies.api.stop();
+            await dependencies.api.stop();
+            const next = await dependencies.api.status();
             if (
               mounted.current &&
               operationGeneration.current === operation &&

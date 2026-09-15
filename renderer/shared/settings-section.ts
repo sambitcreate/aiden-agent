@@ -96,6 +96,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "model",
       "access",
       "proactive",
+      "beta",
     ],
   },
   {

@@ -793,17 +793,19 @@ test("audio rejection stops capture and the provider session instead of claiming
     state: "idle",
   };
   let stops = 0;
+  let starts = 0;
   const fixture = await mountHook({
     api: {
       status: async () => snapshot,
       start: async () => {
-        snapshot = { ...snapshot, sessionId: "audio-failure", state: "open" };
+        starts += 1;
+        snapshot = { ...snapshot, sessionId: `audio-failure-${starts}`, state: "open" };
         return snapshot;
       },
       stop: async () => {
         stops += 1;
         snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
-        return snapshot;
+        return { available: false, reason: "live_model_unverified", state: "idle" };
       },
       sendAudio: async () => false,
       onEvent: () => () => undefined,
@@ -818,6 +820,11 @@ test("audio rejection stops capture and the provider session instead of claiming
   assert.equal(fixture.tracks[0]?.stopped, true);
   assert.equal(stops, 1);
   assert.match(fixture.controller().error ?? "", /audio could not be sent/iu);
+  assert.equal(fixture.controller().available, true, "recovery re-reads authoritative status");
+  await fixture.controller().start();
+  await settle();
+  assert.equal(starts, 2, "Live can restart without an unrelated providers refresh");
+  assert.equal(fixture.controller().active, true);
   await fixture.unmount();
 });
 

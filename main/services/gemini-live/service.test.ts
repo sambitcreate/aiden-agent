@@ -252,6 +252,89 @@ test("only a prepared gated session declares and executes Aiden custom computer_
   assert.deepEqual(closed, ["controller"]);
 });
 
+test("a Computer Use result produced during transport rotation fails the session closed", async () => {
+  const server = new FakeGeminiLiveServer();
+  const execution = deferred<Awaited<ReturnType<GeminiLiveComputerUseController["execute"]>>>();
+  let bridge!: GeminiLiveComputerUseBridge;
+  let controllerCloses = 0;
+  const controller: GeminiLiveComputerUseController = {
+    approvalFor: async () => null,
+    authorize: () => undefined,
+    execute: async () => execution.promise,
+    close: async () => {
+      controllerCloses += 1;
+    },
+  };
+  const service = new GeminiLiveService({
+    credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
+    resolveModel: () => "gemini-3.1-flash-live-preview",
+    createConnector: () => server.connector,
+    prepareComputerUse: async ({ chatId, sessionId }) => {
+      if (!chatId) return null;
+      let sendResult:
+        | ((value: { id: string; name: string; response: Record<string, unknown> }) => void)
+        | null = null;
+      bridge = new GeminiLiveComputerUseBridge({
+        sessionId,
+        controller,
+        isAuthorized: () => true,
+        requestApproval: async () => true,
+        sendResult: (value) => sendResult?.(value),
+      });
+      return {
+        bridge,
+        tools: [
+          {
+            functionDeclarations: [
+              { name: "computer_use", parametersJsonSchema: ComputerUseParameters },
+            ],
+          },
+        ],
+        approve: () => false,
+        bindSendResult: (send) => {
+          sendResult = send;
+        },
+      };
+    },
+  });
+  const owner = new FakeOwner(42, "42:1:tool-rotation");
+  await service.start(owner, {
+    chatId: "assistant-chat",
+    microphone: false,
+    screen: false,
+  });
+  server.latest.emit({
+    toolCall: {
+      functionCalls: [
+        { id: "rotating-call", name: "computer_use", args: { action: "list_apps" } },
+      ],
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const session = service.sessions.get(owner)!;
+  session.state = "resuming";
+  const protocol = session.protocol as unknown as { phase: string; wire: unknown };
+  protocol.phase = "resuming";
+  protocol.wire = null;
+  execution.resolve({
+    content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+    details: { action: "list_apps" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.sessions.values().length, 0);
+  assert.equal(protocol.phase, "closed");
+  assert.equal(bridge.pendingCount, 0);
+  assert.equal(controllerCloses, 1);
+  assert.equal(
+    owner.events.some((event) => event.type === "snapshot" && event.snapshot.state === "closed"),
+    true,
+    "the renderer receives a terminal state instead of a hanging function call",
+  );
+});
+
 test("gate revocation aborts issued approval and queued calls before controller and socket teardown", async () => {
   const server = new FakeGeminiLiveServer();
   const order: string[] = [];

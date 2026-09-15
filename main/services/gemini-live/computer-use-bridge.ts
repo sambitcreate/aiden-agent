@@ -240,6 +240,13 @@ export class GeminiLiveComputerUseBridge {
 
   private send(call: GeminiLiveComputerUseCall, response: Record<string, unknown>): void {
     if (this.closed) return;
-    this.options.sendResult({ id: call.id, name: call.name, response });
+    try {
+      this.options.sendResult({ id: call.id, name: call.name, response });
+    } catch {
+      // sendResult crosses into the owned provider transport. Its failure must
+      // never escape this detached queue drain as an unhandled rejection.
+      // Production also closes the owning Live session at that boundary.
+      this.close();
+    }
   }
 }
