@@ -176,6 +176,14 @@ object AidenProgressFencing {
     /** Identity for one retained roster within a chat. The separator is
      * outside the epoch/turnId grammar so components can never be confused. */
     fun rosterKey(epoch: String, turnId: String?): String = "$epoch\u0000${turnId ?: ""}"
+
+    fun retainedRoster(
+        rosters: List<AidenChatAgentRoster>,
+        currentEpoch: String?,
+        turnId: String
+    ): AidenChatAgentRoster? = rosters.firstOrNull {
+        currentEpoch != null && it.epoch == currentEpoch && it.turnId == turnId
+    }
 }
 
 /** Strict decoder for the progress DTOs. Unknown fields are rejected. */

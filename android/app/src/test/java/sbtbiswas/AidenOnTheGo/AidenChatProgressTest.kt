@@ -223,6 +223,30 @@ class AidenChatProgressTest {
     }
 
     @Test
+    fun retainedRosterSelectionIsScopedToCurrentEpoch() {
+        val base = AidenChatProgressCodec.parseAgentRoster(fixtureRoot().getValue("agentRoster"))
+        val old = base.copy(epoch = "epoch_old", turnId = "turn_shared")
+        val current = base.copy(epoch = "epoch_current", turnId = "turn_shared")
+
+        assertEquals(
+            current,
+            AidenProgressFencing.retainedRoster(
+                listOf(old, current),
+                currentEpoch = "epoch_current",
+                turnId = "turn_shared"
+            )
+        )
+        assertEquals(
+            null,
+            AidenProgressFencing.retainedRoster(
+                listOf(old),
+                currentEpoch = "epoch_current",
+                turnId = "turn_shared"
+            )
+        )
+    }
+
+    @Test
     fun progressSseEventRejectsPayloadFromAnotherChat() {
         val mismatched = """
             {"protocolVersion":1,"streamId":"chat_a","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_b","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[]}}

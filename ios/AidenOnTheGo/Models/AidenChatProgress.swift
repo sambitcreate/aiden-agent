@@ -56,8 +56,11 @@ enum AidenProgressPresentation {
 
     static func showsAgentChip(_ roster: AidenRemoteChatAgentRoster?) -> Bool {
         guard let roster else { return false }
-        // An unavailable roster carries no agents, but retained earlier turns
-        // must remain inspectable rather than hiding the surface entirely.
+        if !roster.isAvailable {
+            return roster.unavailableReason != .unsupported
+        }
+        // Retained earlier turns must remain inspectable rather than hiding
+        // the surface entirely.
         return !roster.agents.isEmpty || !roster.previousTurns.isEmpty
     }
 
@@ -87,7 +90,8 @@ struct AidenChatProgressControls: View {
     let agentRoster: AidenRemoteChatAgentRoster?
     let canReadTasks: Bool
     let canReadAgents: Bool
-    let isStale: Bool
+    let taskIsStale: Bool
+    let agentIsStale: Bool
     let openTasks: () -> Void
     let openAgents: () -> Void
 
@@ -106,7 +110,7 @@ struct AidenChatProgressControls: View {
                             AidenProgressChipLabel(
                                 systemImage: "checklist",
                                 title: taskTitle(taskProgress),
-                                stale: isStale
+                                stale: taskIsStale
                             )
                         }
                         .accessibilityLabel(Text(taskAccessibilityLabel(taskProgress)))
@@ -120,7 +124,7 @@ struct AidenChatProgressControls: View {
                             AidenProgressChipLabel(
                                 systemImage: "checklist",
                                 title: String(localized: "Tasks unavailable"),
-                                stale: isStale
+                                stale: taskIsStale
                             )
                         }
                         .accessibilityLabel(Text("Task progress unavailable"))
@@ -132,7 +136,7 @@ struct AidenChatProgressControls: View {
                             AidenProgressChipLabel(
                                 systemImage: "person.2",
                                 title: agentTitle(agentRoster),
-                                stale: isStale
+                                stale: agentIsStale
                             )
                         }
                         .accessibilityLabel(Text(agentAccessibilityLabel(agentRoster)))
@@ -171,6 +175,9 @@ struct AidenChatProgressControls: View {
     }
 
     private func agentTitle(_ roster: AidenRemoteChatAgentRoster) -> String {
+        if !roster.isAvailable {
+            return String(localized: "Agents unavailable")
+        }
         let active = AidenProgressPresentation.activeAgentCount(roster)
         if roster.agents.isEmpty, !roster.previousTurns.isEmpty {
             return String(localized: "Earlier agents")
@@ -185,6 +192,9 @@ struct AidenChatProgressControls: View {
     }
 
     private func agentAccessibilityLabel(_ roster: AidenRemoteChatAgentRoster) -> String {
+        if !roster.isAvailable {
+            return String(localized: "Delegated-agent status unavailable")
+        }
         if roster.agents.isEmpty, !roster.previousTurns.isEmpty {
             return String(localized: "Earlier delegated agents: \(roster.previousTurns.count) turns available")
         }
@@ -272,7 +282,7 @@ struct AidenChatProgressSheet: View {
                 } header: {
                     Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(AidenProgressPresentation.visibleTasks(progress).count) completed")
                 } footer: {
-                    if model.isProgressStale {
+                    if model.isTaskProgressStale {
                         Text("Last known progress")
                     }
                 }

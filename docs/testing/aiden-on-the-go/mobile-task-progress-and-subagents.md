@@ -57,6 +57,8 @@ Validation after this round: `npm run test:aiden-remote` 417 passing with 1 expe
 
 Committed as `18b4f8bc1` ("Harden mobile progress contract, turn identity, and roster reachability") and moved to follow-up PR #126 after feature PR #123 merged. The original stacked PR #124 was automatically closed when GitHub deleted its merged base branch. Post-push CI: all `ci.yml` checks passed — `verify` (both workflows), `Detect changed areas`, `Android build and APK`, and `Deterministic Electron E2E`. The external `pullfrog` review-agent check failed twice with provider activity timeouts ("the provider never returned a first token"); it is a `workflow_dispatch`-only workflow, not a required check, and unrelated to the PR contents.
 
+PR #126 review then separated iOS task and roster freshness so one failed projection cannot mark or clear the other's last-known state, kept an invalid-snapshot agent projection reachable while continuing to hide unsupported servers, and fenced retained iOS and Android rosters to the current server epoch. Focused presentation, lifecycle, and epoch-selection regressions cover these paths. The generic iOS hardware test bundle compiled, and the Android JVM suite passed. A targeted physical-iPhone run could not start because the connected device was locked; the earlier full physical suite remains the execution evidence for this increment.
+
 ## Remaining physical acceptance
 
 No Android device was attached during implementation. Connected Compose instrumentation and manual phone/tablet checks remain open. Compilation/JVM tests are not physical UI evidence.

@@ -464,7 +464,13 @@ class AidenChatViewModel(
         val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
         if (!historical) {
             if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
-            if (agentEpoch != snapshot.epoch) agentRevision = 0L
+            if (agentEpoch != null && agentEpoch != snapshot.epoch) {
+                agentRosterSelectionTicket += 1
+                _agentRosterHistory.value = emptyList()
+                selectedRosterTurnId = null
+                _selectedAgentRoster.value = null
+                agentRevision = 0L
+            }
             agentEpoch = snapshot.epoch
             agentRevision = snapshot.revision
             val previousTurnId = currentRosterTurnId
@@ -475,6 +481,7 @@ class AidenChatViewModel(
                 _selectedAgentRoster.value = snapshot
             }
         } else {
+            if (snapshot.epoch != agentEpoch) return false
             // A retained-turn fetch can resolve after a fresher snapshot for the
             // same turn was already applied. Revisions are ordered within an
             // epoch:turn key, so never let a late response move history or the
@@ -513,7 +520,11 @@ class AidenChatViewModel(
             _selectedAgentRoster.value = _agentRoster.value
             return
         }
-        val cached = _agentRosterHistory.value.firstOrNull { it.turnId == turnId }
+        val cached = AidenProgressFencing.retainedRoster(
+            _agentRosterHistory.value,
+            agentEpoch,
+            turnId
+        )
         // Fence a current-turn refresh immediately, even while the selected
         // historical roster is being fetched. Otherwise its late response can
         // briefly replace the user's chosen turn in the sheet.
@@ -534,7 +545,11 @@ class AidenChatViewModel(
                     // The fetch resolved to a stale snapshot: keep the newer
                     // cached roster for this turn instead of regressing it.
                     selectedRosterTurnId = turnId
-                    _selectedAgentRoster.value = _agentRosterHistory.value.firstOrNull { it.turnId == turnId }
+                    _selectedAgentRoster.value = AidenProgressFencing.retainedRoster(
+                        _agentRosterHistory.value,
+                        agentEpoch,
+                        turnId
+                    )
                 }
             } catch (error: Exception) {
                 if (isProgressCredentialRevoked(error)) {
