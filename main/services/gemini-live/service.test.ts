@@ -837,6 +837,8 @@ test("the model gate is explicit-experimental and media has no persistence or lo
     fs.readFile(path.join(here, "../../handlers/assistant-live.ts"), "utf8"),
   ]);
   assert.match(mainSource, /resolveModel: \(\) => experimentalGeminiLiveModel\(\)/u);
+  assert.match(mainSource, /behavior: Behavior\.NON_BLOCKING/u);
+  assert.match(mainSource, /say Allow once or Deny/u);
   assert.doesNotMatch(serviceSource, /DataStore|writeFile|appendFile|logger|writeDevLog/u);
   assert.doesNotMatch(handlerSource, /jpeg|frame|credential|apiKey|tool/u);
 });

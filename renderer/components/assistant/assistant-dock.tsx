@@ -35,8 +35,12 @@ function storedSetupComplete(): boolean {
 
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
-  const chat = useAssistantLiveApprovals();
   const live = useAssistantLive(null);
+  const chat = useAssistantLiveApprovals(
+    live.voiceApprovalReceipts,
+    live.latestVoiceApprovalReceiptId,
+    live.retainVoiceApprovalReceiptsAfter,
+  );
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
@@ -104,7 +108,8 @@ export function AssistantDockPresentation({
     }
     onOpenSettings(live.available ? "computerUse" : "providers");
   }, [live, onOpenSettings, setupCompleted]);
-  useCommand("assistant.open", openPanel);
+  useCommand("assistant.open", openPanel, live.visible);
+  if (!live.visible) return <></>;
 
   return (
     <div
@@ -117,7 +122,6 @@ export function AssistantDockPresentation({
             <AssistantComputerUseApproval
               prompt={liveApproval}
               deciding={chat.decidingApprovalId === liveApproval.approvalId}
-              onDecision={(decision) => void chat.decideApproval(liveApproval, decision)}
             />
           ) : null}
         </AssistantLiveHud>

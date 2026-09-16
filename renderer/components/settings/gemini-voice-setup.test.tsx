@@ -46,6 +46,7 @@ test("Voice defers Gemini selection until disclosure and managed auth complete",
 test("Providers routes Google through the same purpose dialog and voice-only auth readiness", () => {
   assert.match(providerSource, /provider\.id !== GOOGLE_PROVIDER_ID/u);
   assert.match(providerSource, /<GeminiVoiceSetupDialog/u);
+  assert.match(providerSource, /provider=\{list\.find\(\(provider\) => provider\.id === GOOGLE_PROVIDER_ID\)\}/u);
   assert.match(providerSource, /activatesVoice=\{false\}/u);
   assert.match(providerSource, /settingsApi\.setGeminiUsageScope\(geminiScope\)/u);
   assert.doesNotMatch(providerSource, /settingsApi\.setGeminiVoiceSetup/u);
@@ -53,4 +54,6 @@ test("Providers routes Google through the same purpose dialog and voice-only aut
   assert.match(providerSource, /requireChatModel=\{settingUp\.id !== GOOGLE_PROVIDER_ID\}/u);
   assert.match(editorSource, /requireChatModel && refreshed\.models\.length === 0/u);
   assert.match(editorSource, /await onSaved\(\)/u);
+  assert.match(dialogSource, /<ProviderModelVisibility provider=\{provider\} policyHidden=\{false\}/u);
+  assert.match(dialogSource, /scope === "models_and_transcription"/u);
 });

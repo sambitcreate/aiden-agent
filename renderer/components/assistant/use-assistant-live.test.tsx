@@ -99,6 +99,7 @@ class RecordingPlayer extends PcmPlayer {
 interface HookFixture {
   controller(): AssistantLiveController;
   emit(event: AssistantLiveRendererEvent): void;
+  emitBatch(events: readonly AssistantLiveRendererEvent[]): void;
   startCalls(): number;
   stopCalls(): number;
   worklets: FakeWorklet[];
@@ -250,6 +251,7 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   return {
     controller: () => latest,
     emit: (event) => flushSync(() => handler(event)),
+    emitBatch: (events) => flushSync(() => events.forEach((event) => handler(event))),
     startCalls: () => starts,
     stopCalls: () => stops,
     worklets,
@@ -1205,6 +1207,78 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
   assert.equal(captions.length, 2);
   assert.equal(captions[0]?.sealed, true);
   assert.equal(captions[1]?.text, "A separate turn");
+});
+
+test("final input receipt sequence advances synchronously at event delivery", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "input",
+    text: "Deny",
+    final: true,
+  });
+  assert.equal(
+    fixture.controller().latestVoiceApprovalReceiptId(),
+    1,
+    "an approval arriving before React commits still fences this utterance",
+  );
+  await fixture.unmount();
+});
+
+test("batched finalized input events retain every approval receipt in FIFO order", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once",
+      final: true,
+    },
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Deny",
+      final: true,
+    },
+  ]);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
+    { id: 1, text: "Allow once" },
+    { id: 2, text: "Deny" },
+  ]);
+  await fixture.unmount();
+});
+
+test("a pending exact voice approval survives bounded receipt eviction", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.controller().retainVoiceApprovalReceiptsAfter(0);
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once.",
+      final: true,
+    },
+    ...Array.from({ length: 300 }, (_, index) => ({
+      type: "caption" as const,
+      sessionId: "session-1",
+      direction: "input" as const,
+      text: `noise ${index}`,
+      final: true,
+    })),
+  ]);
+  assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
+    id: 1,
+    text: "Allow once.",
+  });
+  await fixture.unmount();
 });
 
 test("caption turns preserve a long response beyond the former fragment cap", () => {

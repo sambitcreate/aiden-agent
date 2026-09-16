@@ -499,3 +499,13 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Running Prettier directly rewrites large legacy files that use the repository's established formatting; audit the diff immediately and use targeted patches for this release.
 - This worktree has no project `.memory/` directory despite the repository instructions; keep durable implementation status in the plan inventory instead of inventing the missing store.
 - Exact-head CI intermittently missed a watched filesystem edit within the test's one-second deadline while the same watcher test passed 10/10 locally; distinguish infrastructure timing from feature regressions before changing unrelated release code.
+
+## 2026-09-16 — Aiden Live voice actions
+
+- The installed Google SDK exposes Live `interactionStatus` inside `serverContent`, while newer Extended Thinking examples describe status alongside tool-call lifecycle events; pin protocol handling to the installed typed wire contract and cover `IDLE` explicitly when adopting the new model.
+# Release coordination
+
+- Pullfrog took just over one hour to review PR #132 after first-party CI was green; keep exact-head checks separate so the long external review does not obscure test status.
+- Moving Live from default-on to acceptance-gated correctly hid the dock but invalidated the local UI E2E; keep default-off rendering covered separately and opt the isolated provider-free E2E harness into the experimental surface explicitly.
+- The hosted full Electron suite marked the unrelated chat-switch queue test flaky after it passed on retry, and `--fail-on-flaky-tests` failed the whole gate; rerun the exact failed job before changing unrelated product behavior, while preserving the strict gate if the flake repeats.
+- A distant Environment source-contract test asserted Aiden Live's two-argument command registration, so focused Live tests missed the intentional capability gate; search all source-contract assertions when changing a shared command signature.

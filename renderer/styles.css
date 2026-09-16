@@ -2675,9 +2675,12 @@ textarea {
   object-fit: cover;
 }
 .aiden-live-trigger[data-kind="orb"] {
+  appearance: none;
   border-color: transparent;
+  border-radius: 9999px;
   background: transparent;
-  box-shadow: 0 10px 32px rgb(49 46 129 / 22%);
+  box-shadow: none;
+  padding: 0;
 }
 .aiden-live-trigger:hover {
   transform: translateY(-1px) scale(1.025);
@@ -2689,6 +2692,9 @@ textarea {
   box-shadow:
     0 0 0 3px var(--color-focus-ring),
     0 10px 30px rgb(0 0 0 / 16%);
+}
+.aiden-live-trigger[data-kind="orb"]:focus-visible {
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
 .aiden-live-trigger-badge {
   position: absolute;

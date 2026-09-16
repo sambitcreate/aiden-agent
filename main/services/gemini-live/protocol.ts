@@ -1,4 +1,4 @@
-import { Modality } from "@google/genai";
+import { Modality, ThinkingLevel } from "@google/genai";
 import type {
   Content,
   FunctionResponse,
@@ -345,6 +345,7 @@ const INTERACTION_STATUSES = new Set([
   "INTERACTION_STATUS_UNSPECIFIED",
   "IN_PROGRESS",
   "REQUIRES_ACTION",
+  "IDLE",
 ]);
 
 function boundedOptionalString(value: unknown, maxBytes: number): boolean {
@@ -482,6 +483,7 @@ function validToolIdentity(id: unknown, name: unknown): id is string {
 
 function liveConnectConfig(
   signal: AbortSignal,
+  model: string,
   handle?: string,
   tools?: LiveConnectConfig["tools"],
 ): GeminiLiveConnectConfig {
@@ -490,6 +492,13 @@ function liveConnectConfig(
     responseModalities: [Modality.AUDIO],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
+    ...(model.endsWith("-extended-thinking")
+      ? {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          systemInstruction:
+            "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Before any approval-gated Computer Use action, state the exact action and ask the user to say ‘Allow once’ or ‘Deny’. Never claim that an action completed until its tool result confirms it.",
+        }
+      : {}),
     ...(handle
       ? {}
       : { historyConfig: { initialHistoryInClientContent: true } }),
@@ -793,7 +802,12 @@ export class GeminiLiveProtocol {
     const params: LiveConnectParameters = {
       model: this.options.model,
       callbacks,
-      config: liveConnectConfig(controller.signal, handle, this.options.tools),
+      config: liveConnectConfig(
+        controller.signal,
+        this.options.model,
+        handle,
+        this.options.tools,
+      ),
     };
     let timeoutTimer: unknown = null;
     const timeout = new Promise<never>((_resolve, reject) => {

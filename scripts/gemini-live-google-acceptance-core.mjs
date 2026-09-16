@@ -3,7 +3,7 @@ export const GOOGLE_LIVE_ACCEPTANCE_CONFIRMATION =
   "--i-understand-real-google-call";
 export const GOOGLE_LIVE_ACCEPTANCE_SCHEMA_VERSION = 1;
 export const GOOGLE_LIVE_ACCEPTANCE_TOTAL_DEADLINE_MS = 12 * 60 * 1_000;
-export const GOOGLE_LIVE_ACCEPTANCE_MODEL = "gemini-3.8-live";
+export const GOOGLE_LIVE_ACCEPTANCE_MODEL = "gemini-3.8-live-extended-thinking";
 
 const RESULT_VALUES = new Set(["pass", "fail"]);
 const FAILURE_CODES = new Set([
