@@ -2,18 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { experimentalGeminiLiveModel, geminiLiveEnabled } from "./feature-flag.js";
 
-test("Gemini 3.8 Live stays behind the exact experimental feature flag", () => {
-  assert.equal(geminiLiveEnabled({}), false);
-  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "true" }), false);
+test("Gemini 3.8 Live is default-on with an exact emergency rollback", () => {
+  assert.equal(geminiLiveEnabled({}), true);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "true" }), true);
   assert.equal(
     experimentalGeminiLiveModel({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL: "model" }),
-    null,
+    "gemini-3.8-live",
   );
-  const enabled = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1" };
-  assert.equal(geminiLiveEnabled(enabled), true);
-  assert.equal(experimentalGeminiLiveModel(enabled), "gemini-3.8-live");
+  const disabled = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "0" };
+  assert.equal(geminiLiveEnabled(disabled), false);
+  assert.equal(experimentalGeminiLiveModel(disabled), null);
   assert.equal(
-    experimentalGeminiLiveModel({ ...enabled, AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL: "bad model" }),
+    experimentalGeminiLiveModel({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL: "bad model" }),
     "gemini-3.8-live",
   );
 });

@@ -80,8 +80,9 @@ Stop, manual reconnect, and exact-session renderer teardown/late-event fencing.
 The UI and main service both keep screen capture unavailable until the native
 macOS picker acceptance is recorded. No capture resumes automatically.
 
-The approved stable model is now `gemini-3.8-live`. It is enabled only through
-`AIDEN_EXPERIMENTAL_GEMINI_LIVE=1`; the ordinary app remains fail-closed.
+The approved stable model is now `gemini-3.8-live`. The beta is available by
+default, with `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` retained as an emergency
+rollback switch.
 Extended Thinking remains out of scope until its non-blocking tool declarations
 and interaction-status lifecycle have their own compatibility review.
 
