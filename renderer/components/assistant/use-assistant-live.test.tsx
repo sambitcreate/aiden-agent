@@ -477,6 +477,45 @@ test("Computer Use restores the one-time setup opt in after readiness is revalid
   await fixture.unmount();
 });
 
+test("cancelling while Computer Use authorization is pending never starts Live", async () => {
+  const authorization = deferred<string | null>();
+  let starts = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      authorizeComputerUse: () => authorization.promise,
+      start: async () => {
+        starts += 1;
+        snapshot = { ...snapshot, sessionId: "must-not-start", state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => true,
+      onEvent: () => () => undefined,
+    },
+  });
+
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().busy, true);
+  const cancelling = fixture.controller().cancelSetup();
+  authorization.resolve("late-authorization");
+  await Promise.all([starting, cancelling]);
+
+  assert.equal(starts, 0, "cancelled authorization must be fenced before provider start");
+  assert.equal(fixture.controller().active, false);
+  await fixture.unmount();
+});
+
 test("Computer Use cannot be enabled when the global helper is unavailable", async () => {
   const unavailable: ComputerUseStatus = {
     enabled: false,

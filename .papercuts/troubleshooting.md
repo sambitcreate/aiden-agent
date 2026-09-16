@@ -498,3 +498,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - The UI-context helper uses its invoking directory, not a newly created worktree path mentioned in the same shell command; invoke design tooling from the target worktree after creation.
 - Running Prettier directly rewrites large legacy files that use the repository's established formatting; audit the diff immediately and use targeted patches for this release.
 - This worktree has no project `.memory/` directory despite the repository instructions; keep durable implementation status in the plan inventory instead of inventing the missing store.
+- Exact-head CI intermittently missed a watched filesystem edit within the test's one-second deadline while the same watcher test passed 10/10 locally; distinguish infrastructure timing from feature regressions before changing unrelated release code.

@@ -828,6 +828,13 @@ export function useAssistantLiveWithDependencies(
       ) {
         throw new Error("Computer Use readiness changed. Open setup and check permissions again.");
       }
+      if (
+        !mounted.current ||
+        setupAbort.signal.aborted ||
+        operationGeneration.current !== generation
+      ) {
+        return;
+      }
       const next = await dependencies.api.start({
         microphone: true,
         computerUseAuthorization,
