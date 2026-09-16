@@ -458,7 +458,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -1168,7 +1168,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -2178,7 +2178,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [
@@ -6354,7 +6354,7 @@
         "id": "glm-4.1v-thinking-flashx",
         "name": "GLM 4.1V Thinking FlashX",
         "description": "Compact GPT model for low-latency assistance and high-volume workloads",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": false,
         "tool_call": false,
@@ -7454,41 +7454,6 @@
           "input": 0.4,
           "output": 1.7,
           "cache_read": 0.2
-        }
-      },
-      "gemma-4-e4b-it": {
-        "id": "gemma-4-e4b-it",
-        "name": "Gemma 4 E4B Instruct",
-        "description": "Open Gemma instruction model for efficient chat and self-hosted deployments",
-        "family": "gemma",
-        "attachment": true,
-        "reasoning": false,
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-04-02",
-        "last_updated": "2026-04-02",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 131072,
-          "input": 131072,
-          "output": 16384
-        },
-        "cost": {
-          "input": 0.04,
-          "output": 0.2,
-          "cache_read": 0.02
         }
       },
       "GLM-4.6-Derestricted-v5": {
@@ -9111,7 +9076,7 @@
         "id": "glm-4.1v-thinking-flash",
         "name": "GLM 4.1V Thinking Flash",
         "description": "Compact GPT model for low-latency assistance and high-volume workloads",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": false,
         "tool_call": false,
@@ -9484,8 +9449,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 262144,
-          "input": 262144,
+          "context": 131072,
+          "input": 131072,
           "output": 32768
         },
         "cost": {
@@ -10138,41 +10103,6 @@
           "input": 0.15,
           "output": 0.6,
           "cache_read": 0.075
-        }
-      },
-      "gemma-4-e2b-it": {
-        "id": "gemma-4-e2b-it",
-        "name": "Gemma 4 E2B Instruct",
-        "description": "Open Gemma instruction model for efficient chat and self-hosted deployments",
-        "family": "gemma",
-        "attachment": true,
-        "reasoning": false,
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-04-02",
-        "last_updated": "2026-04-02",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 131072,
-          "input": 131072,
-          "output": 16384
-        },
-        "cost": {
-          "input": 0.02,
-          "output": 0.1,
-          "cache_read": 0.01
         }
       },
       "gemini-exp-1206": {
@@ -11431,39 +11361,6 @@
           "cache_read": 0.135
         }
       },
-      "qwen/qwen3.5-0.8b": {
-        "id": "qwen/qwen3.5-0.8b",
-        "name": "Qwen3.5 0.8B",
-        "description": "Qwen3.5 0.8B is a lightweight open-weight multimodal model from Alibaba for fast reasoning, visual understanding, tool use, and JSON output.",
-        "family": "qwen3.5",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "release_date": "2026-08-16",
-        "last_updated": "2026-08-16",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "input": 262144,
-          "output": 32768
-        },
-        "cost": {
-          "input": 0.06,
-          "output": 0.12,
-          "cache_read": 0.03
-        }
-      },
       "qwen/qwen3.7-flash": {
         "id": "qwen/qwen3.7-flash",
         "name": "Qwen3.7 Flash",
@@ -11966,39 +11863,6 @@
           "cache_write": 0.5
         }
       },
-      "qwen/qwen3.5-4b": {
-        "id": "qwen/qwen3.5-4b",
-        "name": "Qwen3.5 4B",
-        "description": "Qwen3.5 4B is a compact open-weight multimodal model from Alibaba for reasoning, coding, visual understanding, tool use, and structured output.",
-        "family": "qwen3.5",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "release_date": "2026-08-16",
-        "last_updated": "2026-08-16",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "input": 262144,
-          "output": 32768
-        },
-        "cost": {
-          "input": 0.1,
-          "output": 0.2,
-          "cache_read": 0.05
-        }
-      },
       "qwen/qwen3.6-flash": {
         "id": "qwen/qwen3.6-flash",
         "name": "Qwen3.6 Flash",
@@ -12452,39 +12316,6 @@
           "input": 0.13,
           "output": 0.5,
           "cache_read": 0.065
-        }
-      },
-      "qwen/qwen3.5-2b": {
-        "id": "qwen/qwen3.5-2b",
-        "name": "Qwen3.5 2B",
-        "description": "Qwen3.5 2B is a small open-weight multimodal model from Alibaba for efficient reasoning, coding, visual understanding, tool use, and JSON output.",
-        "family": "qwen3.5",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "release_date": "2026-08-16",
-        "last_updated": "2026-08-16",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 262144,
-          "input": 262144,
-          "output": 32768
-        },
-        "cost": {
-          "input": 0.08,
-          "output": 0.16,
-          "cache_read": 0.04
         }
       },
       "qwen/qwen3.6-35b-a3b:thinking": {
@@ -19631,7 +19462,7 @@
         "id": "TEE/glm-5.3-flash",
         "name": "GLM 5.3 Flash TEE",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -26518,7 +26349,7 @@
         "id": "z-ai/glm-4.7-flash-original",
         "name": "GLM 4.7 Flash Original",
         "description": "GLM-4.7-Flash is a lightweight 30B model optimized for coding and agentic tasks. Balances high performance with efficiency, perfect for local deployment.",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [],
@@ -26616,7 +26447,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -27049,7 +26880,7 @@
         "id": "z-ai/glm-4.7-flash-original:thinking",
         "name": "GLM 4.7 Flash Original Thinking",
         "description": "GLM-4.7-Flash with extended thinking capabilities for complex reasoning. Lightweight 30B model optimized for coding and agentic tasks.",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [],
@@ -27189,7 +27020,7 @@
         "id": "z-ai/glm-5.3-flash-uncensored",
         "name": "GLM 5.3 Flash Uncensored",
         "description": "GLM 5.3 Flash Uncensored is an uncensored fine-tune of the efficient 320B mixture-of-experts reasoning model, built for unrestricted chat, creative writing, coding, agentic work, tool use, and long-context tasks.",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -29912,7 +29743,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -32303,7 +32134,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -36498,7 +36329,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -46480,7 +46311,7 @@
         "id": "scx-ai-gp/glm-5.3-flash",
         "name": "GLM-5.3 Flash (SCX.ai)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -48368,7 +48199,7 @@
         "id": "vichar-ai/glm-5.3-flash",
         "name": "GLM-5.3 Flash (vichar-ai)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [
@@ -51005,7 +50836,7 @@
         "id": "novita/glm-5.3-flash",
         "name": "GLM-5.3 Flash (NovitaAI)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -53132,7 +52963,7 @@
         "id": "consensusprotocol/glm-5.3-flash",
         "name": "GLM-5.3 Flash (Consensus Protocol)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -57322,7 +57153,7 @@
         "id": "zai/glm-4.6v-flashx",
         "name": "GLM-4.6V FlashX (Z AI)",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -57470,7 +57301,7 @@
         "id": "zai/glm-5.3-flash",
         "name": "GLM-5.3 Flash (Z AI)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -59066,7 +58897,7 @@
         "id": "runware/glm-5.3-flash",
         "name": "GLM-5.3 Flash (Runware)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -60049,7 +59880,7 @@
         "interleaved": {
           "field": "reasoning_content"
         },
-        "structured_output": true,
+        "structured_output": false,
         "temperature": true,
         "knowledge": "2025-05",
         "release_date": "2026-09-10",
@@ -64533,7 +64364,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -67412,7 +67243,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -73523,7 +73354,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -73729,7 +73560,7 @@
         "id": "z-ai/glm-5.3-flash-free",
         "name": "GLM-5.3-Flash (free)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -81868,7 +81699,7 @@
         "id": "glm-5-3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -86344,7 +86175,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -89697,6 +89528,51 @@
         "cost": {
           "input": 0.144,
           "output": 0.287
+        }
+      },
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+        "family": "glm",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-14",
+        "last_updated": "2026-08-14",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "cost": {
+          "input": 1.1,
+          "output": 3.851,
+          "cache_read": 0.275,
+          "cache_write": 0
         }
       },
       "qwen-long": {
@@ -97082,7 +96958,7 @@
         "id": "zai-org/glm-4.7-flash",
         "name": "GLM-4.7-Flash",
         "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [
@@ -99021,7 +98897,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [
@@ -109189,7 +109065,7 @@
         "id": "glm-5.3-flash-fp4",
         "name": "GLM 5.3 Flash FP4",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -110081,7 +109957,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -114677,7 +114553,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -114950,7 +114826,7 @@
         "id": "glm-5.3-flash@eu",
         "name": "GLM-5.3-Flash (EU)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -120267,7 +120143,7 @@
         "id": "zai-org/GLM-4.6V-Flash",
         "name": "GLM-4.6V-Flash",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -120501,7 +120377,7 @@
         "id": "zai-org/GLM-4.7-Flash",
         "name": "GLM-4.7-Flash",
         "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [],
@@ -120635,7 +120511,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -122308,7 +122184,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -125854,7 +125730,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -132263,7 +132139,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -134181,7 +134057,7 @@
         "id": "zai-org/glm-4.7-flash",
         "name": "GLM-4.7-Flash",
         "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [],
@@ -139579,7 +139455,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM 5.3 Flash",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -151917,7 +151793,7 @@
         "id": "zai/glm-5.3-flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -154407,7 +154283,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -156317,7 +156193,7 @@
         "id": "zai-org-glm-4.7-flash",
         "name": "GLM 4.7 Flash",
         "description": "Budget GLM lane for fast coding help, routing, and everyday automation",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": false,
         "reasoning": true,
         "reasoning_options": [
@@ -159270,7 +159146,7 @@
         "id": "z-ai-glm-5-3-flash",
         "name": "GLM 5.3 Flash",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -163086,7 +162962,7 @@
         "id": "glm-4.6v-flashx",
         "name": "GLM-4.6V FlashX",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -166318,7 +166194,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -175755,7 +175631,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -178138,7 +178014,7 @@
         "id": "accounts/fireworks/routers/glm-flash-latest",
         "name": "GLM Flash Latest (GLM 5.3 Flash)",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -179235,7 +179111,7 @@
         "id": "accounts/fireworks/models/glm-5p3-flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -182700,7 +182576,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM 5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -184189,7 +184065,7 @@
         "id": "glm-4-6v-flash",
         "name": "GLM 4.6V Flash",
         "description": "Lightweight GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -185302,7 +185178,7 @@
         "id": "glm-5-3-flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -189450,7 +189326,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM 5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -191662,7 +191538,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -193313,10 +193189,10 @@
           "output": 131072
         },
         "cost": {
-          "input": 1.25,
-          "output": 3.75,
-          "cache_read": 0.125,
-          "cache_write": 1.5625
+          "input": 1.475,
+          "output": 4.425,
+          "cache_read": 0.295,
+          "cache_write": 1.84375
         }
       },
       "qwen/qwen3-coder-plus": {
@@ -194550,8 +194426,8 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 262144,
-          "output": 16384
+          "context": 131072,
+          "output": 32768
         },
         "cost": {
           "input": 0.13,
@@ -195146,7 +195022,7 @@
         "cost": {
           "input": 0.32,
           "output": 1.28,
-          "cache_read": 0.032,
+          "cache_read": 0.064,
           "cache_write": 0.4
         }
       },
@@ -195714,12 +195590,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 0.57948,
-          "output": 1.73844,
-          "cache_read": 0.018438
+          "input": 0.66,
+          "output": 1.98,
+          "cache_read": 0.022
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -195756,8 +195632,8 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1000000,
-          "output": 393216
+          "context": 1048576,
+          "output": 943718
         },
         "cost": {
           "input": 0.15,
@@ -196458,12 +196334,12 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 128000,
+          "context": 256000,
           "output": 16384
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.2
+          "input": 0.09375,
+          "output": 0.25
         }
       },
       "mistralai/mixtral-8x22b-instruct": {
@@ -197634,8 +197510,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 202800,
-          "output": 182520
+          "context": 256000,
+          "output": 32768
         },
         "cost": {
           "input": 0.5,
@@ -201232,8 +201108,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 393216
+          "context": 1024000,
+          "output": 384000
         },
         "cost": {
           "input": 1.32,
@@ -206598,9 +206474,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.14,
+          "output": 0.58,
+          "cache_read": 0.035
         }
       },
       "tencent/hy4-preview": {
@@ -207063,7 +206939,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "GLM-5.3-Flash is a native multimodal model from Z.ai. It is suited for efficient coding and long-horizon agent tasks. Its hybrid sparse and linear attention architecture maintains accurate long-context behavior while...",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -226114,7 +225990,7 @@
         "id": "zai/glm-5.3-flash",
         "name": "GLM-5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -233431,7 +233307,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -238446,11 +238322,11 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 16384
+          "output": 32768
         },
         "cost": {
-          "input": 0.15,
-          "output": 0.6
+          "input": 0.13,
+          "output": 0.52
         }
       },
       "qwen/qwen-plus": {
@@ -239618,12 +239494,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 0.57948,
-          "output": 1.73844,
-          "cache_read": 0.018438
+          "input": 0.66,
+          "output": 1.98,
+          "cache_read": 0.022
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -239663,7 +239539,7 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 943718
         },
         "cost": {
           "input": 0.15,
@@ -240317,8 +240193,8 @@
           "output": 16384
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.2
+          "input": 0.09375,
+          "output": 0.25
         }
       },
       "mistralai/mixtral-8x22b-instruct": {
@@ -241042,7 +240918,7 @@
           "output": 40000
         },
         "cost": {
-          "input": 0.55,
+          "input": 0.4,
           "output": 2.2
         }
       },
@@ -241435,12 +241311,12 @@
         "open_weights": true,
         "limit": {
           "context": 262144,
-          "output": 182520
+          "output": 32768
         },
         "cost": {
-          "input": 0.6,
-          "output": 2.4,
-          "cache_read": 0.12
+          "input": 0.625,
+          "output": 3.125,
+          "cache_read": 0.1875
         }
       },
       "nvidia/nemotron-3-nano-30b-a3b": {
@@ -245382,12 +245258,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 0.57948,
-          "output": 1.73844,
-          "cache_read": 0.018438
+          "input": 0.9834,
+          "output": 2.9502,
+          "cache_read": 0.03278
         }
       },
       "deepseek/deepseek-v4-flash-0731": {
@@ -245430,9 +245306,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 0.055,
-          "output": 0.11,
-          "cache_read": 0.011
+          "input": 0.06,
+          "output": 0.12,
+          "cache_read": 0.012
         }
       },
       "deepseek/deepseek-v4-flash": {
@@ -245477,9 +245353,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.07476,
-          "output": 0.14952,
-          "cache_read": 0.014952
+          "input": 0.088606,
+          "output": 0.177212,
+          "cache_read": 0.017721
         }
       },
       "deepseek/deepseek-v4.1-flash": {
@@ -250301,9 +250177,9 @@
           "output": 235929
         },
         "cost": {
-          "input": 0.71,
-          "output": 3.5,
-          "cache_read": 0.15
+          "input": 0.7062,
+          "output": 3.21,
+          "cache_read": 0.18
         }
       },
       "moonshotai/kimi-k2-thinking": {
@@ -250820,9 +250696,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.0825,
-          "output": 0.33,
-          "cache_read": 0.020625
+          "input": 0.132,
+          "output": 0.528,
+          "cache_read": 0.033
         }
       },
       "tencent/hy4-preview": {
@@ -251267,7 +251143,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -251301,9 +251177,9 @@
           "output": 131072
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.25,
-          "cache_read": 0.015
+          "input": 0.1,
+          "output": 0.3333,
+          "cache_read": 0.02
         }
       },
       "z-ai/glm-4.5": {
@@ -252291,7 +252167,7 @@
         "id": "cline-pass/glm-5.3-flash",
         "name": "cline-pass/glm-5.3-flash",
         "description": "Latest natively multimodal model in the GLM-5 series",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -258996,7 +258872,7 @@
         "id": "z-ai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -261791,7 +261667,7 @@
         "id": "glm-5-3-flash",
         "name": "GLM-5.3 Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -263627,7 +263503,7 @@
         "id": "GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [],
@@ -270646,7 +270522,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -271296,7 +271172,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -273742,7 +273618,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -277548,7 +277424,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -278372,7 +278248,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -278829,7 +278705,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -280412,7 +280288,7 @@
         "id": "hf:zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -281405,7 +281281,7 @@
         "id": "zai-org/GLM-5.3-Flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -282644,7 +282520,7 @@
         "id": "@cf/zai-org/glm-5.3-flash",
         "name": "Glm 5.3 Flash",
         "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [],
@@ -288195,6 +288071,55 @@
     "name": "Vancine",
     "doc": "https://vancine.com/docs",
     "models": {
+      "deepseek-v4.1-flash": {
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.24,
+          "output": 0.96,
+          "cache_read": 0.0048
+        }
+      },
       "hy4-preview": {
         "id": "hy4-preview",
         "name": "Hy4 preview",
@@ -288287,7 +288212,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -288504,55 +288429,6 @@
           "input": 1.12,
           "output": 3.52,
           "cache_read": 0.208
-        }
-      },
-      "deepseek-flash": {
-        "id": "deepseek-flash",
-        "name": "DeepSeek V4.1 Flash",
-        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
-        "family": "deepseek-flash",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          },
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2025-05",
-        "release_date": "2026-09-10",
-        "last_updated": "2026-09-10",
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 1000000,
-          "output": 384000
-        },
-        "cost": {
-          "input": 0.24,
-          "output": 0.96,
-          "cache_read": 0.0048
         }
       }
     }
@@ -290990,7 +290866,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -293809,7 +293685,7 @@
         "id": "glm5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [],
@@ -298197,7 +298073,7 @@
         "id": "glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -300483,7 +300359,7 @@
         "id": "glm-5-3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
@@ -309689,7 +309565,7 @@
         "id": "zai/glm-5.3-flash",
         "name": "GLM-5.3-Flash",
         "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
-        "family": "glm",
+        "family": "glm-flash",
         "attachment": true,
         "reasoning": true,
         "reasoning_options": [
