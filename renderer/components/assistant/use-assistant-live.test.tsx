@@ -99,6 +99,7 @@ class RecordingPlayer extends PcmPlayer {
 interface HookFixture {
   controller(): AssistantLiveController;
   emit(event: AssistantLiveRendererEvent): void;
+  emitBatch(events: readonly AssistantLiveRendererEvent[]): void;
   startCalls(): number;
   stopCalls(): number;
   worklets: FakeWorklet[];
@@ -250,6 +251,7 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   return {
     controller: () => latest,
     emit: (event) => flushSync(() => handler(event)),
+    emitBatch: (events) => flushSync(() => events.forEach((event) => handler(event))),
     startCalls: () => starts,
     stopCalls: () => stops,
     worklets,
@@ -1207,36 +1209,6 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
   assert.equal(captions[1]?.text, "A separate turn");
 });
 
-test("same-direction finalized captions retain a unique exact approval receipt", () => {
-  let captionId = 0;
-  let receiptId = 0;
-  const finalized = (text: string) => ({
-    type: "caption" as const,
-    sessionId: "s",
-    direction: "input" as const,
-    text,
-    final: true,
-  });
-  let captions = reconcileAssistantLiveCaption(
-    [],
-    finalized("Open settings"),
-    () => ++captionId,
-    { id: ++receiptId, text: "Open settings" },
-  );
-  captions = reconcileAssistantLiveCaption(
-    captions,
-    finalized("Allow once"),
-    () => ++captionId,
-    { id: ++receiptId, text: "Allow once" },
-  );
-  assert.equal(captions.length, 1, "display fragments may remain coalesced");
-  assert.equal(captions[0]?.text, "Open settings Allow once");
-  assert.deepEqual(captions[0]?.voiceApprovalReceipt, {
-    id: 2,
-    text: "Allow once",
-  });
-});
-
 test("final input receipt sequence advances synchronously at event delivery", async () => {
   const fixture = await mountHook();
   await fixture.controller().start();
@@ -1252,6 +1224,32 @@ test("final input receipt sequence advances synchronously at event delivery", as
     1,
     "an approval arriving before React commits still fences this utterance",
   );
+  await fixture.unmount();
+});
+
+test("batched finalized input events retain every approval receipt in FIFO order", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once",
+      final: true,
+    },
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Deny",
+      final: true,
+    },
+  ]);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
+    { id: 1, text: "Allow once" },
+    { id: 2, text: "Deny" },
+  ]);
   await fixture.unmount();
 });
 

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AssistantDockPresentation } from "./assistant-dock.js";
 import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
 import {
   assistantLiveVoiceApprovalDecision,
   assistantLiveVoiceApprovalForReceipt,
+  assistantLiveVoiceApprovalFromReceipts,
 } from "./use-assistant-live-approvals.js";
 import type { AssistantLiveController } from "./use-assistant-live.js";
 
@@ -24,6 +27,7 @@ const idleLive: AssistantLiveController = {
   model: "gemini-live-reviewed",
   state: "idle",
   captions: [],
+  voiceApprovalReceipts: [],
   latestVoiceApprovalReceiptId: () => 0,
   error: null,
   reconnectRequired: false,
@@ -117,6 +121,37 @@ test("voice approval ignores stale and consumed receipts", () => {
   assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, true), null);
 });
 
+test("batched voice receipts are examined FIFO and the earliest exact command wins", () => {
+  assert.deepEqual(
+    assistantLiveVoiceApprovalFromReceipts(
+      [
+        { id: 2, text: "Allow once" },
+        { id: 3, text: "Deny" },
+      ],
+      1,
+      new Set(),
+    ),
+    {
+      examinedReceiptIds: [2],
+      match: { receiptId: 2, decision: "allow" },
+    },
+  );
+  assert.deepEqual(
+    assistantLiveVoiceApprovalFromReceipts(
+      [
+        { id: 2, text: "keep going" },
+        { id: 3, text: "Deny" },
+      ],
+      1,
+      new Set(),
+    ),
+    {
+      examinedReceiptIds: [2, 3],
+      match: { receiptId: 3, decision: "deny" },
+    },
+  );
+});
+
 test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
   assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
@@ -132,6 +167,17 @@ test("dock replaces the retired Assistant panel with setup logo then Live orb", 
   assert.doesNotMatch(dock, /onDecision=/u);
   assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
+});
+
+test("a disabled Live capability renders no dock or setup affordance", () => {
+  const markup = renderToStaticMarkup(
+    <AssistantDockPresentation
+      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+      live={{ ...idleLive, visible: false }}
+      useCommand={() => undefined}
+    />,
+  );
+  assert.equal(markup, "");
 });
 
 test("Computer Use approvals are voice-only and keep the exact action visible", () => {

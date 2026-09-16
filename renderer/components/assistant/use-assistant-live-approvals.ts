@@ -1,6 +1,6 @@
 import * as React from "react";
 import { chatsApi, onNotification, type ApprovalPrompt } from "../../lib/ipc";
-import type { AssistantLiveCaption } from "./use-assistant-live";
+import type { AssistantLiveVoiceApprovalReceipt } from "./use-assistant-live";
 
 export interface AssistantLiveApprovals {
   approvals: ApprovalPrompt[];
@@ -22,20 +22,8 @@ export function assistantLiveVoiceApprovalDecision(
   return null;
 }
 
-function latestVoiceApprovalReceipt(
-  captions: readonly AssistantLiveCaption[],
-): NonNullable<AssistantLiveCaption["voiceApprovalReceipt"]> | null {
-  for (let index = captions.length - 1; index >= 0; index -= 1) {
-    const caption = captions[index];
-    if (caption?.direction === "input" && caption.voiceApprovalReceipt) {
-      return caption.voiceApprovalReceipt;
-    }
-  }
-  return null;
-}
-
 export function assistantLiveVoiceApprovalForReceipt(
-  receipt: NonNullable<AssistantLiveCaption["voiceApprovalReceipt"]> | null,
+  receipt: AssistantLiveVoiceApprovalReceipt | null,
   baselineReceiptId: number | undefined,
   alreadyConsumed: boolean,
 ): "allow" | "deny" | null {
@@ -50,9 +38,30 @@ export function assistantLiveVoiceApprovalForReceipt(
   return assistantLiveVoiceApprovalDecision(receipt.text);
 }
 
+export function assistantLiveVoiceApprovalFromReceipts(
+  receipts: readonly AssistantLiveVoiceApprovalReceipt[],
+  baselineReceiptId: number | undefined,
+  consumedReceiptIds: ReadonlySet<number>,
+): {
+  examinedReceiptIds: number[];
+  match: { receiptId: number; decision: "allow" | "deny" } | null;
+} {
+  const examinedReceiptIds: number[] = [];
+  if (baselineReceiptId === undefined) return { examinedReceiptIds, match: null };
+  for (const receipt of receipts) {
+    if (receipt.id <= baselineReceiptId || consumedReceiptIds.has(receipt.id)) continue;
+    examinedReceiptIds.push(receipt.id);
+    const decision = assistantLiveVoiceApprovalForReceipt(receipt, baselineReceiptId, false);
+    if (decision) {
+      return { examinedReceiptIds, match: { receiptId: receipt.id, decision } };
+    }
+  }
+  return { examinedReceiptIds, match: null };
+}
+
 /** Live-only approval state; deliberately does not mount or list the legacy Assistant workspace. */
 export function useAssistantLiveApprovals(
-  captions: readonly AssistantLiveCaption[],
+  receipts: readonly AssistantLiveVoiceApprovalReceipt[],
   latestVoiceApprovalReceiptId: () => number,
 ): AssistantLiveApprovals {
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
@@ -111,17 +120,21 @@ export function useAssistantLiveApprovals(
   React.useEffect(() => {
     const prompt = approvals[0];
     if (!prompt || decidingApprovalId) return;
-    const receipt = latestVoiceApprovalReceipt(captions);
     const baseline = receiptBaselines.current.get(prompt.approvalId);
-    const decision = assistantLiveVoiceApprovalForReceipt(
-      receipt,
+    const oldestRetainedId = receipts[0]?.id;
+    if (oldestRetainedId !== undefined) {
+      for (const id of consumedReceiptIds.current) {
+        if (id < oldestRetainedId) consumedReceiptIds.current.delete(id);
+      }
+    }
+    const result = assistantLiveVoiceApprovalFromReceipts(
+      receipts,
       baseline,
-      receipt ? consumedReceiptIds.current.has(receipt.id) : false,
+      consumedReceiptIds.current,
     );
-    if (!decision || !receipt) return;
-    consumedReceiptIds.current.add(receipt.id);
-    void decideApproval(prompt, decision);
-  }, [approvals, captions, decideApproval, decidingApprovalId]);
+    for (const id of result.examinedReceiptIds) consumedReceiptIds.current.add(id);
+    if (result.match) void decideApproval(prompt, result.match.decision);
+  }, [approvals, decideApproval, decidingApprovalId, receipts]);
 
   return { approvals, decidingApprovalId, decideApproval };
 }

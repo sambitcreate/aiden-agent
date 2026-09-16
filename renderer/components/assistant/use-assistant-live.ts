@@ -20,11 +20,11 @@ export interface AssistantLiveCaption {
   final: boolean;
   sealed: boolean;
   text: string;
-  /** Exact finalized input event, kept separate from display-fragment coalescing. */
-  voiceApprovalReceipt?: {
-    id: number;
-    text: string;
-  };
+}
+
+export interface AssistantLiveVoiceApprovalReceipt {
+  id: number;
+  text: string;
 }
 
 export interface AssistantLiveController {
@@ -43,6 +43,7 @@ export interface AssistantLiveController {
   model: string | null;
   state: AssistantLiveSnapshot["state"];
   captions: readonly AssistantLiveCaption[];
+  voiceApprovalReceipts: readonly AssistantLiveVoiceApprovalReceipt[];
   latestVoiceApprovalReceiptId(): number;
   error: string | null;
   reconnectRequired: boolean;
@@ -367,7 +368,6 @@ export function reconcileAssistantLiveCaption(
   current: readonly AssistantLiveCaption[],
   event: Extract<AssistantLiveRendererEvent, { type: "caption" }>,
   nextId: () => number,
-  voiceApprovalReceipt?: AssistantLiveCaption["voiceApprovalReceipt"],
 ): AssistantLiveCaption[] {
   const last = current[current.length - 1];
   if (last && !last.sealed && last.direction === event.direction) {
@@ -376,7 +376,6 @@ export function reconcileAssistantLiveCaption(
       ...last,
       final: event.final,
       text: last.final ? joinAssistantLiveCaptionFragments(last.text, event.text) : event.text,
-      ...(voiceApprovalReceipt ? { voiceApprovalReceipt } : {}),
     };
     return boundAssistantLiveTranscript(updated);
   }
@@ -389,7 +388,6 @@ export function reconcileAssistantLiveCaption(
       final: event.final,
       sealed: false,
       text: event.text,
-      ...(voiceApprovalReceipt ? { voiceApprovalReceipt } : {}),
     },
   ]);
 }
@@ -434,6 +432,9 @@ export function useAssistantLiveWithDependencies(
     React.useState<AssistantLiveMicrophonePermission>("checking");
   const [busy, setBusy] = React.useState(false);
   const [captions, setCaptions] = React.useState<AssistantLiveCaption[]>([]);
+  const [voiceApprovalReceipts, setVoiceApprovalReceipts] = React.useState<
+    AssistantLiveVoiceApprovalReceipt[]
+  >([]);
   const [error, setError] = React.useState<string | null>(null);
   const [reconnectRequired, setReconnectRequired] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<ComputerUseStatus | null>(null);
@@ -480,6 +481,7 @@ export function useAssistantLiveWithDependencies(
         if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
           setCaptions([]);
+          setVoiceApprovalReceipts([]);
           setComputerUseActing(false);
           if (event.snapshot.state !== "closed") {
             setReconnectRequired(true);
@@ -499,17 +501,12 @@ export function useAssistantLiveWithDependencies(
         // Assign the approval receipt synchronously at IPC delivery time. React may defer
         // the caption render, but an immediately following approval notification must
         // still fence every utterance that arrived before the prompt.
-        const voiceApprovalReceipt =
-          event.direction === "input" && event.final
-            ? { id: ++voiceApprovalReceiptId.current, text: event.text }
-            : undefined;
+        if (event.direction === "input" && event.final) {
+          const receipt = { id: ++voiceApprovalReceiptId.current, text: event.text };
+          setVoiceApprovalReceipts((current) => [...current, receipt].slice(-256));
+        }
         setCaptions((current) =>
-          reconcileAssistantLiveCaption(
-            current,
-            event,
-            () => ++captionId.current,
-            voiceApprovalReceipt,
-          ),
+          reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
         );
       } else if (event.type === "turn") {
         setCaptions(sealAssistantLiveCaption);
@@ -520,6 +517,7 @@ export function useAssistantLiveWithDependencies(
       } else if (event.type === "reconnect_required") {
         sessionRef.current = null;
         setCaptions([]);
+        setVoiceApprovalReceipts([]);
         setReconnectRequired(true);
         setError((current) => current ?? "Live disconnected. Nothing restarted automatically.");
         setSnapshot((current) => ({
@@ -742,7 +740,10 @@ export function useAssistantLiveWithDependencies(
             ) {
               sessionRef.current = activeSnapshot(next) ? (next.sessionId ?? null) : null;
               setSnapshot(next);
-              if (!activeSnapshot(next)) setCaptions([]);
+              if (!activeSnapshot(next)) {
+                setCaptions([]);
+                setVoiceApprovalReceipts([]);
+              }
               setError(
                 "Microphone capture stopped because audio could not be sent. Start Live again.",
               );
@@ -842,6 +843,7 @@ export function useAssistantLiveWithDependencies(
     setError(null);
     setReconnectRequired(false);
     setCaptions([]);
+    setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
     try {
       const computerUseAuthorization = computerUseEnabled
@@ -928,7 +930,10 @@ export function useAssistantLiveWithDependencies(
       if (mounted.current && operationGeneration.current === generation) {
         sessionRef.current = activeSnapshot(next) ? (next.sessionId ?? null) : null;
         setSnapshot(next);
-        if (!activeSnapshot(next)) setCaptions([]);
+        if (!activeSnapshot(next)) {
+          setCaptions([]);
+          setVoiceApprovalReceipts([]);
+        }
         setError(null);
       }
     } catch {
@@ -937,7 +942,10 @@ export function useAssistantLiveWithDependencies(
         if (mounted.current && operationGeneration.current === generation) {
           sessionRef.current = activeSnapshot(reconciled) ? (reconciled.sessionId ?? null) : null;
           setSnapshot(reconciled);
-          if (!activeSnapshot(reconciled)) setCaptions([]);
+          if (!activeSnapshot(reconciled)) {
+            setCaptions([]);
+            setVoiceApprovalReceipts([]);
+          }
           setError(
             activeSnapshot(reconciled)
               ? "Aiden stopped this microphone, but the provider session may still be open. Choose Stop again."
@@ -1007,6 +1015,7 @@ export function useAssistantLiveWithDependencies(
     model: snapshot.model ?? null,
     state: snapshot.state,
     captions,
+    voiceApprovalReceipts,
     latestVoiceApprovalReceiptId,
     error,
     reconnectRequired,

@@ -37,7 +37,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const navigate = useNavigate();
   const live = useAssistantLive(null);
   const chat = useAssistantLiveApprovals(
-    live.captions,
+    live.voiceApprovalReceipts,
     live.latestVoiceApprovalReceiptId,
   );
   const openSettings = React.useCallback(
@@ -108,6 +108,7 @@ export function AssistantDockPresentation({
     onOpenSettings(live.available ? "computerUse" : "providers");
   }, [live, onOpenSettings, setupCompleted]);
   useCommand("assistant.open", openPanel);
+  if (!live.visible) return <></>;
 
   return (
     <div
