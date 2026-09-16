@@ -1,5 +1,8 @@
 import { ipcMain } from "../platform.js";
-import { geminiLiveService } from "../services/gemini-live/service-main.js";
+import {
+  authorizeAidenLiveComputerUse,
+  geminiLiveService,
+} from "../services/gemini-live/service-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   parseAssistantLiveStartIntent,
@@ -23,6 +26,10 @@ export function registerAssistantLiveHandlers(): void {
   ipcMain.handle("assistant-live:status", (event) =>
     invokeAssistantLiveStatus(geminiLiveService, owner(event)),
   );
+  ipcMain.handle("assistant-live:authorize-computer-use", (event, input: unknown) => {
+    parseAssistantLiveStopIntent(input);
+    return authorizeAidenLiveComputerUse(owner(event));
+  });
   ipcMain.handle("assistant-live:start", (event, input: unknown) => {
     const requestOwner = owner(event);
     const intent = parseAssistantLiveStartIntent(input);

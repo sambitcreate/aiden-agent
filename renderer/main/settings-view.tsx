@@ -34,7 +34,7 @@ import { ComputerUseSettings } from "../components/settings/computer-use-setting
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
-import { GeminiLiveSettings } from "../components/settings/gemini-live-settings";
+import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import { SettingsPage } from "../components/settings/settings-page";
@@ -88,7 +88,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   computerUse: ComputerUseSettings,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
-  geminiLive: GeminiLiveSettings,
+  geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,

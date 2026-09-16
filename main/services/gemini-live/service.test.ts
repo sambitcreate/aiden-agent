@@ -63,7 +63,95 @@ function serviceHarness(credential: Credential | null = { type: "api_key", key: 
   return { connectorKeys, servers, service };
 }
 
-const intent = { microphone: false, screen: false } as const;
+const intent = { microphone: false, computerUseAuthorization: null } as const;
+
+test("every stopped and restarted Live session gets a fresh dedicated thread", async () => {
+  const server = new FakeGeminiLiveServer();
+  const began: string[] = [];
+  const finished: Array<{ id: string; outcome: string }> = [];
+  let sequence = 0;
+  const service = new GeminiLiveService({
+    credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
+    resolveModel: () => "gemini-3.8-live",
+    createSessionId: () => `aiden-live-${++sequence}`,
+    createConnector: () => server.connector,
+    threads: {
+      begin: async ({ id }) => {
+        began.push(id);
+      },
+      finish: async (id, outcome) => {
+        finished.push({ id, outcome });
+      },
+    },
+  });
+  const owner = new FakeOwner(2, "2:1:aiden-live-threads");
+
+  await service.start(owner, intent);
+  await service.stop(owner);
+  await service.start(owner, intent);
+  await service.stop(owner);
+
+  assert.deepEqual(began, ["aiden-live-1", "aiden-live-2"]);
+  assert.deepEqual(finished, [
+    { id: "aiden-live-1", outcome: "stopped" },
+    { id: "aiden-live-2", outcome: "stopped" },
+  ]);
+});
+
+test("shutdown retries a failed thread finalization after the session has stopped", async () => {
+  const server = new FakeGeminiLiveServer();
+  let finishAttempts = 0;
+  const service = new GeminiLiveService({
+    credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
+    resolveModel: () => "gemini-3.8-live",
+    createSessionId: () => "retry-thread",
+    createConnector: () => server.connector,
+    threads: {
+      begin: async () => undefined,
+      finish: async () => {
+        finishAttempts += 1;
+        if (finishAttempts === 1) throw new Error("temporary disk failure");
+      },
+    },
+  });
+  const owner = new FakeOwner(22, "22:1:retry-thread");
+  await service.start(owner, intent);
+  await service.stop(owner);
+  assert.equal(finishAttempts, 1);
+  await service.shutdown();
+  assert.equal(finishAttempts, 2);
+});
+
+test("shutdown waits for an in-flight thread begin and finalizes its record", async () => {
+  const beginStarted = deferred<void>();
+  const releaseBegin = deferred<void>();
+  let began = false;
+  const finished: string[] = [];
+  const service = new GeminiLiveService({
+    credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
+    resolveModel: () => "gemini-3.8-live",
+    createSessionId: () => "shutdown-during-begin",
+    createConnector: () => new FakeGeminiLiveServer().connector,
+    threads: {
+      begin: async () => {
+        beginStarted.resolve();
+        await releaseBegin.promise;
+        began = true;
+      },
+      finish: async (id) => {
+        assert.equal(began, true);
+        finished.push(id);
+      },
+    },
+  });
+  const start = service.start(new FakeOwner(23, "23:1:shutdown-begin"), intent);
+  await beginStarted.promise;
+  const shutdown = service.shutdown();
+  releaseBegin.resolve();
+  await assert.rejects(start, /Live session could not start/u);
+  await shutdown;
+  assert.deepEqual(finished, ["shutdown-during-begin"]);
+});
 
 test("explicit acceptance recorder corroborates ready, provider audio, and Stop teardown", async () => {
   const server = new FakeGeminiLiveServer();
@@ -152,12 +240,12 @@ test("fake transport projects bounded playback while secrets and tool arguments 
   const serialized = JSON.stringify(owner.events);
   assert.doesNotMatch(serialized, /KEY_SENTINEL|RAW_TOOL_SENTINEL|AQIDBA==/u);
   assert.doesNotMatch(serialized, /"args"|"apiKey"|"credential"/u);
-  subject.service.shutdown();
+  await subject.service.shutdown();
 });
 
 test("only a prepared gated session declares and executes Aiden custom computer_use", async () => {
   const server = new FakeGeminiLiveServer();
-  const preparedChatIds: Array<string | null> = [];
+  const preparedRequests: boolean[] = [];
   const executed: string[] = [];
   const closed: string[] = [];
   const controller: GeminiLiveComputerUseController = {
@@ -178,9 +266,9 @@ test("only a prepared gated session declares and executes Aiden custom computer_
     credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
     resolveModel: () => "gemini-3.1-flash-live-preview",
     createConnector: () => server.connector,
-    prepareComputerUse: async ({ chatId, sessionId }) => {
-      preparedChatIds.push(chatId);
-      if (!chatId) return null;
+    prepareComputerUse: async ({ authorization, sessionId }) => {
+      preparedRequests.push(Boolean(authorization));
+      if (!authorization) return null;
       let sendResult:
         | ((value: { id: string; name: string; response: Record<string, unknown> }) => void)
         | null = null;
@@ -208,11 +296,11 @@ test("only a prepared gated session declares and executes Aiden custom computer_
     },
   });
   const owner = new FakeOwner(40, "40:1:live-tools");
-  await service.start(owner, { chatId: null, microphone: false, screen: false });
+  await service.start(owner, { microphone: false, computerUseAuthorization: null });
   assert.equal(server.latest.params.config?.tools, undefined);
   service.stop(owner);
 
-  await service.start(owner, { chatId: "assistant-chat", microphone: false, screen: false });
+  await service.start(owner, { microphone: false, computerUseAuthorization: "authorization" });
   const tool = server.latest.params.config?.tools?.[0] as
     | { functionDeclarations?: Array<{ name?: string; parametersJsonSchema?: unknown }> }
     | undefined;
@@ -236,9 +324,7 @@ test("only a prepared gated session declares and executes Aiden custom computer_
     ),
     true,
   );
-  service.revokeComputerUse("other-chat");
-  assert.deepEqual(closed, []);
-  service.revokeComputerUse("assistant-chat");
+  service.revokeComputerUse();
   assert.deepEqual(closed, ["controller"]);
   assert.equal(server.latest.closed, true, "gate withdrawal terminates the whole Live session");
   assert.equal(service.sessions.values().length, 0);
@@ -248,7 +334,7 @@ test("only a prepared gated session declares and executes Aiden custom computer_
     "the renderer receives a terminal state for manual restart",
   );
   service.stop(owner);
-  assert.deepEqual(preparedChatIds, [null, "assistant-chat"]);
+  assert.deepEqual(preparedRequests, [false, true]);
   assert.deepEqual(closed, ["controller"]);
 });
 
@@ -269,8 +355,8 @@ test("a Computer Use result produced during transport rotation fails the session
     credentials: { read: async () => ({ type: "api_key", key: "KEY_SENTINEL" }) },
     resolveModel: () => "gemini-3.1-flash-live-preview",
     createConnector: () => server.connector,
-    prepareComputerUse: async ({ chatId, sessionId }) => {
-      if (!chatId) return null;
+    prepareComputerUse: async ({ authorization, sessionId }) => {
+      if (!authorization) return null;
       let sendResult:
         | ((value: { id: string; name: string; response: Record<string, unknown> }) => void)
         | null = null;
@@ -299,9 +385,8 @@ test("a Computer Use result produced during transport rotation fails the session
   });
   const owner = new FakeOwner(42, "42:1:tool-rotation");
   await service.start(owner, {
-    chatId: "assistant-chat",
     microphone: false,
-    screen: false,
+    computerUseAuthorization: "authorization",
   });
   server.latest.emit({
     toolCall: {
@@ -375,8 +460,8 @@ test("gate revocation aborts issued approval and queued calls before controller 
         },
       };
     },
-    prepareComputerUse: async ({ chatId, sessionId }) => {
-      if (!chatId) return null;
+    prepareComputerUse: async ({ authorization, sessionId }) => {
+      if (!authorization) return null;
       let sendResult:
         | ((value: { id: string; name: string; response: Record<string, unknown> }) => void)
         | null = null;
@@ -424,9 +509,8 @@ test("gate revocation aborts issued approval and queued calls before controller 
   }
   const owner = new OrderingOwner(41, "41:1:live-revocation");
   await service.start(owner, {
-    chatId: "assistant-chat",
     microphone: true,
-    screen: false,
+    computerUseAuthorization: "authorization",
   });
   server.latest.emit({
     toolCall: {
@@ -443,7 +527,7 @@ test("gate revocation aborts issued approval and queued calls before controller 
     "one approval is active while another issued call is queued",
   );
 
-  service.revokeComputerUse("assistant-chat");
+  service.revokeComputerUse();
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(executed, [], "neither the pending mutation nor queued call may execute");
@@ -503,7 +587,7 @@ test("session replacement closes the old transport before the replacement owns t
     service.sessions.values().map((session) => session.sessionId),
     ["session-2"],
   );
-  service.shutdown();
+  await service.shutdown();
 });
 
 test("pending start replacement suppresses stale events and cannot reclaim exact-document ownership", async () => {
@@ -572,7 +656,7 @@ test("pending start replacement suppresses stale events and cannot reclaim exact
     service.sessions.values().map((session) => session.sessionId),
     ["session-2"],
   );
-  service.shutdown();
+  await service.shutdown();
 });
 
 test("navigation and owner loss close the exact document session", async () => {
@@ -600,7 +684,7 @@ test("sessions are document-scoped and cannot be stopped by a different document
   subject.service.stop(first);
   assert.equal(subject.servers[0]!.latest.closed, true);
   assert.equal(subject.servers[1]!.latest.closed, false);
-  subject.service.shutdown();
+  await subject.service.shutdown();
 });
 
 test("clean shutdown closes every transport and rejects new starts", async () => {
@@ -608,7 +692,7 @@ test("clean shutdown closes every transport and rejects new starts", async () =>
   await subject.service.start(new FakeOwner(1, "1:1:a"), intent);
   await subject.service.start(new FakeOwner(2, "2:2:b"), intent);
 
-  subject.service.shutdown();
+  await subject.service.shutdown();
 
   assert.equal(subject.service.sessions.values().length, 0);
   assert.ok(subject.servers.every((server) => server.latest.closed));
@@ -760,7 +844,10 @@ test("the model gate is explicit-experimental and media has no persistence or lo
 test("microphone PCM is admitted only for the current consenting exact-document session", async () => {
   const subject = serviceHarness();
   const owner = new FakeOwner(31, "31:1:doc");
-  const session = await subject.service.start(owner, { microphone: true, screen: false });
+  const session = await subject.service.start(owner, {
+    microphone: true,
+    computerUseAuthorization: null,
+  });
   const pcm = new Uint8Array(640);
   assert.equal(subject.service.sendAudio(owner, session.sessionId!, pcm), true);
   const received = subject.servers[0]!.latest.received;
@@ -797,21 +884,21 @@ test("microphone PCM is admitted only for the current consenting exact-document 
     subject.service.sendAudio(new FakeOwner(31, "31:2:other"), session.sessionId!, pcm),
     false,
   );
-  subject.service.shutdown();
+  await subject.service.shutdown();
 
   const noMic = serviceHarness();
   const noMicOwner = new FakeOwner(32, "32:1:doc");
   const noMicSession = await noMic.service.start(noMicOwner, intent);
   assert.equal(noMic.service.sendAudio(noMicOwner, noMicSession.sessionId!, pcm), false);
-  noMic.service.shutdown();
+  await noMic.service.shutdown();
 });
 
-test("screen capture remains fail-closed until native picker operator acceptance", async () => {
+test("Computer Use is absent unless the Live start explicitly requests it", async () => {
   const subject = serviceHarness();
-  await assert.rejects(
-    subject.service.start(new FakeOwner(33, "33:1:doc"), { microphone: true, screen: true }),
-    (error: unknown) =>
-      error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
-  );
-  assert.equal(subject.servers.length, 0);
+  await subject.service.start(new FakeOwner(33, "33:1:doc"), {
+    microphone: true,
+    computerUseAuthorization: null,
+  });
+  assert.equal(subject.servers[0]?.latest.params.config?.tools, undefined);
+  await subject.service.stop(new FakeOwner(33, "33:1:doc"));
 });

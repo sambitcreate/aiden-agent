@@ -355,7 +355,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Web Search",
     "Reusable Skills",
     "MCP Connectors",
-    "Gemini Live",
+    "Aiden Live",
     "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",

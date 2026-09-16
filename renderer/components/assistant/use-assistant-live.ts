@@ -1,8 +1,8 @@
 import * as React from "react";
-import { assistantLiveApi, chatsApi, computerUseApi } from "../../lib/ipc";
+import { assistantLiveApi, computerUseApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { useProviders } from "../../lib/queries";
-import type { Chat, ComputerUseStatus } from "../../lib/types";
+import type { ComputerUseStatus } from "../../lib/types";
 import {
   GEMINI_LIVE_PCM_WORKLET_NAME,
   GeminiLivePcmPlaybackQueue,
@@ -42,8 +42,8 @@ export interface AssistantLiveController {
   reconnectRequired: boolean;
   startBlockedReason: string | null;
   computerUseEnabled: boolean;
+  computerUseActing: boolean;
   computerUseReady: boolean;
-  computerUseConversationAvailable: boolean;
   computerUseBusy: boolean;
   computerUseDetail: string;
   computerUsePermissions: ComputerUseStatus["permissions"] | null;
@@ -256,10 +256,10 @@ export class PcmPlayer {
 
 interface AssistantLiveApi {
   status(): Promise<AssistantLiveSnapshot>;
+  authorizeComputerUse?(): Promise<string | null>;
   start(intent: {
-    chatId: string | null;
     microphone: boolean;
-    screen: boolean;
+    computerUseAuthorization: string | null;
   }): Promise<AssistantLiveSnapshot>;
   stop(): Promise<AssistantLiveSnapshot>;
   sendAudio(sessionId: string, pcm: Uint8Array): Promise<boolean>;
@@ -285,11 +285,6 @@ export interface AssistantLiveDependencies {
     setEnabled?(enabled: boolean): Promise<ComputerUseStatus>;
     requestPermissions?(): Promise<ComputerUseStatus>;
   };
-  chats: {
-    get(id: string): Promise<Chat | null>;
-    setComputerUse(id: string, enabled: boolean): Promise<Chat>;
-  };
-  activeChatId?: string | null;
   ordinaryBusyReason?: string | null;
 }
 
@@ -313,7 +308,6 @@ function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
     loadWorklet: (context) => loadGeminiLivePcmWorklet(context, window.location.href),
     createPlayer: () => new PcmPlayer(),
     computerUse: computerUseApi,
-    chats: chatsApi,
   };
 }
 
@@ -430,6 +424,7 @@ export function useAssistantLiveWithDependencies(
   const [reconnectRequired, setReconnectRequired] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<ComputerUseStatus | null>(null);
   const [computerUseEnabled, setComputerUseEnabled] = React.useState(false);
+  const [computerUseActing, setComputerUseActing] = React.useState(false);
   const [computerUseBusy, setComputerUseBusy] = React.useState(false);
   const [computerUseError, setComputerUseError] = React.useState<string | null>(null);
 
@@ -471,6 +466,7 @@ export function useAssistantLiveWithDependencies(
         if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
           setCaptions([]);
+          setComputerUseActing(false);
           if (event.snapshot.state !== "closed") {
             setReconnectRequired(true);
             setError((current) => current ?? "Live disconnected. Nothing restarted automatically.");
@@ -491,6 +487,8 @@ export function useAssistantLiveWithDependencies(
         );
       } else if (event.type === "turn") {
         setCaptions(sealAssistantLiveCaption);
+      } else if (event.type === "computer_use_state") {
+        setComputerUseActing(event.active);
       } else if (event.type === "error") {
         setError(assistantLiveRuntimeErrorDetail(event.code));
       } else if (event.type === "reconnect_required") {
@@ -581,15 +579,11 @@ export function useAssistantLiveWithDependencies(
       setComputerUseStatus(null);
       return;
     }
-    const chatId = dependencies.activeChatId ?? null;
-    void Promise.all([
-      dependencies.computerUse.status(),
-      chatId ? dependencies.chats.get(chatId) : Promise.resolve<Chat | null>(null),
-    ])
-      .then(([status, chat]) => {
+    void dependencies.computerUse.status()
+      .then((status) => {
         if (!mounted.current || computerUseGeneration.current !== generation) return;
         setComputerUseStatus(status);
-        setComputerUseEnabled(chat?.computerUseEnabled === true);
+        setComputerUseEnabled(status.ready);
       })
       .catch(() => {
         if (!mounted.current || computerUseGeneration.current !== generation) return;
@@ -601,49 +595,17 @@ export function useAssistantLiveWithDependencies(
       computerUseGeneration.current += 1;
     };
   }, [
-    dependencies.activeChatId,
-    dependencies.chats,
     dependencies.computerUse,
     dependencies.geminiLive,
   ]);
 
   const setComputerUse = React.useCallback(
     async (enabled: boolean) => {
-      const chatId = dependencies.activeChatId ?? null;
-      if (!chatId || computerUseBusy || (enabled && computerUseStatus?.ready !== true)) return;
-      setComputerUseBusy(true);
+      if (computerUseBusy || (enabled && computerUseStatus?.ready !== true)) return;
       setComputerUseError(null);
-      // Disable is an authority-removal intent. Reflect it immediately while
-      // main synchronously closes this chat's exact Live session before its
-      // durable setting write. A failed write is reconciled below.
-      if (!enabled) setComputerUseEnabled(false);
-      try {
-        const chat = await dependencies.chats.setComputerUse(chatId, enabled);
-        if (!mounted.current || dependencies.activeChatId !== chatId) return;
-        setComputerUseEnabled(chat.computerUseEnabled === true);
-      } catch (cause) {
-        if (!mounted.current) return;
-        if (!enabled && dependencies.activeChatId === chatId) {
-          try {
-            const reconciled = await dependencies.chats.get(chatId);
-            if (mounted.current && dependencies.activeChatId === chatId) {
-              setComputerUseEnabled(reconciled?.computerUseEnabled === true);
-            }
-          } catch {
-            // Unknown durable truth stays fail-closed in this mounted view.
-            setComputerUseEnabled(false);
-          }
-        }
-        setComputerUseError(
-          cause instanceof Error
-            ? cause.message
-            : "Aiden could not change Computer Use for this conversation.",
-        );
-      } finally {
-        if (mounted.current) setComputerUseBusy(false);
-      }
+      setComputerUseEnabled(enabled);
     },
-    [computerUseBusy, computerUseStatus?.ready, dependencies.activeChatId, dependencies.chats],
+    [computerUseBusy, computerUseStatus?.ready],
   );
 
   const requestMicrophonePermission = React.useCallback(async () => {
@@ -660,7 +622,6 @@ export function useAssistantLiveWithDependencies(
 
   const prepareComputerUse = React.useCallback(async () => {
     if (computerUseBusy) return;
-    const chatId = dependencies.activeChatId ?? null;
     setComputerUseBusy(true);
     setComputerUseError(null);
     try {
@@ -680,16 +641,7 @@ export function useAssistantLiveWithDependencies(
         if (mounted.current) setComputerUseError(status.detail);
         return;
       }
-      if (!chatId) {
-        if (mounted.current) {
-          setComputerUseError("Start an Aiden conversation before enabling Live actions.");
-        }
-        return;
-      }
-      const chat = await dependencies.chats.setComputerUse(chatId, true);
-      if (mounted.current && dependencies.activeChatId === chatId) {
-        setComputerUseEnabled(chat.computerUseEnabled === true);
-      }
+      if (mounted.current) setComputerUseEnabled(true);
     } catch (cause) {
       if (mounted.current) {
         setComputerUseError(
@@ -702,8 +654,6 @@ export function useAssistantLiveWithDependencies(
   }, [
     computerUseBusy,
     computerUseStatus,
-    dependencies.activeChatId,
-    dependencies.chats,
     dependencies.computerUse,
   ]);
 
@@ -866,11 +816,21 @@ export function useAssistantLiveWithDependencies(
     setError(null);
     setReconnectRequired(false);
     setCaptions([]);
+    setComputerUseActing(false);
     try {
+      const computerUseAuthorization = computerUseEnabled
+        ? (await dependencies.api.authorizeComputerUse?.()) ?? null
+        : null;
+      if (
+        computerUseEnabled &&
+        dependencies.api.authorizeComputerUse &&
+        !computerUseAuthorization
+      ) {
+        throw new Error("Computer Use readiness changed. Open setup and check permissions again.");
+      }
       const next = await dependencies.api.start({
-        chatId: dependencies.activeChatId ?? null,
         microphone: true,
-        screen: false,
+        computerUseAuthorization,
       });
       if (
         !mounted.current ||
@@ -1023,8 +983,8 @@ export function useAssistantLiveWithDependencies(
           ? microphonePermissionDetail
           : null),
     computerUseEnabled,
-    computerUseReady: computerUseStatus?.ready === true && Boolean(dependencies.activeChatId),
-    computerUseConversationAvailable: Boolean(dependencies.activeChatId),
+    computerUseActing,
+    computerUseReady: computerUseStatus?.ready === true,
     computerUseBusy,
     computerUseDetail: computerUseStatus?.detail ?? "Checking global Computer Use readiness…",
     computerUsePermissions: computerUseStatus?.permissions ?? null,
@@ -1042,7 +1002,6 @@ export function useAssistantLiveWithDependencies(
 }
 
 export function useAssistantLive(
-  activeChatId: string | null = null,
   ordinaryBusyReason: string | null = null,
 ): AssistantLiveController {
   const { geminiLive } = useAppCapabilities();
@@ -1052,10 +1011,9 @@ export function useAssistantLive(
       ...defaultDependencies(geminiLive),
       availabilityRefreshReady: providers.fetchStatus === "idle",
       availabilityRefreshToken: providers.dataUpdatedAt,
-      activeChatId,
       ordinaryBusyReason,
     }),
-    [activeChatId, geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
+    [geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
   );
   return useAssistantLiveWithDependencies(dependencies);
 }

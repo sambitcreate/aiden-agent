@@ -96,8 +96,13 @@ export interface GeminiLiveServiceOptions {
   resolveModel(): string | null | Promise<string | null>;
   createSessionId?: () => string;
   acceptanceEvidence?: GeminiLiveAcceptanceEvidenceRecorder | null;
+  threads?: {
+    begin(input: { id: string; model: string; computerUseEnabled: boolean }): Promise<void>;
+    finish(id: string, outcome: "stopped" | "failed" | "disconnected"): Promise<void>;
+  };
   prepareComputerUse?(input: {
-    chatId: string | null;
+    authorization: string | null;
+    threadId: string;
     owner: RendererDocumentOwner;
     sessionId: string;
     signal: AbortSignal;
@@ -136,7 +141,10 @@ interface OwnedLiveSession {
         ownerDocumentId: string,
       ) => boolean)
     | null;
-  computerUseChatId: string | null;
+  threadRecorded: boolean;
+  threadBegin: Promise<void> | null;
+  threadFinish: Promise<void> | null;
+  threadOutcome: "stopped" | "failed" | "disconnected" | null;
 }
 
 function documentKey(owner: RendererDocumentOwner): string {
@@ -244,6 +252,9 @@ export class GeminiLiveSessionStore {
 export class GeminiLiveService {
   readonly sessions = new GeminiLiveSessionStore();
   private shuttingDown = false;
+  private readonly pendingThreadFinalization = new Set<OwnedLiveSession>();
+  private activeStarts = 0;
+  private readonly startWaiters = new Set<() => void>();
 
   constructor(private readonly options: GeminiLiveServiceOptions) {}
 
@@ -280,10 +291,6 @@ export class GeminiLiveService {
     if (this.shuttingDown) throw new GeminiLiveStartError("live_start_failed");
     if (owner.isDestroyed())
       throw new GeminiLiveStartError("live_start_failed");
-    // Native picker acceptance is still open. Do not let a crafted renderer
-    // request turn the Phase-0 deterministic capture proof into production authority.
-    if (_intent.screen) throw new GeminiLiveStartError("live_start_failed");
-
     const session: OwnedLiveSession = {
       abort: new AbortController(),
       documentKey: documentKey(owner),
@@ -296,14 +303,18 @@ export class GeminiLiveService {
       resumptionAudio: [],
       computerUse: null,
       approveComputerUse: null,
-      computerUseChatId: null,
+      threadRecorded: false,
+      threadBegin: null,
+      threadFinish: null,
+      threadOutcome: null,
     };
     const previous = this.sessions.get(owner);
-    if (previous) this.closeSession(previous);
+    if (previous) this.closeSession(previous, false, "stopped");
     this.sessions.install(session);
     session.disposeOwner = owner.onInvalidated(() =>
-      this.closeSession(session),
+      this.closeSession(session, false, "disconnected"),
     );
+    this.activeStarts += 1;
 
     try {
       const credential = await this.readGoogleCredential();
@@ -322,7 +333,8 @@ export class GeminiLiveService {
 
       const computerUse = this.options.prepareComputerUse
         ? await this.options.prepareComputerUse({
-            chatId: _intent.chatId ?? null,
+            authorization: _intent.computerUseAuthorization,
+            threadId: session.sessionId,
             owner,
             sessionId: session.sessionId,
             signal: session.abort.signal,
@@ -334,7 +346,19 @@ export class GeminiLiveService {
       }
       session.computerUse = computerUse?.bridge ?? null;
       session.approveComputerUse = computerUse?.approve ?? null;
-      session.computerUseChatId = computerUse ? (_intent.chatId ?? null) : null;
+
+      session.threadRecorded = Boolean(this.options.threads);
+      if (session.threadRecorded) this.pendingThreadFinalization.add(session);
+      session.threadBegin =
+        this.options.threads?.begin({
+          id: session.sessionId,
+          model,
+          computerUseEnabled: Boolean(computerUse),
+        }) ?? null;
+      await session.threadBegin;
+      if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) {
+        throw new Error("The Assistant Live start was superseded.");
+      }
 
       const protocol = new GeminiLiveProtocol({
         connector: this.options.createConnector(eligibility.apiKey),
@@ -363,21 +387,29 @@ export class GeminiLiveService {
       }
       return this.snapshot(session, "available");
     } catch (error) {
-      this.closeSession(session);
+      this.closeSession(session, false, "failed");
+      await this.finishThread(session, "failed");
       const safeError = safeGeminiLiveStartError(error);
       process.stderr.write(
         `[gemini-live] stage=start result=${safeError.reason}\n`,
       );
       throw safeError;
+    } finally {
+      this.activeStarts -= 1;
+      if (this.activeStarts === 0) {
+        for (const resolve of this.startWaiters) resolve();
+        this.startWaiters.clear();
+      }
     }
   }
 
-  stop(owner: RendererDocumentOwner): AssistantLiveSnapshot {
+  async stop(owner: RendererDocumentOwner): Promise<AssistantLiveSnapshot> {
     const session = this.sessions.get(owner);
     if (session) {
       this.recordAcceptanceEvidence("stop_requested", session.sessionId);
-      this.closeSession(session);
+      this.closeSession(session, false, "stopped");
       this.recordAcceptanceEvidence("stopped", session.sessionId);
+      await this.finishThread(session, "stopped");
     }
     return this.idleSnapshot("live_model_unverified");
   }
@@ -394,16 +426,14 @@ export class GeminiLiveService {
     );
   }
 
-  revokeComputerUse(chatId?: string): void {
+  revokeComputerUse(): void {
     for (const session of this.sessions.values()) {
-      if (chatId !== undefined && session.computerUseChatId !== chatId)
-        continue;
-      // A withdrawn global or per-chat gate terminates the attended session,
+      // A withdrawn global gate terminates the attended session,
       // not just its tool adapter. Otherwise an issued provider call can stay
       // synchronously pending after its approval/controller authority vanished.
       // closeSession invalidates bridge queues and approvals before notifying
       // the renderer and before closing the provider transport.
-      this.closeSession(session, true);
+      this.closeSession(session, true, "stopped");
     }
   }
 
@@ -444,10 +474,18 @@ export class GeminiLiveService {
     }
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
-    for (const session of this.sessions.values()) this.closeSession(session);
+    for (const session of this.sessions.values()) this.closeSession(session, false, "stopped");
+    await this.waitForStarts();
+    const sessions = [...this.pendingThreadFinalization];
+    await Promise.all(sessions.map((session) => this.finishThread(session, "stopped")));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const retry = sessions.filter((session) => session.threadRecorded);
+      if (retry.length === 0) break;
+      await Promise.all(retry.map((session) => this.finishThread(session, "stopped")));
+    }
   }
 
   private handleProtocolEvent(
@@ -517,6 +555,8 @@ export class GeminiLiveService {
         event.state === "disconnected" ||
         event.state === "closed"
       ) {
+        const outcome = event.state === "disconnected" ? "disconnected" : event.state === "failed" ? "failed" : "stopped";
+        void this.finishThread(session, outcome);
         queueMicrotask(() => this.closeSession(session));
       }
       return;
@@ -541,13 +581,13 @@ export class GeminiLiveService {
   private closeSession(
     session: OwnedLiveSession,
     notifyRenderer = false,
+    outcome: "stopped" | "failed" | "disconnected" = "failed",
   ): void {
     if (!this.sessions.delete(session) && session.abort.signal.aborted) return;
     session.disposeOwner();
     session.computerUse?.close();
     session.computerUse = null;
     session.approveComputerUse = null;
-    session.computerUseChatId = null;
     session.state = "closed";
     session.resumptionAudio = [];
     if (notifyRenderer && !session.owner.isDestroyed()) {
@@ -564,6 +604,7 @@ export class GeminiLiveService {
     session.abort.abort();
     session.protocol?.stop("cancelled");
     session.protocol = null;
+    void this.finishThread(session, outcome);
   }
 
   private snapshot(
@@ -606,5 +647,34 @@ export class GeminiLiveService {
     sessionId: string,
   ): void {
     this.options.acceptanceEvidence?.record(event, sessionId);
+  }
+
+  private async finishThread(
+    session: OwnedLiveSession,
+    outcome: "stopped" | "failed" | "disconnected",
+  ): Promise<void> {
+    if (session.threadFinish) return session.threadFinish;
+    if (!session.threadRecorded || !this.options.threads) return;
+    session.threadOutcome ??= outcome;
+    session.threadFinish = (async () => {
+      try {
+        await session.threadBegin?.catch(() => undefined);
+        await this.options.threads?.finish(session.sessionId, session.threadOutcome ?? outcome);
+        session.threadRecorded = false;
+        this.pendingThreadFinalization.delete(session);
+      } catch (error) {
+        process.stderr.write(
+          `[aiden-live] stage=thread-finish result=failed type=${error instanceof Error ? error.name : "unknown"}\n`,
+        );
+      } finally {
+        session.threadFinish = null;
+      }
+    })();
+    await session.threadFinish;
+  }
+
+  private waitForStarts(): Promise<void> {
+    if (this.activeStarts === 0) return Promise.resolve();
+    return new Promise((resolve) => this.startWaiters.add(resolve));
   }
 }

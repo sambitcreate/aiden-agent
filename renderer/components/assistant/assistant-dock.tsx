@@ -1,4 +1,4 @@
-// Aiden's window-level Gemini Live control. Before setup it presents the app
+// Aiden's window-level Live control. Before setup it presents the app
 // mark; after setup it becomes a stateful blue Libraries.dev orb.
 
 import * as React from "react";
@@ -11,15 +11,23 @@ import {
   AssistantLiveSetupDialog,
   assistantLiveOrbState,
 } from "./assistant-live";
-import { useAssistantChat, type AssistantChat } from "./use-assistant-chat";
+import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
+import {
+  useAssistantLiveApprovals,
+  type AssistantLiveApprovals,
+} from "./use-assistant-live-approvals";
 
-const AIDEN_LOGO_URL = new URL("../../../resources/aiden-sidebar-logo.png", import.meta.url).href;
-const GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
+const AIDEN_LOGO_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
+const AIDEN_LIVE_SETUP_COMPLETE_KEY = "aiden.live.setup-complete";
+const LEGACY_GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
 
 function storedSetupComplete(): boolean {
   try {
-    return window.localStorage.getItem(GEMINI_LIVE_SETUP_COMPLETE_KEY) === "true";
+    return (
+      window.localStorage.getItem(AIDEN_LIVE_SETUP_COMPLETE_KEY) === "true" ||
+      window.localStorage.getItem(LEGACY_GEMINI_LIVE_SETUP_COMPLETE_KEY) === "true"
+    );
   } catch {
     return false;
   }
@@ -27,18 +35,8 @@ function storedSetupComplete(): boolean {
 
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
-  const chat = useAssistantChat();
-  const ordinaryApprovalPending = chat.approvals.some(
-    (approval) => approval.toolName !== "computer_use",
-  );
-  const live = useAssistantLive(
-    chat.activeChatId,
-    ordinaryApprovalPending
-      ? "Decide the pending automation approval before starting Live."
-      : chat.streaming
-        ? "Finish or stop the current Aiden response before starting Live."
-        : null,
-  );
+  const chat = useAssistantLiveApprovals();
+  const live = useAssistantLive(null);
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
@@ -63,7 +61,7 @@ export function AssistantDockPresentation({
   onOpenSettings = () => undefined,
   useCommand = useCommandHandler,
 }: {
-  chat: AssistantChat;
+  chat: AssistantLiveApprovals;
   live: AssistantLiveController;
   rightInset?: number;
   onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
@@ -72,7 +70,8 @@ export function AssistantDockPresentation({
   const [hudOpen, setHudOpen] = React.useState(false);
   const [setupCompleted, setSetupCompleted] = React.useState(storedSetupComplete);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const approvalPending = chat.approvals.some((approval) => approval.toolName === "computer_use");
+  const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
+  const approvalPending = Boolean(liveApproval);
   const orbState = assistantLiveOrbState(live, approvalPending);
 
   React.useEffect(() => {
@@ -84,7 +83,7 @@ export function AssistantDockPresentation({
     if (!live.active || !live.microphoneActive || setupCompleted) return;
     setSetupCompleted(true);
     try {
-      window.localStorage.setItem(GEMINI_LIVE_SETUP_COMPLETE_KEY, "true");
+      window.localStorage.setItem(AIDEN_LIVE_SETUP_COMPLETE_KEY, "true");
     } catch {
       // A private/locked storage context should not prevent the active session.
     }
@@ -112,7 +111,17 @@ export function AssistantDockPresentation({
       className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
       style={{ right: `calc(1rem + ${Math.max(0, rightInset)}px)` }}
     >
-      {live.active && hudOpen ? <AssistantLiveHud live={live} orbState={orbState} /> : null}
+      {live.active && hudOpen ? (
+        <AssistantLiveHud live={live} orbState={orbState}>
+          {liveApproval ? (
+            <AssistantComputerUseApproval
+              prompt={liveApproval}
+              deciding={chat.decidingApprovalId === liveApproval.approvalId}
+              onDecision={(decision) => void chat.decideApproval(liveApproval, decision)}
+            />
+          ) : null}
+        </AssistantLiveHud>
+      ) : null}
       <button
         ref={triggerRef}
         type="button"
@@ -121,10 +130,10 @@ export function AssistantDockPresentation({
         data-state={orbState}
         aria-label={
           !setupCompleted
-            ? "Set up Gemini Live"
+            ? "Set up Aiden Live"
             : live.active
-              ? `${hudOpen ? "Hide" : "Show"} Gemini Live controls`
-              : "Start Gemini Live"
+              ? `${hudOpen ? "Hide" : "Show"} Aiden Live controls`
+              : "Start Aiden Live"
         }
         aria-expanded={live.active ? hudOpen : live.setupOpen}
         onClick={openPanel}
@@ -132,7 +141,9 @@ export function AssistantDockPresentation({
         {setupCompleted ? (
           <AidenLiveOrb state={orbState} level={live.microphoneLevel} />
         ) : (
-          <img src={AIDEN_LOGO_URL} alt="" draggable={false} />
+          <span className="aiden-live-trigger-logo-mask squircle-control">
+            <img src={AIDEN_LOGO_URL} alt="" draggable={false} />
+          </span>
         )}
         {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
       </button>

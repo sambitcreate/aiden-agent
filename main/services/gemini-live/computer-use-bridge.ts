@@ -43,6 +43,7 @@ export interface GeminiLiveComputerUseBridgeOptions {
     summary: string;
     signal: AbortSignal;
   }): Promise<boolean>;
+  onActivity?(active: boolean): void;
   sendResult(result: {
     id: string;
     name: string;
@@ -160,6 +161,7 @@ export class GeminiLiveComputerUseBridge {
     if (this.closed) return;
     this.closed = true;
     this.invalidate("The Live session stopped.");
+    this.notifyActivity(false);
     // close() revokes the controller lifecycle synchronously before its first
     // await, which is the ordering guarantee required before socket close.
     void this.options.controller.close().catch(() => undefined);
@@ -187,9 +189,10 @@ export class GeminiLiveComputerUseBridge {
     if (!entry) return;
     this.active = entry;
     this.calls.set(entry.call.id, "running");
+    this.notifyActivity(true);
     try {
       if (!(await this.options.isAuthorized())) {
-        throw new Error("Computer Use is no longer enabled for this Assistant conversation.");
+        throw new Error("Computer Use is no longer enabled for this Aiden Live session.");
       }
       const coordinateMutation =
         computerUseNeedsApproval(entry.args) &&
@@ -234,7 +237,8 @@ export class GeminiLiveComputerUseBridge {
       }
     } finally {
       if (this.active === entry) this.active = null;
-      if (!this.closed) void this.drain();
+      if (!this.closed && this.queue.length > 0) void this.drain();
+      else this.notifyActivity(false);
     }
   }
 
@@ -247,6 +251,14 @@ export class GeminiLiveComputerUseBridge {
       // never escape this detached queue drain as an unhandled rejection.
       // Production also closes the owning Live session at that boundary.
       this.close();
+    }
+  }
+
+  private notifyActivity(active: boolean): void {
+    try {
+      this.options.onActivity?.(active);
+    } catch {
+      // Renderer ownership may disappear between the bridge check and delivery.
     }
   }
 }

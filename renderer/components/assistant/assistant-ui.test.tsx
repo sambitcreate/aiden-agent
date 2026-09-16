@@ -24,8 +24,8 @@ const idleLive: AssistantLiveController = {
   reconnectRequired: false,
   startBlockedReason: null,
   computerUseEnabled: true,
+  computerUseActing: false,
   computerUseReady: true,
-  computerUseConversationAvailable: true,
   computerUseBusy: false,
   computerUseDetail: "Ready",
   computerUsePermissions: { accessibility: true, screenRecording: true },
@@ -41,7 +41,7 @@ const idleLive: AssistantLiveController = {
   cancelSetup: async () => undefined,
 };
 
-test("Gemini Live orb state prioritizes errors, approvals, and connection work", () => {
+test("Aiden Live orb state prioritizes errors, approvals, and connection work", () => {
   assert.equal(assistantLiveOrbState(idleLive), "ready");
   assert.equal(
     assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
@@ -52,6 +52,10 @@ test("Gemini Live orb state prioritizes errors, approvals, and connection work",
     "connecting",
   );
   assert.equal(assistantLiveOrbState({ ...idleLive, active: true }, true), "approval");
+  assert.equal(
+    assistantLiveOrbState({ ...idleLive, active: true, computerUseActing: true }),
+    "acting",
+  );
   assert.equal(assistantLiveOrbState({ ...idleLive, error: "Disconnected" }), "error");
   assert.equal(
     assistantLiveOrbState({ ...idleLive, available: false, setupComplete: false }),
@@ -72,6 +76,19 @@ test("a final user caption moves the active orb to thinking", () => {
   );
 });
 
+test("an active output caption moves the orb to speaking", () => {
+  assert.equal(
+    assistantLiveOrbState({
+      ...idleLive,
+      active: true,
+      state: "open",
+      microphoneActive: true,
+      captions: [{ id: 1, direction: "output", text: "Opening Settings", final: false, sealed: false }],
+    }),
+    "speaking",
+  );
+});
+
 test("Live transcript follows only when the viewport remains near the latest turn", () => {
   assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 776, 200), true);
   assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 700, 200), false);
@@ -80,13 +97,16 @@ test("Live transcript follows only when the viewport remains near the latest tur
 test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
   assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
-  assert.match(dock, /GEMINI_LIVE_SETUP_COMPLETE_KEY/u);
+  assert.match(dock, /AIDEN_LIVE_SETUP_COMPLETE_KEY/u);
   assert.match(
     dock,
     /if \(!live\.active \|\| !live\.microphoneActive \|\| setupCompleted\) return/u,
   );
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.match(dock, /AidenLiveOrb/u);
+  assert.match(dock, /AssistantComputerUseApproval/u);
+  assert.match(dock, /chat\.decideApproval/u);
+  assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
 
@@ -96,9 +116,11 @@ test("setup discloses macOS access and per-action approval", () => {
   assert.match(live, /Screen and Accessibility/u);
   assert.match(live, /Scheduled tasks/u);
   assert.match(live, /still require Allow once/u);
+  assert.match(live, /role="log"/u);
+  assert.match(live, /aria-live="polite"/u);
 });
 
-test("Gemini Live is visibly marked beta in setup and settings", () => {
+test("Aiden Live is visibly marked beta in setup and settings", () => {
   const setup = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
   const settings = readFileSync(
     new URL("../settings/gemini-live-settings.tsx", import.meta.url),
@@ -106,10 +128,10 @@ test("Gemini Live is visibly marked beta in setup and settings", () => {
   );
   assert.match(setup, /<Badge color="blue">Beta<\/Badge>/u);
   assert.match(settings, /<Badge color="blue">Beta<\/Badge>/u);
-  assert.match(settings, /Availability and supported actions may change during beta\./u);
+  assert.match(settings, /Availability and\s+supported actions may change during beta\./u);
 });
 
-test("the Live orb maps all eight states onto the shared Libraries.dev orb", () => {
+test("the Live orb maps all user-visible states onto the shared Libraries.dev orb", () => {
   const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
   const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
   const packageJson = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
@@ -118,6 +140,7 @@ test("the Live orb maps all eight states onto the shared Libraries.dev orb", () 
     "connecting",
     "listening",
     "thinking",
+    "speaking",
     "acting",
     "approval",
     "error",

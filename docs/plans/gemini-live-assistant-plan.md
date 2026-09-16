@@ -1,6 +1,6 @@
-# Gemini Live Assistant Plan
+# Aiden Live Assistant Plan
 
-Status: Partial — Phases 0–4 plus the beta-labeled Gemini Live orb/setup shell are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
+Status: Partial — Phases 0–4 plus the beta-labeled Aiden Live orb/setup shell and dedicated metadata-only session threads are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
 Date: 2026-09-15
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`
@@ -8,7 +8,7 @@ Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 ## Outcome
 
 The bottom-right **Aiden orb** becomes the single entry point for a
-user-started Gemini Live session. Aiden streams microphone PCM and a
+user-started Aiden Live session. Aiden streams microphone PCM and a
 user-approved screen/window as bounded JPEG frames to Gemini Live, plays Gemini
 native audio, and shows its input/output captions. When Gemini needs to act, it
 invokes Aiden's existing `computer_use` tool; every input action keeps the
@@ -423,12 +423,12 @@ Status: Implemented (2026-09-15). The retired Assistant panel/composer and its
 orphan presentation code are removed. Before setup, the canonical Aiden logo
 opens a one-time guided model, microphone, Screen Recording, Accessibility,
 and Computer Use checklist. Both that first-time surface and the dedicated
-Settings destination label Gemini Live as **Beta** and explain that
+Settings destination label Aiden Live as **Beta** and explain that
 availability and supported actions may change. After the first successful Live
 start, it permanently hands off to a blue Libraries.dev `thinking-orbs`
-presence with ready, connecting, listening, thinking, acting,
+presence with ready, connecting, listening, thinking, speaking, acting,
 approval, error, and unavailable states. Active sessions use a compact
-caption/Stop HUD. A dedicated Gemini Live settings destination consolidates
+caption/Stop HUD. A dedicated Aiden Live settings destination consolidates
 the related provider, permissions, scheduled-task, and shortcut entry points.
 Listening uses the package's calm `breathing` animation; the remaining Live
 states map to its purpose-built connecting, solving, working, and shaping

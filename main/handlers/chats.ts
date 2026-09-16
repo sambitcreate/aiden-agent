@@ -8,7 +8,6 @@ import { chatApplicationService } from "../services/chat-application-service-mai
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
 import { computerUseStatus } from "../services/computer-use/status.js";
-import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -501,8 +500,9 @@ export function registerChatHistoryHandlers(): void {
           status: (signal) => computerUseStatus.status({ signal }),
           persist: (targetChatId, nextEnabled, isCurrent) =>
             chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
-          revokeLive: (targetChatId) =>
-            geminiLiveService.revokeComputerUse(targetChatId),
+          // Aiden Live owns separate per-session authority and is unaffected
+          // by an ordinary chat's Computer Use toggle.
+          revokeLive: () => undefined,
         }),
       );
     },

@@ -3,10 +3,10 @@
 Status: The enforceable Settings foundation, main-chat Markdown parity, and approval-gated
 global/project/MCP automation creation and editing are implemented; settings tools and
 proactivity remain planned. The Phase 1 user-facing dock/panel/composer was superseded and
-removed by [Gemini Live Assistant](gemini-live-assistant-plan.md) Phase 4.5 on 2026-09-15.
+removed by [Aiden Live Assistant](gemini-live-assistant-plan.md) Phase 4.5 on 2026-09-15.
 Historical dock tasks and code samples below describe the implementation that was replaced,
 not the current renderer surface. Any remaining settings-tool or proactive work needs a new
-Gemini Live/main-chat UX before implementation. The Settings foundation was reconciled with
+Aiden Live/main-chat UX before implementation. The Settings foundation was reconciled with
 the canonical command system on 2026-07-26; Markdown/automation access was added on 2026-07-30.
 The automation boundary was hardened on 2026-08-04 with fingerprint-bound provider and MCP
 connections, exact model pins, monotonic revisions, cancellation compensation, and mutually
@@ -32,11 +32,11 @@ it with approval-gated settings tools and opt-in proactive nudges about uncommit
 untouched projects, and configuration drift.
 
 **Current architecture:** `RootView` still mounts a component named `AssistantDock`, but it
-now owns Gemini Live's one-time setup logo, stateful orb, and compact Live controls rather
+now owns Aiden Live's one-time setup logo, stateful orb, and compact Live controls rather
 than an Assistant chat panel. The reserved assistant workspace and approval-gated automation
 services remain internal runtime infrastructure. Future unattended proactive runs can still
 reuse the _background owner_ pattern that Scheduled Tasks established, but their user-facing
-entry point must be redesigned for Gemini Live or the main chat first. The proactive engine
+entry point must be redesigned for Aiden Live or the main chat first. The proactive engine
 remains split into pure decision cores and thin Electron shells, following
 `schedule-service-core.ts` / `schedule-service.ts`.
 

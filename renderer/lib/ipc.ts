@@ -310,6 +310,8 @@ export const assistantApi = {
 
 export const assistantLiveApi = {
   status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
+  authorizeComputerUse: () =>
+    invoke<string | null>("assistant-live:authorize-computer-use", {}),
   start: (intent: AssistantLiveStartIntent) =>
     invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),

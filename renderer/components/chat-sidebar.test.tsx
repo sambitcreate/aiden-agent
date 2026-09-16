@@ -327,23 +327,12 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Gemini Live settings has a dedicated destination and the dock keeps the canonical logo", () => {
+test("Aiden Live settings has a dedicated destination and the dock restores the app logo", () => {
   const settings = source("../main/settings-view.tsx");
   const dock = source("./assistant/assistant-dock.tsx");
-  const rendererLogo = readFileSync(
-    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
-  );
-  const canonicalLogo = readFileSync(
-    new URL(
-      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
-      import.meta.url,
-    ),
-  );
-
   assert.match(settings, /geminiLive: <AudioWaveform/u);
-  assert.match(dock, /resources\/aiden-sidebar-logo\.png/u);
+  assert.match(dock, /resources\/app-icon\.png/u);
   assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
-  assert.deepEqual(rendererLogo, canonicalLogo);
 });
 
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {

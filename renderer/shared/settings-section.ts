@@ -85,7 +85,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
   {
     id: "geminiLive",
-    title: "Gemini Live",
+    title: "Aiden Live",
     group: "Agent",
     keywords: [
       "live",
