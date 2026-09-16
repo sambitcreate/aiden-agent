@@ -74,7 +74,7 @@ test("the hotkey waits for the central command listener and uses the dock comman
   const readySignal = commands.indexOf("appApi.rendererReady()");
   const readinessWait = main.indexOf("await rendererReadiness.wait()");
   const assistantCommand = main.indexOf('commandId: "assistant.open"');
-  assert.match(dock, /useCommand\("assistant\.open", openPanel\)/u);
+  assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.doesNotMatch(dock, /interactionBlocked/u);
   assert.ok(listener >= 0 && readySignal > listener);
   assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);
