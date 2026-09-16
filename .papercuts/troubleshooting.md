@@ -503,3 +503,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-16 — Aiden Live voice actions
 
 - The installed Google SDK exposes Live `interactionStatus` inside `serverContent`, while newer Extended Thinking examples describe status alongside tool-call lifecycle events; pin protocol handling to the installed typed wire contract and cover `IDLE` explicitly when adopting the new model.
+# Release coordination
+
+- Pullfrog took just over one hour to review PR #132 after first-party CI was green; keep exact-head checks separate so the long external review does not obscure test status.

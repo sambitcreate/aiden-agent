@@ -22,62 +22,50 @@ export function assistantLiveVoiceApprovalDecision(
   return null;
 }
 
-function latestFinalInputCaption(
+function latestVoiceApprovalReceipt(
   captions: readonly AssistantLiveCaption[],
-): AssistantLiveCaption | null {
+): NonNullable<AssistantLiveCaption["voiceApprovalReceipt"]> | null {
   for (let index = captions.length - 1; index >= 0; index -= 1) {
     const caption = captions[index];
-    if (caption?.direction === "input" && caption.final) return caption;
+    if (caption?.direction === "input" && caption.voiceApprovalReceipt) {
+      return caption.voiceApprovalReceipt;
+    }
   }
   return null;
 }
 
-function latestInputCaptionId(captions: readonly AssistantLiveCaption[]): number {
-  for (let index = captions.length - 1; index >= 0; index -= 1) {
-    const caption = captions[index];
-    if (caption?.direction === "input") return caption.id;
-  }
-  return 0;
-}
-
-export function assistantLiveVoiceApprovalForCaption(
-  caption: AssistantLiveCaption | null,
-  baselineCaptionId: number | undefined,
+export function assistantLiveVoiceApprovalForReceipt(
+  receipt: NonNullable<AssistantLiveCaption["voiceApprovalReceipt"]> | null,
+  baselineReceiptId: number | undefined,
   alreadyConsumed: boolean,
 ): "allow" | "deny" | null {
   if (
-    !caption ||
-    caption.direction !== "input" ||
-    !caption.final ||
-    baselineCaptionId === undefined ||
-    caption.id <= baselineCaptionId ||
+    !receipt ||
+    baselineReceiptId === undefined ||
+    receipt.id <= baselineReceiptId ||
     alreadyConsumed
   ) {
     return null;
   }
-  return assistantLiveVoiceApprovalDecision(caption.text);
+  return assistantLiveVoiceApprovalDecision(receipt.text);
 }
 
 /** Live-only approval state; deliberately does not mount or list the legacy Assistant workspace. */
 export function useAssistantLiveApprovals(
   captions: readonly AssistantLiveCaption[],
+  latestVoiceApprovalReceiptId: () => number,
 ): AssistantLiveApprovals {
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
-  const captionsRef = React.useRef(captions);
-  const captionBaselines = React.useRef(new Map<string, number>());
-  const consumedCaptionIds = React.useRef(new Set<number>());
-  captionsRef.current = captions;
+  const receiptBaselines = React.useRef(new Map<string, number>());
+  const consumedReceiptIds = React.useRef(new Set<number>());
 
   React.useEffect(() => {
     const removeApproval = onNotification<ApprovalPrompt & { streamId: string }>(
       "chat:approval",
       (prompt) => {
         if (!prompt.streamId.startsWith("live:") || prompt.toolName !== "computer_use") return;
-        captionBaselines.current.set(
-          prompt.approvalId,
-          latestInputCaptionId(captionsRef.current),
-        );
+        receiptBaselines.current.set(prompt.approvalId, latestVoiceApprovalReceiptId());
         setApprovals((current) =>
           current.some((candidate) => candidate.approvalId === prompt.approvalId)
             ? current
@@ -88,7 +76,7 @@ export function useAssistantLiveApprovals(
     const removeWithdrawal = onNotification<{ approvalId: string }>(
       "chat:approval-withdrawn",
       ({ approvalId }) => {
-        captionBaselines.current.delete(approvalId);
+        receiptBaselines.current.delete(approvalId);
         setApprovals((current) =>
           current.filter((candidate) => candidate.approvalId !== approvalId),
         );
@@ -99,7 +87,7 @@ export function useAssistantLiveApprovals(
       removeApproval();
       removeWithdrawal();
     };
-  }, []);
+  }, [latestVoiceApprovalReceiptId]);
 
   const decideApproval = React.useCallback(
     async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
@@ -107,7 +95,7 @@ export function useAssistantLiveApprovals(
       setDecidingApprovalId(prompt.approvalId);
       try {
         await chatsApi.approve(prompt.approvalId, decision);
-        captionBaselines.current.delete(prompt.approvalId);
+        receiptBaselines.current.delete(prompt.approvalId);
         setApprovals((current) =>
           current.filter((candidate) => candidate.approvalId !== prompt.approvalId),
         );
@@ -123,15 +111,15 @@ export function useAssistantLiveApprovals(
   React.useEffect(() => {
     const prompt = approvals[0];
     if (!prompt || decidingApprovalId) return;
-    const caption = latestFinalInputCaption(captions);
-    const baseline = captionBaselines.current.get(prompt.approvalId);
-    const decision = assistantLiveVoiceApprovalForCaption(
-      caption,
+    const receipt = latestVoiceApprovalReceipt(captions);
+    const baseline = receiptBaselines.current.get(prompt.approvalId);
+    const decision = assistantLiveVoiceApprovalForReceipt(
+      receipt,
       baseline,
-      caption ? consumedCaptionIds.current.has(caption.id) : false,
+      receipt ? consumedReceiptIds.current.has(receipt.id) : false,
     );
-    if (!decision || !caption) return;
-    consumedCaptionIds.current.add(caption.id);
+    if (!decision || !receipt) return;
+    consumedReceiptIds.current.add(receipt.id);
     void decideApproval(prompt, decision);
   }, [approvals, captions, decideApproval, decidingApprovalId]);
 

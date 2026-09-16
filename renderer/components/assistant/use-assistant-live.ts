@@ -20,6 +20,11 @@ export interface AssistantLiveCaption {
   final: boolean;
   sealed: boolean;
   text: string;
+  /** Exact finalized input event, kept separate from display-fragment coalescing. */
+  voiceApprovalReceipt?: {
+    id: number;
+    text: string;
+  };
 }
 
 export interface AssistantLiveController {
@@ -38,6 +43,7 @@ export interface AssistantLiveController {
   model: string | null;
   state: AssistantLiveSnapshot["state"];
   captions: readonly AssistantLiveCaption[];
+  latestVoiceApprovalReceiptId(): number;
   error: string | null;
   reconnectRequired: boolean;
   startBlockedReason: string | null;
@@ -361,6 +367,7 @@ export function reconcileAssistantLiveCaption(
   current: readonly AssistantLiveCaption[],
   event: Extract<AssistantLiveRendererEvent, { type: "caption" }>,
   nextId: () => number,
+  voiceApprovalReceipt?: AssistantLiveCaption["voiceApprovalReceipt"],
 ): AssistantLiveCaption[] {
   const last = current[current.length - 1];
   if (last && !last.sealed && last.direction === event.direction) {
@@ -369,6 +376,7 @@ export function reconcileAssistantLiveCaption(
       ...last,
       final: event.final,
       text: last.final ? joinAssistantLiveCaptionFragments(last.text, event.text) : event.text,
+      ...(voiceApprovalReceipt ? { voiceApprovalReceipt } : {}),
     };
     return boundAssistantLiveTranscript(updated);
   }
@@ -381,6 +389,7 @@ export function reconcileAssistantLiveCaption(
       final: event.final,
       sealed: false,
       text: event.text,
+      ...(voiceApprovalReceipt ? { voiceApprovalReceipt } : {}),
     },
   ]);
 }
@@ -406,6 +415,11 @@ export function useAssistantLiveWithDependencies(
   const playerRef = React.useRef<PcmPlayer | null>(null);
   if (!playerRef.current) playerRef.current = dependencies.createPlayer();
   const captionId = React.useRef(0);
+  const voiceApprovalReceiptId = React.useRef(0);
+  const latestVoiceApprovalReceiptId = React.useCallback(
+    () => voiceApprovalReceiptId.current,
+    [],
+  );
   const computerUseGeneration = React.useRef(0);
   const [snapshot, setSnapshot] = React.useState<AssistantLiveSnapshot>({
     available: false,
@@ -482,8 +496,20 @@ export function useAssistantLiveWithDependencies(
         playerRef.current?.flush();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
+        // Assign the approval receipt synchronously at IPC delivery time. React may defer
+        // the caption render, but an immediately following approval notification must
+        // still fence every utterance that arrived before the prompt.
+        const voiceApprovalReceipt =
+          event.direction === "input" && event.final
+            ? { id: ++voiceApprovalReceiptId.current, text: event.text }
+            : undefined;
         setCaptions((current) =>
-          reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
+          reconcileAssistantLiveCaption(
+            current,
+            event,
+            () => ++captionId.current,
+            voiceApprovalReceipt,
+          ),
         );
       } else if (event.type === "turn") {
         setCaptions(sealAssistantLiveCaption);
@@ -981,6 +1007,7 @@ export function useAssistantLiveWithDependencies(
     model: snapshot.model ?? null,
     state: snapshot.state,
     captions,
+    latestVoiceApprovalReceiptId,
     error,
     reconnectRequired,
     startBlockedReason:

@@ -4,7 +4,7 @@ import test from "node:test";
 import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
 import {
   assistantLiveVoiceApprovalDecision,
-  assistantLiveVoiceApprovalForCaption,
+  assistantLiveVoiceApprovalForReceipt,
 } from "./use-assistant-live-approvals.js";
 import type { AssistantLiveController } from "./use-assistant-live.js";
 
@@ -24,6 +24,7 @@ const idleLive: AssistantLiveController = {
   model: "gemini-live-reviewed",
   state: "idle",
   captions: [],
+  latestVoiceApprovalReceiptId: () => 0,
   error: null,
   reconnectRequired: false,
   startBlockedReason: null,
@@ -106,22 +107,14 @@ test("voice approvals accept only the two explicit finalized command phrases", (
   assert.equal(assistantLiveVoiceApprovalDecision("do not deny"), null);
 });
 
-test("voice approval ignores stale, model-spoken, interim, and consumed captions", () => {
-  const caption = {
+test("voice approval ignores stale and consumed receipts", () => {
+  const receipt = {
     id: 7,
-    direction: "input" as const,
-    final: true,
-    sealed: false,
     text: "Allow once",
   };
-  assert.equal(assistantLiveVoiceApprovalForCaption(caption, 6, false), "allow");
-  assert.equal(assistantLiveVoiceApprovalForCaption(caption, 7, false), null);
-  assert.equal(
-    assistantLiveVoiceApprovalForCaption({ ...caption, direction: "output" }, 6, false),
-    null,
-  );
-  assert.equal(assistantLiveVoiceApprovalForCaption({ ...caption, final: false }, 6, false), null);
-  assert.equal(assistantLiveVoiceApprovalForCaption(caption, 6, true), null);
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, false), "allow");
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 7, false), null);
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, true), null);
 });
 
 test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
@@ -135,7 +128,7 @@ test("dock replaces the retired Assistant panel with setup logo then Live orb", 
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.match(dock, /AidenLiveOrb/u);
   assert.match(dock, /AssistantComputerUseApproval/u);
-  assert.match(dock, /useAssistantLiveApprovals\(live\.captions\)/u);
+  assert.match(dock, /live\.latestVoiceApprovalReceiptId/u);
   assert.doesNotMatch(dock, /onDecision=/u);
   assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
@@ -150,10 +143,9 @@ test("Computer Use approvals are voice-only and keep the exact action visible", 
   assert.match(approval, /Say “Allow once” or “Deny\.”/u);
   assert.match(approval, /\{prompt\.summary\}/u);
   assert.doesNotMatch(approval, /<Button|onClick/u);
-  assert.match(hook, /caption\.direction !== "input"/u);
-  assert.match(hook, /caption\.id <= baselineCaptionId/u);
-  assert.match(hook, /latestInputCaptionId\(captionsRef\.current\)/u);
-  assert.match(hook, /consumedCaptionIds/u);
+  assert.match(hook, /receipt\.id <= baselineReceiptId/u);
+  assert.match(hook, /latestVoiceApprovalReceiptId\(\)/u);
+  assert.match(hook, /consumedReceiptIds/u);
 });
 
 test("setup discloses macOS access and per-action approval", () => {

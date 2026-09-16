@@ -36,7 +36,10 @@ function storedSetupComplete(): boolean {
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
   const live = useAssistantLive(null);
-  const chat = useAssistantLiveApprovals(live.captions);
+  const chat = useAssistantLiveApprovals(
+    live.captions,
+    live.latestVoiceApprovalReceiptId,
+  );
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);

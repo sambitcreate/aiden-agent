@@ -80,9 +80,9 @@ Stop, manual reconnect, and exact-session renderer teardown/late-event fencing.
 The UI and main service both keep screen capture unavailable until the native
 macOS picker acceptance is recorded. No capture resumes automatically.
 
-The approved voice-first model is now `gemini-3.8-live-extended-thinking`. The beta is available by
-default, with `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` retained as an emergency
-rollback switch.
+The candidate voice-first model is `gemini-3.8-live-extended-thinking`. The beta
+remains acceptance-gated with `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` until the exact
+model passes the credentialed Google Live and Computer Use contract.
 Extended Thinking uses explicit `NON_BLOCKING` Computer Use declarations so it
 can speak brief progress updates while tools run. Every mutation remains paused
 behind a fresh, finalized user-voice “Allow once” or “Deny” decision.
@@ -408,9 +408,10 @@ has been claimed on this machine: macOS denies the deterministic display probe
 before handler dispatch, and no user-provided key was available for a paid
 provider call.
 
-- Ship as a default-on beta with model/capability and permission health
-  indicators, plus the exact-zero emergency rollback; no silent fallback to
-  one-shot dictation.
+- Ship the beta UI with model/capability and permission health indicators, but
+  keep provider start acceptance-gated until the pinned model passes the exact
+  credentialed Live + Computer Use smoke; no silent fallback to one-shot
+  dictation.
 - Run focused suites, `npm run type-check`, `npm run lint`, relevant `npm run
 test:*`, package verification, and signed-package permission acceptance.
 - Require an operator-driven real Google Live smoke only with a user-provided

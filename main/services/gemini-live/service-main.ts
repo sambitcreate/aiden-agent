@@ -72,10 +72,11 @@ const LIVE_COMPUTER_USE_DESCRIPTION =
   "Use Aiden's approval-gated Computer Use controller. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Keep speaking naturally while work is in progress. Before every click, key, type, drag, scroll, focus, or other mutation, briefly state the exact action and ask the user to say Allow once or Deny. Each mutation pauses for a fresh voice decision.";
 
 /**
- * The default-on beta resolves only the recorded
+ * The acceptance-gated beta resolves only the recorded
  * `gemini-3.8-live-extended-thinking` model; it
  * never guesses from a normal Gemini chat model or the SDK guide's preview
- * string. `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` is the emergency rollback.
+ * string. `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` is reserved for credentialed
+ * acceptance and explicit experimental launches until that contract passes.
  */
 export const geminiLiveService = new GeminiLiveService({
   credentials: piCredentialStore,
