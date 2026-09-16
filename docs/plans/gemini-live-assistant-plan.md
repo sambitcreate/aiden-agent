@@ -406,8 +406,9 @@ has been claimed on this machine: macOS denies the deterministic display probe
 before handler dispatch, and no user-provided key was available for a paid
 provider call.
 
-- Ship behind an off-by-default experimental setting with model/capability and
-  permission health indicators; no silent fallback to one-shot dictation.
+- Ship as a default-on beta with model/capability and permission health
+  indicators, plus the exact-zero emergency rollback; no silent fallback to
+  one-shot dictation.
 - Run focused suites, `npm run type-check`, `npm run lint`, relevant `npm run
 test:*`, package verification, and signed-package permission acceptance.
 - Require an operator-driven real Google Live smoke only with a user-provided
