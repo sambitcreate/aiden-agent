@@ -20,20 +20,24 @@ test("Assistant Live audio admission accepts only one exact 20 ms PCM chunk", ()
   ]) assert.throws(() => parseAssistantLiveAudioIntent(value), /audio request/u);
 });
 
-test("Assistant Live start intent is an exact boolean-only record", () => {
-  assert.deepEqual(parseAssistantLiveStartIntent({ chatId: "assistant-1", microphone: true, screen: false }), {
-    chatId: "assistant-1",
+test("Assistant Live start intent accepts only an exact bounded authorization record", () => {
+  assert.deepEqual(parseAssistantLiveStartIntent({ microphone: true, computerUseAuthorization: null }), {
     microphone: true,
-    screen: false,
+    computerUseAuthorization: null,
   });
+  assert.equal(
+    parseAssistantLiveStartIntent({ microphone: true, computerUseAuthorization: "token" })
+      .computerUseAuthorization,
+    "token",
+  );
   for (const value of [
     null,
     {},
-    { chatId: null, microphone: true },
-    { chatId: null, microphone: true, screen: false, apiKey: "secret" },
-    { chatId: null, microphone: 1, screen: false },
-    { chatId: null, microphone: false, screen: new Uint8Array([1]) },
-    { chatId: "", microphone: true, screen: false },
+    { microphone: true },
+    { microphone: true, computerUseAuthorization: null, apiKey: "secret" },
+    { microphone: 1, computerUseAuthorization: null },
+    { microphone: false, computerUseAuthorization: new Uint8Array([1]) },
+    { microphone: false, computerUseAuthorization: "x".repeat(129) },
   ]) {
     assert.throws(() => parseAssistantLiveStartIntent(value), /Invalid Assistant Live/u);
   }

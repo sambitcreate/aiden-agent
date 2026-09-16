@@ -5,7 +5,7 @@ import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live.js";
-import type { Chat, ComputerUseStatus } from "../../lib/types.js";
+import type { ComputerUseStatus } from "../../lib/types.js";
 import {
   assistantLiveRuntimeErrorDetail,
   assistantLiveStartErrorDetail,
@@ -105,7 +105,7 @@ interface HookFixture {
   contexts: FakeCaptureContext[];
   tracks: FakeTrack[];
   player: RecordingPlayer;
-  computerUseChanges(): boolean[];
+  startIntents(): Array<{ microphone: boolean; computerUseAuthorization: string | null }>;
   refreshAvailability(): Promise<void>;
   unmount(): Promise<void>;
 }
@@ -169,12 +169,14 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   };
   let starts = 0;
   let stops = 0;
+  const startIntents: Array<{
+    microphone: boolean;
+    computerUseAuthorization: string | null;
+  }> = [];
   const tracks: FakeTrack[] = [];
   const worklets: FakeWorklet[] = [];
   const contexts: FakeCaptureContext[] = [];
   const player = new RecordingPlayer();
-  const computerUseChanges: boolean[] = [];
-  let chatComputerUseEnabled = false;
   const readyComputerUseStatus: ComputerUseStatus = {
     enabled: true,
     beta: true,
@@ -188,7 +190,9 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   };
   const api = {
     status: async () => snapshot,
-    start: async () => {
+    authorizeComputerUse: async () => "test-authorization",
+    start: async (intent: { microphone: boolean; computerUseAuthorization: string | null }) => {
+      startIntents.push(intent);
       starts += 1;
       snapshot = { ...snapshot, sessionId: `session-${starts}`, state: "open" };
       return snapshot;
@@ -229,15 +233,6 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
     loadWorklet: async () => undefined,
     createPlayer: () => player,
     computerUse: { status: async () => readyComputerUseStatus },
-    chats: {
-      get: async () => ({ computerUseEnabled: chatComputerUseEnabled }) as Chat,
-      setComputerUse: async (_chatId, enabled) => {
-        computerUseChanges.push(enabled);
-        chatComputerUseEnabled = enabled;
-        return { computerUseEnabled: enabled } as Chat;
-      },
-    },
-    activeChatId: "assistant-chat",
     ...overrides,
   };
   let latest!: AssistantLiveController;
@@ -261,7 +256,7 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
     contexts,
     tracks,
     player,
-    computerUseChanges: () => [...computerUseChanges],
+    startIntents: () => [...startIntents],
     refreshAvailability: async () => {
       dependencies = {
         ...dependencies,
@@ -466,59 +461,58 @@ test("an availability refresh begun during stop cannot restore a stale open sess
   await fixture.unmount();
 });
 
-test("Computer Use stays off until a deliberate per-chat change and reports global readiness", async () => {
+test("Computer Use restores the one-time setup opt in after readiness is revalidated", async () => {
   const fixture = await mountHook();
-  assert.equal(fixture.controller().computerUseEnabled, false);
+  assert.equal(fixture.controller().computerUseEnabled, true);
   assert.equal(fixture.controller().computerUseReady, true);
   assert.match(fixture.controller().computerUseDetail, /Accessibility and Screen Recording/u);
-  assert.deepEqual(fixture.computerUseChanges(), []);
-
-  await fixture.controller().setComputerUse(true);
-  await settle();
-  assert.deepEqual(fixture.computerUseChanges(), [true]);
-  assert.equal(fixture.controller().computerUseEnabled, true);
+  await fixture.controller().start();
+  assert.deepEqual(fixture.startIntents(), [
+    { microphone: true, computerUseAuthorization: "test-authorization" },
+  ]);
+  await fixture.controller().stop();
   await fixture.controller().setComputerUse(false);
   await settle();
-  assert.deepEqual(fixture.computerUseChanges(), [true, false]);
   assert.equal(fixture.controller().computerUseEnabled, false);
   await fixture.unmount();
 });
 
-test("mounted disable becomes fail-closed while persistence is deferred", async () => {
-  const write = deferred<Chat>();
-  const enabledFixture = await mountHook({
-    chats: {
-      get: async () => ({ computerUseEnabled: true }) as Chat,
-      setComputerUse: async (_chatId, enabled) => {
-        assert.equal(enabled, false);
-        return write.promise;
-      },
-    },
-  });
-  assert.equal(enabledFixture.controller().computerUseEnabled, true);
-  const disabling = enabledFixture.controller().setComputerUse(false);
-  await settle();
-  assert.equal(enabledFixture.controller().computerUseEnabled, false);
-  assert.equal(enabledFixture.controller().computerUseBusy, true);
-  write.resolve({ computerUseEnabled: false } as Chat);
-  await disabling;
-  await enabledFixture.unmount();
-});
-
-test("mounted disable reconciles durable truth after a rejected setting write", async () => {
+test("cancelling while Computer Use authorization is pending never starts Live", async () => {
+  const authorization = deferred<string | null>();
+  let starts = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
   const fixture = await mountHook({
-    chats: {
-      get: async () => ({ computerUseEnabled: true }) as Chat,
-      setComputerUse: async () => {
-        throw new Error("Could not save Computer Use.");
+    api: {
+      status: async () => snapshot,
+      authorizeComputerUse: () => authorization.promise,
+      start: async () => {
+        starts += 1;
+        snapshot = { ...snapshot, sessionId: "must-not-start", state: "open" };
+        return snapshot;
       },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => true,
+      onEvent: () => () => undefined,
     },
   });
-  assert.equal(fixture.controller().computerUseEnabled, true);
-  await fixture.controller().setComputerUse(false);
+
+  const starting = fixture.controller().start();
   await settle();
-  assert.equal(fixture.controller().computerUseEnabled, true);
-  assert.match(fixture.controller().computerUseError ?? "", /Could not save/u);
+  assert.equal(fixture.controller().busy, true);
+  const cancelling = fixture.controller().cancelSetup();
+  authorization.resolve("late-authorization");
+  await Promise.all([starting, cancelling]);
+
+  assert.equal(starts, 0, "cancelled authorization must be fenced before provider start");
+  assert.equal(fixture.controller().active, false);
   await fixture.unmount();
 });
 
@@ -540,7 +534,7 @@ test("Computer Use cannot be enabled when the global helper is unavailable", asy
   assert.equal(fixture.controller().computerUseReady, false);
   assert.match(fixture.controller().computerUseDetail, /Turn on the Computer Use beta/u);
   await fixture.controller().setComputerUse(true);
-  assert.deepEqual(fixture.computerUseChanges(), []);
+  assert.equal(fixture.controller().computerUseEnabled, false);
   await fixture.unmount();
 });
 

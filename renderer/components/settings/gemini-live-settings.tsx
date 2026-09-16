@@ -24,7 +24,7 @@ function StateBadge({ ready, checking = false }: { ready: boolean; checking?: bo
   );
 }
 
-export function GeminiLiveSettings(): React.ReactElement {
+export function AidenLiveSettings(): React.ReactElement {
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
   const computerUse = useComputerUseStatus();
@@ -69,7 +69,7 @@ export function GeminiLiveSettings(): React.ReactElement {
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <Text variant="strong">Gemini Live is Aiden’s voice and action layer</Text>
+              <Text variant="strong">Aiden Live is Aiden’s voice and action layer</Text>
               <Badge color="blue">Beta</Badge>
             </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
@@ -123,7 +123,7 @@ export function GeminiLiveSettings(): React.ReactElement {
       <FieldSet title="Actions">
         <Field
           label="Operate Aiden"
-          description="Gemini Live can use the screen and accessibility tree to focus the composer, choose the current model or actions, send prompts, and navigate Aiden."
+          description="Aiden Live can use the screen and accessibility tree to focus the composer, choose the current model or actions, send prompts, and navigate Aiden."
         >
           <Badge color="blue">
             <AudioWaveform />

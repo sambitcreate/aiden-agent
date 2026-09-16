@@ -7,6 +7,7 @@ export type AidenLiveOrbState =
   | "connecting"
   | "listening"
   | "thinking"
+  | "speaking"
   | "acting"
   | "approval"
   | "error"
@@ -21,6 +22,7 @@ const ORB_PRESENTATION: Record<
   // Listening deliberately uses Libraries.dev's calm breathing treatment.
   listening: { state: "breathing", active: true },
   thinking: { state: "solving", active: true },
+  speaking: { state: "composing", active: true },
   acting: { state: "working", active: true },
   approval: { state: "shaping", active: true },
   error: { state: "breathing", active: false },

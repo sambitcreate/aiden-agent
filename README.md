@@ -20,7 +20,7 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 
 ## Features
 
-- **Gemini Live (Beta)** - use the blue orb for an explicitly started voice session with visible listening, thinking, speaking, approval, and error states. First use walks through model access, microphone, and Screen & Accessibility permissions once; computer actions and scheduled tasks retain Aiden's existing approval boundaries.
+- **Aiden Live (Beta)** - use the blue orb for an explicitly started voice session with visible listening, thinking, speaking, approval, and error states. First use walks through model access, microphone, and Screen & Accessibility permissions once; computer actions and scheduled tasks retain Aiden's existing approval boundaries.
 - **Command palette and shortcuts** - `⌘K` searches commands, chats, models, providers, Settings, and appearance actions. One typed command system also powers native menus, visible shortcut labels, transactional global hotkeys, and the searchable Keyboard Shortcuts editor.
 - **Commands and explicit skills** - type `/` at the start of the composer to search Aiden app commands, or `$` to search the active workspace's available skills. Commands reuse canonical app workflows; an explicitly selected skill is revalidated for the active workspace, applies to one accepted message, and persists only safe display provenance.
 - **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, or `reviewer` tasks. Children are read/search-only, inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment.

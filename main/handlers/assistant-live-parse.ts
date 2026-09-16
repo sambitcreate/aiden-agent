@@ -12,18 +12,20 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 export function parseAssistantLiveStartIntent(value: unknown): AssistantLiveStartIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["chatId", "microphone", "screen"]) ||
-    (value.chatId !== null &&
-      (typeof value.chatId !== "string" || value.chatId.length < 1 || value.chatId.length > 160)) ||
+    !exactKeys(value, ["computerUseAuthorization", "microphone"]) ||
     typeof value.microphone !== "boolean" ||
-    typeof value.screen !== "boolean"
+    !(
+      value.computerUseAuthorization === null ||
+      (typeof value.computerUseAuthorization === "string" &&
+        value.computerUseAuthorization.length >= 1 &&
+        value.computerUseAuthorization.length <= 128)
+    )
   ) {
     throw new Error("Invalid Assistant Live start request.");
   }
   return {
-    chatId: value.chatId as string | null,
     microphone: value.microphone,
-    screen: value.screen,
+    computerUseAuthorization: value.computerUseAuthorization,
   };
 }
 

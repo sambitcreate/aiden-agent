@@ -12,7 +12,7 @@ const owner = {
   send: () => undefined,
   onInvalidated: () => () => undefined,
 } satisfies RendererDocumentOwner;
-const intent = { microphone: false, screen: false } as const;
+const intent = { microphone: false, computerUseAuthorization: null } as const;
 
 test("Assistant Live handler boundary replaces unexpected service detail with one fixed rejection", async () => {
   await assert.rejects(

@@ -6,10 +6,9 @@ export type AssistantLiveAvailabilityReason =
   | "live_model_unverified";
 
 export interface AssistantLiveStartIntent {
-  /** Exact attended Assistant thread whose Computer Use opt-in may be inherited. */
-  chatId?: string | null;
   microphone: boolean;
-  screen: boolean;
+  /** Opaque, one-use main-process proof that Computer Use is ready for this document. */
+  computerUseAuthorization: string | null;
 }
 
 export interface AssistantLiveSnapshot {
@@ -43,6 +42,7 @@ export type AssistantLiveRendererEvent =
       text: string;
     }
   | { type: "model_text"; sessionId: string; text: string }
+  | { type: "computer_use_state"; sessionId: string; active: boolean }
   | {
       type: "turn";
       sessionId: string;

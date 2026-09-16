@@ -1,16 +1,16 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-test("local Gemini Live, Scheduled, Profile, and About surfaces stay safe to explore", async ({
+test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to explore", async ({
   aiden,
 }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
-  // The dock is now the one-time Gemini Live setup entry point. Exercise the
+  // The dock is now the one-time Aiden Live setup entry point. Exercise the
   // keyboard path without requesting system permissions or contacting Google.
-  const liveSetupTrigger = page.getByRole("button", { name: "Set up Gemini Live" });
+  const liveSetupTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
   await liveSetupTrigger.press("Enter");
-  const liveSetup = page.getByRole("dialog", { name: "Set up Gemini Live" });
+  const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
   await expect(liveSetup).toBeVisible();
   await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
   await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();

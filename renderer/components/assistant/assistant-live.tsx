@@ -9,7 +9,14 @@ import {
   Settings2,
   Square,
 } from "lucide-react";
-import { Badge, Button, Dialog } from "../ui";
+import {
+  Badge,
+  Button,
+  Dialog,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "../ui";
 import { AidenLiveOrb, type AidenLiveOrbState } from "./aiden-live-orb";
 import type { AssistantLiveCaption, AssistantLiveController } from "./use-assistant-live";
 
@@ -44,7 +51,9 @@ export function assistantLiveOrbState(
   if (approvalPending) return "approval";
   if (live.busy || ["connecting", "resuming", "closing"].includes(live.state)) return "connecting";
   if (!live.active) return "ready";
+  if (live.computerUseActing) return "acting";
   const latest = live.captions[live.captions.length - 1];
+  if (latest?.direction === "output" && !latest.sealed) return "speaking";
   if (latest?.direction === "input" && latest.final) return "thinking";
   return live.microphoneActive ? "listening" : "ready";
 }
@@ -108,7 +117,7 @@ export function AssistantLiveSetupDialog({
     <Dialog
       open={live.setupOpen}
       onOpenChange={live.setSetupOpen}
-      title="Set up Gemini Live"
+      title="Set up Aiden Live"
       description="Give Aiden only the access it needs. Nothing is captured until you start a Live session."
       confirmLabel={live.busy ? "Starting…" : "Start Live"}
       confirmDisabled={!live.setupComplete || live.busy || Boolean(live.startBlockedReason)}
@@ -185,10 +194,28 @@ export function AssistantLiveSetupDialog({
           <ChevronRight className="size-4 shrink-0" aria-hidden="true" />
         </button>
       ) : null}
-      <p className="text-xs leading-4 text-tertiary">
-        Screen actions use Computer Use and still require Allow once. Audio and captions remain in
-        memory for this Live session and are not added to chat history.
-      </p>
+      <div className="flex justify-end">
+        <HoverCard openDelay={250} closeDelay={100}>
+          <HoverCardTrigger asChild>
+            <Button
+              iconOnly
+              size="small"
+              variant="transparent"
+              className={`size-7 text-tertiary ${ASSISTANT_LIVE_FOCUS_CLASS}`}
+              aria-label="About Aiden Live privacy"
+            >
+              <span aria-hidden className="text-xs font-semibold leading-none">i</span>
+            </Button>
+          </HoverCardTrigger>
+          <HoverCardContent align="end" className="w-80">
+            <p className="text-xs font-medium text-primary">Live session privacy</p>
+            <p className="mt-1 text-xs leading-5 text-secondary">
+              Screen actions use Computer Use and still require Allow once. Audio and captions
+              remain in memory for this Live session and are not added to chat history.
+            </p>
+          </HoverCardContent>
+        </HoverCard>
+      </div>
     </Dialog>
   );
 }
@@ -206,6 +233,9 @@ function Transcript({ captions }: { captions: readonly AssistantLiveCaption[] })
       ref={viewportRef}
       className="gemini-live-hud-transcript"
       aria-label="Live captions"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
       onScroll={(event) => {
         const viewport = event.currentTarget;
         followLatest.current = assistantLiveTranscriptFollowsLatest(
@@ -231,12 +261,14 @@ function Transcript({ captions }: { captions: readonly AssistantLiveCaption[] })
 export function AssistantLiveHud({
   live,
   orbState,
+  children,
 }: {
   live: AssistantLiveController;
   orbState: AidenLiveOrbState;
+  children?: React.ReactNode;
 }): React.ReactElement {
   return (
-    <section className="gemini-live-hud" aria-label="Gemini Live conversation">
+    <section className="gemini-live-hud" aria-label="Aiden Live conversation">
       <div className="gemini-live-hud-header">
         <AidenLiveOrb state={orbState} level={live.microphoneLevel} />
         <div className="min-w-0 flex-1">
@@ -264,6 +296,7 @@ export function AssistantLiveHud({
         </Button>
       </div>
       <Transcript captions={live.captions} />
+      {children}
       {live.error ? (
         <p role="alert" className="gemini-live-hud-error">
           {live.error}
@@ -297,7 +330,7 @@ export function AssistantLiveEntryPoint({
   if (!live.visible || live.active) return null;
   return (
     <Button size="small" onClick={() => live.setSetupOpen(true)}>
-      Set up Gemini Live
+      Set up Aiden Live
     </Button>
   );
 }

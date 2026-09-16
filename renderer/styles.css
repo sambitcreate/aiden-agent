@@ -2641,7 +2641,7 @@ textarea {
   .button-press-feedback { scale: none !important; }
 }
 
-/* Gemini Live replaces the previous Assistant panel with one persistent,
+/* Aiden Live replaces the previous Assistant panel with one persistent,
    stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
 .aiden-live-trigger {
   position: relative;
@@ -2649,9 +2649,8 @@ textarea {
   width: 3.5rem;
   height: 3.5rem;
   place-items: center;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent);
-  border-radius: 9999px;
   background: var(--color-background);
   box-shadow:
     0 10px 30px rgb(0 0 0 / 16%),
@@ -2662,10 +2661,18 @@ textarea {
     box-shadow 160ms ease,
     border-color 160ms ease;
 }
+.aiden-live-trigger-logo-mask {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+}
 .aiden-live-trigger[data-kind="logo"] img {
-  width: 1.75rem;
-  height: 1.75rem;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  scale: 1.32;
+  object-fit: cover;
 }
 .aiden-live-trigger[data-kind="orb"] {
   border-color: transparent;
