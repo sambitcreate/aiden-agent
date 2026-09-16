@@ -29,6 +29,7 @@ const idleLive: AssistantLiveController = {
   captions: [],
   voiceApprovalReceipts: [],
   latestVoiceApprovalReceiptId: () => 0,
+  retainVoiceApprovalReceiptsAfter: () => undefined,
   error: null,
   reconnectRequired: false,
   startBlockedReason: null,
@@ -164,20 +165,25 @@ test("dock replaces the retired Assistant panel with setup logo then Live orb", 
   assert.match(dock, /AidenLiveOrb/u);
   assert.match(dock, /AssistantComputerUseApproval/u);
   assert.match(dock, /live\.latestVoiceApprovalReceiptId/u);
+  assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.doesNotMatch(dock, /onDecision=/u);
   assert.doesNotMatch(dock, /useAssistantChat/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
 
 test("a disabled Live capability renders no dock or setup affordance", () => {
+  let commandEnabled = true;
   const markup = renderToStaticMarkup(
     <AssistantDockPresentation
       chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
       live={{ ...idleLive, visible: false }}
-      useCommand={() => undefined}
+      useCommand={(_commandId, _handler, enabled = true) => {
+        commandEnabled = enabled;
+      }}
     />,
   );
   assert.equal(markup, "");
+  assert.equal(commandEnabled, false);
 });
 
 test("Computer Use approvals are voice-only and keep the exact action visible", () => {

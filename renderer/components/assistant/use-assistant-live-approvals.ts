@@ -1,25 +1,14 @@
 import * as React from "react";
 import { chatsApi, onNotification, type ApprovalPrompt } from "../../lib/ipc";
+import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import type { AssistantLiveVoiceApprovalReceipt } from "./use-assistant-live";
+
+export { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 
 export interface AssistantLiveApprovals {
   approvals: ApprovalPrompt[];
   decidingApprovalId: string | null;
   decideApproval(prompt: ApprovalPrompt, decision: "allow" | "deny"): Promise<void>;
-}
-
-export function assistantLiveVoiceApprovalDecision(
-  transcript: string,
-): "allow" | "deny" | null {
-  const normalized = transcript
-    .normalize("NFKC")
-    .toLocaleLowerCase("en-US")
-    .replace(/[.,!?;:'’“”"-]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  if (normalized === "allow once") return "allow";
-  if (normalized === "deny") return "deny";
-  return null;
 }
 
 export function assistantLiveVoiceApprovalForReceipt(
@@ -63,11 +52,17 @@ export function assistantLiveVoiceApprovalFromReceipts(
 export function useAssistantLiveApprovals(
   receipts: readonly AssistantLiveVoiceApprovalReceipt[],
   latestVoiceApprovalReceiptId: () => number,
+  retainVoiceApprovalReceiptsAfter: (receiptId: number | null) => void,
 ): AssistantLiveApprovals {
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const receiptBaselines = React.useRef(new Map<string, number>());
   const consumedReceiptIds = React.useRef(new Set<number>());
+
+  const syncRetentionFloor = React.useCallback(() => {
+    const baselines = [...receiptBaselines.current.values()];
+    retainVoiceApprovalReceiptsAfter(baselines.length > 0 ? Math.min(...baselines) : null);
+  }, [retainVoiceApprovalReceiptsAfter]);
 
   React.useEffect(() => {
     const removeApproval = onNotification<ApprovalPrompt & { streamId: string }>(
@@ -75,6 +70,7 @@ export function useAssistantLiveApprovals(
       (prompt) => {
         if (!prompt.streamId.startsWith("live:") || prompt.toolName !== "computer_use") return;
         receiptBaselines.current.set(prompt.approvalId, latestVoiceApprovalReceiptId());
+        syncRetentionFloor();
         setApprovals((current) =>
           current.some((candidate) => candidate.approvalId === prompt.approvalId)
             ? current
@@ -86,6 +82,7 @@ export function useAssistantLiveApprovals(
       "chat:approval-withdrawn",
       ({ approvalId }) => {
         receiptBaselines.current.delete(approvalId);
+        syncRetentionFloor();
         setApprovals((current) =>
           current.filter((candidate) => candidate.approvalId !== approvalId),
         );
@@ -95,8 +92,10 @@ export function useAssistantLiveApprovals(
     return () => {
       removeApproval();
       removeWithdrawal();
+      receiptBaselines.current.clear();
+      retainVoiceApprovalReceiptsAfter(null);
     };
-  }, [latestVoiceApprovalReceiptId]);
+  }, [latestVoiceApprovalReceiptId, retainVoiceApprovalReceiptsAfter, syncRetentionFloor]);
 
   const decideApproval = React.useCallback(
     async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
@@ -105,6 +104,7 @@ export function useAssistantLiveApprovals(
       try {
         await chatsApi.approve(prompt.approvalId, decision);
         receiptBaselines.current.delete(prompt.approvalId);
+        syncRetentionFloor();
         setApprovals((current) =>
           current.filter((candidate) => candidate.approvalId !== prompt.approvalId),
         );
@@ -114,7 +114,7 @@ export function useAssistantLiveApprovals(
         );
       }
     },
-    [decidingApprovalId],
+    [decidingApprovalId, syncRetentionFloor],
   );
 
   React.useEffect(() => {

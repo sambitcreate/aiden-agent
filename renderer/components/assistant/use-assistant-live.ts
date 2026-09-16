@@ -13,6 +13,7 @@ import type {
   AssistantLiveRendererEvent,
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live";
+import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 
 export interface AssistantLiveCaption {
   id: number;
@@ -45,6 +46,7 @@ export interface AssistantLiveController {
   captions: readonly AssistantLiveCaption[];
   voiceApprovalReceipts: readonly AssistantLiveVoiceApprovalReceipt[];
   latestVoiceApprovalReceiptId(): number;
+  retainVoiceApprovalReceiptsAfter(receiptId: number | null): void;
   error: string | null;
   reconnectRequired: boolean;
   startBlockedReason: string | null;
@@ -414,10 +416,14 @@ export function useAssistantLiveWithDependencies(
   if (!playerRef.current) playerRef.current = dependencies.createPlayer();
   const captionId = React.useRef(0);
   const voiceApprovalReceiptId = React.useRef(0);
+  const voiceApprovalReceiptRetentionFloor = React.useRef<number | null>(null);
   const latestVoiceApprovalReceiptId = React.useCallback(
     () => voiceApprovalReceiptId.current,
     [],
   );
+  const retainVoiceApprovalReceiptsAfter = React.useCallback((receiptId: number | null) => {
+    voiceApprovalReceiptRetentionFloor.current = receiptId;
+  }, []);
   const computerUseGeneration = React.useRef(0);
   const [snapshot, setSnapshot] = React.useState<AssistantLiveSnapshot>({
     available: false,
@@ -503,7 +509,22 @@ export function useAssistantLiveWithDependencies(
         // still fence every utterance that arrived before the prompt.
         if (event.direction === "input" && event.final) {
           const receipt = { id: ++voiceApprovalReceiptId.current, text: event.text };
-          setVoiceApprovalReceipts((current) => [...current, receipt].slice(-256));
+          setVoiceApprovalReceipts((current) => {
+            const next = [...current, receipt];
+            const floor = voiceApprovalReceiptRetentionFloor.current;
+            const protectedReceipt =
+              floor === null
+                ? undefined
+                : next.find(
+                    (candidate) =>
+                      candidate.id > floor &&
+                      assistantLiveVoiceApprovalDecision(candidate.text) !== null,
+                  );
+            const tail = next.slice(protectedReceipt ? -255 : -256);
+            return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
+              ? [protectedReceipt, ...tail]
+              : tail;
+          });
         }
         setCaptions((current) =>
           reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
@@ -1017,6 +1038,7 @@ export function useAssistantLiveWithDependencies(
     captions,
     voiceApprovalReceipts,
     latestVoiceApprovalReceiptId,
+    retainVoiceApprovalReceiptsAfter,
     error,
     reconnectRequired,
     startBlockedReason:

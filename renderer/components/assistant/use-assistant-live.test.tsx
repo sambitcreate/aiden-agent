@@ -1253,6 +1253,34 @@ test("batched finalized input events retain every approval receipt in FIFO order
   await fixture.unmount();
 });
 
+test("a pending exact voice approval survives bounded receipt eviction", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.controller().retainVoiceApprovalReceiptsAfter(0);
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once.",
+      final: true,
+    },
+    ...Array.from({ length: 300 }, (_, index) => ({
+      type: "caption" as const,
+      sessionId: "session-1",
+      direction: "input" as const,
+      text: `noise ${index}`,
+      final: true,
+    })),
+  ]);
+  assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
+    id: 1,
+    text: "Allow once.",
+  });
+  await fixture.unmount();
+});
+
 test("caption turns preserve a long response beyond the former fragment cap", () => {
   let captions: AssistantLiveController["captions"] = [];
   let id = 0;
