@@ -118,7 +118,10 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
-import { geminiLiveService } from "./services/gemini-live/service-main.js";
+import {
+  geminiLiveService,
+  initializeAidenLiveService,
+} from "./services/gemini-live/service-main.js";
 import {
   getOnboardingSnapshot,
   setOnboardingOutcome,
@@ -1756,6 +1759,15 @@ if (!ownsSingleInstanceLock) {
         logger.warn(
           "terminal",
           "Persisted terminal history is unavailable; terminals will remain session-only.",
+          error,
+        );
+      }
+      try {
+        await initializeAidenLiveService();
+      } catch (error) {
+        logger.warn(
+          "aiden-live",
+          "Aiden Live thread recovery is unavailable; Live starts will retry before writing session metadata.",
           error,
         );
       }

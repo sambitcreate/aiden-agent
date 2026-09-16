@@ -105,6 +105,7 @@ interface HookFixture {
   contexts: FakeCaptureContext[];
   tracks: FakeTrack[];
   player: RecordingPlayer;
+  startIntents(): Array<{ microphone: boolean; computerUseAuthorization: string | null }>;
   refreshAvailability(): Promise<void>;
   unmount(): Promise<void>;
 }
@@ -168,6 +169,10 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   };
   let starts = 0;
   let stops = 0;
+  const startIntents: Array<{
+    microphone: boolean;
+    computerUseAuthorization: string | null;
+  }> = [];
   const tracks: FakeTrack[] = [];
   const worklets: FakeWorklet[] = [];
   const contexts: FakeCaptureContext[] = [];
@@ -186,7 +191,8 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
   const api = {
     status: async () => snapshot,
     authorizeComputerUse: async () => "test-authorization",
-    start: async () => {
+    start: async (intent: { microphone: boolean; computerUseAuthorization: string | null }) => {
+      startIntents.push(intent);
       starts += 1;
       snapshot = { ...snapshot, sessionId: `session-${starts}`, state: "open" };
       return snapshot;
@@ -250,6 +256,7 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
     contexts,
     tracks,
     player,
+    startIntents: () => [...startIntents],
     refreshAvailability: async () => {
       dependencies = {
         ...dependencies,
@@ -459,6 +466,11 @@ test("Computer Use restores the one-time setup opt in after readiness is revalid
   assert.equal(fixture.controller().computerUseEnabled, true);
   assert.equal(fixture.controller().computerUseReady, true);
   assert.match(fixture.controller().computerUseDetail, /Accessibility and Screen Recording/u);
+  await fixture.controller().start();
+  assert.deepEqual(fixture.startIntents(), [
+    { microphone: true, computerUseAuthorization: "test-authorization" },
+  ]);
+  await fixture.controller().stop();
   await fixture.controller().setComputerUse(false);
   await settle();
   assert.equal(fixture.controller().computerUseEnabled, false);

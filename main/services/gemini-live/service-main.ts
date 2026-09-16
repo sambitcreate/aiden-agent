@@ -33,6 +33,11 @@ function ensureAidenLiveThreadRecovery(): Promise<void> {
     });
   return aidenLiveThreadRecovery;
 }
+
+/** Run crash reconciliation at application startup before a renderer can start Live. */
+export function initializeAidenLiveService(): Promise<void> {
+  return ensureAidenLiveThreadRecovery();
+}
 const computerUseAuthorizations = new Map<
   string,
   { token: string; dispose: () => void }

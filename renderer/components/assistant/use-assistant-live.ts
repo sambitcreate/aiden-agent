@@ -870,6 +870,7 @@ export function useAssistantLiveWithDependencies(
     }
   }, [
     busy,
+    computerUseEnabled,
     dependencies,
     microphone,
     microphonePermission,
