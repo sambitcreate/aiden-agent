@@ -482,3 +482,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - The full Electron E2E gate still encoded the retired Assistant panel and old Aiden settings destination even though focused source-contract tests passed; update user-journey E2E whenever a top-level surface is replaced, not only its component tests.
 - A clean latest Pullfrog summary can coexist with unresolved older inline threads; query `reviewThreads` directly before declaring the review gate clear.
 - Replacing a shipped surface must update the authoritative plan index and add an explicit supersession note to the historical plan; code and tests alone leave misleading implementation claims.
+
+## 2026-09-15 — 0.41.0 launch incident
+
+- A signed, notarized, Gatekeeper-accepted app can still remain at `_dyld_start` with a 96 KB footprint on macOS 27; sample the process and inspect ShipIt before blaming Electron startup or profile migration. On build 26A5425a, fresh Aiden 0.40.1/0.41.0, Electron 43.7.1/44.4.0, and Cursor all reproduced the same pre-main suspension, while native IINA launched. Preserve the blocked bundle and updater logs, and keep this beta-OS gate separate from release artifact verification.
+
+### 2026-09-15 — Release review caught a stale Gemini Live gate
+
+- The beta UI and README were ready to ship while `geminiLiveEnabled()` still required an undocumented opt-in environment variable.
+- Treat user-visible beta activation and its main-process capability gate as one release contract; keep `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` only as an emergency rollback.
