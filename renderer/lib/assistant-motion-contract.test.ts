@@ -46,6 +46,14 @@ test("the Live orb trigger has tactile motion and a reduced-motion override", ()
   assert.match(trigger, /transition:/u);
   assert.match(styles, /:root\[data-reduce-motion="true"\] \.aiden-live-trigger/u);
   assert.match(styles, /\.aiden-live-trigger:focus-visible/u);
+  const orb = between(
+    styles,
+    '.aiden-live-trigger[data-kind="orb"] {',
+    ".aiden-live-trigger:hover",
+  );
+  assert.match(orb, /background: transparent/u);
+  assert.match(orb, /box-shadow: none/u);
+  assert.match(styles, /\.aiden-live-trigger\[data-kind="orb"\]:focus-visible/u);
 });
 
 test("the dock has one trigger and no longer owns a competing composer", () => {

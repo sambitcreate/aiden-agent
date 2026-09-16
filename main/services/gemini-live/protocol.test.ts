@@ -63,6 +63,7 @@ function harness(
       params: GeminiLiveConnectParameters,
     ) => ReturnType<FakeGeminiLiveServer["connector"]>;
     idleTimeoutMs?: number;
+    model?: string;
     signal?: AbortSignal;
   } = {},
 ) {
@@ -72,7 +73,7 @@ function harness(
   const protocol = new GeminiLiveProtocol({
     clock,
     connector: options.connector ?? server.connector,
-    model: "gemini-3.1-flash-live-preview",
+    model: options.model ?? "gemini-3.1-flash-live-preview",
     onEvent: (event) => events.push(event),
     ...(options.connectTimeoutMs
       ? { connectTimeoutMs: options.connectTimeoutMs }
@@ -140,6 +141,15 @@ test("seeds ordered history once, then sends conversational text through realtim
   assert.deepEqual(config.contextWindowCompression, { slidingWindow: {} });
   assert.deepEqual(config.sessionResumption, {});
   assert.ok(config.abortSignal instanceof AbortSignal);
+});
+
+test("extended-thinking sessions enable low thinking and a voice-first action contract", async () => {
+  const subject = harness({ model: "gemini-3.8-live-extended-thinking" });
+  await subject.protocol.start();
+  const config = subject.server.latest.params.config!;
+  assert.deepEqual(config.thinkingConfig, { thinkingLevel: "LOW" });
+  assert.match(String(config.systemInstruction), /fully voice-first/u);
+  assert.match(String(config.systemInstruction), /Allow once.*Deny/u);
 });
 
 test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob", async () => {
@@ -395,7 +405,7 @@ test("accepts bounded metadata declared by the pinned Live server schema", async
         },
       },
     },
-    ...["INTERACTION_STATUS_UNSPECIFIED", "IN_PROGRESS", "REQUIRES_ACTION"].map(
+    ...["INTERACTION_STATUS_UNSPECIFIED", "IN_PROGRESS", "REQUIRES_ACTION", "IDLE"].map(
       (interactionStatus) => ({
         serverContent: { turnComplete: true, interactionStatus },
       }),

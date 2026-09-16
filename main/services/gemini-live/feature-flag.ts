@@ -1,5 +1,5 @@
 export const GEMINI_LIVE_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_GEMINI_LIVE";
-export const GEMINI_LIVE_MODEL = "gemini-3.8-live";
+export const GEMINI_LIVE_MODEL = "gemini-3.8-live-extended-thinking";
 
 /** Gemini Live is available by default as a beta; retain an emergency rollback switch. */
 export function geminiLiveEnabled(

@@ -48,14 +48,14 @@ acceptance. Keep screen sharing off for this run.
 ## Operator run
 
 1. Quit every other Aiden instance so the isolated window is unambiguous.
-2. Review the pinned `gemini-3.8-live` model for this acceptance. Do not infer
+2. Review the pinned `gemini-3.8-live-extended-thinking` model for this acceptance. Do not infer
    it from an ordinary Gemini chat model or substitute another model.
 3. Commit the exact reviewed source and confirm the Git tree is clean. The
    acceptance runner performs its own fresh build and refuses dirty trees.
 4. Start the acceptance with that exact pinned model:
 
    ```sh
-   AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE=1 npm run test:gemini-live:google:acceptance -- --i-understand-real-google-call --model gemini-3.8-live
+   AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE=1 npm run test:gemini-live:google:acceptance -- --i-understand-real-google-call --model gemini-3.8-live-extended-thinking
    ```
 
 5. In the isolated Aiden window, connect Google through Settings using the

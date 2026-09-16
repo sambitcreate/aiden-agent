@@ -694,6 +694,7 @@ export function ProvidersSettings() {
         hasKey={list.some(
           (provider) => provider.id === GOOGLE_PROVIDER_ID && provider.hasKey === true,
         )}
+        provider={list.find((provider) => provider.id === GOOGLE_PROVIDER_ID)}
         busy={geminiBusy}
         error={geminiError}
         onScopeChange={setGeminiScope}

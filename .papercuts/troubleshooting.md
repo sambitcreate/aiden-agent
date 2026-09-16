@@ -499,3 +499,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Running Prettier directly rewrites large legacy files that use the repository's established formatting; audit the diff immediately and use targeted patches for this release.
 - This worktree has no project `.memory/` directory despite the repository instructions; keep durable implementation status in the plan inventory instead of inventing the missing store.
 - Exact-head CI intermittently missed a watched filesystem edit within the test's one-second deadline while the same watcher test passed 10/10 locally; distinguish infrastructure timing from feature regressions before changing unrelated release code.
+
+## 2026-09-16 — Aiden Live voice actions
+
+- The installed Google SDK exposes Live `interactionStatus` inside `serverContent`, while newer Extended Thinking examples describe status alongside tool-call lifecycle events; pin protocol handling to the installed typed wire contract and cover `IDLE` explicitly when adopting the new model.
