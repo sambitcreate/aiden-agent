@@ -506,3 +506,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 # Release coordination
 
 - Pullfrog took just over one hour to review PR #132 after first-party CI was green; keep exact-head checks separate so the long external review does not obscure test status.
+- Moving Live from default-on to acceptance-gated correctly hid the dock but invalidated the local UI E2E; keep default-off rendering covered separately and opt the isolated provider-free E2E harness into the experimental surface explicitly.
