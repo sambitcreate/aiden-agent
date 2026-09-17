@@ -110370,13 +110370,9 @@
           {
             "type": "effort",
             "values": [
-              "none",
-              "minimal",
               "low",
               "medium",
-              "high",
-              "xhigh",
-              "max"
+              "high"
             ]
           }
         ],
@@ -110395,7 +110391,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 128072,
+          "context": 131072,
           "output": 13107
         },
         "cost": {
@@ -122088,46 +122084,6 @@
           "cache_write": 0
         }
       },
-      "glm-5.1": {
-        "id": "glm-5.1",
-        "name": "GLM-5.1",
-        "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-03-27",
-        "last_updated": "2026-03-27",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
-        }
-      },
       "glm-5.3": {
         "id": "glm-5.3",
         "name": "GLM-5.3",
@@ -122153,132 +122109,6 @@
         "temperature": true,
         "release_date": "2026-08-14",
         "last_updated": "2026-08-14",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 1000000,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
-        }
-      },
-      "glm-5v-turbo": {
-        "id": "glm-5v-turbo",
-        "name": "GLM-5V-Turbo",
-        "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
-        "family": "glm",
-        "attachment": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "temperature": true,
-        "release_date": "2026-04-01",
-        "last_updated": "2026-04-01",
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
-        }
-      },
-      "glm-5-turbo": {
-        "id": "glm-5-turbo",
-        "name": "GLM-5-Turbo",
-        "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-03-16",
-        "last_updated": "2026-03-16",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": false,
-        "limit": {
-          "context": 200000,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
-        }
-      },
-      "glm-5.2": {
-        "id": "glm-5.2",
-        "name": "GLM-5.2",
-        "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-06-13",
-        "last_updated": "2026-06-13",
         "modalities": {
           "input": [
             "text"
@@ -122334,90 +122164,6 @@
         "cost": {
           "input": 0.3,
           "output": 0.9
-        }
-      },
-      "glm-4.7": {
-        "id": "glm-4.7",
-        "name": "GLM-4.7",
-        "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "toggle"
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "temperature": true,
-        "knowledge": "2025-04",
-        "release_date": "2025-12-22",
-        "last_updated": "2025-12-22",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 204800,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
-        }
-      },
-      "glm-5.2-highspeed": {
-        "id": "glm-5.2-highspeed",
-        "name": "GLM-5.2 Highspeed",
-        "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
-        "family": "glm",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "tool_call": true,
-        "interleaved": {
-          "field": "reasoning_content"
-        },
-        "structured_output": true,
-        "temperature": true,
-        "release_date": "2026-06-13",
-        "last_updated": "2026-06-13",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 1000000,
-          "output": 131072
-        },
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cache_read": 0,
-          "cache_write": 0
         }
       }
     }
@@ -172776,6 +172522,73 @@
           "cache_write": 3.125
         }
       },
+      "openai/gpt-6-astra": {
+        "id": "openai/gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+        "family": "gpt-astra",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "knowledge": "2026-04-30",
+        "release_date": "2026-09-04",
+        "last_updated": "2026-09-04",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "provider": {
+          "npm": "@ai-sdk/openai"
+        },
+        "cost": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 1,
+          "cache_write": 12,
+          "tiers": [
+            {
+              "input": 20,
+              "output": 75,
+              "cache_read": 2,
+              "cache_write": 25,
+              "tier": {
+                "type": "context",
+                "size": 272000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 20,
+            "output": 75,
+            "cache_read": 2,
+            "cache_write": 25
+          }
+        }
+      },
       "openai/gpt-4.1-mini": {
         "id": "openai/gpt-4.1-mini",
         "name": "GPT-4.1 mini",
@@ -173763,7 +173576,23 @@
         "cost": {
           "input": 2,
           "output": 6,
-          "cache_read": 0.3
+          "cache_read": 0.3,
+          "tiers": [
+            {
+              "input": 4,
+              "output": 12,
+              "cache_read": 0.6,
+              "tier": {
+                "type": "context",
+                "size": 200000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 4,
+            "output": 12,
+            "cache_read": 0.6
+          }
         }
       },
       "xai/grok-4.6": {
@@ -173806,7 +173635,23 @@
         "cost": {
           "input": 2,
           "output": 6,
-          "cache_read": 0.5
+          "cache_read": 0.5,
+          "tiers": [
+            {
+              "input": 4,
+              "output": 12,
+              "cache_read": 1,
+              "tier": {
+                "type": "context",
+                "size": 200000
+              }
+            }
+          ],
+          "context_over_200k": {
+            "input": 4,
+            "output": 12,
+            "cache_read": 1
+          }
         }
       },
       "xai/grok-4.20-0309-non-reasoning": {
@@ -195427,13 +195272,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1000000,
+          "context": 1048576,
           "output": 393216
         },
         "cost": {
-          "input": 0.5808,
-          "output": 1.7424,
-          "cache_read": 0.05808
+          "input": 0.57948,
+          "output": 1.73844,
+          "cache_read": 0.018438
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -200946,7 +200791,7 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1000000,
+          "context": 1048576,
           "output": 393216
         },
         "cost": {
@@ -239461,9 +239306,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 0.5808,
-          "output": 1.7424,
-          "cache_read": 0.05808
+          "input": 0.57948,
+          "output": 1.73844,
+          "cache_read": 0.018438
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -245224,9 +245069,9 @@
           "output": 393216
         },
         "cost": {
-          "input": 0.5808,
-          "output": 1.7424,
-          "cache_read": 0.05808
+          "input": 0.57948,
+          "output": 1.73844,
+          "cache_read": 0.018438
         }
       },
       "deepseek/deepseek-v4-flash-0731": {
@@ -302777,8 +302622,8 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.46148,
-          "output": 0.92296
+          "input": 0.45924,
+          "output": 0.91848
         }
       },
       "scaleway/gemma-3-27b-it": {
@@ -302849,8 +302694,8 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.173055,
-          "output": 0.69222
+          "input": 0.172215,
+          "output": 0.68886
         }
       },
       "scaleway/llama-3.3-70b-instruct": {
@@ -302880,8 +302725,8 @@
           "output": 4096
         },
         "cost": {
-          "input": 1.038331,
-          "output": 1.038331
+          "input": 1.03329,
+          "output": 1.03329
         }
       },
       "nebius/deepseek-ai/DeepSeek-V4-Flash-0731": {
@@ -305416,8 +305261,8 @@
           "output": 262144
         },
         "cost": {
-          "input": 0.34611,
-          "output": 0.46148
+          "input": 0.34443,
+          "output": 0.45924
         }
       },
       "flexai/Nemotron-3-Super-120B-A12B": {
@@ -313191,8 +313036,8 @@
           "output": 4096
         },
         "cost": {
-          "input": 0.749905,
-          "output": 0.749905
+          "input": 0.746265,
+          "output": 0.746265
         }
       },
       "ionos/openai/gpt-oss-120b": {
@@ -313231,8 +313076,8 @@
           "output": 32768
         },
         "cost": {
-          "input": 0.173055,
-          "output": 0.749905
+          "input": 0.172215,
+          "output": 0.746265
         }
       },
       "perplexityai/sonar": {
