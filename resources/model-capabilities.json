@@ -20607,9 +20607,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.44,
-          "output": 1.32,
-          "cache_read": 0.014
+          "input": 0.22,
+          "output": 0.66,
+          "cache_read": 0.007
         }
       },
       "deepseek/deepseek-v4-pro-0813": {
@@ -20913,7 +20913,7 @@
         "cost": {
           "input": 0.1,
           "output": 0.4,
-          "cache_read": 0.006
+          "cache_read": 0.003
         }
       },
       "deepseek/deepseek-v4-pro-0813:thinking": {
@@ -21001,7 +21001,7 @@
         "cost": {
           "input": 0.1,
           "output": 0.4,
-          "cache_read": 0.006
+          "cache_read": 0.003
         }
       },
       "deepseek/deepseek-v4-pro:thinking": {
@@ -60441,6 +60441,51 @@
         "limit": {
           "context": 1000000,
           "output": 384000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        }
+      },
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+        "family": "glm",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-14",
+        "last_updated": "2026-08-14",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
         },
         "cost": {
           "input": 0,
@@ -135379,8 +135424,8 @@
           "output": 262144
         },
         "cost": {
-          "input": 0,
-          "output": 0
+          "input": 0.47,
+          "output": 3.19
         }
       },
       "qwen3-32b": {
@@ -140509,6 +140554,33 @@
           "output": 3.5
         }
       },
+      "typesafe-ai/jev": {
+        "id": "typesafe-ai/jev",
+        "name": "Jev",
+        "description": "Evaluation model for fast, structured decisions in software, returning choices, scores, and boolean probabilities",
+        "attachment": false,
+        "reasoning": false,
+        "tool_call": false,
+        "release_date": "2026-09-15",
+        "last_updated": "2026-09-15",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "cost": {
+          "input": 0.042,
+          "output": 0
+        }
+      },
       "xiaomi/mimo-v2.5": {
         "id": "xiaomi/mimo-v2.5",
         "name": "MiMo M2.5",
@@ -141140,7 +141212,6 @@
         "id": "alibaba/wan-v3.0-video",
         "name": "Wan v3.0 Video",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": true,
         "reasoning": false,
         "tool_call": false,
@@ -141209,7 +141280,6 @@
         "id": "alibaba/wan-v2.7-r2v",
         "name": "Wan v2.7 Reference-to-Video",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -141279,7 +141349,6 @@
         "id": "alibaba/wan-v2.6-t2v",
         "name": "Wan v2.6 Text-to-Video",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -141304,7 +141373,6 @@
         "id": "alibaba/wan-v3.0-video-prime",
         "name": "Wan v3.0 Video Prime",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": true,
         "reasoning": false,
         "tool_call": false,
@@ -141665,7 +141733,6 @@
         "id": "alibaba/wan-v2.6-r2v",
         "name": "Wan v2.6 Reference-to-Video",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -141845,7 +141912,6 @@
         "id": "alibaba/wan-v2.6-i2v-flash",
         "name": "Wan v2.6 Image-to-Video Flash",
         "description": "Image model for prompt-driven generation, editing, and visual design workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -141912,7 +141978,6 @@
         "id": "alibaba/wan-v2.6-r2v-flash",
         "name": "Wan v2.6 Reference-to-Video Flash",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -141937,7 +142002,6 @@
         "id": "alibaba/wan-v2.5-t2v-preview",
         "name": "Wan v2.5 Text-to-Video Preview",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -142038,7 +142102,6 @@
         "id": "alibaba/wan-v2.6-i2v",
         "name": "Wan v2.6 Image-to-Video",
         "description": "Image model for prompt-driven generation, editing, and visual design workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -142291,7 +142354,6 @@
         "id": "alibaba/wan-v2.7-t2v",
         "name": "Wan v2.7 Text-to-Video",
         "description": "Video model for prompt-guided generation, editing, and motion workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -145861,7 +145923,6 @@
         "id": "quiverai/arrow-1.1",
         "name": "Arrow 1.1",
         "description": "Image model for prompt-driven generation, editing, and visual design workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146398,7 +146459,6 @@
         "id": "fish-audio/transcribe-1",
         "name": "Transcribe-1",
         "description": "Speech transcription model for accurate audio-to-text and captioning workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146422,7 +146482,6 @@
         "id": "fish-audio/s2.1-pro-free",
         "name": "S2.1 Pro (Free)",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146446,7 +146505,6 @@
         "id": "fish-audio/s2.1-pro",
         "name": "S2.1 Pro",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146470,7 +146528,6 @@
         "id": "fish-audio/s1-free",
         "name": "S1 (Free)",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146494,7 +146551,6 @@
         "id": "fish-audio/s2-pro",
         "name": "S2 Pro",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146518,7 +146574,6 @@
         "id": "fish-audio/s2-pro-free",
         "name": "S2 Pro (Free)",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146542,7 +146597,6 @@
         "id": "fish-audio/transcribe-1-free",
         "name": "Transcribe-1 (Free)",
         "description": "Speech transcription model for accurate audio-to-text and captioning workflows",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -146566,7 +146620,6 @@
         "id": "fish-audio/s1",
         "name": "S1",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -148020,7 +148073,6 @@
         "id": "openai/tts-1",
         "name": "TTS-1",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -149107,7 +149159,6 @@
         "id": "openai/tts-1-hd",
         "name": "TTS-1 HD",
         "description": "Speech generation model for controllable voice, narration, and audio delivery",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -149333,6 +149384,7 @@
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
+        "temperature": false,
         "release_date": "2026-09-08",
         "last_updated": "2026-09-08",
         "modalities": {
@@ -149734,6 +149786,7 @@
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
+        "temperature": false,
         "release_date": "2026-09-08",
         "last_updated": "2026-09-08",
         "modalities": {
@@ -150948,7 +151001,6 @@
         "id": "inference-net/schematron-v2-small",
         "name": "Schematron V2 Small",
         "description": "Efficient model for low-latency assistance, extraction, and routine automation",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -150977,7 +151029,6 @@
         "id": "inference-net/schematron-v2-turbo",
         "name": "Schematron V2 Turbo",
         "description": "Efficient model for low-latency assistance, extraction, and routine automation",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -151006,7 +151057,6 @@
         "id": "cohere/rerank-v4-pro",
         "name": "Cohere Rerank 4 Pro",
         "description": "Reranking model for improving retrieval quality in search and recommendation systems",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -151031,7 +151081,6 @@
         "id": "cohere/rerank-v4-fast",
         "name": "Cohere Rerank 4 Fast",
         "description": "Reranking model for improving retrieval quality in search and recommendation systems",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -151111,7 +151160,6 @@
         "id": "cohere/rerank-v3.5",
         "name": "Cohere Rerank 3.5",
         "description": "Reranking model for improving retrieval quality in search and recommendation systems",
-        "family": "o",
         "attachment": false,
         "reasoning": false,
         "tool_call": false,
@@ -195379,13 +195427,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1048576,
-          "output": 384000
+          "context": 1000000,
+          "output": 393216
         },
         "cost": {
-          "input": 0.7,
-          "output": 2.96,
-          "cache_read": 0.033
+          "input": 0.5808,
+          "output": 1.7424,
+          "cache_read": 0.05808
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -195422,8 +195470,8 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1048576,
-          "output": 943718
+          "context": 1000000,
+          "output": 393216
         },
         "cost": {
           "input": 0.15,
@@ -200706,9 +200754,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 2,
-          "output": 11.2,
-          "cache_read": 0.232
+          "input": 2.1,
+          "output": 10.95,
+          "cache_read": 0.23
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -200898,8 +200946,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 1048576,
-          "output": 384000
+          "context": 1000000,
+          "output": 393216
         },
         "cost": {
           "input": 1.32,
@@ -210900,6 +210948,37 @@
           "cache_read": 0.075
         }
       },
+      "gpt-image-2.5-sunburst": {
+        "id": "gpt-image-2.5-sunburst",
+        "name": "GPT Image 2.5 Sunburst",
+        "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+        "family": "gpt-image",
+        "attachment": true,
+        "reasoning": false,
+        "tool_call": false,
+        "temperature": false,
+        "release_date": "2026-09-08",
+        "last_updated": "2026-09-08",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "cost": {
+          "input": 5,
+          "output": 30,
+          "cache_read": 1.25
+        }
+      },
       "grok-4.6": {
         "id": "grok-4.6",
         "name": "Grok 4.6",
@@ -211563,6 +211642,37 @@
         "cost": {
           "input": 1.5,
           "output": 2
+        }
+      },
+      "gpt-image-2.5-flare": {
+        "id": "gpt-image-2.5-flare",
+        "name": "GPT Image 2.5 Flare",
+        "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+        "family": "gpt-image",
+        "attachment": true,
+        "reasoning": false,
+        "tool_call": false,
+        "temperature": false,
+        "release_date": "2026-09-08",
+        "last_updated": "2026-09-08",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "cost": {
+          "input": 5,
+          "output": 30,
+          "cache_read": 1.25
         }
       },
       "gpt-5.6-terra": {
@@ -239348,12 +239458,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 384000
+          "output": 393216
         },
         "cost": {
-          "input": 0.7,
-          "output": 2.96,
-          "cache_read": 0.033
+          "input": 0.5808,
+          "output": 1.7424,
+          "cache_read": 0.05808
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -239393,7 +239503,7 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 943718
+          "output": 393216
         },
         "cost": {
           "input": 0.15,
@@ -243923,8 +244033,8 @@
           "output": 117964
         },
         "cost": {
-          "input": 0.35,
-          "output": 1.5,
+          "input": 0.3,
+          "output": 1.1,
           "cache_read": 0.04
         }
       },
@@ -244917,9 +245027,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 2,
-          "output": 11.2,
-          "cache_read": 0.232
+          "input": 2.1,
+          "output": 10.95,
+          "cache_read": 0.23
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -245111,12 +245221,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 384000
+          "output": 393216
         },
         "cost": {
-          "input": 1.32,
-          "output": 3.96,
-          "cache_read": 0.044
+          "input": 0.5808,
+          "output": 1.7424,
+          "cache_read": 0.05808
         }
       },
       "deepseek/deepseek-v4-flash-0731": {
@@ -245206,9 +245316,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.088606,
-          "output": 0.177212,
-          "cache_read": 0.017721
+          "input": 0.07,
+          "output": 0.14,
+          "cache_read": 0.014
         }
       },
       "deepseek/deepseek-v4.1-flash": {
@@ -245252,9 +245362,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.3,
-          "output": 1.2,
-          "cache_read": 0.006
+          "input": 0.15,
+          "output": 0.6,
+          "cache_read": 0.003
         }
       },
       "deepseek/deepseek-r1": {
@@ -255063,6 +255173,47 @@
           "cache_write": 0.31
         }
       },
+      "bailian/qwen3.8-flash": {
+        "id": "bailian/qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+        "family": "qwen",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "budget_tokens"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "release_date": "2026-08-26",
+        "last_updated": "2026-08-26",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.47,
+          "cache_read": 0.016,
+          "cache_write": 0.2
+        }
+      },
       "bailian/qwen3.6-max-preview": {
         "id": "bailian/qwen3.6-max-preview",
         "name": "Qwen3.6 Max Preview",
@@ -263539,6 +263690,53 @@
         "limit": {
           "context": 1048576,
           "output": 512000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0
+        }
+      },
+      "DeepSeek-V4.1-Flash": {
+        "id": "DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 384000
         },
         "cost": {
           "input": 0,
@@ -290245,38 +290443,6 @@
           "cache_read": 0.18
         }
       },
-      "llama-3.1-405b-instruct": {
-        "id": "llama-3.1-405b-instruct",
-        "name": "Llama 3.1 405B Instruct",
-        "description": "Open Llama instruction model for multilingual chat, reasoning, and coding",
-        "family": "llama",
-        "attachment": false,
-        "reasoning": true,
-        "reasoning_options": [],
-        "tool_call": true,
-        "structured_output": true,
-        "temperature": true,
-        "knowledge": "2023-12",
-        "release_date": "2024-07-23",
-        "last_updated": "2024-07-23",
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "open_weights": true,
-        "limit": {
-          "context": 128000,
-          "output": 128000
-        },
-        "cost": {
-          "input": 1.95,
-          "output": 1.95
-        }
-      },
       "qwen3-32b": {
         "id": "qwen3-32b",
         "name": "Qwen3 32B",
@@ -293171,6 +293337,63 @@
       }
     }
   },
+  "ainetcafe": {
+    "id": "ainetcafe",
+    "env": [
+      "AINETCAFE_API_KEY"
+    ],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://microquickjs.com/v1",
+    "name": "ainetcafe",
+    "doc": "https://ainetcafe.com/k3/guides/",
+    "models": {
+      "Kimi-K3": {
+        "id": "Kimi-K3",
+        "name": "Kimi K3",
+        "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+        "family": "kimi-k3",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": false,
+        "release_date": "2026-07-16",
+        "last_updated": "2026-07-16",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "output": 32768
+        },
+        "cost": {
+          "input": 2.1,
+          "output": 10.5,
+          "cache_read": 0.3
+        }
+      }
+    }
+  },
   "hpc-ai": {
     "id": "hpc-ai",
     "env": [
@@ -295703,6 +295926,51 @@
         "limit": {
           "context": 1000000,
           "output": 384000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        }
+      },
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+        "family": "glm",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-08-14",
+        "last_updated": "2026-08-14",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
         },
         "cost": {
           "input": 0,
