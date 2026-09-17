@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   Mic,
+  Monitor,
   MousePointer2,
   Radio,
   Settings2,
@@ -49,13 +50,14 @@ export function assistantLiveOrbState(
   if (!live.available && !live.setupComplete) return "unavailable";
   if (live.error || ["failed", "disconnected"].includes(live.state)) return "error";
   if (approvalPending) return "approval";
+  if (live.state === "closing") return "ready";
   if (live.busy || ["connecting", "resuming", "closing"].includes(live.state)) return "connecting";
   if (!live.active) return "ready";
   if (live.computerUseActing) return "acting";
   const latest = live.captions[live.captions.length - 1];
   if (latest?.direction === "output" && !latest.sealed) return "speaking";
   if (latest?.direction === "input" && latest.final) return "thinking";
-  return live.microphoneActive ? "listening" : "ready";
+  return "listening";
 }
 
 function ReadinessRow({
@@ -66,6 +68,7 @@ function ReadinessRow({
   busy = false,
   action,
   onAction,
+  trailing,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -74,6 +77,8 @@ function ReadinessRow({
   busy?: boolean;
   action: string;
   onAction(): void;
+  /** Extra controls shown beside the ready mark once the row is ready. */
+  trailing?: React.ReactNode;
 }): React.ReactElement {
   return (
     <div className="gemini-live-readiness-row">
@@ -100,6 +105,7 @@ function ReadinessRow({
           <ChevronRight className="size-3.5" aria-hidden="true" />
         </Button>
       )}
+      {trailing}
     </div>
   );
 }
@@ -156,11 +162,54 @@ export function AssistantLiveSetupDialog({
         <ReadinessRow
           icon={<Mic className="size-4" />}
           title="Microphone"
-          detail={live.microphonePermissionDetail}
+          detail={`${live.microphonePermissionDetail} Choose input and output devices in Settings → Aiden Live.`}
           ready={live.microphonePermission === "granted"}
           action="Allow"
           onAction={() => void live.requestMicrophonePermission()}
         />
+        {live.screenShareAvailable ? (
+          <ReadinessRow
+            icon={<Monitor className="size-4" />}
+            title="Screen share"
+            detail={
+              live.screenSourceLabel
+                ? `Ready to share ${live.screenSourceLabel} — one frame a second, only while Live runs.`
+                : "Optional. Share one screen or window so Aiden can see what you see."
+            }
+            ready={Boolean(live.screenSourceLabel)}
+            busy={live.screenBusy}
+            action="Choose…"
+            onAction={() => void live.chooseScreenSource()}
+            trailing={
+              live.screenSourceLabel ? (
+                <span className="flex items-center gap-1">
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    className={ASSISTANT_LIVE_FOCUS_CLASS}
+                    onClick={() => void live.chooseScreenSource()}
+                    disabled={live.screenBusy}
+                  >
+                    Change
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    className={ASSISTANT_LIVE_FOCUS_CLASS}
+                    onClick={live.releaseScreen}
+                  >
+                    Remove
+                  </Button>
+                </span>
+              ) : null
+            }
+          />
+        ) : null}
+        {live.screenError ? (
+          <p role="alert" className="gemini-live-setup-error">
+            {live.screenError}
+          </p>
+        ) : null}
         <ReadinessRow
           icon={<MousePointer2 className="size-4" />}
           title="Screen and Accessibility"
@@ -177,7 +226,7 @@ export function AssistantLiveSetupDialog({
         <ReadinessRow
           icon={<Settings2 className="size-4" />}
           title="Scheduled tasks"
-          detail="Live can open Aiden and create recurring or one-time tasks with your confirmation."
+          detail="Ask Live to create recurring or one-time tasks in Aiden."
           ready
           action="Review"
           onAction={() => onOpenSettings("scheduledTasks")}
@@ -210,7 +259,7 @@ export function AssistantLiveSetupDialog({
           <HoverCardContent align="end" className="w-80">
             <p className="text-xs font-medium text-primary">Live session privacy</p>
             <p className="mt-1 text-xs leading-5 text-secondary">
-              Screen actions use Computer Use and still require Allow once. Audio and captions
+              Starting Live enables screen actions without per-action prompts until you stop. Audio and captions
               remain in memory for this Live session and are not added to chat history.
             </p>
           </HoverCardContent>
@@ -277,6 +326,12 @@ export function AssistantLiveHud({
               {STATE_LABEL[live.state]}
             </p>
             {orbState === "approval" ? <Badge color="blue">Approval needed</Badge> : null}
+            {live.screenActive ? (
+              <Badge color="blue">
+                <Monitor className="size-3" aria-hidden="true" />
+                Sharing {live.screenSourceLabel ?? "screen"}
+              </Badge>
+            ) : null}
           </div>
           <p className="truncate text-xs text-tertiary" title={live.model ?? "Google Gemini"}>
             Google Gemini{live.model ? ` · ${live.model}` : ""}

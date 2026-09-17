@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { OrbState } from "thinking-orbs";
 import { AidenOrb } from "../aiden-orb";
 
 export type AidenLiveOrbState =
@@ -13,21 +12,10 @@ export type AidenLiveOrbState =
   | "error"
   | "unavailable";
 
-const ORB_PRESENTATION: Record<
-  AidenLiveOrbState,
-  { state: OrbState; active: boolean }
-> = {
-  ready: { state: "breathing", active: false },
-  connecting: { state: "connecting", active: true },
-  // Listening deliberately uses Libraries.dev's calm breathing treatment.
-  listening: { state: "breathing", active: true },
-  thinking: { state: "solving", active: true },
-  speaking: { state: "composing", active: true },
-  acting: { state: "working", active: true },
-  approval: { state: "shaping", active: true },
-  error: { state: "breathing", active: false },
-  unavailable: { state: "breathing", active: false },
-};
+export function aidenLiveOrbVisual(state: AidenLiveOrbState): "duplex" | "connecting" | "rest" {
+  if (["listening", "thinking", "speaking", "acting"].includes(state)) return "duplex";
+  return state === "connecting" ? "connecting" : "rest";
+}
 
 export function AidenLiveOrb({
   state,
@@ -38,22 +26,28 @@ export function AidenLiveOrb({
   level?: number;
   className?: string;
 }): React.ReactElement {
-  const presentation = ORB_PRESENTATION[state];
-  const boundedLevel = Math.max(0, Math.min(1, level));
+  const visual = aidenLiveOrbVisual(state);
+  const boundedLevel = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0;
 
   return (
     <span
       className={`aiden-live-orb ${className ?? ""}`.trim()}
       data-state={state}
+      data-visual={visual}
       style={{ "--aiden-live-level": boundedLevel } as React.CSSProperties}
       aria-hidden="true"
     >
-      <AidenOrb
-        state={presentation.state}
-        size={64}
-        active={presentation.active}
-        className="aiden-live-orb-canvas"
-      />
+      {/* Stable layers preserve animation phase across simultaneous voice/tool events. */}
+      <span className="aiden-live-orb-layer" data-layer="rest">
+        <AidenOrb state="breathing" size={64} active={false} className="aiden-live-orb-canvas" />
+      </span>
+      <span className="aiden-live-orb-layer" data-layer="connecting">
+        <AidenOrb state="connecting" size={64} active={visual === "connecting"} className="aiden-live-orb-canvas" />
+      </span>
+      <span className="aiden-live-orb-layer" data-layer="duplex">
+        <span className="aiden-live-duplex-listening"><AidenOrb state="listening" size={64} active={visual === "duplex"} className="aiden-live-orb-canvas" /></span>
+        <span className="aiden-live-duplex-weaving"><AidenOrb state="weaving" size={64} active={visual === "duplex"} className="aiden-live-orb-canvas" /></span>
+      </span>
     </span>
   );
 }

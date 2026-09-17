@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { LiveAudioDeviceFields } from "../settings/live-audio-settings.js";
+
+test("Live settings expose labeled input and output selectors with system defaults", () => {
+  const html = renderToStaticMarkup(<LiveAudioDeviceFields value={{ input: "default", output: "default" }} devices={[]} onChange={() => undefined} />);
+  assert.match(html, /Live input device/);
+  assert.match(html, /Live output device/);
+  assert.match(html, /System default/);
+  assert.match(html, /replies and start\/stop sounds/);
+});
+
+test("Live audio player ownership survives asynchronous capability refresh", () => {
+  const source = readFileSync(new URL("./use-assistant-live.ts", import.meta.url), "utf8");
+  assert.match(source, /\[audioDependencies\] = React\.useState\(\(\) => defaultDependencies\(false\)\)/);
+  assert.match(source, /\.\.\.audioDependencies,\s+geminiLive,/);
+});
 import { renderToStaticMarkup } from "react-dom/server";
-import { AssistantDockPresentation } from "./assistant-dock.js";
+import { AssistantDockPresentation, liveDockClickAction } from "./assistant-dock.js";
+import { aidenLiveOrbVisual, AidenLiveOrb } from "./aiden-live-orb.js";
 import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
 import {
   assistantLiveVoiceApprovalDecision,
@@ -40,16 +56,48 @@ const idleLive: AssistantLiveController = {
   computerUseDetail: "Ready",
   computerUsePermissions: { accessibility: true, screenRecording: true },
   computerUseError: null,
+  screenShareAvailable: false,
+  screenSourceLabel: null,
+  screenActive: false,
+  screenBusy: false,
+  screenError: null,
   setupComplete: true,
   setSetupOpen: () => undefined,
   setMicrophone: () => undefined,
   setComputerUse: async () => undefined,
   requestMicrophonePermission: async () => true,
   prepareComputerUse: async () => undefined,
+  chooseScreenSource: async () => undefined,
+  releaseScreen: () => undefined,
   start: async () => undefined,
   stop: async () => undefined,
   cancelSetup: async () => undefined,
 };
+
+test("duplex visuals remain stable through voice and action changes", () => {
+  for (const state of ["listening", "thinking", "speaking", "acting"] as const) {
+    assert.equal(aidenLiveOrbVisual(state), "duplex");
+    const markup = renderToStaticMarkup(<AidenLiveOrb state={state} level={NaN} />);
+    assert.match(markup, /data-visual="duplex"/);
+    assert.doesNotMatch(markup, /NaN/);
+  }
+  assert.equal(aidenLiveOrbVisual("error"), "rest");
+  assert.equal(aidenLiveOrbVisual("connecting"), "connecting");
+  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
+  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
+});
+
+test("dock requires reveal then stop, including mic-off and first-session startup", () => {
+  const active = { ...idleLive, active: true, state: "open" as const };
+  assert.equal(liveDockClickAction(active, true, false), "reveal-stop");
+  assert.equal(liveDockClickAction(active, true, true), "stop");
+  assert.equal(liveDockClickAction(active, false, false), "reveal-stop");
+  assert.equal(liveDockClickAction({ ...active, state: "closing", busy: true }, true, true), "none");
+  assert.equal(liveDockClickAction({ ...idleLive, busy: true }, true, false), "none");
+  assert.equal(liveDockClickAction(idleLive, true, false), "start");
+  assert.equal(liveDockClickAction(idleLive, false, false), "setup");
+  assert.equal(liveDockClickAction({ ...idleLive, setupComplete: false }, true, false), "settings");
+});
 
 test("Aiden Live orb state prioritizes errors, approvals, and connection work", () => {
   assert.equal(assistantLiveOrbState(idleLive), "ready");
@@ -164,7 +212,8 @@ test("dock replaces the retired Assistant panel with setup logo then Live orb", 
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.match(dock, /AidenLiveOrb/u);
   assert.match(dock, /AssistantComputerUseApproval/u);
-  assert.match(dock, /live\.latestVoiceApprovalReceiptId/u);
+  assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
+  assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
   assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.doesNotMatch(dock, /onDecision=/u);
   assert.doesNotMatch(dock, /useAssistantChat/u);
@@ -186,7 +235,20 @@ test("a disabled Live capability renders no dock or setup affordance", () => {
   assert.equal(commandEnabled, false);
 });
 
-test("Computer Use approvals are voice-only and keep the exact action visible", () => {
+test("a disconnected Live error stays visible and microphone status is screen-reader-only", () => {
+  const render = (live: AssistantLiveController) => renderToStaticMarkup(
+    <AssistantDockPresentation
+      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+      live={live}
+      useCommand={() => undefined}
+    />,
+  );
+  assert.match(render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }), /The Live provider sent an invalid event\./);
+  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /Listening · mic on/);
+  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /class="sr-only"/);
+});
+
+test("legacy voice approval presentation remains isolated from the direct-action dock", () => {
   const approval = readFileSync(
     new URL("./assistant-computer-use-approval.tsx", import.meta.url),
     "utf8",
@@ -200,14 +262,24 @@ test("Computer Use approvals are voice-only and keep the exact action visible", 
   assert.match(hook, /consumedReceiptIds/u);
 });
 
-test("setup discloses macOS access and per-action approval", () => {
+test("setup discloses macOS access and direct actions until Stop", () => {
   const live = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
   assert.match(live, /Google Live model/u);
   assert.match(live, /Screen and Accessibility/u);
   assert.match(live, /Scheduled tasks/u);
-  assert.match(live, /still require Allow once/u);
+  assert.match(live, /without per-action prompts until you stop/u);
   assert.match(live, /role="log"/u);
   assert.match(live, /aria-live="polite"/u);
+});
+
+test("screen sharing is opt-in, source-labelled, and visibly active in the HUD", () => {
+  const live = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  assert.match(live, /live\.screenShareAvailable/u);
+  assert.match(live, /title="Screen share"/u);
+  assert.match(live, /live\.chooseScreenSource/u);
+  assert.match(live, /live\.releaseScreen/u);
+  assert.match(live, /Sharing \{live\.screenSourceLabel \?\? "screen"\}/u);
+  assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
 });
 
 test("Aiden Live is visibly marked beta in setup and settings", () => {
@@ -239,7 +311,8 @@ test("the Live orb maps all user-visible states onto the shared Libraries.dev or
     assert.match(orb, new RegExp(`\\b${state}\\b`, "u"));
   }
   assert.match(orb, /import \{ AidenOrb \} from "\.\.\/aiden-orb"/u);
-  assert.match(orb, /listening: \{ state: "breathing", active: true \}/u);
+  assert.match(orb, /state="listening"/u);
+  assert.match(orb, /state="weaving"/u);
   assert.doesNotMatch(orb, /Rive|\.riv/u);
   assert.match(styles, /\.aiden-live-orb-canvas[\s\S]*filter:[\s\S]*hue-rotate\(209deg\)/u);
   assert.match(

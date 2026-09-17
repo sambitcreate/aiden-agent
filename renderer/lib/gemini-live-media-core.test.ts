@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  GEMINI_LIVE_FRAME_MAX_DIMENSION,
+  GEMINI_LIVE_MAX_FRAME_BYTES,
   GEMINI_LIVE_PCM_WORKLET_NAME,
   GeminiLivePcmChunker,
   GeminiLivePcmPlaybackQueue,
   bindDisplayCaptureLifecycle,
+  geminiLiveScaledFrameSize,
   measureGeminiLivePcmLevel,
   resolveGeminiLivePcmWorkletUrl,
   type DisplayMediaTrack,
@@ -67,6 +70,30 @@ test("an already canceled display request tears down immediately", () => {
   );
   assert.deepEqual(stopped, ["aborted"]);
   assert.equal(track.stops, 1);
+});
+
+test("screen frames scale down to the bounded JPEG budget and never upscale", () => {
+  assert.equal(GEMINI_LIVE_MAX_FRAME_BYTES, 1_500_000);
+  assert.deepEqual(geminiLiveScaledFrameSize(3840, 2160), { width: 1280, height: 720 });
+  assert.deepEqual(geminiLiveScaledFrameSize(2560, 1440), { width: 1280, height: 720 });
+  assert.deepEqual(geminiLiveScaledFrameSize(800, 600), { width: 800, height: 600 });
+  assert.deepEqual(geminiLiveScaledFrameSize(100, 4000), { width: 32, height: 1280 });
+  assert.equal(
+    Math.max(
+      geminiLiveScaledFrameSize(10_000, 10_000).width,
+      geminiLiveScaledFrameSize(10_000, 10_000).height,
+    ),
+    GEMINI_LIVE_FRAME_MAX_DIMENSION,
+  );
+  for (const [width, height] of [
+    [0, 100],
+    [100, 0],
+    [-1, 100],
+    [Number.NaN, 100],
+    [100, Number.POSITIVE_INFINITY],
+  ]) {
+    assert.throws(() => geminiLiveScaledFrameSize(width, height), /invalid/iu);
+  }
 });
 
 test("the pure AudioWorklet counterpart resamples to mono 16 kHz signed PCM in 20 ms chunks", () => {

@@ -4,6 +4,11 @@ export const GEMINI_LIVE_WORKLET_SAMPLE_RATE = 16_000;
 export const GEMINI_LIVE_WORKLET_CHUNK_MS = 20;
 export const GEMINI_LIVE_PLAYBACK_SAMPLE_RATE = 24_000;
 export const GEMINI_LIVE_MAX_PLAYBACK_BYTES = GEMINI_LIVE_PLAYBACK_SAMPLE_RATE * 2 * 2;
+export const GEMINI_LIVE_FRAME_INTERVAL_MS = 1_000;
+export const GEMINI_LIVE_FRAME_MAX_DIMENSION = 1_280;
+export const GEMINI_LIVE_FRAME_JPEG_QUALITY = 0.75;
+// Mirrors the protocol's bounded JPEG admission ceiling in main.
+export const GEMINI_LIVE_MAX_FRAME_BYTES = 1_500_000;
 
 const TARGET_SAMPLES_PER_CHUNK =
   (GEMINI_LIVE_WORKLET_SAMPLE_RATE * GEMINI_LIVE_WORKLET_CHUNK_MS) / 1_000;
@@ -24,6 +29,7 @@ export function measureGeminiLivePcmLevel(pcm: Uint8Array): number {
 
 export interface DisplayMediaTrack {
   readonly readyState?: string;
+  readonly label?: string;
   addEventListener(type: "ended", listener: () => void, options?: { once?: boolean }): void;
   removeEventListener(type: "ended", listener: () => void): void;
   stop(): void;
@@ -34,6 +40,35 @@ export interface DisplayMediaStream {
 }
 
 export type DisplayCaptureStopReason = "aborted" | "ended" | "stopped";
+
+/** Latest frame the session may send; null while the source has no picture. */
+export interface GeminiLiveDisplayFrameSource {
+  capture(): Promise<Uint8Array | null>;
+  stop(): void;
+}
+
+/** Downscale to the bounded JPEG budget; never upscale a smaller source. */
+export function geminiLiveScaledFrameSize(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error("Live screen frame dimensions are invalid.");
+  }
+  const scale = Math.min(
+    1,
+    GEMINI_LIVE_FRAME_MAX_DIMENSION / Math.max(width, height),
+  );
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
 
 export function resolveGeminiLivePcmWorkletUrl(baseUrl: string): string {
   return new URL(GEMINI_LIVE_PCM_WORKLET_PATH, baseUrl).href;

@@ -1,5 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { LiveAudioDeviceError } from "../../lib/live-audio-devices.js";
+
+test("Live device preparation failure prevents provider start and surfaces recovery", async () => {
+  const fixture = await mountHook({ prepareAudioSession: async () => { throw new LiveAudioDeviceError("Choose another output in Aiden Live settings."); } });
+  try {
+    await fixture.controller().start();
+    await settle();
+    assert.equal(fixture.startCalls(), 0);
+    assert.match(fixture.controller().error ?? "", /Choose another output/);
+  } finally { await fixture.unmount(); }
+});
+
+test("cancelling device preparation fences provider start", async () => {
+  const pending = deferred<void>();
+  const fixture = await mountHook({ prepareAudioSession: () => pending.promise });
+  try {
+    const starting = fixture.controller().start();
+    await settle();
+    await fixture.controller().cancelSetup();
+    pending.resolve();
+    await starting;
+    assert.equal(fixture.startCalls(), 0);
+  } finally { await fixture.unmount(); }
+});
+
+test("output preparation closes its context when cancelled during sink selection", async () => {
+  const pending = deferred<void>();
+  let closed = false;
+  const context = { setSinkId: () => pending.promise, close: async () => { closed = true; } } as unknown as AudioContext;
+  const player = new PcmPlayer(() => context);
+  const abort = new AbortController();
+  const preparing = player.prepareOutput("speaker", abort.signal);
+  await settle();
+  abort.abort();
+  pending.resolve();
+  await preparing;
+  assert.equal(closed, true);
+});
 import { DOMImplementation } from "@xmldom/xmldom";
 import type {
   AssistantLiveRendererEvent,
@@ -106,7 +144,7 @@ interface HookFixture {
   contexts: FakeCaptureContext[];
   tracks: FakeTrack[];
   player: RecordingPlayer;
-  startIntents(): Array<{ microphone: boolean; computerUseAuthorization: string | null }>;
+  startIntents(): Array<{ microphone: boolean; screen?: boolean; computerUseAuthorization: string | null }>;
   refreshAvailability(): Promise<void>;
   unmount(): Promise<void>;
 }
@@ -286,6 +324,52 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
     },
   };
 }
+
+test("connection cues wait for microphone readiness, deduplicate resume, and sound on stop", async () => {
+  const cues: string[] = [];
+  const media = deferred<MediaStream>();
+  const fixture = await mountHook({
+    getUserMedia: () => media.promise,
+    playConnectionCue: async (cue) => { cues.push(cue); },
+  });
+  try {
+    const starting = fixture.controller().start();
+    await settle();
+    assert.deepEqual(cues, []);
+    media.resolve({ getTracks: () => [new FakeTrack()] } as unknown as MediaStream);
+    await starting;
+    await settle();
+    await settle();
+    assert.deepEqual(cues, ["connected"]);
+    for (const state of ["resuming", "open", "open"] as const) {
+      fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state } });
+      await settle();
+    }
+    assert.deepEqual(cues, ["connected"]);
+    await fixture.controller().stop();
+    await settle();
+    await settle();
+    assert.deepEqual(cues, ["connected", "disconnected"]);
+  } finally { await fixture.unmount(); }
+});
+
+test("unexpected disconnect sounds once even if cue playback fails", async () => {
+  const cues: string[] = [];
+  const fixture = await mountHook({ playConnectionCue: async (cue) => {
+    cues.push(cue);
+    throw new Error("audio unavailable");
+  } });
+  try {
+    await fixture.controller().start();
+    await settle();
+    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state: "disconnected" } });
+    await settle();
+    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", state: "disconnected" } });
+    await settle();
+    assert.deepEqual(cues, ["connected", "disconnected"]);
+    assert.equal(fixture.controller().microphoneActive, false);
+  } finally { await fixture.unmount(); }
+});
 
 test("provider refresh rechecks Live availability without remounting or reconnecting", async () => {
   let hasGoogleCredential = false;
@@ -470,7 +554,7 @@ test("Computer Use restores the one-time setup opt in after readiness is revalid
   assert.match(fixture.controller().computerUseDetail, /Accessibility and Screen Recording/u);
   await fixture.controller().start();
   assert.deepEqual(fixture.startIntents(), [
-    { microphone: true, computerUseAuthorization: "test-authorization" },
+    { microphone: true, computerUseAuthorization: "test-authorization", screen: false },
   ]);
   await fixture.controller().stop();
   await fixture.controller().setComputerUse(false);
@@ -1361,4 +1445,225 @@ test("playback interruption stops an already active source", async () => {
   player.pauseAndFlush();
   assert.equal(stops, 1);
   await player.close();
+});
+
+class FakeDisplayTrack {
+  readyState = "live";
+  stops = 0;
+  readonly listeners = new Set<() => void>();
+
+  constructor(readonly label = "Aiden window") {}
+
+  addEventListener(_type: "ended", listener: () => void): void {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener(_type: "ended", listener: () => void): void {
+    this.listeners.delete(listener);
+  }
+
+  stop(): void {
+    this.stops += 1;
+    this.readyState = "ended";
+  }
+
+  end(): void {
+    this.readyState = "ended";
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
+interface ScreenFixtureOptions {
+  snapshot: AssistantLiveSnapshot;
+  startCalls: Array<{ screen: boolean }>;
+  framesSent: Array<{ sessionId: string; frame: Uint8Array }>;
+  binds: number[];
+  releases: number[];
+  displayTrack: FakeDisplayTrack;
+  frameSource: {
+    captures: number;
+    stops: number;
+    capture(): Promise<Uint8Array | null>;
+    stop(): void;
+  };
+}
+
+function screenDependencies(): {
+  dependencies: Partial<AssistantLiveDependencies>;
+  state: ScreenFixtureOptions;
+} {
+  const displayTrack = new FakeDisplayTrack();
+  const state: ScreenFixtureOptions = {
+    snapshot: {
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      screenShareAllowed: true,
+      state: "idle",
+    },
+    startCalls: [],
+    framesSent: [],
+    binds: [],
+    releases: [],
+    displayTrack,
+    frameSource: {
+      captures: 0,
+      stops: 0,
+      capture: async () => {
+        state.frameSource.captures += 1;
+        return new Uint8Array([0xff, 0xd8, 0x2a, 0xff, 0xd9]);
+      },
+      stop: () => {
+        state.frameSource.stops += 1;
+      },
+    },
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => state.snapshot,
+    start: async (intent) => {
+      state.startCalls.push({ screen: intent.screen === true });
+      state.snapshot = {
+        ...state.snapshot,
+        sessionId: `screen-${state.startCalls.length}`,
+        state: "open",
+      };
+      return state.snapshot;
+    },
+    stop: async () => {
+      state.snapshot = { ...state.snapshot, sessionId: undefined, state: "idle" };
+      return state.snapshot;
+    },
+    sendAudio: async () => true,
+    bindDisplay: async () => {
+      state.binds.push(1);
+      return true;
+    },
+    releaseDisplay: async () => {
+      state.releases.push(1);
+      return true;
+    },
+    sendFrame: async (sessionId, frame) => {
+      state.framesSent.push({ sessionId, frame });
+      return true;
+    },
+    onEvent: () => () => undefined,
+  };
+  return {
+    state,
+    dependencies: {
+      api,
+      getDisplayMedia: async () => ({
+        getTracks: () => [state.displayTrack],
+      }),
+      createDisplayFrameSource: async () => state.frameSource,
+    },
+  };
+}
+
+test("a chosen screen source shares one bounded frame only while its session runs", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  assert.equal(fixture.controller().screenShareAvailable, true);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 1);
+  assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  assert.equal(state.startCalls.length, 0, "the picker alone never starts Live");
+  assert.equal(state.framesSent.length, 0, "no frame flows before a session exists");
+
+  await fixture.controller().start();
+  await settle();
+  assert.deepEqual(state.startCalls, [{ screen: true }]);
+  assert.equal(fixture.controller().screenActive, true);
+  assert.equal(state.framesSent.length, 1);
+  assert.equal(state.framesSent[0]?.sessionId, "screen-1");
+  assert.equal(state.frameSource.stops, 0);
+  assert.equal(state.displayTrack.stops, 0);
+
+  await fixture.controller().stop();
+  await settle();
+  const sentAtStop = state.framesSent.length;
+  assert.equal(state.displayTrack.stops, 1);
+  assert.equal(state.frameSource.stops, 1);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await settle();
+  assert.equal(state.framesSent.length, sentAtStop, "no frame flows after Stop");
+  await fixture.unmount();
+});
+
+test("the picker is unavailable until the screen gate admits this document", async () => {
+  const { dependencies, state } = screenDependencies();
+  state.snapshot = { ...state.snapshot, screenShareAllowed: false };
+  const fixture = await mountHook(dependencies);
+  assert.equal(fixture.controller().screenShareAvailable, false);
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 0);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("a cancelled picker is nonfatal and releases unused binding authority", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      throw new DOMException("cancelled", "NotAllowedError");
+    },
+  });
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 1);
+  assert.equal(state.releases.length, 1, "a failed first pick releases authority");
+  assert.equal(fixture.controller().screenError, null);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  assert.equal(fixture.controller().screenBusy, false);
+  await fixture.unmount();
+});
+
+test("a picker failure that is not cancellation surfaces an accessible error", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      throw new Error("display denied");
+    },
+  });
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.releases.length, 1);
+  assert.match(fixture.controller().screenError ?? "", /screen picker/iu);
+  await fixture.unmount();
+});
+
+test("an externally ended display source stops the Live session instead of streaming a dead feed", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  await fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().screenActive, true);
+
+  state.displayTrack.end();
+  await settle();
+  await settle();
+  assert.equal(fixture.controller().active, false, "the session stops with its source");
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("Live without a chosen source starts audio-only and the picker stays re-armable", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().start();
+  await settle();
+  assert.deepEqual(state.startCalls, [{ screen: false }]);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(state.frameSource.captures, 0);
+  await fixture.controller().stop();
+  await fixture.unmount();
 });

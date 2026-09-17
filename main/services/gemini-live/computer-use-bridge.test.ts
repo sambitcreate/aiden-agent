@@ -74,6 +74,7 @@ class FakeController implements GeminiLiveComputerUseController {
 }
 
 function harness(overrides: {
+  actionPolicy?: "session" | "per-action";
   controller?: FakeController;
   authorized?: () => boolean | Promise<boolean>;
   approve?: (signal: AbortSignal, summary: string) => Promise<boolean>;
@@ -83,6 +84,7 @@ function harness(overrides: {
   const approvalSummaries: string[] = [];
   const bridge = new GeminiLiveComputerUseBridge({
     sessionId: "session-1",
+    actionPolicy: overrides.actionPolicy,
     controller,
     isAuthorized: overrides.authorized ?? (() => true),
     requestApproval: ({ signal, summary }) => {
@@ -93,6 +95,26 @@ function harness(overrides: {
   });
   return { bridge, controller, responses, approvalSummaries };
 }
+
+test("session actions execute without prompts and still bind a fresh target grant", async () => {
+  const h = harness({ actionPolicy: "session", approve: async () => { throw new Error("must not prompt"); } });
+  h.bridge.enqueue({ id: "type", name: "computer_use", args: { action: "type", text: "hello" } });
+  await tick();
+  assert.deepEqual(h.approvalSummaries, []);
+  assert.deepEqual(h.controller.authorizations, ["type"]);
+  assert.deepEqual(h.controller.executions, ["type"]);
+  await h.bridge.close();
+});
+
+test("session actions recheck revoked authority after resolving the target", async () => {
+  let checks = 0;
+  const h = harness({ actionPolicy: "session", authorized: () => ++checks === 1 });
+  h.bridge.enqueue({ id: "type", name: "computer_use", args: { action: "type", text: "hello" } });
+  await tick();
+  assert.deepEqual(h.controller.authorizations, []);
+  assert.deepEqual(h.controller.executions, []);
+  await h.bridge.close();
+});
 
 test("Live bridge rejects unknown tools and fields before the controller", async () => {
   const h = harness();

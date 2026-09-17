@@ -1,4 +1,5 @@
 import { Modality, ThinkingLevel } from "@google/genai";
+import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 import type {
   Content,
   FunctionResponse,
@@ -30,7 +31,7 @@ const MAX_OUTPUT_AUDIO_BYTES_PER_EVENT = 512_000;
 const MAX_OUTPUT_AUDIO_BYTES_PER_SECOND = 768_000;
 const MAX_DECODED_SERVER_EVENT_BYTES = 640_000;
 export const GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES = 96_000;
-const MAX_JPEG_BYTES = 1_500_000;
+export const GEMINI_LIVE_MAX_JPEG_BYTES = 1_500_000;
 const MAX_TEXT_BYTES = 16_384;
 const MAX_HISTORY_TURNS = 16;
 const MAX_HISTORY_BYTES = 65_536;
@@ -442,7 +443,7 @@ function audioChunkDurationMs(bytes: number): number {
 function validJpeg(bytes: Uint8Array): boolean {
   return (
     bytes.length >= 4 &&
-    bytes.length <= MAX_JPEG_BYTES &&
+    bytes.length <= GEMINI_LIVE_MAX_JPEG_BYTES &&
     bytes[0] === 0xff &&
     bytes[1] === 0xd8 &&
     bytes[bytes.length - 2] === 0xff &&
@@ -496,7 +497,7 @@ function liveConnectConfig(
       ? {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction:
-            "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Before any approval-gated Computer Use action, state the exact action and ask the user to say ‘Allow once’ or ‘Deny’. Never claim that an action completed until its tool result confirms it.",
+            "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Execute the user's requested screen actions directly during this Live session without per-action approval prompts. Stop when the user cancels. Never claim that an action completed until its tool result confirms it.",
         }
       : {}),
     ...(handle
@@ -876,10 +877,18 @@ export class GeminiLiveProtocol {
     this.malformedStage = "message";
     if (!isRecord(message)) throw new Error("Invalid Live server message.");
     const keys = Object.keys(message);
+    // Observed from the real Gemini Developer API: an empty protobuf envelope
+    // carries no payload. Count it against rate limits without refreshing liveness.
+    if (keys.length === 0) {
+      this.admitServerEvent();
+      return;
+    }
     if (
-      keys.length === 0 ||
       keys.some((key) => !SUPPORTED_SERVER_MESSAGE_KEYS.has(key))
     ) {
+      writeDiagnosticEvent({ level: "warn", area: "voice", event: "legacy-log", fields: {
+        message: "Live rejected unsupported message fields",
+      } });
       this.malformed();
     }
     const toolSnapshot = new Map(
@@ -1023,7 +1032,7 @@ export class GeminiLiveProtocol {
     }
     // Gemini's Developer API can serialize a serverContent envelope with all
     // optional protobuf fields omitted. Treat that exact shape as a bounded,
-    // rate-limited provider no-op; empty top-level messages still fail closed.
+    // rate-limited provider no-op.
     if (Object.keys(content).length === 0) {
       this.markMeaningful();
       return;
