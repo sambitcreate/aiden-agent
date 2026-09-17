@@ -147,6 +147,7 @@ interface HookFixture {
   player: RecordingPlayer;
   startIntents(): Array<{ microphone: boolean; screen?: boolean; computerUseAuthorization: string | null }>;
   refreshAvailability(): Promise<void>;
+  refreshApi(): Promise<void>;
   unmount(): Promise<void>;
 }
 
@@ -309,6 +310,15 @@ async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Pr
         ...dependencies,
         availabilityRefreshReady: true,
         availabilityRefreshToken: (dependencies.availabilityRefreshToken ?? 0) + 1,
+      };
+      flushSync(() => root.render(<Harness />));
+      await settle();
+      flushSync(() => undefined);
+    },
+    refreshApi: async () => {
+      dependencies = {
+        ...dependencies,
+        api: { ...dependencies.api },
       };
       flushSync(() => root.render(<Harness />));
       await settle();
@@ -1668,6 +1678,35 @@ test("releasing setup fences and stops a display stream returned by a late picke
   assert.deepEqual(state.releases, ["binding-1"]);
   assert.equal(fixture.controller().screenBusy, false);
   assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("an API refresh cancels a pending picker and re-arms screen choice", async () => {
+  const { dependencies, state } = screenDependencies();
+  const firstPicker = deferred<DisplayMediaStream>();
+  let picks = 0;
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      picks += 1;
+      if (picks === 1) return firstPicker.promise;
+      return { getTracks: () => [state.displayTrack] };
+    },
+  });
+  const staleChoice = fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(fixture.controller().screenBusy, true);
+
+  await fixture.refreshApi();
+  assert.equal(fixture.controller().screenBusy, false);
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(picks, 2, "the replacement effect accepts a new picker");
+
+  firstPicker.resolve({ getTracks: () => [new FakeDisplayTrack()] });
+  await staleChoice;
+  await settle();
+  assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
   await fixture.unmount();
 });
 
