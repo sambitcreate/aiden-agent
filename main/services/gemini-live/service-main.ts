@@ -75,11 +75,10 @@ const LIVE_COMPUTER_USE_DESCRIPTION =
 let disposeDisplayMediaGuards: (() => void) | null = null;
 
 /**
- * The acceptance-gated beta resolves only the recorded
+ * The voice-only beta resolves only the recorded
  * `gemini-3.8-live-extended-thinking` model; it
  * never guesses from a normal Gemini chat model or the SDK guide's preview
- * string. `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` is reserved for credentialed
- * acceptance and explicit experimental launches until that contract passes.
+ * string. Screen capture remains independently acceptance-gated.
  */
 export const geminiLiveService = new GeminiLiveService({
   credentials: piCredentialStore,

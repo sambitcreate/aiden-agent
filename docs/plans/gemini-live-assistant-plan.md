@@ -2,6 +2,7 @@
 
 Status: Partial — Phases 0–4 plus the beta-labeled Aiden Live orb/setup shell and dedicated metadata-only session threads are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
 Date: 2026-09-15
+Voice-default release follow-up (2026-09-17): 0.41.5 exposes ordinary voice-only Aiden Live in normal Finder-launched production builds. The existing `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0`/`false` values remain an incident kill switch. Screen capture is unchanged and stays unavailable unless `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=1` is deliberately supplied; the native-picker acceptance receipt remains pending.
 Continuous orb follow-up (2026-09-17): active listening/thinking/speaking/acting now share stable Listening + Weaving canvas layers with a slow complementary blend and connection/rest crossfades. Removed visible dock status text (retained screen-reader status). First active click reveals Stop; the second stops, Escape restores the orb, and closing disables duplicate clicks. Sharing/error surfaces remain visible. Added mapping/click-policy regressions; all 230 Live tests, type-check, lint, and standalone browser interaction/motion checks pass. Downloads duplex-review.html uses the actual orb component; the installed notarized app has not been rebuilt for this change.
 
 Release hardening follow-up (2026-09-17): Pullfrog's post-merge review blocked 0.41.4 publication until screen authority is generation-fenced. Exact binding tokens now prevent stale releases from revoking replacements, late picker streams stop after teardown, rejected frame sends revoke capture, and temporary Electron permission handlers admit only audio-only media for the exact document before restoring defaults when the final binding closes. Source Change/Remove is locked across pending provider startup and start failure releases the exact current binding. Adversarial coverage was added for each path.
@@ -91,9 +92,9 @@ Stop, manual reconnect, and exact-session renderer teardown/late-event fencing.
 The UI and main service both keep screen capture unavailable until the native
 macOS picker acceptance is recorded. No capture resumes automatically.
 
-The candidate voice-first model is `gemini-3.8-live-extended-thinking`. The beta
-remains acceptance-gated with `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` until the exact
-model passes the credentialed Google Live and Computer Use contract.
+The voice-first model is `gemini-3.8-live-extended-thinking`. Voice-only Live
+ships enabled as a beta; `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` is the incident
+kill switch. Screen capture remains separately acceptance-gated.
 Extended Thinking uses explicit `NON_BLOCKING` Computer Use declarations so it
 can speak brief progress updates while tools run. Every mutation remains paused
 behind a fresh, finalized user-voice “Allow once” or “Deny” decision.

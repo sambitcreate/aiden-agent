@@ -6,8 +6,8 @@ import {
   geminiLiveScreenEnabled,
 } from "./feature-flag.js";
 
-test("Gemini 3.8 Live stays acceptance-gated behind an exact opt-in", () => {
-  assert.equal(geminiLiveEnabled({}), false);
+test("voice-only Gemini 3.8 Live ships on with an explicit kill switch", () => {
+  assert.equal(geminiLiveEnabled({}), true);
   assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "true" }), true);
   assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1" }), true);
   assert.equal(geminiLiveEnabled({ AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE: "1" }), true);
@@ -21,6 +21,12 @@ test("Gemini 3.8 Live stays acceptance-gated behind an exact opt-in", () => {
   const disabled = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "0" };
   assert.equal(geminiLiveEnabled(disabled), false);
   assert.equal(experimentalGeminiLiveModel(disabled), null);
+  const disabledByName = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: " false " };
+  assert.equal(geminiLiveEnabled(disabledByName), false);
+  assert.equal(experimentalGeminiLiveModel(disabledByName), null);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "" }), false);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "   " }), false);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "enabled" }), false);
   assert.equal(
     experimentalGeminiLiveModel({
       AIDEN_EXPERIMENTAL_GEMINI_LIVE: "true",
@@ -30,14 +36,14 @@ test("Gemini 3.8 Live stays acceptance-gated behind an exact opt-in", () => {
   );
 });
 
-test("screen sharing needs both flags and can never outlive the Live gate", () => {
+test("screen sharing stays separately opt-in and cannot outlive the Live gate", () => {
   const live = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1" };
   assert.equal(geminiLiveScreenEnabled({}), false);
   assert.equal(geminiLiveScreenEnabled(live), false);
   assert.equal(
     geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
-    false,
-    "the screen flag alone must not admit capture",
+    true,
+    "the screen flag admits capture when the default-on voice gate is healthy",
   );
   assert.equal(
     geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "true" }),
@@ -46,5 +52,13 @@ test("screen sharing needs both flags and can never outlive the Live gate", () =
   assert.equal(
     geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
     true,
+  );
+  assert.equal(
+    geminiLiveScreenEnabled({
+      AIDEN_EXPERIMENTAL_GEMINI_LIVE: "0",
+      AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1",
+    }),
+    false,
+    "the screen gate cannot override the Live incident kill switch",
   );
 });
