@@ -1652,14 +1652,21 @@ test("releasing setup fences and stops a display stream returned by a late picke
   const choosing = fixture.controller().chooseScreenSource();
   await settle();
   assert.deepEqual(state.binds, [1]);
+  assert.equal(fixture.controller().screenBusy, true);
+
+  await fixture.controller().start();
+  assert.equal(state.startCalls.length, 0, "Live cannot start while its picker is pending");
 
   fixture.controller().releaseScreen();
+  await settle();
+  assert.equal(fixture.controller().screenBusy, false);
   picker.resolve({ getTracks: () => [state.displayTrack] });
   await choosing;
   await settle();
 
   assert.equal(state.displayTrack.stops, 1, "the late stream is stopped immediately");
   assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenBusy, false);
   assert.equal(fixture.controller().screenSourceLabel, null);
   await fixture.unmount();
 });
@@ -1669,6 +1676,7 @@ test("a rejected screen frame stops capture and releases its exact binding", asy
   state.admitFrames = false;
   const fixture = await mountHook(dependencies);
   await fixture.controller().chooseScreenSource();
+  await settle();
   await fixture.controller().start();
   await settle();
   await settle();

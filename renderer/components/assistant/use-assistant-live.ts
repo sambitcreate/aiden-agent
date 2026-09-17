@@ -586,6 +586,7 @@ export function useAssistantLiveWithDependencies(
     screenPickerGeneration.current += 1;
     const bindingId = screenBindingRef.current;
     screenBindingRef.current = null;
+    if (mounted.current) setScreenBusy(false);
     if (bindingId) {
       void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
     }
@@ -1140,6 +1141,7 @@ export function useAssistantLiveWithDependencies(
   const start = React.useCallback(async () => {
     if (
       busy ||
+      screenBusy ||
       dependencies.ordinaryBusyReason ||
       !snapshot.available ||
       !["granted", "not-determined"].includes(microphonePermission) ||
@@ -1223,6 +1225,7 @@ export function useAssistantLiveWithDependencies(
     }
   }, [
     busy,
+    screenBusy,
     computerUseEnabled,
     dependencies,
     microphone,

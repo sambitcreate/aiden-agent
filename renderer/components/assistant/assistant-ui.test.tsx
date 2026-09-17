@@ -280,6 +280,7 @@ test("screen sharing is opt-in, source-labelled, and visibly active in the HUD",
   assert.match(live, /live\.releaseScreen/u);
   assert.match(live, /busy=\{live\.screenBusy \|\| live\.busy\}/u);
   assert.match(live, /disabled=\{live\.screenBusy \|\| live\.busy\}/u);
+  assert.match(live, /confirmDisabled=\{!live\.setupComplete \|\| live\.busy \|\| live\.screenBusy/u);
   assert.match(live, /Sharing \{live\.screenSourceLabel \?\? "screen"\}/u);
   assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
 });
