@@ -302659,6 +302659,50 @@
           "cache_read": 0.14
         }
       },
+      "nebius/deepseek-ai/DeepSeek-V4.1-Flash": {
+        "id": "nebius/deepseek-ai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash (Nebius)",
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": false,
+        "structured_output": false,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 1048000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cache_read": 0.3
+        }
+      },
       "nebius/deepseek-ai/DeepSeek-V4-Pro-0813": {
         "id": "nebius/deepseek-ai/DeepSeek-V4-Pro-0813",
         "name": "DeepSeek V4 Pro 0813 (Nebius)",
@@ -307425,7 +307469,8 @@
         },
         "cost": {
           "input": 0.035,
-          "output": 0.14
+          "output": 0.14,
+          "cache_read": 0.00875
         }
       },
       "amazon/mistral.pixtral-large-2502-v1:0": {
@@ -307488,7 +307533,8 @@
         },
         "cost": {
           "input": 0.06,
-          "output": 0.24
+          "output": 0.24,
+          "cache_read": 0.015
         }
       },
       "amazon/zai.glm-4.7-flash@us": {
@@ -307616,7 +307662,8 @@
         },
         "cost": {
           "input": 0.8,
-          "output": 3.2
+          "output": 3.2,
+          "cache_read": 0.2
         }
       },
       "amazon/google.gemma-3-12b-it": {
@@ -307721,7 +307768,8 @@
         },
         "cost": {
           "input": 0.06,
-          "output": 0.24
+          "output": 0.24,
+          "cache_read": 0.015
         }
       },
       "amazon/amazon.nova-pro-v1:0": {
@@ -307754,7 +307802,8 @@
         },
         "cost": {
           "input": 0.8,
-          "output": 3.2
+          "output": 3.2,
+          "cache_read": 0.2
         }
       },
       "amazon/openai.gpt-oss-safeguard-20b@us": {
@@ -307889,7 +307938,8 @@
         },
         "cost": {
           "input": 0.035,
-          "output": 0.14
+          "output": 0.14,
+          "cache_read": 0.00875
         }
       },
       "amazon/mistral.voxtral-mini-3b-2507@us": {
