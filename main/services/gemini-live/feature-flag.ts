@@ -3,18 +3,16 @@ export const GEMINI_LIVE_MODEL = "gemini-3.8-live-extended-thinking";
 export const GEMINI_LIVE_SCREEN_FLAG = "AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN";
 
 /**
- * The exact Live + Computer Use contract stays opt-in until a credentialed
- * production acceptance receipt exists for this pinned model.
+ * Voice-only Aiden Live ships enabled. Keep an explicit environment kill
+ * switch for incident recovery without coupling ordinary voice to the
+ * separately gated screen-capture path.
  */
 export function geminiLiveEnabled(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
   const value = environment[GEMINI_LIVE_FEATURE_FLAG]?.trim().toLowerCase();
-  return (
-    value === "1" ||
-    value === "true" ||
-    environment.AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE?.trim() === "1"
-  );
+  if (!value) return true;
+  return value === "1" || value === "true";
 }
 
 /**
