@@ -18,6 +18,7 @@ import {
   ChartScatter,
   Info,
   Clock3,
+  Route,
   Send,
   Smartphone,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import { VoiceSettings } from "../components/settings/voice-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
+import { AutoRouterSettings } from "../components/settings/auto-router-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
@@ -75,6 +77,7 @@ type NavItem = {
 const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   providers: <Server className="size-5" />,
   modelData: <ChartScatter className="size-5" />,
+  autoRouter: <Route className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
   telegram: <Send className="size-5" />,
@@ -101,6 +104,7 @@ const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
 const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
   modelData: ModelDataSettings,
+  autoRouter: AutoRouterSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
   remoteAccess: RemoteAccessSettings,
@@ -119,6 +123,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
+  autoRouter: "Automatically route chat prompts to optimal models based on coding task complexity, benchmarks, and cost.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",

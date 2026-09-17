@@ -31,6 +31,7 @@ function providerInfo(
     parameterCount: metadata.parameterCount,
     format: metadata.format,
     contextLength: metadata.contextLength,
+    ...(metadata.cost ? { cost: metadata.cost } : {}),
     inputModalities: metadata.vision ? ["text", "image"] : ["text"],
     metadataSource: "provider",
     matched: true,
@@ -42,7 +43,12 @@ function withProviderFallback(
   catalog: ModelInfo,
   metadata: ProviderModelMetadata | undefined,
 ): ModelInfo {
-  return catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  if (catalog.matched) {
+    return metadata?.cost && !catalog.cost
+      ? { ...catalog, cost: metadata.cost }
+      : catalog;
+  }
+  return providerInfo(modelId, metadata) ?? catalog;
 }
 
 const CODEX_CATALOG_PROVIDER: ModelCatalogProvider = {
@@ -68,11 +74,13 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.ranking && !catalog.benchmark) return pinned;
+  const cost = catalog.cost ?? pinned.cost;
+  if (!catalog.ranking && !catalog.benchmark && !cost) return pinned;
   return {
     ...pinned,
     ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
     ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
+    ...(cost ? { cost } : {}),
     metadataSource: catalog.ranking ? "artificial-analysis" : pinned.metadataSource,
     matched: true,
   };

@@ -104,3 +104,15 @@ test("same-window model writes notify every mounted consumer", async () => {
   unsubscribeFirst();
   unsubscribeSecond();
 });
+
+test("auto router selection remains available and ready for new work without provider dependencies", async () => {
+  const {
+    isModelSelectionAvailable,
+    isModelSelectionReadyForNewWork,
+    resolveVisibleModelSelection,
+  } = await import("./use-model-selection");
+  const autoSelection = { providerId: "auto", model: "auto" };
+  assert.equal(isModelSelectionAvailable(autoSelection, []), true);
+  assert.equal(isModelSelectionReadyForNewWork(autoSelection, [], undefined, false), true);
+  assert.deepEqual(resolveVisibleModelSelection(autoSelection, [], undefined), autoSelection);
+});

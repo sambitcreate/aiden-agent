@@ -55,6 +55,7 @@ import {
   useGitInfo,
   useModelInfo,
   useProviders,
+  useProvidersModelInfo,
   useSettings,
 } from "../lib/queries";
 import {
@@ -62,6 +63,21 @@ import {
   resolveVisibleModelSelection,
   useModelSelection,
 } from "../lib/use-model-selection";
+import { useModelPadLayout } from "../lib/model-pad-layout";
+import {
+  buildAutoRouterCandidates,
+  isAutoRouterSelection,
+  promptRequiresVision,
+  resolveAutoRoute,
+} from "../lib/auto-router";
+import {
+  createModelEntries,
+  encodeSelection,
+  isUsable,
+  positionSavedModels,
+  visibleModelEntries,
+  type ModelEntry,
+} from "../lib/model-picker-data";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
@@ -77,6 +93,7 @@ import {
   type ChatMeta,
   type Workspace,
   type WorkspacePermission,
+  type ModelInfo,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import {
@@ -217,20 +234,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
+  const catalog = useProvidersModelInfo(providers.data ?? []);
+  const modelPadLayout = useModelPadLayout();
   const hasMessages = (chat.data?.messages.length ?? 0) > 0;
+  const isAutoRouter = isAutoRouterSelection(providerId, model);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
-    selectedProvider &&
-    isModelSelectionReadyForNewWork(
-      { providerId, model },
-      providers.data,
-      settings.data?.hiddenModelsByProvider,
-      hasMessages,
-    ) &&
-    (selectedProvider.hasKey || !selectedProvider.needsKey),
+    isAutoRouter
+      ? (providers.data?.some((p) => p.models.length > 0 && (!p.needsKey || p.hasKey)) ?? false)
+      : (selectedProvider &&
+        isModelSelectionReadyForNewWork(
+          { providerId, model },
+          providers.data,
+          settings.data?.hiddenModelsByProvider,
+          hasMessages,
+        ) &&
+        (selectedProvider.hasKey || !selectedProvider.needsKey)),
   );
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
+    if (isAutoRouter) {
+      const hasAnyConfigured = providers.data?.some(
+        (p) => p.models.length > 0 && (!p.needsKey || p.hasKey),
+      );
+      if (!hasAnyConfigured) {
+        return "No chat models are configured. Add or enable a model in Settings → Providers.";
+      }
+      return undefined;
+    }
     if (!selectedProvider) {
       return providerId === OPENAI_CODEX_PROVIDER_ID
         ? "Sign in with ChatGPT in Settings → Providers to use Codex."
@@ -255,7 +286,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
     }
     return undefined;
-  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
+  }, [hasMessages, isAutoRouter, model, providerId, providers.data, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -303,7 +334,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [providers.data, providerId],
   );
   const modelInfo = useModelInfo(providerId, providerModels, selectedProvider);
-  const visionSupported = model ? modelInfo.data?.[model]?.vision : undefined;
+  const anyProviderHasVision = React.useMemo(() => {
+    if (!providers.data || catalog.isLoading) return undefined;
+    for (const p of providers.data) {
+      if (!isUsable(p)) continue;
+      const data = catalog.data[p.id];
+      for (const m of p.models) {
+        const info = data?.[m];
+        if (info?.vision === true || info?.inputModalities?.includes("image")) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [catalog.data, catalog.isLoading, providers.data]);
+  const visionSupported = isAutoRouter
+    ? anyProviderHasVision
+    : (model ? modelInfo.data?.[model]?.vision : undefined);
   const googleThinkingSupported =
     providerId === GOOGLE_PROVIDER_ID &&
     Boolean(model) &&
@@ -438,6 +485,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
+  const generationModelOverrideRef = React.useRef<{ providerId: string; model: string } | null>(null);
+  const [lastRoutedReason, setLastRoutedReason] = React.useState<string | null>(null);
   // Prose from an earlier turn must not pin the activity row to a static
   // "Responding…" while the model reasons or writes tool arguments, so the
   // row keys "responding" off deltas that are still arriving.
@@ -572,6 +621,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setTodoSnapshot(null);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
+    setLastRoutedReason(null);
   }, [chatId]);
 
   React.useEffect(() => {
@@ -885,22 +935,78 @@ export function ChatPane({ chatId }: { chatId: string }) {
       };
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
+      const modelOverride = generationModelOverrideRef.current;
+      generationModelOverrideRef.current = null;
+      const targetProviderId = modelOverride?.providerId ?? providerId;
+      const targetModel = modelOverride?.model ?? model;
+
+      const targetProvider = (providers.data ?? []).find((p) => p.id === targetProviderId);
+      const targetModelMetadata = targetModel ? targetProvider?.modelMetadata?.[targetModel] : undefined;
+      const targetCatalogInfo = targetModel ? catalog.data[targetProviderId]?.[targetModel] : undefined;
+      const targetReasoning = targetCatalogInfo?.reasoning === true || modelInfo.data?.[targetModel]?.reasoning === true;
+
+      let effectiveThinkingLevel: GenerationThinkingLevel | undefined;
+      if (targetProviderId === GOOGLE_PROVIDER_ID && targetReasoning) {
+        const declared = targetModelMetadata?.thinkingLevels;
+        const supported = declared?.length
+          ? GOOGLE_THINKING_LEVELS.filter((lvl) => declared.includes(lvl))
+          : [...GOOGLE_THINKING_LEVELS];
+        const levels: GoogleThinkingLevel[] = supported.includes("off") ? supported : ["off", ...supported];
+        effectiveThinkingLevel = normalizeGoogleThinkingLevel(
+          levels,
+          targetModel ? settings.data?.googleThinkingByModel?.[targetModel] : undefined,
+        );
+      } else if (targetProviderId === OPENAI_CODEX_PROVIDER_ID && targetReasoning) {
+        const declared = targetModelMetadata?.thinkingLevels;
+        const levels = declared?.length
+          ? CODEX_THINKING_LEVELS.filter((lvl) => declared.includes(lvl))
+          : [];
+        if (levels.length > 0) {
+          effectiveThinkingLevel = normalizeCodexThinkingLevel(
+            levels,
+            targetModel ? settings.data?.codexThinkingByModel?.[targetModel] : undefined,
+          );
+        }
+      } else if (targetProviderId === ANTHROPIC_PROVIDER_ID && targetReasoning) {
+        const declared = targetModelMetadata?.thinkingLevels;
+        const levels = declared?.length
+          ? ANTHROPIC_THINKING_LEVELS.filter((lvl) => declared.includes(lvl))
+          : [];
+        if (levels.length > 0) {
+          effectiveThinkingLevel = normalizeAnthropicThinkingLevel(
+            levels,
+            targetModel ? settings.data?.anthropicThinkingByModel?.[targetModel] : undefined,
+          );
+        }
+      } else if (targetProvider?.isBuiltin === true && targetReasoning) {
+        const declared = targetModelMetadata?.thinkingLevels;
+        const levels = declared?.filter(isGenerationThinkingLevel) ?? [];
+        if (levels.length > 0) {
+          effectiveThinkingLevel = normalizeProviderThinkingLevel(
+            levels,
+            targetModel ? settings.data?.providerThinkingByModel?.[targetProviderId]?.[targetModel] : undefined,
+          );
+        }
+      }
+
       const handle = startGeneration(
         {
           chatId,
           workspaceId: effectiveWorkspaceId,
-          providerId,
-          model,
+          providerId: targetProviderId,
+          model: targetModel,
           ...(visualize ? { visualize: true as const } : {}),
-          thinkingLevel: googleThinkingSupported
-            ? googleThinkingLevel
-            : codexThinkingSupported
-              ? codexThinkingLevel
-              : anthropicThinkingSupported
-                ? anthropicThinkingLevel
-                : providerThinkingSupported
-                  ? providerThinkingLevel
-                  : undefined,
+          thinkingLevel:
+            effectiveThinkingLevel ??
+            (googleThinkingSupported
+              ? googleThinkingLevel
+              : codexThinkingSupported
+                ? codexThinkingLevel
+                : anthropicThinkingSupported
+                  ? anthropicThinkingLevel
+                  : providerThinkingSupported
+                    ? providerThinkingLevel
+                    : undefined),
         },
         {
           onDelta: (delta) => {
@@ -1223,6 +1329,96 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
+      let effectiveProviderId = providerId;
+      let effectiveModel = model;
+
+      if (isAutoRouterSelection(providerId, model)) {
+        const providerList = providers.data ?? [];
+        const infoByValue: Record<string, ModelInfo | undefined> = {};
+        for (const p of providerList) {
+          const data = catalog.data[p.id];
+          for (const m of p.models) {
+            infoByValue[encodeSelection(p.id, m)] = data?.[m];
+          }
+        }
+        const allEntries = createModelEntries(providerList, infoByValue);
+        const visibleEntries = visibleModelEntries(
+          allEntries,
+          settings.data?.hiddenModelsByProvider,
+        );
+        const padModels = positionSavedModels(visibleEntries, modelPadLayout.placements);
+        const requiresVision = promptRequiresVision(attachments);
+        const excludedSet = new Set(settings.data?.autoRouter?.excludedModels ?? []);
+        const isEntryUsable = (e: ModelEntry) => {
+          const prov = providerList.find((p) => p.id === e.providerId);
+          return Boolean(prov && isUsable(prov));
+        };
+        const isEntryEligible = (e: ModelEntry) => isEntryUsable(e) && !excludedSet.has(e.value);
+        const hasVision = (e: ModelEntry) =>
+          e.info?.vision === true || e.info?.inputModalities?.includes("image");
+
+        const padHasEligibleVision = padModels.some((e) => isEntryEligible(e) && hasVision(e));
+        const padHasEligible = padModels.some(isEntryEligible);
+
+        const sourceEntries =
+          padModels.length > 0 &&
+          padHasEligible &&
+          (!requiresVision || padHasEligibleVision)
+            ? padModels
+            : visibleEntries;
+        const candidates = buildAutoRouterCandidates(
+          sourceEntries,
+          modelPadLayout.placements,
+          providerList,
+        );
+
+        const firstUsableVision = requiresVision
+          ? sourceEntries.find((e) => isEntryEligible(e) && hasVision(e)) ??
+            visibleEntries.find((e) => isEntryEligible(e) && hasVision(e)) ??
+            sourceEntries.find((e) => isEntryUsable(e) && hasVision(e)) ??
+            visibleEntries.find((e) => isEntryUsable(e) && hasVision(e))
+          : undefined;
+
+        const firstUsable =
+          firstUsableVision ??
+          sourceEntries.find(isEntryEligible) ??
+          visibleEntries.find(isEntryEligible) ??
+          sourceEntries.find(isEntryUsable) ??
+          visibleEntries.find(isEntryUsable);
+        const defaultFallback = firstUsable
+          ? { providerId: firstUsable.providerId, model: firstUsable.model }
+          : resolveVisibleModelSelection(
+              { providerId: "", model: "" },
+              providerList,
+              settings.data?.hiddenModelsByProvider,
+            );
+
+        const resolved = resolveAutoRoute({
+          prompt: text,
+          attachments,
+          candidates,
+          preset: settings.data?.autoRouter?.preset,
+          excludedModels: settings.data?.autoRouter?.excludedModels,
+          defaultSelection: defaultFallback,
+        });
+
+        if (resolved.providerId && resolved.model) {
+          effectiveProviderId = resolved.providerId;
+          effectiveModel = resolved.model;
+        } else if (defaultFallback) {
+          effectiveProviderId = defaultFallback.providerId;
+          effectiveModel = defaultFallback.model;
+        }
+
+        generationModelOverrideRef.current = {
+          providerId: effectiveProviderId,
+          model: effectiveModel,
+        };
+
+        setLastRoutedReason(resolved.reason);
+        select(effectiveProviderId, effectiveModel);
+      }
+
       const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
       const generationIntent = ++generationIntentRef.current;
       const messageTurnId = createChatTurnId();
@@ -1236,8 +1432,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
                 workspaceId: firstDraft.chat.workspaceId!,
-                providerId,
-                model,
+                providerId: effectiveProviderId,
+                model: effectiveModel,
                 computerUseEnabled: firstDraft.chat.computerUseEnabled,
                 turnId: messageTurnId,
                 message: { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
@@ -1251,8 +1447,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               attachments: attachments.length ? attachments : undefined,
             },
             {
-              providerId,
-              model,
+              providerId: effectiveProviderId,
+              model: effectiveModel,
               autoTitle: true,
               turnId: messageTurnId,
               skillInvocation,
@@ -1287,6 +1483,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // that committed message back into an unsent composer payload.
         if (!started.ok && mountedRef.current) setError(started.error.message);
       } finally {
+        generationModelOverrideRef.current = null;
         if (firstDraft) finishChatDraftSend(chatId, false);
         if (
           mountedRef.current &&
@@ -1298,15 +1495,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [
+      catalog.data,
       chatId,
       computerUseSaving,
       detachedGenerationDraining,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
+      modelPadLayout.placements,
       providerId,
       model,
+      providers.data,
       qc,
       runGeneration,
+      select,
+      settings.data,
     ],
   );
 
@@ -2239,7 +2441,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 providers={settings.data ? (providers.data ?? []) : []}
                 providerId={providerId}
                 model={model}
+                routedReason={lastRoutedReason ?? undefined}
                 onChange={(nextProviderId, nextModel) => {
+                  setLastRoutedReason(null);
                   if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
                 }}
                 disabled={isGenerating || isStartingGeneration || thinkingSaving}

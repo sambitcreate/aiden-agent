@@ -46,6 +46,8 @@ import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
+import { parseAutoRouterSetting } from "../services/auto-router-core.js";
+export { parseAutoRouterSetting };
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -235,6 +237,7 @@ async function refreshProviderCatalogs(providerIds?: readonly string[], force = 
     errors: projectPiCatalogRefreshErrors(errors),
   };
 }
+
 
 export function registerProviderHandlers(): void {
   forwardCodexProviderStatusChanges(
@@ -532,6 +535,9 @@ export function registerProviderHandlers(): void {
       p.chatTitleProviderId === "chat-model"
     ) {
       next.chatTitleProviderId = p.chatTitleProviderId;
+    }
+    if (p.autoRouter !== undefined) {
+      next.autoRouter = parseAutoRouterSetting(p.autoRouter);
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     const saved = await configStore.setSettings(next);

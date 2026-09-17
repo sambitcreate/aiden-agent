@@ -7,6 +7,7 @@ import { isUsable } from "./model-picker-data";
 import type { AppSettings, Provider } from "./types";
 import { telegramApi } from "./ipc";
 import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
+import { isAutoRouterSelection } from "./auto-router";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
@@ -42,6 +43,9 @@ export function isModelSelectionAvailable(
   selection: ModelSelection,
   providers: Provider[] | undefined,
 ): boolean {
+  if (isAutoRouterSelection(selection.providerId, selection.model)) {
+    return true;
+  }
   const provider = providers?.find((candidate) => candidate.id === selection.providerId);
   return Boolean(provider && isUsable(provider) && provider.models.includes(selection.model));
 }
@@ -53,6 +57,9 @@ export function isModelSelectionReadyForNewWork(
   hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
   hasMessages: boolean,
 ): boolean {
+  if (isAutoRouterSelection(selection.providerId, selection.model)) {
+    return true;
+  }
   return (
     isModelSelectionAvailable(selection, providers) &&
     (hasMessages || !isModelHidden(hiddenModelsByProvider, selection.providerId, selection.model))
@@ -65,6 +72,9 @@ export function resolveVisibleModelSelection(
   providers: Provider[] | undefined,
   hiddenModelsByProvider: AppSettings["hiddenModelsByProvider"],
 ): ModelSelection | undefined {
+  if (isAutoRouterSelection(selection.providerId, selection.model)) {
+    return selection;
+  }
   if (
     isModelSelectionAvailable(selection, providers) &&
     !isModelHidden(hiddenModelsByProvider, selection.providerId, selection.model)

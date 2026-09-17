@@ -26,6 +26,7 @@ interface RawModel {
   last_updated?: string;
   modalities?: { input?: string[]; output?: string[] };
   limit?: { context?: number; output?: number };
+  cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number };
 }
 
 interface RawProvider {
@@ -352,6 +353,18 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     inputModalities: inputs.length ? inputs : undefined,
     knowledge: raw.knowledge,
     releaseDate: raw.release_date,
+    ...(raw.cost && typeof raw.cost.input === "number" && typeof raw.cost.output === "number"
+      ? {
+          cost: {
+            input: raw.cost.input,
+            output: raw.cost.output,
+            cacheRead:
+              typeof raw.cost.cache_read === "number" ? raw.cost.cache_read : undefined,
+            cacheWrite:
+              typeof raw.cost.cache_write === "number" ? raw.cost.cache_write : undefined,
+          },
+        }
+      : {}),
     metadataSource: "models-dev",
     matched: true,
   };

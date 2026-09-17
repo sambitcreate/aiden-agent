@@ -8,6 +8,7 @@ import {
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
   assert.equal(parseSettingsSection("modelData"), "modelData");
+  assert.equal(parseSettingsSection("autoRouter"), "autoRouter");
   assert.equal(parseSettingsSection("computerUse"), "computerUse");
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("assistant"), "assistant");

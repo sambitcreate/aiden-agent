@@ -64,6 +64,7 @@ export interface ProviderModelMetadata {
   contextLength?: number;
   parameterCount?: string;
   format?: string;
+  cost?: ModelCost;
 }
 
 export interface Provider {
@@ -493,6 +494,13 @@ export type ModelMetadataSource =
   | "models-dev"
   | "fallback";
 
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export interface ModelInfo {
   id: string;
   name?: string;
@@ -511,6 +519,7 @@ export interface ModelInfo {
   releaseDate?: string;
   ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  cost?: ModelCost;
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }
@@ -796,7 +805,15 @@ export interface AssistantConfigSnapshot {
   hotkeyActive: boolean;
 }
 
+export type AutoRouterPreset = "balanced" | "cost" | "capability";
+
+export interface AutoRouterSettings {
+  preset: AutoRouterPreset;
+  excludedModels?: string[];
+}
+
 export interface AppSettings {
+  autoRouter?: AutoRouterSettings;
   compactionEngine?: CompactionEngine;
   lastProviderId?: string;
   lastModel?: string;

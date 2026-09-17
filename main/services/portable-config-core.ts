@@ -525,7 +525,7 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
-function normalizeSettingsShape(value: unknown): SettingsShape {
+export function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
   if (!isRecord(settings)) return { ...rest, settings: {} };
@@ -606,6 +606,28 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     if (isRecord(settings.assistant)) normalized.assistant = structuredClone(settings.assistant);
     else delete normalized.assistant;
   }
+  if (settings.autoRouter !== undefined) {
+    if (isRecord(settings.autoRouter)) {
+      const rawAuto = settings.autoRouter as Record<string, unknown>;
+      const preset =
+        rawAuto.preset === "cost" ||
+        rawAuto.preset === "capability" ||
+        rawAuto.preset === "balanced"
+          ? rawAuto.preset
+          : "balanced";
+      const excludedModels = Array.isArray(rawAuto.excludedModels)
+        ? rawAuto.excludedModels.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : undefined;
+      normalized.autoRouter = {
+        preset,
+        ...(excludedModels ? { excludedModels } : {}),
+      };
+    } else {
+      delete normalized.autoRouter;
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(settings, "webSearch")) {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     // A future Web Search document is user-owned durable state. Keep the raw
@@ -672,6 +694,28 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   else delete runtime.telegramProfiles;
   if (settings.assistant !== undefined) {
     runtime.assistant = runtimeAssistantSettings(settings);
+  }
+  if (settings.autoRouter !== undefined) {
+    if (isRecord(settings.autoRouter)) {
+      const rawAuto = settings.autoRouter as Record<string, unknown>;
+      const preset =
+        rawAuto.preset === "cost" ||
+        rawAuto.preset === "capability" ||
+        rawAuto.preset === "balanced"
+          ? rawAuto.preset
+          : "balanced";
+      const excludedModels = Array.isArray(rawAuto.excludedModels)
+        ? rawAuto.excludedModels.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : undefined;
+      runtime.autoRouter = {
+        preset,
+        ...(excludedModels ? { excludedModels } : {}),
+      };
+    } else {
+      delete runtime.autoRouter;
+    }
   }
   const projectThinkingMap = (
     key: "googleThinkingByModel" | "codexThinkingByModel" | "anthropicThinkingByModel",

@@ -37,9 +37,14 @@ import {
   useModelPadLayout,
 } from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Pin, Route, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import {
+  AUTO_ROUTER_MODEL_ID,
+  AUTO_ROUTER_PROVIDER_ID,
+  isAutoRouterSelection,
+} from "../lib/auto-router";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -49,6 +54,7 @@ interface ModelPickerProps {
   disabled?: boolean;
   settingsBlockedReason?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  routedReason?: string;
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -343,6 +349,7 @@ export function ModelPicker({
   disabled,
   settingsBlockedReason,
   hiddenModelsByProvider,
+  routedReason,
 }: ModelPickerProps) {
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
@@ -400,7 +407,8 @@ export function ModelPicker({
           label: `${activePosition?.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`,
         }
       : null;
-  const hasUnavailableSelection = Boolean(selectedValue && !selected);
+  const isAutoRouter = isAutoRouterSelection(providerId, model);
+  const hasUnavailableSelection = Boolean(selectedValue && !selected && !isAutoRouter);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;
   const unavailableMessage =
@@ -487,26 +495,36 @@ export function ModelPicker({
         <Button
           variant="transparent"
           size="small"
-          disabled={disabled || !hasModels}
+          disabled={disabled || (!hasModels && !isAutoRouter)}
           className="min-w-0 shrink max-w-[min(14rem,45vw)] gap-1.5"
           aria-label={
-            hasUnavailableSelection
-              ? "Selected model is unavailable. Choose a model."
-              : selected
-                ? `Selected model: ${selected.label}. Choose a model.`
-                : hasModels
-                  ? "Choose a model"
-                  : unavailableMessage
+            isAutoRouter
+              ? "Auto Router. Choose a model."
+              : hasUnavailableSelection
+                ? "Selected model is unavailable. Choose a model."
+                : selected
+                  ? routedReason
+                    ? `Selected model: ${selected.label}. ${routedReason}. Choose a model.`
+                    : `Selected model: ${selected.label}. Choose a model.`
+                  : hasModels
+                    ? "Choose a model"
+                    : unavailableMessage
           }
           title={
-            hasUnavailableSelection
-              ? "Selected model is unavailable."
-              : hasModels
-                ? undefined
-                : unavailableMessage
+            isAutoRouter
+              ? "Auto Router (Dynamically routes based on task complexity and benchmarks)"
+              : hasUnavailableSelection
+                ? "Selected model is unavailable."
+                : selected && routedReason
+                  ? `${selected.label} (${routedReason})`
+                  : hasModels
+                    ? undefined
+                    : unavailableMessage
           }
         >
-          {selected ? (
+          {isAutoRouter ? (
+            <Route className="size-4 shrink-0 text-accent" />
+          ) : selected ? (
             <ProviderIcon
               providerId={selected.providerId}
               providerLabel={selected.providerLabel}
@@ -516,13 +534,15 @@ export function ModelPicker({
             />
           ) : null}
           <span className="min-w-0 truncate">
-            {selected
-              ? selected.label
-              : hasUnavailableSelection
-                ? "Model unavailable"
-                : hasModels
-                  ? "Select model"
-                  : "No models"}
+            {isAutoRouter
+              ? "Auto Router"
+              : selected
+                ? selected.label
+                : hasUnavailableSelection
+                  ? "Model unavailable"
+                  : hasModels
+                    ? "Select model"
+                    : "No models"}
           </span>
         </Button>
       </PopoverTrigger>
@@ -549,12 +569,44 @@ export function ModelPicker({
         }}
       >
         <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
-        <div className="p-1.5 pb-0">
-          <div
-            className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
-            role="tablist"
-            aria-label="Model picker view"
-          >
+          <div className="p-1.5 pb-0">
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left transition-[background-color,color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+                isAutoRouter
+                  ? "bg-control font-medium text-primary"
+                  : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection",
+              )}
+              onClick={() => {
+                onChange(AUTO_ROUTER_PROVIDER_ID, AUTO_ROUTER_MODEL_ID);
+                setOpen(false);
+              }}
+            >
+              <span
+                className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded-full",
+                  isAutoRouter ? "bg-status-accent-surface text-status-accent" : "bg-control text-tertiary",
+                )}
+              >
+                <Route className="size-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-small-strong">Auto Router</span>
+                <span className="block truncate text-mini text-tertiary">
+                  Dynamic routing per task
+                </span>
+              </div>
+              {isAutoRouter ? <Check className="size-4 shrink-0 text-accent" /> : null}
+            </button>
+          </div>
+          <div className="mx-2 my-1 border-t border-separator" />
+          <div className="p-1.5 pt-0 pb-0">
+            <div
+              className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
+              role="tablist"
+              aria-label="Model picker view"
+            >
             <Button
               id={listTabId}
               role="tab"
@@ -639,6 +691,24 @@ export function ModelPicker({
               />
               <CommandList>
                 <CommandEmpty>No models found.</CommandEmpty>
+                <CommandItem
+                  value="auto-router-dynamic"
+                  keywords={["auto", "router", "dynamic", "optimal", "intelligence", "routing"]}
+                  onSelect={() => {
+                    onChange(AUTO_ROUTER_PROVIDER_ID, AUTO_ROUTER_MODEL_ID);
+                    setOpen(false);
+                  }}
+                  className="group gap-2"
+                >
+                  <Route className={cn("size-4 shrink-0", isAutoRouter ? "text-accent" : "text-tertiary")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-small-strong">Auto Router</span>
+                    <span className="block truncate text-small text-tertiary">
+                      Dynamic · Routes per task
+                    </span>
+                  </span>
+                  {isAutoRouter ? <Check className="size-4 shrink-0 text-accent" /> : null}
+                </CommandItem>
                 {orderedEntries.map((entry) => {
                   const isActive = entry.value === selectedValue;
                   const isPinned = pinned.includes(entry.value);

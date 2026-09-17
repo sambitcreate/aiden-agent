@@ -38,6 +38,7 @@ export interface ProviderModelMetadata {
   contextLength?: number;
   parameterCount?: string;
   format?: string;
+  cost?: ModelCost;
 }
 
 /** A configured connection to an LLM backend (hosted or local). */
@@ -248,6 +249,13 @@ export type ModelMetadataSource =
   | "models-dev"
   | "fallback";
 
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
   id: string;
@@ -272,6 +280,7 @@ export interface ModelInfo {
   releaseDate?: string;
   ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  cost?: ModelCost;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
@@ -525,6 +534,13 @@ export interface AssistantConfigSnapshot {
   hotkeyActive: boolean;
 }
 
+export type AutoRouterPreset = "balanced" | "cost" | "capability";
+
+export interface AutoRouterSettings {
+  preset: AutoRouterPreset;
+  excludedModels?: string[];
+}
+
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
@@ -606,6 +622,8 @@ export interface AppSettings {
   telegramRendering?: "rich" | "html";
   /** Automatic voice reply policy; explicit telegram_voice actions remain available. */
   telegramVoiceMode?: "hidden" | "mirror" | "always";
+  /** Auto Router optimization presets and model exclusion settings. */
+  autoRouter?: AutoRouterSettings;
   /**
    * Explicit folder workspace authorized for Telegram project automation.
    * Omitted keeps Telegram turns assistant-only.
