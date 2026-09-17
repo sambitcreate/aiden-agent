@@ -1260,6 +1260,21 @@ textarea {
   flex-wrap: wrap;
 }
 
+/* Device pickers are a single line, not a wrapping trailing-action cluster.
+   Radix Value intentionally drops className/style, so target its actual span. */
+.settings-page .settings-field-control > .live-audio-device-select {
+  flex-wrap: nowrap;
+}
+
+.live-audio-device-select > span:first-child {
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
 .settings-page .settings-field-control input {
   min-width: 0;
 }
@@ -2714,7 +2729,30 @@ textarea {
   min-width: 2.5rem;
   min-height: 2.5rem;
   transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
-  transition: opacity 180ms ease, transform 100ms ease;
+  transition: opacity 300ms ease, transform 420ms cubic-bezier(.22, 1, .36, 1);
+}
+.aiden-live-orb-layer,
+.aiden-live-duplex-listening,
+.aiden-live-duplex-weaving { position: absolute; inset: 0; }
+.aiden-live-orb-layer { opacity: 0; transition: opacity 360ms ease; }
+.aiden-live-orb[data-visual="rest"] [data-layer="rest"],
+.aiden-live-orb[data-visual="connecting"] [data-layer="connecting"],
+.aiden-live-orb[data-visual="duplex"] [data-layer="duplex"] { opacity: 1; }
+.aiden-live-duplex-listening { opacity: .65; }
+.aiden-live-duplex-weaving { opacity: .35; }
+.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-listening { animation: aiden-live-duplex 10s ease-in-out infinite alternate; }
+.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-weaving { animation: aiden-live-duplex 10s ease-in-out infinite alternate-reverse; }
+@keyframes aiden-live-duplex { from { opacity: .75; } to { opacity: .25; } }
+.aiden-live-stop-symbol { position: absolute; width: 16px; height: 16px; border-radius: 4px; background: var(--color-text-primary, currentColor); opacity: 0; transform: scale(.85); transition: opacity 220ms ease, transform 300ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
+.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-orb { opacity: 0; transform: scale(.94); }
+.aiden-live-trigger[data-stop-revealed="true"] .aiden-live-stop-symbol { opacity: 1; transform: scale(1); }
+:root[data-reduce-motion="true"] .aiden-live-orb-layer,
+:root[data-reduce-motion="true"] .aiden-live-stop-symbol { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-duplex-listening,
+:root[data-reduce-motion="true"] .aiden-live-duplex-weaving { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .aiden-live-orb, .aiden-live-orb-layer, .aiden-live-stop-symbol { transition: none !important; }
+  .aiden-live-duplex-listening, .aiden-live-duplex-weaving { animation: none !important; }
 }
 .aiden-live-orb-canvas {
   position: absolute;
@@ -2735,7 +2773,7 @@ textarea {
 .aiden-live-orb[data-state="ready"] {
   opacity: 0.82;
 }
-.aiden-live-orb[data-state="listening"] {
+.aiden-live-orb[data-visual="duplex"] {
   transform: scale(calc(0.98 + var(--aiden-live-level, 0) * 0.08));
 }
 .aiden-live-orb[data-state="approval"] {

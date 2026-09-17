@@ -30,6 +30,12 @@ import {
 } from "./session.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/fake-cua-driver.mjs", import.meta.url));
+
+test("Computer Use helper layout follows physical packaging, not the runtime profile", async () => {
+  const source = await readFile(new URL("./runtime.ts", import.meta.url), "utf8");
+  assert.match(source, /isPackaged:\s*app\.isPackaged/);
+  assert.doesNotMatch(source, /isPackagedRuntime/);
+});
 const SESSION_LESS_TOOLS = new Set([
   "health_report",
   "check_permissions",

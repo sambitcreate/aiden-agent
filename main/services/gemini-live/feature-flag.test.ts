@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { experimentalGeminiLiveModel, geminiLiveEnabled } from "./feature-flag.js";
+import {
+  experimentalGeminiLiveModel,
+  geminiLiveEnabled,
+  geminiLiveScreenEnabled,
+} from "./feature-flag.js";
 
 test("Gemini 3.8 Live stays acceptance-gated behind an exact opt-in", () => {
   assert.equal(geminiLiveEnabled({}), false);
@@ -23,5 +27,24 @@ test("Gemini 3.8 Live stays acceptance-gated behind an exact opt-in", () => {
       AIDEN_EXPERIMENTAL_GEMINI_LIVE_MODEL: "bad model",
     }),
     "gemini-3.8-live-extended-thinking",
+  );
+});
+
+test("screen sharing needs both flags and can never outlive the Live gate", () => {
+  const live = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1" };
+  assert.equal(geminiLiveScreenEnabled({}), false);
+  assert.equal(geminiLiveScreenEnabled(live), false);
+  assert.equal(
+    geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
+    false,
+    "the screen flag alone must not admit capture",
+  );
+  assert.equal(
+    geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "true" }),
+    false,
+  );
+  assert.equal(
+    geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
+    true,
   );
 });

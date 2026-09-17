@@ -34,6 +34,8 @@ export interface GeminiLiveComputerUseCall {
 
 export interface GeminiLiveComputerUseBridgeOptions {
   sessionId: string;
+  /** Explicit Live-session consent replaces per-action prompts; target checks still apply. */
+  actionPolicy?: "session" | "per-action";
   controller: GeminiLiveComputerUseController;
   isAuthorized(): boolean | Promise<boolean>;
   requestApproval(input: {
@@ -205,7 +207,7 @@ export class GeminiLiveComputerUseBridge {
         entry.controller.signal,
       );
       if (approval) {
-        const allowed = await this.options.requestApproval({
+        const allowed = this.options.actionPolicy === "session" || await this.options.requestApproval({
           streamId: `live:${this.options.sessionId}`,
           toolCallId: entry.call.id,
           toolName: COMPUTER_USE_TOOL_NAME,

@@ -1,13 +1,12 @@
 import { createOwnedGoogleGenAIConnector } from "./owned-sdk-connector.js";
 import { piCredentialStore } from "../pi-credential-store.js";
 import { GeminiLiveService } from "./service.js";
-import { experimentalGeminiLiveModel } from "./feature-flag.js";
+import { experimentalGeminiLiveModel, geminiLiveScreenEnabled } from "./feature-flag.js";
 import { configStore } from "../config-store.js";
 import { computerUseStatus } from "../computer-use/status.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { ComputerUseParameters } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
-import { ToolApprovalCoordinator } from "../tool-approval.js";
 import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import { app } from "../../platform.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
@@ -69,7 +68,7 @@ export async function authorizeAidenLiveComputerUse(
 }
 
 const LIVE_COMPUTER_USE_DESCRIPTION =
-  "Use Aiden's approval-gated Computer Use controller. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Keep speaking naturally while work is in progress. Before every click, key, type, drag, scroll, focus, or other mutation, briefly state the exact action and ask the user to say Allow once or Deny. Each mutation pauses for a fresh voice decision.";
+  "Use Aiden's Computer Use controller during this user-started Live session. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Execute the user's requested actions directly without per-action approval prompts. Keep speaking naturally while work is in progress. Stop when the session ends or the user cancels. Never claim success before the tool result confirms it.";
 
 /**
  * The acceptance-gated beta resolves only the recorded
@@ -95,6 +94,7 @@ export const geminiLiveService = new GeminiLiveService({
     },
   },
   resolveModel: () => experimentalGeminiLiveModel(),
+  screenShareEnabled: () => geminiLiveScreenEnabled(),
   createConnector: (apiKey) => createOwnedGoogleGenAIConnector({ apiKey }),
   prepareComputerUse: async ({ authorization, owner, sessionId, signal }) => {
     if (!authorization || signal.aborted || owner.isDestroyed()) return null;
@@ -123,10 +123,6 @@ export const geminiLiveService = new GeminiLiveService({
     }
 
     const controller = createComputerUseController(`live:${sessionId}`, true);
-    const approvals = new ToolApprovalCoordinator(
-      (prompt) => owner.send("chat:approval", prompt),
-      (approvalId) => owner.send("chat:approval-withdrawn", { approvalId }),
-    );
     // The bridge cannot receive a provider call before setup completes, while
     // bindSendResult runs synchronously before protocol.start().
     let sendToolResult:
@@ -142,14 +138,10 @@ export const geminiLiveService = new GeminiLiveService({
     };
     const bridge = new GeminiLiveComputerUseBridge({
       sessionId,
+      actionPolicy: "session",
       controller,
       isAuthorized,
-      requestApproval: async ({ streamId, toolCallId, toolName, summary, signal: callSignal }) =>
-        (await approvals.request(
-          { streamId, toolCallId, toolName, summary },
-          callSignal,
-          owner.documentId,
-        )) === "allowed",
+      requestApproval: async () => false,
       onActivity: (active) =>
         owner.send("assistant-live:event", {
           type: "computer_use_state",
@@ -172,8 +164,7 @@ export const geminiLiveService = new GeminiLiveService({
           ],
         },
       ],
-      approve: (approvalId, allowed, ownerDocumentId) =>
-        approvals.decide(approvalId, allowed, ownerDocumentId),
+      approve: () => false,
       bindSendResult: (send) => {
         sendToolResult = send;
       },

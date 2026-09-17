@@ -86,3 +86,81 @@ export function bindGeminiLiveDisplayMediaDocument(
       details.requestingUrl === requestingUrl,
   };
 }
+
+interface DisplayMediaGuardSession {
+  setPermissionCheckHandler(
+    handler: ((
+      webContents: Electron.WebContents | null,
+      permission: string,
+      requestingOrigin: string,
+      details: Electron.PermissionCheckHandlerHandlerDetails,
+    ) => boolean) | null,
+  ): void;
+  setPermissionRequestHandler(
+    handler: ((
+      webContents: Electron.WebContents,
+      permission: string,
+      callback: (permissionGranted: boolean) => void,
+      details: Electron.PermissionRequest,
+    ) => void) | null,
+  ): void;
+  setDisplayMediaRequestHandler(
+    handler:
+      | ((
+          request: Electron.DisplayMediaRequestHandlerHandlerRequest,
+          callback: (streams: Electron.Streams) => void,
+        ) => void)
+      | null,
+    opts?: Electron.DisplayMediaRequestHandlerOpts,
+  ): void;
+}
+
+const guardedSessions = new WeakSet<object>();
+
+/**
+ * Installs the display-capture boundary once per Electron session. Every
+ * permission other than display-capture keeps Electron's default allow, and a
+ * display request succeeds only while a currently bound Live document admits
+ * it. The system-picker session never dispatches to the fallback handler; any
+ * non-picker dispatch is denied rather than trusted to select a source.
+ */
+export function installGeminiLiveDisplayMediaGuards(
+  electronSession: DisplayMediaGuardSession,
+  getBindings: () => readonly GeminiLiveDisplayMediaBinding[],
+): void {
+  if (guardedSessions.has(electronSession)) return;
+  guardedSessions.add(electronSession);
+  electronSession.setPermissionCheckHandler(
+    (webContents, permission, _requestingOrigin, details) => {
+      if (String(permission) !== "display-capture" || !webContents) return true;
+      return getBindings().some((binding) =>
+        binding.allowsPermissionRequest(webContents, "display-capture", {
+          isMainFrame: details.isMainFrame === true,
+          requestingUrl: details.requestingUrl ?? "",
+        }),
+      );
+    },
+  );
+  electronSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      if (String(permission) !== "display-capture") {
+        callback(true);
+        return;
+      }
+      callback(
+        getBindings().some((binding) =>
+          binding.allowsPermissionRequest(webContents, "display-capture", {
+            isMainFrame: details.isMainFrame === true,
+            requestingUrl: details.requestingUrl ?? "",
+          }),
+        ),
+      );
+    },
+  );
+  electronSession.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      callback({});
+    },
+    GEMINI_LIVE_SYSTEM_PICKER_OPTIONS,
+  );
+}

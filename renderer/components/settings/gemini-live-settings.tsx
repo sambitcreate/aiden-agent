@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LiveAudioSettings } from "./live-audio-settings";
 import { useNavigate } from "@tanstack/react-router";
 import {
   AudioWaveform,
@@ -73,8 +74,8 @@ export function AidenLiveSettings(): React.ReactElement {
               <Badge color="blue">Beta</Badge>
             </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
-              Speak naturally, let Aiden read the current screen, and approve each click or typed
-              action one at a time. Availability and supported actions may change during beta.
+              Speak naturally and let Aiden act on your screen during Live. Stop Live to end
+              session access. Availability and supported actions may change during beta.
             </Text>
           </div>
         </div>
@@ -120,6 +121,8 @@ export function AidenLiveSettings(): React.ReactElement {
         </Field>
       </FieldSet>
 
+      <LiveAudioSettings />
+
       <FieldSet title="Actions">
         <Field
           label="Operate Aiden"
@@ -127,7 +130,7 @@ export function AidenLiveSettings(): React.ReactElement {
         >
           <Badge color="blue">
             <AudioWaveform />
-            Allow once per action
+            Direct actions during Live
           </Badge>
         </Field>
         <Field

@@ -7,6 +7,7 @@ export type AssistantLiveAvailabilityReason =
 
 export interface AssistantLiveStartIntent {
   microphone: boolean;
+  screen?: boolean;
   /** Opaque, one-use main-process proof that Computer Use is ready for this document. */
   computerUseAuthorization: string | null;
 }
@@ -16,6 +17,8 @@ export interface AssistantLiveSnapshot {
   reason: AssistantLiveAvailabilityReason;
   /** Exact main-approved model. Present only after the model gate resolves. */
   model?: string;
+  /** True only while the screen-share feature gate is open for this document. */
+  screenShareAllowed?: boolean;
   sessionId?: string;
   state:
     | "idle"

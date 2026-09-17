@@ -10,7 +10,7 @@ interface OrbAppearance {
 function readOrbAppearance(): OrbAppearance {
   if (typeof document === "undefined") return { paused: true, theme: "light" };
   return {
-    paused: document.documentElement.dataset.reduceMotion === "true",
+    paused: document.documentElement.dataset.reduceMotion === "true" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true,
     theme: document.documentElement.dataset.appearanceScheme === "dark" ? "dark" : "light",
   };
 }
@@ -21,7 +21,12 @@ function useOrbAppearance(): OrbAppearance {
   React.useEffect(() => {
     const update = () => setAppearance(readOrbAppearance());
     window.addEventListener(APPEARANCE_CHANGE_EVENT, update);
-    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
+    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    motion?.addEventListener("change", update);
+    return () => {
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
+      motion?.removeEventListener("change", update);
+    };
   }, []);
 
   return appearance;

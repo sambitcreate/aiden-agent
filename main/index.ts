@@ -1290,6 +1290,13 @@ async function createMainWindow(): Promise<void> {
   createdWindow.webContents.on("did-finish-load", () => {
     protectedAction = null;
   });
+  let liveDiagnosticCount = 0;
+  createdWindow.webContents.on("console-message", (details) => {
+    // Only fixed local lifecycle markers; never forward arbitrary renderer console content.
+    if (liveDiagnosticCount >= 200 || !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(details.message)) return;
+    liveDiagnosticCount += 1;
+    writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
+  });
 
   createdWindow.webContents.setWindowOpenHandler(({ url }) => {
     openExternalUrl(url);

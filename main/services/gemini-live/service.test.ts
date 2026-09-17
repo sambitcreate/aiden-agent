@@ -12,6 +12,7 @@ import { FakeGeminiLiveServer } from "./fake-live-server.js";
 import { GeminiLiveService, GeminiLiveStartError } from "./service.js";
 import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import type { GeminiLiveComputerUseController } from "./computer-use-bridge.js";
+import type { GeminiLiveDisplayMediaBinding } from "./display-media-contract.js";
 import { ComputerUseParameters } from "../computer-use/schema.js";
 
 class FakeOwner implements RendererDocumentOwner {
@@ -45,7 +46,15 @@ class FakeOwner implements RendererDocumentOwner {
   }
 }
 
-function serviceHarness(credential: Credential | null = { type: "api_key", key: "KEY_SENTINEL" }) {
+function serviceHarness(
+  credential: Credential | null = { type: "api_key", key: "KEY_SENTINEL" },
+  overrides: Partial<
+    Pick<
+      ConstructorParameters<typeof GeminiLiveService>[0],
+      "screenShareEnabled" | "prepareComputerUse" | "acceptanceEvidence"
+    >
+  > = {},
+) {
   const servers: FakeGeminiLiveServer[] = [];
   const connectorKeys: string[] = [];
   let sequence = 0;
@@ -59,6 +68,7 @@ function serviceHarness(credential: Credential | null = { type: "api_key", key: 
       servers.push(server);
       return server.connector;
     },
+    ...overrides,
   });
   return { connectorKeys, servers, service };
 }
@@ -152,6 +162,21 @@ test("shutdown waits for an in-flight thread begin and finalizes its record", as
   await shutdown;
   assert.deepEqual(finished, ["shutdown-during-begin"]);
 });
+/**
+ * A display-media binding shaped like what bindGeminiLiveDisplayMediaDocument
+ * records for the exact document that invoked the picker.
+ */
+function fakeDisplayBinding(
+  owner: FakeOwner,
+): GeminiLiveDisplayMediaBinding {
+  return {
+    documentId: owner.documentId,
+    owner,
+    allowsDisplayRequest: () => true,
+    allowsPermissionRequest: () => true,
+  };
+}
+
 
 test("explicit acceptance recorder corroborates ready, provider audio, and Stop teardown", async () => {
   const server = new FakeGeminiLiveServer();
@@ -739,6 +764,7 @@ test("credential-store failures are normalized without exposing private detail",
   assert.deepEqual(await service.availability(new FakeOwner(22, "22:1:doc")), {
     available: false,
     reason: "google_api_key_invalid",
+    screenShareAllowed: false,
     state: "idle",
   });
   await assert.rejects(service.start(new FakeOwner(22, "22:2:doc"), intent), (error: unknown) =>
@@ -774,6 +800,7 @@ test("model resolver sync and async failures return one safe unavailable status"
     assert.deepEqual(status, {
       available: false,
       reason: "live_model_unverified",
+      screenShareAllowed: false,
       state: "idle",
     });
     assert.doesNotMatch(
@@ -838,9 +865,12 @@ test("the model gate is explicit-experimental and media has no persistence or lo
   ]);
   assert.match(mainSource, /resolveModel: \(\) => experimentalGeminiLiveModel\(\)/u);
   assert.match(mainSource, /behavior: Behavior\.NON_BLOCKING/u);
-  assert.match(mainSource, /say Allow once or Deny/u);
+  assert.match(mainSource, /actionPolicy: "session"/u);
+  assert.doesNotMatch(mainSource, /ToolApprovalCoordinator|say Allow once or Deny/u);
   assert.doesNotMatch(serviceSource, /DataStore|writeFile|appendFile|logger|writeDevLog/u);
-  assert.doesNotMatch(handlerSource, /jpeg|frame|credential|apiKey|tool/u);
+  // Bounded screen frames now cross a dedicated channel by name; credentials,
+  // raw tool data, and unbounded media still never reach the handler layer.
+  assert.doesNotMatch(handlerSource, /jpeg|credential|apiKey|tool/u);
 });
 
 test("microphone PCM is admitted only for the current consenting exact-document session", async () => {
@@ -903,4 +933,107 @@ test("Computer Use is absent unless the Live start explicitly requests it", asyn
   });
   assert.equal(subject.servers[0]?.latest.params.config?.tools, undefined);
   await subject.service.stop(new FakeOwner(33, "33:1:doc"));
+});
+test("screen intent stays fail-closed without the screen gate or a bound document", async () => {
+  const subject = serviceHarness();
+  await assert.rejects(
+    subject.service.start(new FakeOwner(33, "33:1:doc"), { microphone: true, screen: true, computerUseAuthorization: null }),
+    (error: unknown) =>
+      error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
+  );
+  assert.equal(subject.servers.length, 0, "the ungated path must never connect");
+
+  // The gate alone is not authority: without a bound display document the
+  // intent is still rejected.
+  const gated = serviceHarness(undefined, { screenShareEnabled: () => true });
+  await assert.rejects(
+    gated.service.start(new FakeOwner(34, "34:1:doc"), { microphone: true, screen: true, computerUseAuthorization: null }),
+    (error: unknown) =>
+      error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
+  );
+  assert.equal(gated.servers.length, 0);
+  // The same gate still permits an ordinary voice-only session.
+  await gated.service.start(new FakeOwner(34, "34:1:doc"), intent);
+  gated.service.shutdown();
+});
+
+test("screen frames are admitted only for a bound, gated, open session", async () => {
+  const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
+  const owner = new FakeOwner(35, "35:1:doc");
+  const binding = fakeDisplayBinding(owner);
+  assert.equal(subject.service.bindDisplayMedia(owner, binding), true);
+  const session = await subject.service.start(owner, {
+    microphone: false,
+    screen: true,
+    computerUseAuthorization: null,
+  });
+  assert.equal(session.screenShareAllowed, true);
+
+  const first = new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]);
+  const newest = new Uint8Array([0xff, 0xd8, 0x02, 0xff, 0xd9]);
+  const received = subject.servers[0]!.latest.received;
+  const videoInputs = () =>
+    received.filter(
+      (message) => message.type === "realtime_input" && "video" in message.value,
+    );
+
+  // Latest-frame-wins buffering across a controlled resumption, before any
+  // frame has been sent, so the protocol's 1 FPS limiter sends it at once.
+  const owned = subject.service.sessions.get(owner)!;
+  owned.state = "resuming";
+  assert.equal(subject.service.sendFrame(owner, session.sessionId!, first), true);
+  assert.equal(subject.service.sendFrame(owner, session.sessionId!, newest), true);
+  assert.equal(videoInputs().length, 0, "resumption buffers instead of sending");
+  (
+    subject.service as unknown as {
+      handleProtocolEvent(
+        session: typeof owned,
+        event: { type: "state"; state: "open" },
+      ): void;
+    }
+  ).handleProtocolEvent(owned, { type: "state", state: "open" });
+  const flushed = videoInputs();
+  assert.equal(flushed.length, 1, "only one buffered frame flushes on reopen");
+  assert.deepEqual(
+    Buffer.from(
+      (flushed[0]!.value as { video: { data: string } }).video.data,
+      "base64",
+    ),
+    Buffer.from(newest),
+    "the newest buffered frame wins",
+  );
+
+  // Wrong session, wrong owner, and non-screen sessions are all rejected.
+  assert.equal(subject.service.sendFrame(owner, "stale", newest), false);
+  assert.equal(
+    subject.service.sendFrame(new FakeOwner(36, "36:1:other"), session.sessionId!, newest),
+    false,
+  );
+
+  // Stopping releases both the session and the document's picker authority.
+  subject.service.stop(owner);
+  assert.deepEqual(subject.service.displayMediaBindings(), []);
+  await assert.rejects(
+    subject.service.start(owner, { microphone: false, screen: true, computerUseAuthorization: null }),
+    (error: unknown) =>
+      error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
+  );
+});
+
+test("a display binding dies with its document and never survives shutdown", async () => {
+  const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
+  const owner = new FakeOwner(37, "37:1:doc");
+  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner)), true);
+  owner.navigate();
+  assert.deepEqual(subject.service.displayMediaBindings(), []);
+
+  const next = new FakeOwner(38, "38:1:doc");
+  assert.equal(subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)), true);
+  subject.service.shutdown();
+  assert.deepEqual(subject.service.displayMediaBindings(), []);
+  assert.equal(
+    subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)),
+    false,
+    "a shut-down service never binds new capture authority",
+  );
 });
