@@ -10,8 +10,9 @@ export const GEMINI_LIVE_SCREEN_FLAG = "AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN";
 export function geminiLiveEnabled(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
-  const value = environment[GEMINI_LIVE_FEATURE_FLAG]?.trim().toLowerCase();
-  if (!value) return true;
+  const rawValue = environment[GEMINI_LIVE_FEATURE_FLAG];
+  if (rawValue === undefined) return true;
+  const value = rawValue.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 

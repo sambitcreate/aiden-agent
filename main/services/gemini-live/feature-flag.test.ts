@@ -24,6 +24,8 @@ test("voice-only Gemini 3.8 Live ships on with an explicit kill switch", () => {
   const disabledByName = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: " false " };
   assert.equal(geminiLiveEnabled(disabledByName), false);
   assert.equal(experimentalGeminiLiveModel(disabledByName), null);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "" }), false);
+  assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "   " }), false);
   assert.equal(geminiLiveEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "enabled" }), false);
   assert.equal(
     experimentalGeminiLiveModel({
