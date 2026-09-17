@@ -101,6 +101,7 @@ export interface GeminiLiveServiceOptions {
    * for this build. When absent or false, every screen intent is rejected.
    */
   screenShareEnabled?(): boolean;
+  onDisplayBindingsChanged?(bindings: readonly GeminiLiveDisplayMediaBinding[]): void;
   createSessionId?: () => string;
   acceptanceEvidence?: GeminiLiveAcceptanceEvidenceRecorder | null;
   threads?: {
@@ -139,6 +140,7 @@ interface OwnedLiveSession {
   state: AssistantLiveSnapshot["state"];
   microphone: boolean;
   screen: boolean;
+  displayBindingId: string | null;
   resumptionAudio: Uint8Array[];
   resumptionFrame: Uint8Array | null;
   model?: string;
@@ -278,29 +280,35 @@ export class GeminiLiveService {
   bindDisplayMedia(
     owner: RendererDocumentOwner,
     binding: GeminiLiveDisplayMediaBinding,
-  ): boolean {
+  ): string | null {
     if (
       this.shuttingDown ||
       this.options.screenShareEnabled?.() !== true ||
       owner.isDestroyed()
     ) {
-      return false;
+      return null;
     }
     const key = documentKey(owner);
     this.displayBindings.get(key)?.dispose();
     const dispose = owner.onInvalidated(() => {
       if (this.displayBindings.get(key)?.binding === binding) {
         this.displayBindings.delete(key);
+        this.options.onDisplayBindingsChanged?.(this.displayMediaBindings());
       }
     });
     this.displayBindings.set(key, { binding, dispose });
-    return true;
+    this.options.onDisplayBindingsChanged?.(this.displayMediaBindings());
+    return binding.bindingId;
   }
 
-  releaseDisplayMedia(owner: RendererDocumentOwner): void {
-    const entry = this.displayBindings.get(documentKey(owner));
+  releaseDisplayMedia(owner: RendererDocumentOwner, bindingId: string): boolean {
+    const key = documentKey(owner);
+    const entry = this.displayBindings.get(key);
+    if (!entry || entry.binding.bindingId !== bindingId) return false;
     entry?.dispose();
-    this.displayBindings.delete(documentKey(owner));
+    this.displayBindings.delete(key);
+    this.options.onDisplayBindingsChanged?.(this.displayMediaBindings());
+    return true;
   }
 
   /** Live bindings consulted by the session-level display-media guards. */
@@ -351,6 +359,7 @@ export class GeminiLiveService {
       throw new GeminiLiveStartError("live_start_failed");
     }
 
+    const displayBinding = this.displayBindings.get(documentKey(owner))?.binding;
     const session: OwnedLiveSession = {
       abort: new AbortController(),
       documentKey: documentKey(owner),
@@ -361,6 +370,7 @@ export class GeminiLiveService {
       state: "connecting",
       microphone: _intent.microphone,
       screen: _intent.screen === true,
+      displayBindingId: _intent.screen ? (displayBinding?.bindingId ?? null) : null,
       resumptionAudio: [],
       resumptionFrame: null,
       computerUse: null,
@@ -566,6 +576,7 @@ export class GeminiLiveService {
     this.shuttingDown = true;
     for (const entry of this.displayBindings.values()) entry.dispose();
     this.displayBindings.clear();
+    this.options.onDisplayBindingsChanged?.([]);
     for (const session of this.sessions.values()) this.closeSession(session, false, "stopped");
     await this.waitForStarts();
     const sessions = [...this.pendingThreadFinalization];
@@ -691,7 +702,10 @@ export class GeminiLiveService {
     session.resumptionFrame = null;
     // Stopping or replacing a session also revokes this document's authority
     // to admit display capture; a restart re-binds through the picker flow.
-    this.releaseDisplayMedia(session.owner);
+    if (session.displayBindingId) {
+      this.releaseDisplayMedia(session.owner, session.displayBindingId);
+      session.displayBindingId = null;
+    }
     if (notifyRenderer && !session.owner.isDestroyed()) {
       try {
         session.owner.send(ASSISTANT_LIVE_EVENT_CHANNEL, {

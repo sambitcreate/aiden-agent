@@ -5,6 +5,7 @@ import {
   parseAssistantLiveAudioIntent,
   parseAssistantLiveEmptyIntent,
   parseAssistantLiveFrameIntent,
+  parseAssistantLiveDisplayReleaseIntent,
   parseAssistantLiveStartIntent,
   parseAssistantLiveStopIntent,
 } from "./assistant-live-parse.js";
@@ -74,8 +75,8 @@ test("Assistant Live frame admission accepts only one bounded copied JPEG byte r
   ]) assert.throws(() => parseAssistantLiveFrameIntent(value), /frame request/u);
 });
 
-test("Assistant Live display bind/release accept only an exact empty record", () => {
-  for (const name of ["display-bind", "display-release"]) {
+test("Assistant Live display bind accepts only an exact empty record", () => {
+  for (const name of ["display-bind"]) {
     assert.doesNotThrow(() => parseAssistantLiveEmptyIntent({}, name));
     assert.throws(
       () => parseAssistantLiveEmptyIntent({ sessionId: "forged" }, name),
@@ -84,6 +85,18 @@ test("Assistant Live display bind/release accept only an exact empty record", ()
     assert.throws(
       () => parseAssistantLiveEmptyIntent(null, name),
       new RegExp(`Invalid Assistant Live ${name}`, "u"),
+    );
+  }
+});
+
+test("Assistant Live display release requires one bounded binding token", () => {
+  assert.deepEqual(parseAssistantLiveDisplayReleaseIntent({ bindingId: "binding-1" }), {
+    bindingId: "binding-1",
+  });
+  for (const value of [{}, { bindingId: "" }, { bindingId: "x", extra: true }, null]) {
+    assert.throws(
+      () => parseAssistantLiveDisplayReleaseIntent(value),
+      /Invalid Assistant Live display-release/u,
     );
   }
 });

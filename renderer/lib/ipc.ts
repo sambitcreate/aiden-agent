@@ -317,8 +317,9 @@ export const assistantLiveApi = {
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
   sendAudio: (sessionId: string, pcm: Uint8Array) =>
     invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
-  bindDisplay: () => invoke<boolean>("assistant-live:display-bind", {}),
-  releaseDisplay: () => invoke<boolean>("assistant-live:display-release", {}),
+  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  releaseDisplay: (bindingId: string) =>
+    invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
     invoke<boolean>("assistant-live:frame", { sessionId, frame }),
   onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>

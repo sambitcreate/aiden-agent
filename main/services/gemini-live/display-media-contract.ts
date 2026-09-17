@@ -1,4 +1,5 @@
 import { rendererDocumentOwner, type RendererDocumentOwner } from "../renderer-document-owner.js";
+import { randomUUID } from "node:crypto";
 
 export const GEMINI_LIVE_SYSTEM_PICKER_OPTIONS: Electron.DisplayMediaRequestHandlerOpts = {
   useSystemPicker: true,
@@ -10,6 +11,7 @@ interface DisplayPermissionDetails {
 }
 
 export interface GeminiLiveDisplayMediaBinding {
+  readonly bindingId: string;
   readonly documentId: string;
   readonly owner: RendererDocumentOwner;
   allowsDisplayRequest(request: Electron.DisplayMediaRequestHandlerHandlerRequest): boolean;
@@ -68,6 +70,7 @@ export function bindGeminiLiveDisplayMediaDocument(
   };
 
   return {
+    bindingId: randomUUID(),
     documentId: owner.documentId,
     owner,
     allowsDisplayRequest: (request) =>
@@ -81,7 +84,7 @@ export function bindGeminiLiveDisplayMediaDocument(
     allowsPermissionRequest: (webContents, permission, details) =>
       current() &&
       webContents === sender &&
-      permission === "display-capture" &&
+      (permission === "display-capture" || permission === "media") &&
       details.isMainFrame === true &&
       details.requestingUrl === requestingUrl,
   };
@@ -115,26 +118,37 @@ interface DisplayMediaGuardSession {
   ): void;
 }
 
-const guardedSessions = new WeakSet<object>();
+const guardedSessions = new WeakMap<object, () => void>();
 
 /**
  * Installs the display-capture boundary once per Electron session. Every
- * permission other than display-capture keeps Electron's default allow, and a
- * display request succeeds only while a currently bound Live document admits
- * it. The system-picker session never dispatches to the fallback handler; any
+ * display or microphone permission succeeds only for a currently bound Live
+ * document. Every unrelated permission is denied while this temporary guard
+ * owns the session policy, and disposal restores Electron's default handlers.
+ * The system-picker session never dispatches to the fallback handler; any
  * non-picker dispatch is denied rather than trusted to select a source.
  */
 export function installGeminiLiveDisplayMediaGuards(
   electronSession: DisplayMediaGuardSession,
   getBindings: () => readonly GeminiLiveDisplayMediaBinding[],
-): void {
-  if (guardedSessions.has(electronSession)) return;
-  guardedSessions.add(electronSession);
+): () => void {
+  const installed = guardedSessions.get(electronSession);
+  if (installed) return installed;
+  let active = true;
+  const dispose = () => {
+    if (!active || guardedSessions.get(electronSession) !== dispose) return;
+    active = false;
+    guardedSessions.delete(electronSession);
+    electronSession.setPermissionCheckHandler(null);
+    electronSession.setPermissionRequestHandler(null);
+    electronSession.setDisplayMediaRequestHandler(null);
+  };
+  guardedSessions.set(electronSession, dispose);
   electronSession.setPermissionCheckHandler(
     (webContents, permission, _requestingOrigin, details) => {
-      if (String(permission) !== "display-capture" || !webContents) return true;
+      if (!webContents) return false;
       return getBindings().some((binding) =>
-        binding.allowsPermissionRequest(webContents, "display-capture", {
+        binding.allowsPermissionRequest(webContents, String(permission), {
           isMainFrame: details.isMainFrame === true,
           requestingUrl: details.requestingUrl ?? "",
         }),
@@ -143,13 +157,9 @@ export function installGeminiLiveDisplayMediaGuards(
   );
   electronSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
-      if (String(permission) !== "display-capture") {
-        callback(true);
-        return;
-      }
       callback(
         getBindings().some((binding) =>
-          binding.allowsPermissionRequest(webContents, "display-capture", {
+          binding.allowsPermissionRequest(webContents, String(permission), {
             isMainFrame: details.isMainFrame === true,
             requestingUrl: details.requestingUrl ?? "",
           }),
@@ -163,4 +173,5 @@ export function installGeminiLiveDisplayMediaGuards(
     },
     GEMINI_LIVE_SYSTEM_PICKER_OPTIONS,
   );
+  return dispose;
 }

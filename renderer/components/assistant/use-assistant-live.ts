@@ -309,8 +309,8 @@ interface AssistantLiveApi {
   }): Promise<AssistantLiveSnapshot>;
   stop(): Promise<AssistantLiveSnapshot>;
   sendAudio(sessionId: string, pcm: Uint8Array): Promise<boolean>;
-  bindDisplay?(): Promise<boolean>;
-  releaseDisplay?(): Promise<boolean>;
+  bindDisplay?(): Promise<string | null>;
+  releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
   onEvent(handler: (event: AssistantLiveRendererEvent) => void): () => void;
 }
@@ -493,6 +493,8 @@ export function useAssistantLiveWithDependencies(
     cleanup: () => Promise<void>;
   } | null>(null);
   const screenStreamRef = React.useRef<DisplayMediaStream | null>(null);
+  const screenBindingRef = React.useRef<string | null>(null);
+  const screenPickerGeneration = React.useRef(0);
   const screenFinishRef = React.useRef<(() => void) | null>(null);
   const screenPumpRef = React.useRef<{
     sessionId: string;
@@ -579,6 +581,15 @@ export function useAssistantLiveWithDependencies(
       setScreenSourceLabel(null);
     }
   }, []);
+
+  const releaseDisplayAuthority = React.useCallback(() => {
+    screenPickerGeneration.current += 1;
+    const bindingId = screenBindingRef.current;
+    screenBindingRef.current = null;
+    if (bindingId) {
+      void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
+    }
+  }, [dependencies.api]);
 
   const teardownMedia = React.useCallback(
     async (expected?: { sessionId: string; generation: number }) => {
@@ -704,9 +715,9 @@ export function useAssistantLiveWithDependencies(
       sessionRef.current = null;
       void teardownMedia();
       void dependencies.api.stop().catch(() => undefined);
-      void dependencies.api.releaseDisplay?.().catch(() => undefined);
+      releaseDisplayAuthority();
     };
-  }, [acceptEvent, dependencies.api, dependencies.geminiLive, teardownMedia]);
+  }, [acceptEvent, dependencies.api, dependencies.geminiLive, releaseDisplayAuthority, teardownMedia]);
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
@@ -841,8 +852,8 @@ export function useAssistantLiveWithDependencies(
 
   const releaseScreen = React.useCallback(() => {
     stopScreenCapture();
-    void dependencies.api.releaseDisplay?.().catch(() => undefined);
-  }, [dependencies.api, stopScreenCapture]);
+    releaseDisplayAuthority();
+  }, [releaseDisplayAuthority, stopScreenCapture]);
 
   const chooseScreenSource = React.useCallback(async () => {
     if (
@@ -853,15 +864,31 @@ export function useAssistantLiveWithDependencies(
       !dependencies.api.bindDisplay
     )
       return;
+    const generation = ++screenPickerGeneration.current;
     setScreenBusy(true);
     setScreenError(null);
+    let bindingId: string | null = null;
     try {
-      if (!(await dependencies.api.bindDisplay())) {
+      bindingId = await dependencies.api.bindDisplay();
+      if (!bindingId) {
         throw new Error("Screen sharing is unavailable for this window.");
       }
+      if (!mounted.current || screenPickerGeneration.current !== generation) {
+        void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
+        return;
+      }
+      screenBindingRef.current = bindingId;
       const stream = await dependencies.getDisplayMedia();
-      if (!mounted.current || sessionRef.current !== null) {
+      if (
+        !mounted.current ||
+        screenPickerGeneration.current !== generation ||
+        sessionRef.current !== null
+      ) {
         for (const track of stream.getTracks()) track.stop();
+        if (screenBindingRef.current === bindingId) {
+          screenBindingRef.current = null;
+          void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
+        }
         return;
       }
       stopScreenCapture();
@@ -880,8 +907,14 @@ export function useAssistantLiveWithDependencies(
     } catch (cause) {
       // A cancelled picker keeps any previously chosen source; only a failed
       // first pick releases this document's binding authority.
-      if (!screenStreamRef.current) {
-        void dependencies.api.releaseDisplay?.().catch(() => undefined);
+      if (
+        bindingId &&
+        screenPickerGeneration.current === generation &&
+        !screenStreamRef.current &&
+        screenBindingRef.current === bindingId
+      ) {
+        screenBindingRef.current = null;
+        void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
       }
       if (mounted.current) {
         const name = cause instanceof DOMException ? cause.name : "";
@@ -892,7 +925,9 @@ export function useAssistantLiveWithDependencies(
         );
       }
     } finally {
-      if (mounted.current) setScreenBusy(false);
+      if (mounted.current && screenPickerGeneration.current === generation) {
+        setScreenBusy(false);
+      }
     }
   }, [
     active,
@@ -910,8 +945,7 @@ export function useAssistantLiveWithDependencies(
       const isCurrent = () =>
         mounted.current && !signal.aborted && sessionRef.current === sessionId;
       if (!dependencies.createDisplayFrameSource || !dependencies.api.sendFrame) {
-        stopScreenCapture();
-        void dependencies.api.releaseDisplay?.().catch(() => undefined);
+        releaseScreen();
         return;
       }
       try {
@@ -927,9 +961,10 @@ export function useAssistantLiveWithDependencies(
           try {
             const frame = await source.capture();
             if (frame && isCurrent()) {
-              await dependencies.api
+              const admitted = await dependencies.api
                 .sendFrame?.(sessionId, frame)
                 .catch(() => false);
+              if (admitted !== true && isCurrent()) releaseScreen();
             }
           } catch {
             // A skipped frame is never fatal; the next interval sends fresh.
@@ -945,11 +980,10 @@ export function useAssistantLiveWithDependencies(
         setScreenActive(true);
         void sendOnce();
       } catch {
-        stopScreenCapture();
-        void dependencies.api.releaseDisplay?.().catch(() => undefined);
+        releaseScreen();
       }
     },
-    [dependencies, stopScreenCapture],
+    [dependencies, releaseScreen],
   );
 
   const startMicrophone = React.useCallback(
@@ -1208,7 +1242,7 @@ export function useAssistantLiveWithDependencies(
     await teardownMedia();
     try {
       await dependencies.api.stop();
-      void dependencies.api.releaseDisplay?.().catch(() => undefined);
+      releaseDisplayAuthority();
       const next = await dependencies.api.status();
       if (mounted.current && operationGeneration.current === generation) {
         sessionRef.current = activeSnapshot(next) ? (next.sessionId ?? null) : null;
@@ -1255,7 +1289,7 @@ export function useAssistantLiveWithDependencies(
         setBusy(false);
       }
     }
-  }, [dependencies, teardownMedia]);
+  }, [dependencies, releaseDisplayAuthority, teardownMedia]);
 
   const cancelSetup = React.useCallback(async () => {
     setSetupOpenState(false);

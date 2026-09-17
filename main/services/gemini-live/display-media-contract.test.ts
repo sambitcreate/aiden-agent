@@ -97,7 +97,7 @@ test("binds both custom-picker and system-picker permission admission to one exa
       isMainFrame: true,
       requestingUrl: frame.url,
     }),
-    false,
+    true,
   );
   assert.equal(
     binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "display-capture", {
@@ -158,8 +158,11 @@ test("session guards gate display-capture only and install exactly once", () => 
   const frame = new FakeFrame(10, 20, "document-one", "file:///Aiden/main-window.html");
   const sender = new FakeWebContents(7, frame);
   const bindings: GeminiLiveDisplayMediaBinding[] = [];
-  installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
-  installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
+  const dispose = installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
+  assert.equal(
+    installGeminiLiveDisplayMediaGuards(electronSession, () => bindings),
+    dispose,
+  );
   assert.equal(installed.checks, 1, "re-installation must not stack handlers");
   assert.equal(installed.requests, 1);
   assert.equal(installed.displays, 1);
@@ -187,8 +190,9 @@ test("session guards gate display-capture only and install exactly once", () => 
   );
   assert.equal(granted, false);
 
-  // A bound document admits display-capture; every other permission keeps the
-  // session's default allow so the guards never shrink unrelated authority.
+  // A bound document admits only its display capture and microphone. Unrelated
+  // contents and unrelated permission types remain denied while the temporary
+  // guard owns the session policy.
   bindings.push(bindGeminiLiveDisplayMediaDocument(invokeEvent(sender, frame)));
   assert.equal(
     installed.check?.(
@@ -200,15 +204,20 @@ test("session guards gate display-capture only and install exactly once", () => 
     true,
   );
   assert.equal(
-    installed.check?.(null, "media", "file:///Aiden/", details),
+    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", details),
     true,
-    "non-display permissions keep the default policy",
+    "the exact bound document keeps microphone access",
   );
   granted = null;
   installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
     granted = next;
   }, details);
   assert.equal(granted, true);
+  assert.equal(
+    installed.check?.(sender as unknown as Electron.WebContents, "notifications", "file:///Aiden/", details),
+    false,
+  );
+  assert.equal(installed.check?.(null, "media", "file:///Aiden/", details), false);
 
   // Any non-picker dispatch to the fallback handler is denied outright.
   const streams: Electron.Streams[] = [];
@@ -226,6 +235,10 @@ test("session guards gate display-capture only and install exactly once", () => 
     ),
     false,
   );
+  dispose();
+  assert.equal(installed.check, null);
+  assert.equal(installed.request, null);
+  assert.equal(installed.display, null);
 });
 
 test("navigation, replacement frames, and unrelated WebContents fail closed", () => {

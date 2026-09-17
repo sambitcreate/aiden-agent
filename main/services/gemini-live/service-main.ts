@@ -15,6 +15,8 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { Behavior } from "@google/genai";
+import { session } from "electron";
+import { installGeminiLiveDisplayMediaGuards } from "./display-media-contract.js";
 
 const aidenLiveThreadStore = new AidenLiveThreadStore(() =>
   path.join(app.getPath("userData"), "aiden-live"),
@@ -70,6 +72,8 @@ export async function authorizeAidenLiveComputerUse(
 const LIVE_COMPUTER_USE_DESCRIPTION =
   "Use Aiden's Computer Use controller during this user-started Live session. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Execute the user's requested actions directly without per-action approval prompts. Keep speaking naturally while work is in progress. Stop when the session ends or the user cancels. Never claim success before the tool result confirms it.";
 
+let disposeDisplayMediaGuards: (() => void) | null = null;
+
 /**
  * The acceptance-gated beta resolves only the recorded
  * `gemini-3.8-live-extended-thinking` model; it
@@ -95,6 +99,18 @@ export const geminiLiveService = new GeminiLiveService({
   },
   resolveModel: () => experimentalGeminiLiveModel(),
   screenShareEnabled: () => geminiLiveScreenEnabled(),
+  onDisplayBindingsChanged: (bindings) => {
+    if (bindings.length > 0 && !disposeDisplayMediaGuards) {
+      disposeDisplayMediaGuards = installGeminiLiveDisplayMediaGuards(
+        session.defaultSession,
+        () => geminiLiveService.displayMediaBindings(),
+      );
+    } else if (bindings.length === 0 && disposeDisplayMediaGuards) {
+      const dispose = disposeDisplayMediaGuards;
+      disposeDisplayMediaGuards = null;
+      dispose();
+    }
+  },
   createConnector: (apiKey) => createOwnedGoogleGenAIConnector({ apiKey }),
   prepareComputerUse: async ({ authorization, owner, sessionId, signal }) => {
     if (!authorization || signal.aborted || owner.isDestroyed()) return null;

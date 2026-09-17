@@ -87,3 +87,18 @@ export function parseAssistantLiveEmptyIntent(
     throw new Error(`Invalid Assistant Live ${name} request.`);
   }
 }
+
+export function parseAssistantLiveDisplayReleaseIntent(
+  value: unknown,
+): { bindingId: string } {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["bindingId"]) ||
+    typeof value.bindingId !== "string" ||
+    value.bindingId.length < 1 ||
+    value.bindingId.length > 128
+  ) {
+    throw new Error("Invalid Assistant Live display-release request.");
+  }
+  return { bindingId: value.bindingId };
+}
