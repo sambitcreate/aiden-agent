@@ -243,7 +243,7 @@ const OPENROUTER_DIRECT_AUTHOR: Readonly<Record<string, string>> = {
   nvidia: "nvidia",
 };
 
-const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate"]);
+const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate", "cursor"]);
 
 const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   openai: "OpenAI",

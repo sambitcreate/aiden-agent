@@ -509,3 +509,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Moving Live from default-on to acceptance-gated correctly hid the dock but invalidated the local UI E2E; keep default-off rendering covered separately and opt the isolated provider-free E2E harness into the experimental surface explicitly.
 - The hosted full Electron suite marked the unrelated chat-switch queue test flaky after it passed on retry, and `--fail-on-flaky-tests` failed the whole gate; rerun the exact failed job before changing unrelated product behavior, while preserving the strict gate if the flake repeats.
 - A distant Environment source-contract test asserted Aiden Live's two-argument command registration, so focused Live tests missed the intentional capability gate; search all source-contract assertions when changing a shared command signature.
+
+## 2026-09-17 — Cursor via fitchmultz/pi-cursor-sdk
+
+- Consume `pi-cursor-sdk` 0.3.7 (`discoverModels` / `streamCursorLazy`) as an Aiden-owned built-in. Do not load the package's default Pi extension (`dist/index.js`): that registers MCP bridging, slash commands, and `parseArgs(process.argv)` session scope.
+- Bind workspace cwd with the SDK session-scope `__testUtils.set` plus Aiden ALS, then globally serialize Cursor streams. The SDK cwd is process-global; per-session turn locks do not cover concurrent chats.
+- This agent environment's `npm install` against registry.npmjs.org failed with TLS `SSL_ERROR_SYSCALL` / `ECONNRESET`. GitHub HTTPS clone of the SDK succeeded. Do not add optional peer `@earendil-works/pi-coding-agent` just to satisfy the SDK: it ships a shrinkwrap and CI `npm ci` then demands that whole nested graph. Keep `package-lock.json` in sync for `pi-cursor-sdk` (exact `@hono/node-server@2.0.12`) and `@cursor/sdk` (`@connectrpc/connect-node` → `undici@5.29.0` → `@fastify/busboy@2.1.1`); unpack `@cursor/sdk`, `pi-cursor-sdk`, and `@connectrpc/**` from asar.

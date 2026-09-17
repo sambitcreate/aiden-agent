@@ -20,6 +20,7 @@ test("keeps the selected Pi providers first in product order and puts every othe
   const providers = [
     { id: "cloudflare-workers-ai" },
     { id: "concentrate" },
+    { id: "cursor" },
     { id: "opencode-go" },
     { id: "groq" },
     { id: "openai" },
@@ -39,6 +40,7 @@ test("keeps the selected Pi providers first in product order and puts every othe
       "openai",
       "anthropic",
       "concentrate",
+      "cursor",
       "opencode",
       "opencode-go",
       "zai-coding-cn",
@@ -137,6 +139,7 @@ test("onboarding distinguishes ready providers from unavailable setup methods", 
 test("resolves provider logos without branding unknown custom or future providers", () => {
   assert.equal(resolveProviderIconSlug("openai"), "openai");
   assert.equal(resolveProviderIconSlug("concentrate"), "concentrate");
+  assert.equal(resolveProviderIconSlug("cursor"), "cursor");
   assert.equal(resolveProviderIconSlug("together"), "together");
   assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");
   assert.equal(resolveProviderIconSlug("custom:ollama"), "ollama");

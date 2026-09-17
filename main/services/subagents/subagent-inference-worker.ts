@@ -98,6 +98,11 @@ parentPort.on("message", (messageEvent) => {
       // A provider cannot be constructed or contacted until main has observed
       // readiness. That makes an exit before the acknowledgement safe to retry.
       await readyAck;
+      if (message.model.provider === "cursor") {
+        throw new Error(
+          "Cursor models cannot run in the isolated subagent worker. They require Aiden's Cursor SDK session.",
+        );
+      }
       const invokeHook = (hook: "payload" | "response", payload: unknown) =>
         new Promise<unknown>((resolve) => {
           const callId = nextCallId++;

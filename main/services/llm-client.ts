@@ -721,6 +721,9 @@ async function prepareGeneration(
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  runtime.workspaceRoot = folderPath;
+  runtime.workspaceTrusted = Boolean(folderPath && permission !== "none");
+  runtime.workspaceProjectTrusted = Boolean(folderPath && permission === "full");
   const git =
     folderPath && (!botContext || botContext.admission.authority.files.botHome)
       ? await gitInfo(folderPath)
