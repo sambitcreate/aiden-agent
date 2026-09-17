@@ -94,6 +94,7 @@ test("Concentrate is an Aiden built-in with bounded dynamic refresh and no secre
 
   const models = registerAidenBuiltinProviders(createModels());
   assert.equal(models.getProvider("concentrate")?.name, "Concentrate");
+  assert.equal(models.getProvider("cursor")?.name, "Cursor");
 });
 
 test("Concentrate rejects empty, malformed, and oversized catalogs", async () => {

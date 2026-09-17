@@ -29,6 +29,7 @@ import {
   waitForAbortableDelay,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
+import { currentCursorSession } from "./cursor-session-binding.js";
 
 test("uses only the connection-bound runtime model as the image gate", () => {
   assert.equal(runtimeSupportsImages({ input: ["text"] }), false);
@@ -233,6 +234,80 @@ test("forwards the chat identity through Pi Agent options into the native stream
   assert.equal(receivedSessionId, "chat-session-123");
   assert.equal(receivedApiKey, "runtime-key");
   assert.equal(receivedAuthorization, null);
+});
+
+test("binds the workspace onto Cursor turns only", () => {
+  let seenCwd: string | undefined;
+  const nativeStream = ((_model, _context, _options) => {
+    seenCwd = currentCursorSession()?.cwd;
+    throw new Error("captured");
+  }) as ProviderStreams["streamSimple"];
+  const cursorModel: Model<"openai-completions"> = {
+    id: "auto",
+    name: "Auto",
+    api: "openai-completions",
+    provider: "cursor",
+    baseUrl: "https://cursor.com",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
+  const agentOptions = buildAgentRuntimeOptions("chat-cursor-1", {
+    apiKey: "runtime-key",
+    headers: undefined,
+    streams: { streamSimple: nativeStream },
+    workspaceRoot: "/tmp/aiden-cursor-ws",
+    workspaceTrusted: true,
+    workspaceProjectTrusted: true,
+  });
+  assert.throws(
+    () => agentOptions.streamFn?.(cursorModel, { messages: [] }, {}),
+    /captured/u,
+  );
+  assert.equal(seenCwd, "/tmp/aiden-cursor-ws");
+
+  seenCwd = "unset";
+  const openaiModel: Model<"openai-completions"> = {
+    ...cursorModel,
+    provider: "openai",
+  };
+  assert.throws(
+    () => agentOptions.streamFn?.(openaiModel, { messages: [] }, {}),
+    /captured/u,
+  );
+  assert.equal(seenCwd, undefined);
+});
+
+test("Cursor chat wrapping trusts only a full-access workspace folder", () => {
+  let projectTrusted: boolean | undefined;
+  const nativeStream = ((_model, _context, _options) => {
+    projectTrusted = currentCursorSession()?.projectTrusted;
+    throw new Error("captured");
+  }) as ProviderStreams["streamSimple"];
+  const cursorModel: Model<"openai-completions"> = {
+    id: "auto",
+    name: "Auto",
+    api: "openai-completions",
+    provider: "cursor",
+    baseUrl: "https://cursor.com",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
+  const askOptions = buildAgentRuntimeOptions("chat-cursor-ask", {
+    apiKey: "runtime-key",
+    headers: undefined,
+    streams: { streamSimple: nativeStream },
+    workspaceRoot: "/tmp/aiden-cursor-ws",
+    workspaceTrusted: true,
+    workspaceProjectTrusted: false,
+  });
+  assert.throws(() => askOptions.streamFn?.(cursorModel, { messages: [] }, {}), /captured/u);
+  assert.equal(projectTrusted, false);
 });
 
 test("uses an in-memory non-secret credential for an explicitly keyless provider", () => {

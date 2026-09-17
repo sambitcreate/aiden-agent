@@ -25,6 +25,7 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
     import.meta.url,
   ).href,
   concentrate: new URL("../assets/provider-logos/concentrate.svg", import.meta.url).href,
+  cursor: new URL("../assets/provider-logos/cursor.svg", import.meta.url).href,
   deepseek: new URL("../assets/provider-logos/deepseek.svg", import.meta.url).href,
   fireworks: new URL("../assets/provider-logos/fireworks.svg", import.meta.url).href,
   "github-copilot": new URL("../assets/provider-logos/github-copilot.svg", import.meta.url).href,

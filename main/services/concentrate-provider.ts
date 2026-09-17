@@ -6,6 +6,7 @@ import {
   type ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { registerCursorProvider } from "./cursor-provider.js";
 
 export const CONCENTRATE_PROVIDER_ID = "concentrate";
 export const CONCENTRATE_PROVIDER_NAME = "Concentrate";
@@ -179,5 +180,5 @@ export function concentrateProvider(fetchImpl: Fetch = fetch) {
 /** Register Aiden-owned built-ins after Pi's pinned catalog is constructed. */
 export function registerAidenBuiltinProviders(models: MutableModels): MutableModels {
   models.setProvider(concentrateProvider());
-  return models;
+  return registerCursorProvider(models);
 }
