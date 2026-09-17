@@ -15,6 +15,7 @@ import {
   type GeminiLiveProtocolOptions,
 } from "./protocol.js";
 import type { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
+import type { GeminiLiveDisplayMediaBinding } from "./display-media-contract.js";
 import type {
   GeminiLiveAcceptanceEvidenceEvent,
   GeminiLiveAcceptanceEvidenceRecorder,
@@ -94,6 +95,11 @@ export interface GeminiLiveServiceOptions {
   credentials: Pick<CredentialStore, "read">;
   createConnector(apiKey: string): GeminiLiveConnector;
   resolveModel(): string | null | Promise<string | null>;
+  /**
+   * True only after the packaged native-picker acceptance has been recorded
+   * for this build. When absent or false, every screen intent is rejected.
+   */
+  screenShareEnabled?(): boolean;
   createSessionId?: () => string;
   acceptanceEvidence?: GeminiLiveAcceptanceEvidenceRecorder | null;
   prepareComputerUse?(input: {
@@ -126,7 +132,9 @@ interface OwnedLiveSession {
   protocol: GeminiLiveProtocol | null;
   state: AssistantLiveSnapshot["state"];
   microphone: boolean;
+  screen: boolean;
   resumptionAudio: Uint8Array[];
+  resumptionFrame: Uint8Array | null;
   model?: string;
   computerUse: GeminiLiveComputerUseBridge | null;
   approveComputerUse:
@@ -243,9 +251,50 @@ export class GeminiLiveSessionStore {
 
 export class GeminiLiveService {
   readonly sessions = new GeminiLiveSessionStore();
+  private readonly displayBindings = new Map<
+    string,
+    { binding: GeminiLiveDisplayMediaBinding; dispose: () => void }
+  >();
   private shuttingDown = false;
 
   constructor(private readonly options: GeminiLiveServiceOptions) {}
+
+  /**
+   * Binds the exact renderer document that asked to share its screen. Binding
+   * alone authorizes nothing until a session also passes the screen gate.
+   */
+  bindDisplayMedia(
+    owner: RendererDocumentOwner,
+    binding: GeminiLiveDisplayMediaBinding,
+  ): boolean {
+    if (
+      this.shuttingDown ||
+      this.options.screenShareEnabled?.() !== true ||
+      owner.isDestroyed()
+    ) {
+      return false;
+    }
+    const key = documentKey(owner);
+    this.displayBindings.get(key)?.dispose();
+    const dispose = owner.onInvalidated(() => {
+      if (this.displayBindings.get(key)?.binding === binding) {
+        this.displayBindings.delete(key);
+      }
+    });
+    this.displayBindings.set(key, { binding, dispose });
+    return true;
+  }
+
+  releaseDisplayMedia(owner: RendererDocumentOwner): void {
+    const entry = this.displayBindings.get(documentKey(owner));
+    entry?.dispose();
+    this.displayBindings.delete(documentKey(owner));
+  }
+
+  /** Live bindings consulted by the session-level display-media guards. */
+  displayMediaBindings(): readonly GeminiLiveDisplayMediaBinding[] {
+    return [...this.displayBindings.values()].map((entry) => entry.binding);
+  }
 
   async availability(
     owner: RendererDocumentOwner,
@@ -280,9 +329,15 @@ export class GeminiLiveService {
     if (this.shuttingDown) throw new GeminiLiveStartError("live_start_failed");
     if (owner.isDestroyed())
       throw new GeminiLiveStartError("live_start_failed");
-    // Native picker acceptance is still open. Do not let a crafted renderer
-    // request turn the Phase-0 deterministic capture proof into production authority.
-    if (_intent.screen) throw new GeminiLiveStartError("live_start_failed");
+    // A screen intent is valid only while the recorded-acceptance gate is open
+    // and this exact document bound the picker ahead of the session start.
+    if (
+      _intent.screen &&
+      (this.options.screenShareEnabled?.() !== true ||
+        !this.displayBindings.has(documentKey(owner)))
+    ) {
+      throw new GeminiLiveStartError("live_start_failed");
+    }
 
     const session: OwnedLiveSession = {
       abort: new AbortController(),
@@ -293,7 +348,9 @@ export class GeminiLiveService {
       protocol: null,
       state: "connecting",
       microphone: _intent.microphone,
+      screen: _intent.screen === true,
       resumptionAudio: [],
+      resumptionFrame: null,
       computerUse: null,
       approveComputerUse: null,
       computerUseChatId: null,
@@ -444,10 +501,38 @@ export class GeminiLiveService {
     }
   }
 
+  sendFrame(
+    owner: RendererDocumentOwner,
+    sessionId: string,
+    jpeg: Uint8Array,
+  ): boolean {
+    const session = this.sessions.get(owner);
+    if (!session || session.sessionId !== sessionId || !session.screen) {
+      return false;
+    }
+    if (session.state === "resuming") {
+      // Frames are latest-wins; keep at most one until the replacement
+      // transport opens so a reconnect never replays stale screen state.
+      session.resumptionFrame = Uint8Array.from(jpeg);
+      return true;
+    }
+    if (session.state !== "open" || !session.protocol) return false;
+    try {
+      session.protocol.sendJpeg(jpeg);
+      return true;
+    } catch {
+      this.closeSession(session);
+      return false;
+    }
+  }
+
   shutdown(): void {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     for (const session of this.sessions.values()) this.closeSession(session);
+    // No picker authority may outlive the service.
+    for (const entry of this.displayBindings.values()) entry.dispose();
+    this.displayBindings.clear();
   }
 
   private handleProtocolEvent(
@@ -499,10 +584,15 @@ export class GeminiLiveService {
     }
     if (event.type === "state") {
       session.state = event.state;
-      if (event.state === "open" && session.resumptionAudio.length > 0) {
-        const pending = session.resumptionAudio.splice(0);
+      if (event.state === "open") {
+        const pendingAudio = session.resumptionAudio.splice(0);
+        const pendingFrame = session.resumptionFrame;
+        session.resumptionFrame = null;
         try {
-          for (const pcm of pending) session.protocol?.sendAudio(pcm);
+          for (const pcm of pendingAudio) session.protocol?.sendAudio(pcm);
+          if (pendingFrame && session.screen) {
+            session.protocol?.sendJpeg(pendingFrame);
+          }
         } catch {
           this.closeSession(session);
           return;
@@ -550,6 +640,10 @@ export class GeminiLiveService {
     session.computerUseChatId = null;
     session.state = "closed";
     session.resumptionAudio = [];
+    session.resumptionFrame = null;
+    // Stopping or replacing a session also revokes this document's authority
+    // to admit display capture; a restart re-binds through the picker flow.
+    this.releaseDisplayMedia(session.owner);
     if (notifyRenderer && !session.owner.isDestroyed()) {
       try {
         session.owner.send(ASSISTANT_LIVE_EVENT_CHANNEL, {
@@ -575,6 +669,7 @@ export class GeminiLiveService {
       reason,
       sessionId: session.sessionId,
       model: session.model,
+      screenShareAllowed: this.options.screenShareEnabled?.() === true,
       state: session.state,
     };
   }
@@ -587,6 +682,7 @@ export class GeminiLiveService {
       available: reason === "available",
       reason,
       ...(model ? { model } : {}),
+      screenShareAllowed: this.options.screenShareEnabled?.() === true,
       state: "idle",
     };
   }

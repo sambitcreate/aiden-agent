@@ -30,12 +30,19 @@ const idleLive: AssistantLiveController = {
   computerUseDetail: "Ready",
   computerUsePermissions: { accessibility: true, screenRecording: true },
   computerUseError: null,
+  screenShareAvailable: false,
+  screenSourceLabel: null,
+  screenActive: false,
+  screenBusy: false,
+  screenError: null,
   setupComplete: true,
   setSetupOpen: () => undefined,
   setMicrophone: () => undefined,
   setComputerUse: async () => undefined,
   requestMicrophonePermission: async () => true,
   prepareComputerUse: async () => undefined,
+  chooseScreenSource: async () => undefined,
+  releaseScreen: () => undefined,
   start: async () => undefined,
   stop: async () => undefined,
   cancelSetup: async () => undefined,
@@ -96,6 +103,16 @@ test("setup discloses macOS access and per-action approval", () => {
   assert.match(live, /Screen and Accessibility/u);
   assert.match(live, /Scheduled tasks/u);
   assert.match(live, /still require Allow once/u);
+});
+
+test("screen sharing is opt-in, source-labelled, and visibly active in the HUD", () => {
+  const live = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  assert.match(live, /live\.screenShareAvailable/u);
+  assert.match(live, /title="Screen share"/u);
+  assert.match(live, /live\.chooseScreenSource/u);
+  assert.match(live, /live\.releaseScreen/u);
+  assert.match(live, /Sharing \{live\.screenSourceLabel \?\? "screen"\}/u);
+  assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
 });
 
 test("Gemini Live is visibly marked beta in setup and settings", () => {

@@ -1,7 +1,7 @@
 import { createOwnedGoogleGenAIConnector } from "./owned-sdk-connector.js";
 import { piCredentialStore } from "../pi-credential-store.js";
 import { GeminiLiveService } from "./service.js";
-import { experimentalGeminiLiveModel } from "./feature-flag.js";
+import { experimentalGeminiLiveModel, geminiLiveScreenEnabled } from "./feature-flag.js";
 import { configStore } from "../config-store.js";
 import { chatStore } from "../chat-store.js";
 import { computerUseStatus } from "../computer-use/status.js";
@@ -29,6 +29,7 @@ export const geminiLiveService = new GeminiLiveService({
     app.getPath("userData"),
   ),
   resolveModel: () => experimentalGeminiLiveModel(),
+  screenShareEnabled: () => geminiLiveScreenEnabled(),
   createConnector: (apiKey) => createOwnedGoogleGenAIConnector({ apiKey }),
   prepareComputerUse: async ({ chatId, owner, sessionId, signal }) => {
     if (!chatId || signal.aborted || owner.isDestroyed()) return null;

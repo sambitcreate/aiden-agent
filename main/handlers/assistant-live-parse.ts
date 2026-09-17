@@ -1,4 +1,5 @@
 import type { AssistantLiveStartIntent } from "../../renderer/shared/assistant-live.js";
+import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -51,4 +52,34 @@ export function parseAssistantLiveAudioIntent(value: unknown): AssistantLiveAudi
     throw new Error("Invalid Assistant Live audio request.");
   }
   return { sessionId: value.sessionId, pcm: Uint8Array.from(value.pcm) };
+}
+
+export interface AssistantLiveFrameIntent {
+  sessionId: string;
+  frame: Uint8Array;
+}
+
+export function parseAssistantLiveFrameIntent(value: unknown): AssistantLiveFrameIntent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["frame", "sessionId"]) ||
+    typeof value.sessionId !== "string" ||
+    value.sessionId.length < 1 ||
+    value.sessionId.length > 128 ||
+    !(value.frame instanceof Uint8Array) ||
+    value.frame.byteLength < 4 ||
+    value.frame.byteLength > GEMINI_LIVE_MAX_JPEG_BYTES
+  ) {
+    throw new Error("Invalid Assistant Live frame request.");
+  }
+  return { sessionId: value.sessionId, frame: Uint8Array.from(value.frame) };
+}
+
+export function parseAssistantLiveEmptyIntent(
+  value: unknown,
+  name: string,
+): void {
+  if (!isRecord(value) || !exactKeys(value, [])) {
+    throw new Error(`Invalid Assistant Live ${name} request.`);
+  }
 }

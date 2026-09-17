@@ -30,7 +30,7 @@ const MAX_OUTPUT_AUDIO_BYTES_PER_EVENT = 512_000;
 const MAX_OUTPUT_AUDIO_BYTES_PER_SECOND = 768_000;
 const MAX_DECODED_SERVER_EVENT_BYTES = 640_000;
 export const GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES = 96_000;
-const MAX_JPEG_BYTES = 1_500_000;
+export const GEMINI_LIVE_MAX_JPEG_BYTES = 1_500_000;
 const MAX_TEXT_BYTES = 16_384;
 const MAX_HISTORY_TURNS = 16;
 const MAX_HISTORY_BYTES = 65_536;
@@ -441,7 +441,7 @@ function audioChunkDurationMs(bytes: number): number {
 function validJpeg(bytes: Uint8Array): boolean {
   return (
     bytes.length >= 4 &&
-    bytes.length <= MAX_JPEG_BYTES &&
+    bytes.length <= GEMINI_LIVE_MAX_JPEG_BYTES &&
     bytes[0] === 0xff &&
     bytes[1] === 0xd8 &&
     bytes[bytes.length - 2] === 0xff &&

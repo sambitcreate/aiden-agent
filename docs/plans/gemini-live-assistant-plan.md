@@ -1,6 +1,6 @@
 # Gemini Live Assistant Plan
 
-Status: Partial — Phases 0–4 plus the beta-labeled Gemini Live orb/setup shell are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
+Status: Partial — Phases 0–4 plus the beta-labeled Gemini Live orb/setup shell are implemented; the attended screen-share pipeline (exact-document picker binding, bounded JPEG frames, full teardown) is now wired end to end behind `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN` and stays fail-closed until the authorized packaged native-picker acceptance and real Google beta receipts are recorded
 Date: 2026-09-15
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`

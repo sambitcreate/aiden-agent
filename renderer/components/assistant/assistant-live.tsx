@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   Mic,
+  Monitor,
   MousePointer2,
   Radio,
   Settings2,
@@ -57,6 +58,7 @@ function ReadinessRow({
   busy = false,
   action,
   onAction,
+  trailing,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -65,6 +67,8 @@ function ReadinessRow({
   busy?: boolean;
   action: string;
   onAction(): void;
+  /** Extra controls shown beside the ready mark once the row is ready. */
+  trailing?: React.ReactNode;
 }): React.ReactElement {
   return (
     <div className="gemini-live-readiness-row">
@@ -91,6 +95,7 @@ function ReadinessRow({
           <ChevronRight className="size-3.5" aria-hidden="true" />
         </Button>
       )}
+      {trailing}
     </div>
   );
 }
@@ -152,6 +157,49 @@ export function AssistantLiveSetupDialog({
           action="Allow"
           onAction={() => void live.requestMicrophonePermission()}
         />
+        {live.screenShareAvailable ? (
+          <ReadinessRow
+            icon={<Monitor className="size-4" />}
+            title="Screen share"
+            detail={
+              live.screenSourceLabel
+                ? `Ready to share ${live.screenSourceLabel} — one frame a second, only while Live runs.`
+                : "Optional. Share one screen or window so Aiden can see what you see."
+            }
+            ready={Boolean(live.screenSourceLabel)}
+            busy={live.screenBusy}
+            action="Choose…"
+            onAction={() => void live.chooseScreenSource()}
+            trailing={
+              live.screenSourceLabel ? (
+                <span className="flex items-center gap-1">
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    className={ASSISTANT_LIVE_FOCUS_CLASS}
+                    onClick={() => void live.chooseScreenSource()}
+                    disabled={live.screenBusy}
+                  >
+                    Change
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="transparent"
+                    className={ASSISTANT_LIVE_FOCUS_CLASS}
+                    onClick={live.releaseScreen}
+                  >
+                    Remove
+                  </Button>
+                </span>
+              ) : null
+            }
+          />
+        ) : null}
+        {live.screenError ? (
+          <p role="alert" className="gemini-live-setup-error">
+            {live.screenError}
+          </p>
+        ) : null}
         <ReadinessRow
           icon={<MousePointer2 className="size-4" />}
           title="Screen and Accessibility"
@@ -186,8 +234,8 @@ export function AssistantLiveSetupDialog({
         </button>
       ) : null}
       <p className="text-xs leading-4 text-tertiary">
-        Screen actions use Computer Use and still require Allow once. Audio and captions remain in
-        memory for this Live session and are not added to chat history.
+        Screen actions use Computer Use and still require Allow once. Audio, captions, and screen
+        frames remain in memory for this Live session and are not added to chat history.
       </p>
     </Dialog>
   );
@@ -245,6 +293,12 @@ export function AssistantLiveHud({
               {STATE_LABEL[live.state]}
             </p>
             {orbState === "approval" ? <Badge color="blue">Approval needed</Badge> : null}
+            {live.screenActive ? (
+              <Badge color="blue">
+                <Monitor className="size-3" aria-hidden="true" />
+                Sharing {live.screenSourceLabel ?? "screen"}
+              </Badge>
+            ) : null}
           </div>
           <p className="truncate text-xs text-tertiary" title={live.model ?? "Google Gemini"}>
             Google Gemini{live.model ? ` · ${live.model}` : ""}

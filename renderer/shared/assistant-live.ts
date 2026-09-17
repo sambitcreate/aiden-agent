@@ -17,6 +17,8 @@ export interface AssistantLiveSnapshot {
   reason: AssistantLiveAvailabilityReason;
   /** Exact main-approved model. Present only after the model gate resolves. */
   model?: string;
+  /** True only while the screen-share feature gate is open for this document. */
+  screenShareAllowed?: boolean;
   sessionId?: string;
   state:
     | "idle"
