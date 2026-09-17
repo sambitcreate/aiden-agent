@@ -168,8 +168,10 @@ test("shutdown waits for an in-flight thread begin and finalizes its record", as
  */
 function fakeDisplayBinding(
   owner: FakeOwner,
+  bindingId = `binding-${owner.documentId}`,
 ): GeminiLiveDisplayMediaBinding {
   return {
+    bindingId,
     documentId: owner.documentId,
     owner,
     allowsDisplayRequest: () => true,
@@ -961,7 +963,7 @@ test("screen frames are admitted only for a bound, gated, open session", async (
   const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
   const owner = new FakeOwner(35, "35:1:doc");
   const binding = fakeDisplayBinding(owner);
-  assert.equal(subject.service.bindDisplayMedia(owner, binding), true);
+  assert.equal(subject.service.bindDisplayMedia(owner, binding), binding.bindingId);
   const session = await subject.service.start(owner, {
     microphone: false,
     screen: true,
@@ -1023,17 +1025,28 @@ test("screen frames are admitted only for a bound, gated, open session", async (
 test("a display binding dies with its document and never survives shutdown", async () => {
   const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
   const owner = new FakeOwner(37, "37:1:doc");
-  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner)), true);
+  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner)), `binding-${owner.documentId}`);
   owner.navigate();
   assert.deepEqual(subject.service.displayMediaBindings(), []);
 
   const next = new FakeOwner(38, "38:1:doc");
-  assert.equal(subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)), true);
+  assert.equal(subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)), `binding-${next.documentId}`);
   subject.service.shutdown();
   assert.deepEqual(subject.service.displayMediaBindings(), []);
   assert.equal(
     subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)),
-    false,
+    null,
     "a shut-down service never binds new capture authority",
   );
+});
+
+test("an older display release cannot revoke its replacement binding", () => {
+  const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
+  const owner = new FakeOwner(39, "39:1:doc");
+  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner, "old")), "old");
+  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner, "new")), "new");
+  assert.equal(subject.service.releaseDisplayMedia(owner, "old"), false);
+  assert.equal(subject.service.displayMediaBindings()[0]?.bindingId, "new");
+  assert.equal(subject.service.releaseDisplayMedia(owner, "new"), true);
+  assert.deepEqual(subject.service.displayMediaBindings(), []);
 });

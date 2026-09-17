@@ -96,6 +96,15 @@ test("binds both custom-picker and system-picker permission admission to one exa
     binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "media", {
       isMainFrame: true,
       requestingUrl: frame.url,
+      mediaType: "audio",
+    }),
+    true,
+  );
+  assert.equal(
+    binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "media", {
+      isMainFrame: true,
+      requestingUrl: frame.url,
+      mediaType: "video",
     }),
     false,
   );
@@ -158,14 +167,21 @@ test("session guards gate display-capture only and install exactly once", () => 
   const frame = new FakeFrame(10, 20, "document-one", "file:///Aiden/main-window.html");
   const sender = new FakeWebContents(7, frame);
   const bindings: GeminiLiveDisplayMediaBinding[] = [];
-  installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
-  installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
+  const dispose = installGeminiLiveDisplayMediaGuards(electronSession, () => bindings);
+  assert.equal(
+    installGeminiLiveDisplayMediaGuards(electronSession, () => bindings),
+    dispose,
+  );
   assert.equal(installed.checks, 1, "re-installation must not stack handlers");
   assert.equal(installed.requests, 1);
   assert.equal(installed.displays, 1);
   assert.deepEqual(installed.opts, { useSystemPicker: true });
 
   const details = { isMainFrame: true, requestingUrl: frame.url } as Electron.PermissionRequest;
+  const audioCheckDetails = { ...details, mediaType: "audio" } as Electron.PermissionCheckHandlerHandlerDetails;
+  const videoCheckDetails = { ...details, mediaType: "video" } as Electron.PermissionCheckHandlerHandlerDetails;
+  const audioRequestDetails = { ...details, mediaTypes: ["audio"] } as Electron.MediaAccessPermissionRequest;
+  const videoRequestDetails = { ...details, mediaTypes: ["video"] } as Electron.MediaAccessPermissionRequest;
   // Without a Live binding every display-capture path denies.
   assert.equal(
     installed.check?.(
@@ -187,8 +203,9 @@ test("session guards gate display-capture only and install exactly once", () => 
   );
   assert.equal(granted, false);
 
-  // A bound document admits display-capture; every other permission keeps the
-  // session's default allow so the guards never shrink unrelated authority.
+  // A bound document admits only its display capture and microphone. Unrelated
+  // contents and unrelated permission types remain denied while the temporary
+  // guard owns the session policy.
   bindings.push(bindGeminiLiveDisplayMediaDocument(invokeEvent(sender, frame)));
   assert.equal(
     installed.check?.(
@@ -200,15 +217,29 @@ test("session guards gate display-capture only and install exactly once", () => 
     true,
   );
   assert.equal(
-    installed.check?.(null, "media", "file:///Aiden/", details),
+    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", audioCheckDetails),
     true,
-    "non-display permissions keep the default policy",
+    "the exact bound document keeps microphone access",
   );
   granted = null;
   installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
     granted = next;
-  }, details);
+  }, audioRequestDetails);
   assert.equal(granted, true);
+  assert.equal(
+    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", videoCheckDetails),
+    false,
+  );
+  granted = null;
+  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
+    granted = next;
+  }, videoRequestDetails);
+  assert.equal(granted, false);
+  assert.equal(
+    installed.check?.(sender as unknown as Electron.WebContents, "notifications", "file:///Aiden/", details),
+    false,
+  );
+  assert.equal(installed.check?.(null, "media", "file:///Aiden/", details), false);
 
   // Any non-picker dispatch to the fallback handler is denied outright.
   const streams: Electron.Streams[] = [];
@@ -226,6 +257,10 @@ test("session guards gate display-capture only and install exactly once", () => 
     ),
     false,
   );
+  dispose();
+  assert.equal(installed.check, null);
+  assert.equal(installed.request, null);
+  assert.equal(installed.display, null);
 });
 
 test("navigation, replacement frames, and unrelated WebContents fail closed", () => {

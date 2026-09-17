@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LiveAudioDeviceError } from "../../lib/live-audio-devices.js";
+import type { DisplayMediaStream } from "../../lib/gemini-live-media-core.js";
 
 test("Live device preparation failure prevents provider start and surfaces recovery", async () => {
   const fixture = await mountHook({ prepareAudioSession: async () => { throw new LiveAudioDeviceError("Choose another output in Aiden Live settings."); } });
@@ -1478,7 +1479,8 @@ interface ScreenFixtureOptions {
   startCalls: Array<{ screen: boolean }>;
   framesSent: Array<{ sessionId: string; frame: Uint8Array }>;
   binds: number[];
-  releases: number[];
+  releases: string[];
+  admitFrames: boolean;
   displayTrack: FakeDisplayTrack;
   frameSource: {
     captures: number;
@@ -1505,6 +1507,7 @@ function screenDependencies(): {
     framesSent: [],
     binds: [],
     releases: [],
+    admitFrames: true,
     displayTrack,
     frameSource: {
       captures: 0,
@@ -1536,15 +1539,15 @@ function screenDependencies(): {
     sendAudio: async () => true,
     bindDisplay: async () => {
       state.binds.push(1);
-      return true;
+      return `binding-${state.binds.length}`;
     },
-    releaseDisplay: async () => {
-      state.releases.push(1);
+    releaseDisplay: async (bindingId) => {
+      state.releases.push(bindingId);
       return true;
     },
     sendFrame: async (sessionId, frame) => {
       state.framesSent.push({ sessionId, frame });
-      return true;
+      return state.admitFrames;
     },
     onEvent: () => () => undefined,
   };
@@ -1636,6 +1639,70 @@ test("a picker failure that is not cancellation surfaces an accessible error", a
   await settle();
   assert.equal(state.releases.length, 1);
   assert.match(fixture.controller().screenError ?? "", /screen picker/iu);
+  await fixture.unmount();
+});
+
+test("releasing setup fences and stops a display stream returned by a late picker", async () => {
+  const { dependencies, state } = screenDependencies();
+  const picker = deferred<DisplayMediaStream>();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: () => picker.promise,
+  });
+  const choosing = fixture.controller().chooseScreenSource();
+  await settle();
+  assert.deepEqual(state.binds, [1]);
+
+  fixture.controller().releaseScreen();
+  picker.resolve({ getTracks: () => [state.displayTrack] });
+  await choosing;
+  await settle();
+
+  assert.equal(state.displayTrack.stops, 1, "the late stream is stopped immediately");
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("a rejected screen frame stops capture and releases its exact binding", async () => {
+  const { dependencies, state } = screenDependencies();
+  state.admitFrames = false;
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  await fixture.controller().start();
+  await settle();
+  await settle();
+
+  assert.equal(state.framesSent.length, 1);
+  assert.equal(state.frameSource.stops, 1);
+  assert.equal(state.displayTrack.stops, 1);
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("a pending Live start blocks display-source replacement", async () => {
+  const { dependencies, state } = screenDependencies();
+  const opening = deferred<AssistantLiveSnapshot>();
+  dependencies.api!.start = async (intent) => {
+    state.startCalls.push({ screen: intent.screen === true });
+    return opening.promise;
+  };
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().busy, true);
+
+  await fixture.controller().chooseScreenSource();
+  assert.deepEqual(state.binds, [1], "busy start owns the selected binding");
+
+  opening.reject(new Error("provider rejected start"));
+  await starting;
+  await settle();
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenSourceLabel, null);
   await fixture.unmount();
 });
 
