@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## 2026-09-16 — Gemini 3.7+ Flash rejects Pi's disabled-thinking floor
+
+- Pi ≤0.85's Google adapter sends `thinkingLevel: "MINIMAL"` whenever thinking is off for any `gemini-3.*-flash` id, but Google dropped `minimal` from 3.7 Flash onward (`low`/`medium`/`high` only), so the request 400s. Pi's `thinkingLevelMap` is not consulted on the disabled path, so catalog metadata cannot repair it; compose an `onPayload` rewrite (`withGoogleThinkingFloor` in `pi-provider-compatibility.ts`) onto the provider's stream functions instead, and preserve `includeThoughts` semantics so "off" stays hidden thinking.
+
 ## 2026-09-12 — Listed upstream integration audit
 
 - This worktree has no `.memory/` or `node_modules/`. Read the main checkout's project memory as historical context, but use this worktree's exact HEAD/source as authority. The main checkout's `tsx` binary can execute dependency-free focused suites without installing packages here; suites with runtime package imports still fail module resolution (observed: `entities` in the subagent capability suite). Treat that as an environment limitation, not a product regression or passing test.
