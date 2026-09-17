@@ -8,6 +8,8 @@ export const GEMINI_LIVE_SYSTEM_PICKER_OPTIONS: Electron.DisplayMediaRequestHand
 interface DisplayPermissionDetails {
   isMainFrame: boolean;
   requestingUrl: string;
+  mediaType?: "video" | "audio" | "unknown";
+  mediaTypes?: Array<"video" | "audio">;
 }
 
 export interface GeminiLiveDisplayMediaBinding {
@@ -81,12 +83,18 @@ export function bindGeminiLiveDisplayMediaDocument(
       request.frame !== null &&
       liveFrame(request.frame) &&
       sameFrame(request.frame, frame),
-    allowsPermissionRequest: (webContents, permission, details) =>
-      current() &&
-      webContents === sender &&
-      (permission === "display-capture" || permission === "media") &&
-      details.isMainFrame === true &&
-      details.requestingUrl === requestingUrl,
+    allowsPermissionRequest: (webContents, permission, details) => {
+      const audioOnly =
+        details.mediaType === "audio" ||
+        (details.mediaTypes?.length === 1 && details.mediaTypes[0] === "audio");
+      return (
+        current() &&
+        webContents === sender &&
+        (permission === "display-capture" || (permission === "media" && audioOnly)) &&
+        details.isMainFrame === true &&
+        details.requestingUrl === requestingUrl
+      );
+    },
   };
 }
 
@@ -151,17 +159,20 @@ export function installGeminiLiveDisplayMediaGuards(
         binding.allowsPermissionRequest(webContents, String(permission), {
           isMainFrame: details.isMainFrame === true,
           requestingUrl: details.requestingUrl ?? "",
+          mediaType: details.mediaType,
         }),
       );
     },
   );
   electronSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
+      const mediaDetails = details as Electron.MediaAccessPermissionRequest;
       callback(
         getBindings().some((binding) =>
           binding.allowsPermissionRequest(webContents, String(permission), {
             isMainFrame: details.isMainFrame === true,
             requestingUrl: details.requestingUrl ?? "",
+            mediaTypes: mediaDetails.mediaTypes,
           }),
         ),
       );

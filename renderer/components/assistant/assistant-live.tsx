@@ -177,7 +177,7 @@ export function AssistantLiveSetupDialog({
                 : "Optional. Share one screen or window so Aiden can see what you see."
             }
             ready={Boolean(live.screenSourceLabel)}
-            busy={live.screenBusy}
+            busy={live.screenBusy || live.busy}
             action="Choose…"
             onAction={() => void live.chooseScreenSource()}
             trailing={
@@ -188,7 +188,7 @@ export function AssistantLiveSetupDialog({
                     variant="transparent"
                     className={ASSISTANT_LIVE_FOCUS_CLASS}
                     onClick={() => void live.chooseScreenSource()}
-                    disabled={live.screenBusy}
+                    disabled={live.screenBusy || live.busy}
                   >
                     Change
                   </Button>
@@ -197,6 +197,7 @@ export function AssistantLiveSetupDialog({
                     variant="transparent"
                     className={ASSISTANT_LIVE_FOCUS_CLASS}
                     onClick={live.releaseScreen}
+                    disabled={live.busy}
                   >
                     Remove
                   </Button>

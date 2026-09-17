@@ -1682,6 +1682,30 @@ test("a rejected screen frame stops capture and releases its exact binding", asy
   await fixture.unmount();
 });
 
+test("a pending Live start blocks display-source replacement", async () => {
+  const { dependencies, state } = screenDependencies();
+  const opening = deferred<AssistantLiveSnapshot>();
+  dependencies.api!.start = async (intent) => {
+    state.startCalls.push({ screen: intent.screen === true });
+    return opening.promise;
+  };
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().busy, true);
+
+  await fixture.controller().chooseScreenSource();
+  assert.deepEqual(state.binds, [1], "busy start owns the selected binding");
+
+  opening.reject(new Error("provider rejected start"));
+  await starting;
+  await settle();
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
 test("an externally ended display source stops the Live session instead of streaming a dead feed", async () => {
   const { dependencies, state } = screenDependencies();
   const fixture = await mountHook(dependencies);

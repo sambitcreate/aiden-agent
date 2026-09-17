@@ -96,8 +96,17 @@ test("binds both custom-picker and system-picker permission admission to one exa
     binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "media", {
       isMainFrame: true,
       requestingUrl: frame.url,
+      mediaType: "audio",
     }),
     true,
+  );
+  assert.equal(
+    binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "media", {
+      isMainFrame: true,
+      requestingUrl: frame.url,
+      mediaType: "video",
+    }),
+    false,
   );
   assert.equal(
     binding.allowsPermissionRequest(sender as unknown as Electron.WebContents, "display-capture", {
@@ -169,6 +178,10 @@ test("session guards gate display-capture only and install exactly once", () => 
   assert.deepEqual(installed.opts, { useSystemPicker: true });
 
   const details = { isMainFrame: true, requestingUrl: frame.url } as Electron.PermissionRequest;
+  const audioCheckDetails = { ...details, mediaType: "audio" } as Electron.PermissionCheckHandlerHandlerDetails;
+  const videoCheckDetails = { ...details, mediaType: "video" } as Electron.PermissionCheckHandlerHandlerDetails;
+  const audioRequestDetails = { ...details, mediaTypes: ["audio"] } as Electron.MediaAccessPermissionRequest;
+  const videoRequestDetails = { ...details, mediaTypes: ["video"] } as Electron.MediaAccessPermissionRequest;
   // Without a Live binding every display-capture path denies.
   assert.equal(
     installed.check?.(
@@ -204,15 +217,24 @@ test("session guards gate display-capture only and install exactly once", () => 
     true,
   );
   assert.equal(
-    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", details),
+    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", audioCheckDetails),
     true,
     "the exact bound document keeps microphone access",
   );
   granted = null;
   installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
     granted = next;
-  }, details);
+  }, audioRequestDetails);
   assert.equal(granted, true);
+  assert.equal(
+    installed.check?.(sender as unknown as Electron.WebContents, "media", "file:///Aiden/", videoCheckDetails),
+    false,
+  );
+  granted = null;
+  installed.request?.(sender as unknown as Electron.WebContents, "media", (next) => {
+    granted = next;
+  }, videoRequestDetails);
+  assert.equal(granted, false);
   assert.equal(
     installed.check?.(sender as unknown as Electron.WebContents, "notifications", "file:///Aiden/", details),
     false,

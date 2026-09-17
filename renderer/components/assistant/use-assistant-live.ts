@@ -858,6 +858,7 @@ export function useAssistantLiveWithDependencies(
   const chooseScreenSource = React.useCallback(async () => {
     if (
       screenBusy ||
+      busy ||
       active ||
       snapshot.screenShareAllowed !== true ||
       !dependencies.getDisplayMedia ||
@@ -931,6 +932,7 @@ export function useAssistantLiveWithDependencies(
     }
   }, [
     active,
+    busy,
     dependencies.api,
     dependencies.getDisplayMedia,
     screenBusy,
@@ -1207,6 +1209,7 @@ export function useAssistantLiveWithDependencies(
         await dependencies.api.stop().catch(() => undefined);
         sessionRef.current = null;
         await teardownMedia();
+        releaseDisplayAuthority();
         if (mounted.current && !setupAbort.signal.aborted)
           setError(assistantLiveStartErrorDetail(startError));
       }
@@ -1227,6 +1230,7 @@ export function useAssistantLiveWithDependencies(
     snapshot.available,
     startMicrophone,
     startScreenShare,
+    releaseDisplayAuthority,
     teardownMedia,
   ]);
 
