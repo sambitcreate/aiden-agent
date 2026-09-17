@@ -139,7 +139,7 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
-  relaunch: () => Promise<Page>;
+  relaunch: (afterClose?: () => Promise<void>) => Promise<Page>;
 };
 
 type AidenE2eOptions = {
@@ -808,10 +808,11 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
-        relaunch: async () => {
+        relaunch: async (afterClose) => {
           const previous = app;
           app = undefined;
           await closeAiden(previous);
+          await afterClose?.();
           return launch();
         },
       };
