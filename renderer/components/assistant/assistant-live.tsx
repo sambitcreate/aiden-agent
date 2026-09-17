@@ -126,7 +126,7 @@ export function AssistantLiveSetupDialog({
       title="Set up Aiden Live"
       description="Give Aiden only the access it needs. Nothing is captured until you start a Live session."
       confirmLabel={live.busy ? "Starting…" : "Start Live"}
-      confirmDisabled={!live.setupComplete || live.busy || Boolean(live.startBlockedReason)}
+      confirmDisabled={!live.setupComplete || live.busy || live.screenBusy || Boolean(live.startBlockedReason)}
       cancelLabel={live.busy ? "Stop" : "Not now"}
       allowCancelWhileBusy
       actionClassName={ASSISTANT_LIVE_FOCUS_CLASS}

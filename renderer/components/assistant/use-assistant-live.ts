@@ -586,6 +586,7 @@ export function useAssistantLiveWithDependencies(
     screenPickerGeneration.current += 1;
     const bindingId = screenBindingRef.current;
     screenBindingRef.current = null;
+    if (mounted.current) setScreenBusy(false);
     if (bindingId) {
       void dependencies.api.releaseDisplay?.(bindingId).catch(() => undefined);
     }
@@ -701,6 +702,10 @@ export function useAssistantLiveWithDependencies(
 
   React.useEffect(() => {
     mounted.current = true;
+    // A dependency refresh may have cancelled an in-flight picker during the
+    // previous effect's cleanup. The replacement effect now owns the hook and
+    // must make the picker re-armable; final unmount has no replacement setup.
+    setScreenBusy(false);
     if (!dependencies.geminiLive)
       return () => {
         mounted.current = false;
@@ -1140,6 +1145,7 @@ export function useAssistantLiveWithDependencies(
   const start = React.useCallback(async () => {
     if (
       busy ||
+      screenBusy ||
       dependencies.ordinaryBusyReason ||
       !snapshot.available ||
       !["granted", "not-determined"].includes(microphonePermission) ||
@@ -1223,6 +1229,7 @@ export function useAssistantLiveWithDependencies(
     }
   }, [
     busy,
+    screenBusy,
     computerUseEnabled,
     dependencies,
     microphone,
