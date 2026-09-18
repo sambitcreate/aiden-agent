@@ -533,3 +533,14 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-18 — CI feedback optimization
+
+- A fresh `npm ci` on this Mac again left Electron's executable absent; run `node node_modules/electron/install.js` before local E2E. The initial shard command stopped before starting any tests.
+- The host defaults to Node 26, while CI pins 22.22.3. Validate registry parsing and process behavior with the installed Node 22 path.
+- Workflow text tests can pass while referenced CLI arguments or package scripts are missing; validate the actual matrix commands and package entry points before pushing.
+- Filename-only lane balancing initially placed native helper tests away from their build prerequisites. Keep binary-dependent tests with those builds and cover that association in registry checks.
+- Local browser E2E encountered an assistant overlay intercepting an Add to chat click. Preserve the strict test and compare hosted behavior before changing product or fixture code.
+- Some `.mjs` regressions import TypeScript modules with `.js` specifiers. Keep ordinary lane tests under the original tsx resolver; plain Node loses that resolution behavior.
+- Moving release eligibility from per-step conditions to an admission job requires updating existing distribution and diagnostics policy tests to assert the new job boundary.
+- The core lane's browser-file regression also launches Chromium. A warm local browser cache hid the missing hosted prerequisite; declare browser installation on both core and renderer matrix entries and check it against preserved browser modes.

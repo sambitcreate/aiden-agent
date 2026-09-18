@@ -149,16 +149,16 @@ test("Electron crash capture remains explicit and upload-disabled", () => {
 
 test("release runs signed packaged diagnostics acceptance before publication", () => {
   const release = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
-  const dist = release.indexOf("run: npm run dist");
+  const dist = release.indexOf('GITHUB_SHA="$ADMITTED_SOURCE_SHA" npm run dist');
   const packaged = release.indexOf("run: npm run test:e2e:diagnostics:packaged");
   const publish = release.indexOf("bash scripts/publish-github-release.sh");
   assert.ok(dist >= 0 && packaged > dist && publish > packaged);
 });
 
-test("release installs Chromium before JavaScript containment tests", () => {
-  const release = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
-  const install = release.indexOf("run: npx playwright install chromium");
-  const testSuite = release.indexOf("run: npm test");
+test("CI installs Chromium before the registered containment tests", () => {
+  const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const install = ci.indexOf("run: npx playwright install chromium");
+  const testSuite = ci.indexOf("run: node scripts/run-ci-tests.mjs");
   assert.ok(install >= 0 && testSuite > install);
 });
 
