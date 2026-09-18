@@ -122,26 +122,14 @@ function resolveCommand(command) {
 }
 
 function unitCommands(lane) {
-  const tsFiles = lane.files.filter((file) => /\.test\.(?:ts|tsx)$/u.test(file));
-  const nodeFiles = lane.files.filter((file) => /\.test\.(?:cjs|mjs|js)$/u.test(file));
-  const commands = [];
-  if (tsFiles.length > 0) {
-    commands.push({
-      id: `${lane.name}:tsx`,
-      lane: lane.name,
-      files: tsFiles,
-      command: [nodeExecutable, tsxCli, "--test", ...tsFiles],
-    });
-  }
-  if (nodeFiles.length > 0) {
-    commands.push({
-      id: `${lane.name}:node`,
-      lane: lane.name,
-      files: nodeFiles,
-      command: [nodeExecutable, "--test", ...nodeFiles],
-    });
-  }
-  return commands;
+  // Some .mjs tests import TypeScript with .js specifiers. Preserve the tsx
+  // resolver used by the original npm test graph for the whole ordinary lane.
+  return [{
+    id: `${lane.name}:tests`,
+    lane: lane.name,
+    files: lane.files,
+    command: [nodeExecutable, tsxCli, "--test", ...lane.files],
+  }];
 }
 
 function buildPlan(registry, options) {
