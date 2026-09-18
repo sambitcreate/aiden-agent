@@ -155,10 +155,10 @@ test("release runs signed packaged diagnostics acceptance before publication", (
   assert.ok(dist >= 0 && packaged > dist && publish > packaged);
 });
 
-test("release installs Chromium before JavaScript containment tests", () => {
-  const release = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
-  const install = release.indexOf("run: npx playwright install chromium");
-  const testSuite = release.indexOf("run: npm test");
+test("CI installs Chromium before the registered containment tests", () => {
+  const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const install = ci.indexOf("run: npx playwright install chromium");
+  const testSuite = ci.indexOf("run: node scripts/run-ci-tests.mjs");
   assert.ok(install >= 0 && testSuite > install);
 });
 

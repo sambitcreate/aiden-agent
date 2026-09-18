@@ -1,39 +1,78 @@
 name: Release macOS
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - ".github/workflows/release.yml"
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact base-repository commit SHA to release after CI succeeds"
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 concurrency:
   group: aiden-agent-macos-release
   cancel-in-progress: false
 
 jobs:
-  release:
-    if: vars.RELEASES_ENABLED == 'true'
-    runs-on: macos-26
-    timeout-minutes: 120
-    environment: release
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  admit:
+    if: >-
+      vars.RELEASES_ENABLED == 'true' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.status == 'completed' &&
+          github.event.workflow_run.conclusion == 'success'
+        )
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      source-sha: ${{ steps.admission.outputs.source-sha }}
+      main-sha: ${{ steps.admission.outputs.main-sha }}
+      ci-run-id: ${{ steps.admission.outputs.ci-run-id }}
+      ci-required-job-id: ${{ steps.admission.outputs.ci-required-job-id }}
+      admission-mode: ${{ steps.admission.outputs.admission-mode }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
-      - name: Check out source
+      - name: Check out trusted release admission source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: main
+          persist-credentials: false
 
-      - name: Use Node.js 22
+      - name: Use Node.js 22 for release admission
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22.22.3
-          cache: npm
+
+      - name: Admit exact CI source before allocating macOS
+        id: admission
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha || '' }}
+        run: node scripts/ci-release-admission.mjs
+
+      - name: Check out admitted source for release preflight
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ steps.admission.outputs.source-sha }}
 
       - name: Resolve the declared release version
         id: version
@@ -57,67 +96,41 @@ jobs:
             echo "$release_tag already exists; skipping release without changing its version."
           fi
 
+  release:
+    if: vars.RELEASES_ENABLED == 'true' && needs.admit.result == 'success' && needs.admit.outputs.publish == 'true'
+    needs: admit
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.admit.outputs.source-sha }}
+
+      - name: Confirm checkout matches admitted source
+        env:
+          ADMITTED_SOURCE_SHA: ${{ needs.admit.outputs.source-sha }}
+        run: test "$(git rev-parse HEAD)" = "$ADMITTED_SOURCE_SHA"
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
       - name: Install locked dependencies
-        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm ci
 
-      - name: Install Playwright Chromium for Generative UI containment
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npx playwright install chromium
-
       - name: Verify Homebrew and website release consumers
-        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run release:check-consumers
 
-      - name: Verify TypeScript
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run type-check
-
-      - name: Verify lint
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run lint
-
-      - name: Verify diagnostics privacy and storage contracts
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run test:diagnostics
-
-      - name: Verify branding, updater, and release policy
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run test:branding
-
-      - name: Run JavaScript, TypeScript, and Computer Use tests
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        env:
-          AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
-        run: npm test
-
-      - name: Run Apple Foundation Models tests
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run test:native
-
-      - name: Run deterministic Electron E2E gate
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run test:e2e
-
-      - name: Verify production-profile diagnostics support workflow
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run test:e2e:diagnostics:production
-
-      - name: Build sanitized E2E failure receipt
-        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
-
-      - name: Upload sanitized E2E failure receipt
-        if: ${{ failure() && steps.version.outputs.publish == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/e2e-safe-receipt.json
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Prepare App Store Connect key
-        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -132,30 +145,57 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and verify distribution
-        if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_ENABLE_AUTO_UPDATES: "1"
+          ADMITTED_SOURCE_SHA: ${{ needs.admit.outputs.source-sha }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-        run: npm run dist
+        run: GITHUB_SHA="$ADMITTED_SOURCE_SHA" npm run dist
 
       - name: Verify reboot-safe subagent migration in the signed app
-        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:subagents:migration:packaged
 
       - name: Verify diagnostics in the signed packaged app
-        if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged
 
+      - name: Build sanitized packaged acceptance failure receipt
+        if: ${{ failure() }}
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json release test-failed
+
+      - name: Upload sanitized packaged acceptance failure receipt
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-diagnostics-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/e2e-safe-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Recheck admitted CI status before publishing
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.admit.outputs.source-sha }}
+        run: node scripts/ci-release-admission.mjs
+
+      - name: Confirm main has not advanced since admission
+        env:
+          ADMITTED_MAIN_SHA: ${{ needs.admit.outputs.main-sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main_sha="$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')"
+          test -n "$current_main_sha"
+          test "$current_main_sha" = "$ADMITTED_MAIN_SHA"
+
       - name: Publish verified release assets
-        if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          ADMITTED_SOURCE_SHA: ${{ needs.admit.outputs.source-sha }}
+          RELEASE_TAG: ${{ needs.admit.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.admit.outputs.version }}
         run: |
           set -euo pipefail
-          bash scripts/publish-github-release.sh release/distribution
+          GITHUB_SHA="$ADMITTED_SOURCE_SHA" bash scripts/publish-github-release.sh release/distribution

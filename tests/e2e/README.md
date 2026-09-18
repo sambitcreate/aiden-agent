@@ -6,11 +6,23 @@ a test-owned LM Studio-compatible server bound to a random loopback port. It
 does not read or contact a developer's Aiden profile, credentials, or LM Studio
 server.
 
-Run the deterministic PR/release gate with:
+Run the complete deterministic suite locally with:
 
 ```sh
 npm run test:e2e
 ```
+
+Hosted CI splits deterministic spec files across three isolated macOS runners, each with
+one Playwright worker. `scripts/ci-e2e-shards.mjs` balances files using recorded hosted
+durations and automatically assigns newly added specs. After `npm run build`, reproduce
+one shard with `node scripts/ci-e2e-shards.mjs 1/3`; append `--list` to inspect its files.
+Never run these shards concurrently against the same checkout or desktop session.
+
+The production-profile diagnostics spec runs separately after the static-check job's
+build through `npm run test:e2e:diagnostics:production:run`. The original
+`npm run test:e2e:diagnostics:production` still prepares its own build for local use.
+Releases reuse successful main CI for deterministic coverage and retain their signed-app
+migration and packaged diagnostics acceptance tests.
 
 Useful static checks are `npm run type-check:e2e` and
 `npm run test:e2e:list`. The fixture constructs the app environment from a
@@ -34,5 +46,6 @@ npm run test:e2e:live:lmstudio
 That command contacts `http://127.0.0.1:1234/v1` by default. Override only for
 an explicitly chosen compatible server with `AIDEN_E2E_LMSTUDIO_BASE_URL`.
 
-Artifacts are written to `test-results/e2e` for traces and failure screenshots,
-and `playwright-report/e2e` for the CI HTML report.
+Local artifacts are written to `test-results/e2e` for traces and failure screenshots,
+and `playwright-report/e2e` for the HTML report. Hosted jobs upload only the sanitized
+failure receipt, under a shard-specific name with seven-day retention.

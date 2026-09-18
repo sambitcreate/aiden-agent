@@ -18,88 +18,167 @@ jobs:
     name: Detect changed areas
     runs-on: ubuntu-24.04
     outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+      apple: ${{ steps.filter.outputs.apple }}
+      ios: ${{ steps.filter.outputs.ios }}
       android: ${{ steps.filter.outputs.android }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
-
-      - name: Detect Android changes
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+      - name: Detect shared and platform changes
         id: filter
-        shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA^{commit}"; then
-            echo "android=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          FORCE_FULL: ${{ github.event_name == 'push' && 'true' || 'false' }}
+        run: node scripts/ci-changes.mjs
 
-          diff_args=("$BASE_SHA" "$HEAD_SHA")
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            diff_args=("$BASE_SHA...$HEAD_SHA")
-          fi
-
-          if ! changed_files="$(git diff --name-only "${diff_args[@]}")"; then
-            echo "android=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if grep -E '^(android(/|$)|\.github/workflows/ci\.yml$)' <<< "$changed_files" >/dev/null; then
-            echo "android=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "android=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  verify:
-    runs-on: macos-26
-    timeout-minutes: 60
+  policy:
+    name: CI policy and test inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22.22.3
           cache: npm
-
       - name: Install locked dependencies
         run: npm ci
+      - name: Verify workflow policy and complete test assignment
+        run: npm run test:ci-policy
 
-      - name: Install Playwright Chromium for Generative UI containment
-        run: npx playwright install chromium
+  e2e:
+    name: Electron E2E (${{ matrix.shard }}/3)
+    needs: changes
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Prepare Electron E2E build
+        run: npm run type-check:e2e && npm run build
+      - name: Run deterministic Electron E2E shard
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
+      - name: Build sanitized E2E failure receipt
+        if: ${{ failure() }}
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+      - name: Upload sanitized E2E failure receipt
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-e2e-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: test-results/e2e-safe-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
+  verify:
+    name: Desktop static checks and diagnostics
+    needs: changes
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
       - name: Verify TypeScript
-        run: npm run type-check
-
+        run: npm run type-check && npm run type-check:e2e
       - name: Verify lint
         run: npm run lint
-
       - name: Verify diagnostics privacy and storage contracts
         run: npm run test:diagnostics
-
       - name: Verify branding, updater, and release policy
         run: npm run test:branding
-
       - name: Verify model catalog contracts
         run: npm run test:model-catalog
+      - name: Build production bundles once
+        run: npm run build
+      - name: Verify production-profile diagnostics support workflow
+        run: npm run test:e2e:diagnostics:production:run
 
-      - name: Run JavaScript, TypeScript, and Computer Use tests
+  unit:
+    name: Desktop tests (${{ matrix.lane }})
+    needs: changes
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [core-git, runtime-subagents, renderer-other]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Playwright Chromium for containment
+        if: ${{ matrix.lane == 'renderer-other' }}
+        run: npx playwright install chromium
+      - name: Run assigned regression tests and prerequisites
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
-        run: npm test
+        run: node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary
 
+  apple:
+    name: Apple Foundation Models tests
+    needs: changes
+    if: ${{ needs.changes.outputs.apple == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
       - name: Run Apple Foundation Models tests
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: npm run test:native
 
-      # The owner requires physical-device-only XCTest acceptance. Hosted CI has
-      # no physical iOS device, so compile the app and test bundle for generic
-      # hardware here; the complete XCTest suite is recorded from signed devices.
+  ios:
+    name: iOS app and test compilation
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      # Physical-device XCTest acceptance stays separate from hosted compilation.
       - name: Compile Aiden On The Go tests for generic iOS hardware
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -111,12 +190,6 @@ jobs:
           -destination 'generic/platform=iOS'
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           CODE_SIGNING_ALLOWED=NO
-
-      - name: Build production bundles
-        run: npm run build
-
-      - name: Verify production-profile diagnostics support workflow
-        run: npm run test:e2e:diagnostics:production
 
   android:
     name: Android build and APK
@@ -198,35 +271,21 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  e2e:
-    name: Deterministic Electron E2E
-    runs-on: macos-26
-    timeout-minutes: 30
+  required:
+    name: CI required
+    if: ${{ always() }}
+    needs: [changes, policy, verify, unit, e2e, apple, ios, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22.22.3
-          cache: npm
-
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Run deterministic Electron E2E gate
-        run: npm run test:e2e
-
-      - name: Build sanitized E2E failure receipt
-        if: ${{ failure() }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
-
-      - name: Upload sanitized E2E failure receipt
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: playwright-e2e-ci-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/e2e-safe-receipt.json
-          if-no-files-found: error
-          retention-days: 7
+      - name: Require every selected check to pass
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_CHANGES_JSON: ${{ toJSON(needs.changes.outputs) }}
+        run: node scripts/ci-required.mjs
