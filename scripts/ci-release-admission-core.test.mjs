@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import process from "node:process";
+import { admitFromGithub } from "./ci-release-admission.mjs";
 
 import {
   CI_REQUIRED_JOB_NAME,
@@ -106,6 +111,42 @@ function admit(overrides = {}) {
 function expectCode(callback, code) {
   assert.throws(callback, (error) => error?.code === code);
 }
+
+test("GitHub admission queries the exact workflow attempt and rejects incomplete job responses", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-ci-admission-"));
+  const previousOutput = process.env.GITHUB_OUTPUT;
+  process.env.GITHUB_OUTPUT = join(directory, "outputs");
+  t.after(async () => {
+    if (previousOutput === undefined) delete process.env.GITHUB_OUTPUT;
+    else process.env.GITHUB_OUTPUT = previousOutput;
+    await rm(directory, { recursive: true, force: true });
+  });
+  const calls = [];
+  let incomplete = false;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    calls.push(url);
+    let payload;
+    if (url.endsWith("/git/ref/heads/main")) payload = { object: { sha: SOURCE_SHA } };
+    else if (url.includes("/actions/workflows/ci.yml/runs?")) payload = { total_count: 1, workflow_runs: [ciRun({ run_attempt: 2 })] };
+    else if (url.endsWith(`/compare/${SOURCE_SHA}...${SOURCE_SHA}`)) payload = identicalComparison();
+    else if (url.endsWith("/actions/runs/1234/attempts/2/jobs?per_page=100")) payload = { total_count: incomplete ? 2 : 1, jobs: requiredJobs() };
+    else assert.fail(`Unexpected admission request: ${url}`);
+    return { ok: true, json: async () => payload };
+  });
+  const options = {
+    apiUrl: "https://github.example.test", repository: REPOSITORY, token: "test-only",
+    eventName: "workflow_run", eventPayload: { workflow_run: workflowRun() },
+  };
+  const admission = await admitFromGithub(options);
+  assert.equal(admission.sourceSha, SOURCE_SHA);
+  assert.ok(calls.some((url) => url.includes(`event=push&branch=main&head_sha=${SOURCE_SHA}`)));
+  const output = await readFile(process.env.GITHUB_OUTPUT, "utf8");
+  assert.ok(output.includes(`source-sha=${SOURCE_SHA}\n`));
+  assert.ok(output.includes("ci-required-job-id=5678\n"));
+  incomplete = true;
+  await assert.rejects(admitFromGithub(options), /CI job API response was incomplete/u);
+  assert.equal(await readFile(process.env.GITHUB_OUTPUT, "utf8"), output, "rejected admission must not append outputs");
+});
 
 test("admits a successful exact-main CI run", () => {
   assert.deepEqual(admit(), {

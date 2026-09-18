@@ -133,6 +133,11 @@ jobs:
       fail-fast: false
       matrix:
         lane: [core-git, runtime-subagents, renderer-other]
+        include:
+          - lane: core-git
+            chromium: true
+          - lane: renderer-other
+            chromium: true
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -144,7 +149,7 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Install Playwright Chromium for containment
-        if: ${{ matrix.lane == 'renderer-other' }}
+        if: ${{ matrix.chromium == true }}
         run: npx playwright install chromium
       - name: Run assigned regression tests and prerequisites
         env:

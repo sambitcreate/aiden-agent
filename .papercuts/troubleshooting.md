@@ -543,3 +543,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local browser E2E encountered an assistant overlay intercepting an Add to chat click. Preserve the strict test and compare hosted behavior before changing product or fixture code.
 - Some `.mjs` regressions import TypeScript modules with `.js` specifiers. Keep ordinary lane tests under the original tsx resolver; plain Node loses that resolution behavior.
 - Moving release eligibility from per-step conditions to an admission job requires updating existing distribution and diagnostics policy tests to assert the new job boundary.
+- The core lane's browser-file regression also launches Chromium. A warm local browser cache hid the missing hosted prerequisite; declare browser installation on both core and renderer matrix entries and check it against preserved browser modes.

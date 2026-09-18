@@ -70,6 +70,12 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
   assert.deepEqual(jobs.unit.strategy.matrix.lane, readRegistry().lanes.map((lane) => lane.name));
+  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install chromium");
+  assert.equal(browserInstall.if, "${{ matrix.chromium == true }}");
+  const registry = readRegistry();
+  const browserModes = new Set(registry.preserved.filter((entry) => ["browser", "chromium"].includes(entry.kind)).map((entry) => entry.id));
+  const browserLanes = registry.lanes.filter((lane) => lane.preserved.some((id) => browserModes.has(id))).map((lane) => lane.name);
+  assert.deepEqual(jobs.unit.strategy.matrix.include.filter((entry) => entry.chromium).map((entry) => entry.lane).toSorted(), browserLanes.toSorted());
   const runner = jobs.unit.steps.find((step) => step.run?.includes("scripts/run-ci-tests.mjs"));
   assert.equal(runner.run, "node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary");
   for (const lane of jobs.unit.strategy.matrix.lane) {
