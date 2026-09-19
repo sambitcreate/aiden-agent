@@ -651,7 +651,7 @@ for (const invalidation of ["restart", "disable"] as const) {
   });
 }
 
-test("stopping while startup stages nextRunAt does not consume a missed run", async (t) => {
+test("stopping while startup stages a missed-run claim preserves its due time", async (t) => {
   const testbed = harness();
   t.after(() => testbed.service.stop());
   const task = await addTask(testbed.store);
@@ -772,4 +772,107 @@ test("an error from a replaced Cron job cannot update the current task", async (
   assert.deepEqual(await testbed.store.runs(task.id), []);
   assert.equal(testbed.broadcasts.length, broadcasts);
   assert.deepEqual(testbed.errors, []);
+});
+
+for (const boundary of ["lookup", "claim publication"] as const) {
+  test(`cancelled startup catch-up at ${boundary} remains due and runs after restart`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let held = false;
+    const holdCatchup = async () => {
+      if (!held && testbed.service.isRunning(task.id)) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+    };
+    if (boundary === "lookup") {
+      const get = testbed.store.get.bind(testbed.store);
+      testbed.store.get = async (id) => {
+        const latest = await get(id);
+        await holdCatchup();
+        return latest;
+      };
+    } else {
+      testbed.taskPersistence.beforeCommit = holdCatchup;
+    }
+
+    await testbed.service.start();
+    await entered.promise;
+    testbed.service.stop();
+    const restarting = testbed.service.start();
+    release.resolve();
+    await restarting;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(testbed.hasPending(task.id), true, "restart must execute the missed run");
+    assert.deepEqual(await testbed.store.runs(task.id), []);
+    assert.deepEqual(testbed.errors, []);
+    assert.ok((await testbed.store.get(task.id))!.nextRunAt! > overdue.nextRunAt!);
+  });
+}
+
+test("cancelling a catch-up claim leaves the durable missed-run timestamp unchanged", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  testbed.taskPersistence.beforeCommit = async () => {
+    if (testbed.service.isRunning(task.id)) {
+      entered.resolve();
+      await release.promise;
+    }
+  };
+
+  await testbed.service.start();
+  await entered.promise;
+  testbed.service.stop();
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(await testbed.store.get(task.id), overdue);
+  assert.equal(testbed.hasPending(task.id), false);
+  assert.deepEqual(await testbed.store.runs(task.id), []);
+  assert.deepEqual(testbed.errors, []);
+});
+
+test("a current Cron trigger still claims and executes the scheduled task", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const before = (await testbed.store.get(task.id))!;
+  const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const triggering = job.trigger();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(testbed.hasPending(task.id), true);
+  const claimed = (await testbed.store.get(task.id))!;
+  assert.ok(claimed.updatedAt > before.updatedAt);
+  assert.ok(claimed.nextRunAt! > Date.now());
+  testbed.service.stop();
+  await triggering;
+  assert.deepEqual(testbed.errors, []);
+});
+
+test("explicit manual runs still work while scheduling and the task are paused", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const paused = await testbed.service.pause(task.id);
+  await testbed.service.setGlobalEnabled(false);
+  const run = testbed.service.runNow(task.id);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(testbed.hasPending(task.id), true);
+  assert.deepEqual(await testbed.store.get(task.id), paused);
+  testbed.service.stop();
+  assert.equal((await run).result, "blocked");
 });
