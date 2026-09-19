@@ -591,3 +591,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `npm ci` omitted Electron's executable; restored with its install script. Renderer/main-only bundles then exited before first window, so focused UI validation needs the normal native helper build prerequisites too.
 - Command-system aggregate has a pre-existing stale source assertion in `main/services/renderer-readiness-core.test.ts`: it expects a no-argument crash callback immediately resetting readiness, while main now records crash diagnostics first. Reported to campaign coordinator; preserve renderer-only scope.
 - Palette regression assertions must inspect loaded chat content because the desktop router uses memory history; the file URL does not change on chat navigation.
+## 2026-09-19 — Android upgrade lane
+- Fresh origin/main has no `.memory/` directory; read the mobile plan and create the required lane-specific memory note.
+- OkHttp `responseBodyStart` fires after its first underlying read; use a tracked source to coordinate cancellation before a deliberately stalled read in the regression test.
