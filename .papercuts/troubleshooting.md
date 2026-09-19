@@ -533,3 +533,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 — upgrade 03-subagents
+- Fresh worktree omits ignored `.memory`; read relevant project history from the primary checkout and create a lane-specific memory note locally.
+- `aiden-plugins` is a collection rather than a Git root; pin the nested `pi-subagents` repository.
+- No worktree dependencies; install a private node_modules with lifecycle scripts disabled for focused TypeScript tests (no Electron packaging needed).
+- Explicit staging of `.papercuts/troubleshooting.md` hit the ignored parent-directory rule; force-stage only the authorized lane feedback and memory files.
