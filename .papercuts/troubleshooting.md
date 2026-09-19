@@ -533,3 +533,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+# Upgrade lane 33
+
+- Fresh worktree omits ignored `.memory/`; read canonical checkout project context and keep a unique lane note here. Dependencies also absent; installing lockfile dependencies before real watcher regressions.
+- Real fs baseline reproduced two disposal failures; pre-existing warm-cache immediate-write test also timed out once. Stabilize its setup boundary so queued creation events cannot masquerade as the edit under test. Directory replacement already works on this macOS host; do not generalize inode-watcher assumptions into speculative code.
+- Git rejects staging the ignored `.papercuts` path with ordinary add in this worktree; force-add the explicit note path together with the required unique `.memory` note.
+- Lane 33 review: callback counts alone cannot prove which filesystem mutation was observed or whether a suppressed watcher was closed. Correlate observed content, stage outside the watched directory, and assert actual native close plus its close event; validate with omitted-close/missed-edit mutants.
+- Lane 33 causal review: fs.watch offers no operation identity; even callback-time content plus a quiet interval can misattribute delayed events. Use controlled delivery of the real listener for causal assertions and limit native-filesystem tests to smoke/continuity claims.
