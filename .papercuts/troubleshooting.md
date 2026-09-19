@@ -673,3 +673,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Upgrade lane 27 journal
 
 - Fresh worktree has no dependencies or ignored `.memory` notes; installing locked dependencies locally and reading lane 23 diagnostics context from its existing worktree before editing.
+# Upgrade 28 catalog refresh
+
+- Fresh worktree omits ignored `.memory` and dependencies; read canonical project notes and auth-lane note, and reused the matching installed dependency tree for focused checks.
+- Scoped-refresh comment still cites Pi 0.80; pinned 0.84.4 supports provider filters, but its native refresh also resolves/rotates OAuth credentials, unlike Aiden's explicitly non-mutating scoped path.
+
+- Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
+- Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.

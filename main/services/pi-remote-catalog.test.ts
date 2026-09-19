@@ -619,6 +619,196 @@ test("provider-scoped refresh aborts a non-mutating auth check without invoking 
   assert.equal(mutatingAuthCalls, 0);
 });
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const invalidation of ["abort", "replace", "remove", "credential-change", "logout"] as const) {
+  for (const persistence of ["write", "delete", "none"] as const) {
+    test(`scoped catalog rejects ${persistence} publication after ${invalidation}`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const original = { models: [oxAlphaModel()], checkedAt: 1 };
+      const store = memoryProviderStore(original);
+      const started = deferred<RefreshModelsContext>();
+      const release = deferred<void>();
+      const finished = deferred<void>();
+      let accepted: boolean | undefined;
+      let updates = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        refreshModels: async (context) => {
+          started.resolve(context);
+          await release.promise; // Simulate a provider/body read ignoring cancellation.
+          accepted = await context.publish({
+            ...(persistence === "write" ? { persist: { models: [], checkedAt: 2 } }
+              : persistence === "delete" ? { persist: null } : {}),
+            update: () => { updates += 1; },
+          });
+          finished.resolve();
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+      const controller = new AbortController();
+      const pending = refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        providerIds: [provider.id], signal: controller.signal,
+      });
+      await started.promise;
+      if (invalidation === "abort") {
+        controller.abort();
+        assert.equal((await pending).aborted, true);
+      } else if (invalidation === "replace") {
+        models.setProvider({ ...provider, refreshModels: async () => undefined });
+      } else if (invalidation === "remove") {
+        models.deleteProvider(provider.id);
+      } else if (invalidation === "credential-change") {
+        await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+      } else {
+        await credentials.delete(provider.id);
+      }
+      release.resolve();
+      await finished.promise;
+      await pending;
+      assert.equal(accepted, false);
+      assert.deepEqual(store.snapshot(), original);
+      assert.equal(updates, 0);
+    });
+  }
+}
+
+for (const invalidation of ["abort", "replace", "credential-change", "logout"] as const) {
+  test(`scoped catalog suppresses in-memory update when ${invalidation} happens during persistence`, async () => {
+    const credentials = new InMemoryCredentialStore();
+    const models = createModels({ credentials });
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const finished = deferred<void>();
+    let updates = 0;
+    let accepted: boolean | undefined;
+    const store = memoryProviderStore();
+    const provider: Provider = {
+      ...opencodeGoProvider(),
+      refreshModels: async (context) => {
+        accepted = await context.publish({
+          persist: { models: [], checkedAt: 1 },
+          update: () => { updates += 1; },
+        });
+        finished.resolve();
+      },
+    };
+    models.setProvider(provider);
+    await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+    const controller = new AbortController();
+    const pending = refreshPiCatalogs({
+      models, credentials, providerModelsStore: () => ({
+        ...store,
+        write: async (entry) => {
+          writing.resolve();
+          await release.promise;
+          await store.write(entry);
+        },
+      }),
+      providerIds: [provider.id], signal: controller.signal,
+    });
+    await writing.promise;
+    if (invalidation === "abort") controller.abort();
+    else if (invalidation === "replace") models.setProvider({ ...provider, refreshModels: async () => undefined });
+    else if (invalidation === "credential-change") {
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+    } else await credentials.delete(provider.id);
+    release.resolve();
+    await finished.promise;
+    await pending;
+    // An already-admitted store mutation can finish; obsolete live state cannot publish.
+    assert.equal(accepted, false);
+    assert.equal(updates, 0);
+  });
+}
+
+test("pi.dev response cannot publish after the configured credential changes", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  const started = deferred<void>();
+  const response = deferred<Response>();
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    now: () => Date.parse("2026-09-10T16:01:00Z"),
+    fetchImpl: async () => {
+      started.resolve();
+      return response.promise;
+    },
+  });
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "old-synthetic" }));
+  const pending = refreshPiCatalogs({
+    models, credentials, providerModelsStore: () => store, providerIds: [provider.id],
+  });
+  await started.promise;
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+  const obsolete = { ...oxAlphaModel(), id: "obsolete-catalog-model" };
+  response.resolve(Response.json([obsolete], {
+    headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+  }));
+  const result = await pending;
+  assert.equal(result.errors.size, 0);
+  assert.equal(store.snapshot(), undefined);
+  assert.equal(models.getModel(provider.id, obsolete.id), undefined);
+});
+
+test("scoped catalog cancellation fences a hung publication credential check", async () => {
+  const underlying = new InMemoryCredentialStore();
+  const checking = deferred<void>();
+  const release = deferred<void>();
+  const finished = deferred<void>();
+  let publishing = false;
+  const credentials: CredentialStore = {
+    list: underlying.list.bind(underlying),
+    modify: underlying.modify.bind(underlying),
+    delete: underlying.delete.bind(underlying),
+    read: async (id) => {
+      if (publishing) {
+        checking.resolve();
+        await release.promise;
+      }
+      return underlying.read(id);
+    },
+  };
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  let accepted: boolean | undefined;
+  let updates = 0;
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    refreshModels: async (context) => {
+      publishing = true;
+      accepted = await context.publish({
+        persist: { models: [], checkedAt: 1 },
+        update: () => { updates += 1; },
+      });
+      finished.resolve();
+    },
+  };
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+  const controller = new AbortController();
+  const pending = refreshPiCatalogs({
+    models, credentials, providerModelsStore: () => store,
+    providerIds: [provider.id], signal: controller.signal,
+  });
+  await checking.promise;
+  controller.abort();
+  assert.equal((await pending).aborted, true);
+  await finished.promise;
+  release.resolve();
+  assert.equal(accepted, false);
+  assert.equal(store.snapshot(), undefined);
+  assert.equal(updates, 0);
+});
+
 test("stale launch refresh selects only stale pi.dev overlays", async () => {
   const radius = builtinProviders().find((provider) => provider.id === "radius");
   assert.ok(radius);
