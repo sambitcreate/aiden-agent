@@ -700,3 +700,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Integration wave4 status schema: lane31 represented its PR as an integer, unlike prior URL entries. Normalize both forms in the validation helper; exact fetched-head verification remains required.
 
 - Review exposed fatal reset bypassing an earlier queued snapshot. Fatal writes, reset, retention and bounded snapshot reads must all finish synchronously at admission; queue only general-file work and immutable fatal snapshot publication.
+## 2026-09-19 — Lane 31 tool approval
+- Fresh worktree omits ignored `.memory` and dependencies; consulted primary checkout project memory and will reuse matching installed dependencies for scoped verification.
+- Initial broad search used a nonexistent `main/ipc*` glob; switched to actual `main/handlers` paths.
+- Extended broker checks initially lacked the native file-mutator helper; built it with the repository script, then all 45 checks passed.
+- Reusing primary checkout dependencies exposed thinking-orbs 0.1.1 versus locked 0.3.1 and unrelated OrbState type failures; installing this worktree lockfile independently.
