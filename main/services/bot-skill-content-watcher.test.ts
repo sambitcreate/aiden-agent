@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { readFileSync, type FSWatcher } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -126,25 +128,45 @@ async function waitForChange(readChanges: () => number): Promise<void> {
   assert.ok(readChanges() > 0, "Skill watcher must observe the current skill directory");
 }
 
+async function waitForQuiet(readChanges: () => number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const before = readChanges();
+    await settleWatcherEvents();
+    if (readChanges() === before) return;
+  }
+  assert.fail("Skill watcher events did not settle");
+}
+
 test("watcher observes atomic skill replacement and subsequent edits", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-atomic-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const skillFile = path.join(root, "SKILL.md");
+  const skillDirectory = path.join(root, "skill");
+  await fs.mkdir(skillDirectory);
+  const skillFile = path.join(skillDirectory, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
-  let changes = 0;
-  const watcher = new BotSkillContentWatcher(() => { changes += 1; });
+  const observedContents: string[] = [];
+  const watcher = new BotSkillContentWatcher(() => {
+    // Capture content when the callback arrives, not after the test's wait.
+    try {
+      observedContents.push(readFileSync(skillFile, "utf8"));
+    } catch {
+      observedContents.push("<unreadable>");
+    }
+  });
   t.after(() => watcher.dispose());
-  await watcher.watchSkillFiles([skillFile]);
-  await settleWatcherEvents();
-  changes = 0;
+  // Stage outside the watched directory so its events cannot satisfy rename.
   const stagedFile = path.join(root, "SKILL.md.tmp");
   await fs.writeFile(stagedFile, "Replacement");
+  await watcher.watchSkillFiles([skillFile]);
+  await waitForQuiet(() => observedContents.length);
+  observedContents.length = 0;
   await fs.rename(stagedFile, skillFile);
-  await waitForChange(() => changes);
-  await settleWatcherEvents();
-  changes = 0;
+  await waitForChange(() => observedContents.filter((content) => content === "Replacement").length);
+  await waitForQuiet(() => observedContents.length);
+  observedContents.length = 0;
   await fs.writeFile(skillFile, "After replacement");
-  await waitForChange(() => changes);
+  await waitForChange(() => observedContents.filter((content) => content === "After replacement").length);
 });
 
 test("disposal fences an in-flight skill registration", async (t) => {
@@ -195,8 +217,15 @@ test("disposal closes installed watchers and permits a fresh independent instanc
   t.after(() => retired.dispose());
   await retired.watchSkillFiles([skillFile]);
   await settleWatcherEvents();
+  const nativeWatcher: FSWatcher = Reflect.get(retired, "directories").get(root).watcher;
+  const closeNative = nativeWatcher.close.bind(nativeWatcher);
+  t.after(closeNative);
+  const close = t.mock.method(nativeWatcher, "close", closeNative);
+  const closed = once(nativeWatcher, "close");
   retired.dispose();
   retired.dispose();
+  assert.equal(close.mock.callCount(), 1, "Disposal must close the installed native watcher exactly once");
+  await closed;
   retiredChanges = 0;
 
   let freshChanges = 0;
