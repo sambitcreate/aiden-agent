@@ -780,3 +780,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - 2026-09-19 lane38 review: Zed's documented Linux binary can be `zeditor`; resolve aliases inside each PATH directory so aliases do not override user PATH precedence. Cursor's agent installation docs do not define desktop editor routing, and vendor support reports both version-dependent `--classic` support and Linux AppImage launchers ignoring it; keep Cursor outside this new Linux support instead of guessing flags/version thresholds.
 - 2026-09-19 closeout: macOS native fullscreen minimize emitted no minimize event within the probe deadline. Retained timeout evidence; separate event-model regression and passing ordinary native lifecycle coverage instead of claiming native reproduction.
+## Lane 40 Environment focus
+
+- Fresh isolated worktree omits ignored `.memory/` and dependencies; read canonical project memory and install worktree-local dependencies without touching primary checkout.
+- Held Git IPC test must dismiss the modal branch picker before querying Quick View controls, and release the gate in `finally` to avoid teardown shutdown timeouts.
+- Radix close autofocus runs after a timeout: checking destination availability after canceling autofocus loses fallback focus. A still-connected but inert Quick View trigger is also unusable; preserve newer focus or use the app root when abandoning the handoff.
