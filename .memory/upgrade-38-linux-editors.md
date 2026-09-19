@@ -1,0 +1,9 @@
+# Linux external editors (lane38)
+
+The existing workspace editor picker is unconditional (`renderer/main/chat-pane.tsx`, `renderer/components/open-in-editor-picker.tsx`, `main/handlers/workspaces.ts`). Linux previously searched only Mac bundles and exposed Finder. Discovery now checks executable files in absolute inherited PATH directories for six existing IDs: Cursor, VS Code, VS Code Insiders, VSCodium, Zed and Sublime Text. Relative/empty entries are ignored. Launch uses the discovered path and one absolute folder argument without a shell, and resolves after spawn rather than GUI exit. Forced discovery at open detects removed/permission-changed launchers.
+
+The existing `finder` preference/icon ID stays stable and receives the File Manager label on Linux; Electron `shell.openPath` still handles it. Mac bundle matching, ordering, native icons and `/usr/bin/open -b` remain unchanged. No renderer, IPC DTO, native client, onboarding or catalog capability changed. Desktop files, Flatpak IDs and launchers outside inherited PATH are outside this bounded support.
+
+References (read-only conceptual study): OpenCode v2 `packages/app/src/components/session/session-header.tsx` uses a Linux command mapping and `packages/desktop/src-tauri/src/lib.rs` routes opening by OS, but its `check_linux_app` returns true unconditionally; Aiden verifies executability instead. OMP `packages/coding-agent/src/utils/external-editor.ts` separates platform launch from editor selection; its shell-based user-command semantics are not appropriate here and were not copied.
+
+Validation: four Linux production-discovery regressions fail against the original service. Focused service/preference tests pass after the fix; original Mac matching/open argument and refreshed-availability tests remain. Native Linux desktop acceptance is outstanding: tests inject process.platform on a Mac and run controlled executable fixtures.

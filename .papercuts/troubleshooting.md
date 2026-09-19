@@ -759,3 +759,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Lane 37: isolated checkout omits ignored `.memory/` and dependencies; read project memory from the saved repository and install this checkout with `npm ci` before validation.
 
 - Integration lane37: test and coverage registration shared long-line conflicts. Preserved all existing script tokens and dependency fields, adding only the new profile-share test once per affected script; merged independent troubleshooting histories.
+- 2026-09-19 lane38: isolated checkout lacks `.memory` and dependencies; read canonical checkout memory and installed this worktree with `npm ci`. Type-check targets pre-ES2022 libs, so test helpers must avoid `Array.at` / `Object.hasOwn` even though the host Node supports them. Linux regression fixtures must assert discovery before launching, otherwise the unfixed macOS service can open an actual installed Mac editor.
