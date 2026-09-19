@@ -533,3 +533,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 — upgrade compaction checkpoint recovery
+
+- Worktree has no `.memory/` or dependencies; used checked-in plans and installed isolated dependencies with scripts disabled.
+- `.papercuts/` is ignored but its troubleshooting file is tracked. Restored its full existing contents after detecting an accidental replacement during diff review; appended only this entry.
