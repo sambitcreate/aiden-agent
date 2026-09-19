@@ -341,10 +341,12 @@ test("browser crash recovery has one current retry and respects the crash limit"
   }
 });
 
+type NativeCrashEvent = { event: string; crashed: boolean; loading: boolean; osProcessId: number };
 type NativeCrashProbe = {
   crash(): Promise<void>;
   deliver(): { crashed: boolean; loading: boolean; timers: number };
   fire(): number;
+  events(): NativeCrashEvent[];
   restore(): void;
 };
 type NativeCrashGlobal = typeof globalThis & { __nativeCrashProbe: NativeCrashProbe };
@@ -359,9 +361,13 @@ async function installNativeCrashProbe(aiden: { app: import("@playwright/test").
         let arrived: (() => void) | undefined;
         let reloads = 0;
         let firing = false;
+        const events: NativeCrashEvent[] = [];
         const callbacks: Array<() => void> = [];
         const handles: ReturnType<typeof setTimeout>[] = [];
         guest.emit = ((event: string, ...args: unknown[]) => {
+          if (["did-stop-loading", "render-process-gone"].includes(event)) {
+            events.push({ event, crashed: guest.isCrashed(), loading: guest.isLoadingMainFrame(), osProcessId: guest.getOSProcessId() });
+          }
           if (event !== "render-process-gone") return emit(event, ...args);
           notification = () => { emit(event, ...args); };
           arrived?.();
@@ -386,6 +392,7 @@ async function installNativeCrashProbe(aiden: { app: import("@playwright/test").
             finally { globalThis.setTimeout = schedule; }
             return { crashed, loading, timers: callbacks.length };
           },
+          events: () => events,
           fire() {
             firing = true;
             try { for (const callback of callbacks.splice(0)) callback(); }
@@ -490,6 +497,9 @@ test("current native crash during a subsequent held main-frame response still re
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
       const crash = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
       expect(crash).toMatchObject({ crashed: true, timers: 1 });
+      const nativeEvents = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.events());
+      expect(nativeEvents.some((event) => event.event === "did-stop-loading" && event.osProcessId === 0)).toBe(true);
+      await test.info().attach("native-crash-event-order", { body: JSON.stringify(nativeEvents, null, 2), contentType: "application/json" });
 
       const state = await aiden.page.evaluate((workspaceId) =>
         (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
@@ -507,3 +517,83 @@ test("current native crash during a subsequent held main-frame response still re
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+for (const scenario of ["queued-before-abort", "queued-before-network-error", "queued-after-abort", "queued-after-network-error", "current-after-abort", "current-after-stop"] as const) {
+  test(`native crash ${scenario} preserves the correct recovery document`, async ({ aiden }) => {
+    let releaseFailure: (() => void) | undefined;
+    let failing = false;
+    let originalRequests = 0;
+    let replacementRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.url === "/replacement") {
+        replacementRequests += 1;
+        const fail = () => {
+          failing = true;
+          if (scenario.endsWith("network-error")) response.destroy();
+          else { response.writeHead(204); response.end(); }
+        };
+        if (failing) fail();
+        else releaseFailure = fail;
+        return;
+      }
+      if (request.url === "/original") originalRequests += 1;
+      response.setHeader("content-type", "text/html");
+      response.end("<!doctype html><title>Original page</title>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      await finishLmStudioOnboarding(aiden.page);
+      const opened = await command(aiden.page, { action: "create", url: `${url}/original` });
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().some((contents) => contents.getURL() === target), `${url}/original`)).toBe(true);
+      const id = await aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id, `${url}/original`);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Original page");
+      await installNativeCrashProbe(aiden, id);
+      await aiden.app.evaluate(({ webContents }, target) => {
+        const guest = webContents.fromId(target)!;
+        const events: string[] = [];
+        guest.on("did-stop-loading", () => events.push("did-stop-loading"));
+        guest.on("did-fail-load", (_event, _code, _description, _url, main) => { if (main) events.push("did-fail-load"); });
+        Object.assign(globalThis, { __failedReplacement: events });
+      }, id);
+      const laterCrash = scenario.startsWith("current-");
+      if (!laterCrash) await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+      await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/replacement`, readiness: "none" });
+      await expect.poll(() => Boolean(releaseFailure)).toBe(true);
+      if (scenario === "current-after-stop") await command(aiden.page, { action: "stop", tabId: opened.tabId! });
+      if (scenario.startsWith("queued-before-")) {
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ loading: true, timers: 0 });
+      }
+      releaseFailure!();
+      await expect.poll(() => aiden.app.evaluate(() => (globalThis as typeof globalThis & { __failedReplacement: string[] }).__failedReplacement.includes("did-stop-loading"))).toBe(true);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.isLoadingMainFrame(), id)).toBe(false);
+      // Native terminal navigation recreates a live renderer even when no normal
+      // document commits (204), or commits an error page (connection reset).
+      expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.isCrashed(), id)).toBe(false);
+      const terminalEvents = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.events());
+      expect(terminalEvents.some((event) => event.event === "did-stop-loading" && !event.crashed && !event.loading && event.osProcessId > 0)).toBe(true);
+      if (laterCrash) {
+        expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getURL(), id)).toBe(`${url}/original`);
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+      } else if (scenario.endsWith("network-error")) {
+        expect(await aiden.app.evaluate(() => (globalThis as typeof globalThis & { __failedReplacement: string[] }).__failedReplacement.includes("did-fail-load"))).toBe(true);
+      }
+      if (!scenario.startsWith("queued-before-")) {
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toEqual({ crashed: laterCrash, loading: false, timers: laterCrash ? 1 : 0 });
+      }
+      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(laterCrash ? 1 : 0);
+      if (laterCrash) {
+        await expect.poll(() => originalRequests === 2 || replacementRequests === 2).toBe(true);
+        expect({ originalRequests, replacementRequests }).toEqual({ originalRequests: 2, replacementRequests: 1 });
+        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
+          const guest = webContents.fromId(target);
+          return guest && { crashed: guest.isCrashed(), url: guest.getURL(), title: guest.getTitle() };
+        }, id)).toEqual({ crashed: false, url: `${url}/original`, title: "Original page" });
+      } else expect(originalRequests).toBe(1);
+    } finally {
+      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}
