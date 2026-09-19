@@ -234,7 +234,7 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .tasksRead, .agentsRead],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead],
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -287,7 +287,74 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    private func assertDraftRestoration(edit: String?, expected: String) async throws {
+    func testDraftRestorationDoesNotAddOldTextToAnUploadedAttachment() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "") { model in
+            let failures = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
+            XCTAssertEqual(failures, 0)
+            XCTAssertEqual(model.pendingAttachments.count, 1)
+            return nil
+        }
+    }
+
+    @MainActor
+    func testDraftRestorationStillLoadsAfterAnEmptyUploadSelection() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "Previously saved draft") { model in
+            let failures = await model.upload([])
+            XCTAssertEqual(failures, 0)
+            return nil
+        }
+    }
+
+    @MainActor
+    func testDraftRestorationDoesNotResumeAfterRemovingAnUploadedAttachment() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "") { model in
+            let failures = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
+            XCTAssertEqual(failures, 0)
+            await model.removeAttachment(try XCTUnwrap(model.pendingAttachments.first))
+            XCTAssertTrue(model.pendingAttachments.isEmpty)
+            return nil
+        }
+    }
+
+    @MainActor
+    func testDraftRestorationDoesNotAddOldTextWhileAnUploadIsPending() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "") { model in
+            let requested = self.expectation(description: "Attachment upload reached the server")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { requested.fulfill() }
+            let upload = Task {
+                let failures = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
+                XCTAssertEqual(failures, 0)
+            }
+            await self.fulfillment(of: [requested], timeout: 5)
+            XCTAssertTrue(model.isUploadingAttachment)
+            XCTAssertTrue(model.pendingAttachments.isEmpty)
+            return upload
+        }
+    }
+
+    @MainActor
+    func testDraftRestorationDoesNotResumeAfterAnAttachmentOnlySend() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "") { model in
+            let failures = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
+            XCTAssertEqual(failures, 0)
+            XCTAssertTrue(model.canSend)
+            let requested = self.expectation(description: "Attachment-only turn reached the server")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { requested.fulfill() }
+            let send = Task { await model.send() }
+            await self.fulfillment(of: [requested], timeout: 5)
+            XCTAssertTrue(model.isStarting)
+            XCTAssertTrue(model.draft.isEmpty)
+            XCTAssertTrue(model.pendingAttachments.isEmpty)
+            return send
+        }
+    }
+
+    @MainActor
+    private func assertDraftRestoration(
+        edit: String?,
+        expected: String,
+        whileReading: @MainActor (AidenChatViewModel) async throws -> Task<Void, Never>? = { _ in nil }
+    ) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "draft-load-\(UUID().uuidString)")
         let fileManager = AidenHeldDraftReadFileManager()
         let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"), fileManager: fileManager)
@@ -314,10 +381,14 @@ final class AidenChatTests: XCTestCase {
             model.draft = "Typing while restoration is pending"
             model.draft = edit
         }
+        let pendingAction = try await whileReading(model)
         fileManager.releaseRead()
         await load.value
         XCTAssertFalse(fileManager.didTimeOut, "The held read must be released by the test")
         XCTAssertEqual(model.draft, expected)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await pendingAction?.value
+        XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
         // Cancel the debounce before removing this test's temporary directory.
         model.setAllowsMutations(false)
     }
@@ -2709,6 +2780,25 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
+    nonisolated(unsafe) private static var heldPathSuffix: String?
+    nonisolated(unsafe) private static var onHeldRequest: (@Sendable () -> Void)?
+    nonisolated(unsafe) private static var heldCompletion: (@Sendable () -> Void)?
+
+    static func holdNextRequest(endingIn suffix: String, onRequest: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            heldPathSuffix = suffix
+            onHeldRequest = onRequest
+        }
+    }
+
+    static func releaseHeldRequest() {
+        let completion = lock.withLock {
+            let completion = heldCompletion
+            heldCompletion = nil
+            return completion
+        }
+        completion?()
+    }
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -2723,10 +2813,13 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 
     static func reset(mode: Mode = .denied) {
+        releaseHeldRequest()
         lock.lock()
         self.mode = mode
         _progressRequestCount = 0
         _agentRequestCount = 0
+        heldPathSuffix = nil
+        onHeldRequest = nil
         lock.unlock()
     }
 
@@ -2746,7 +2839,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 contentType: "application/json",
                 data: Data(
                     """
-                    {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","tasks:read","agents:read"],"serverCapabilities":["server:read","workspace:read","tasks:read","agents:read"],"features":["chat-tasks-v1","chat-agents-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}
+                    {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"features":["chat-tasks-v1","chat-agents-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}
                     """.utf8
                 )
             )
@@ -2841,6 +2934,17 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                     data: Data("id: 1\nevent: task_update\ndata: {\"protocolVersion\":1,\"streamId\":\"chat-progress-lifecycle\",\"sequence\":1,\"timestamp\":\"2026-09-14T12:00:00Z\",\"type\":\"task_update\",\"terminal\":false,\"payload\":\(payload)}\n\n".utf8)
                 )
             }
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/attachments":
+            result = Self.response(
+                for: request,
+                status: 201,
+                contentType: "application/json",
+                data: try! JSONSerialization.data(withJSONObject: [
+                    "id": "att_" + String(repeating: "a", count: 43),
+                    "name": "fixture.txt", "mimeType": "text/plain", "kind": "text", "size": 7,
+                    "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+                ])
+            )
         default:
             result = Self.response(
                 for: request,
@@ -2850,6 +2954,23 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             )
         }
 
+        let finishes = shouldFinish
+        let onHold = Self.lock.withLock { () -> (@Sendable () -> Void)? in
+            guard let suffix = Self.heldPathSuffix, path.hasSuffix(suffix) else { return nil }
+            Self.heldPathSuffix = nil
+            let onHold = Self.onHeldRequest
+            Self.onHeldRequest = nil
+            Self.heldCompletion = { [self] in complete(result, shouldFinish: finishes) }
+            return onHold
+        }
+        if let onHold {
+            onHold()
+            return
+        }
+        complete(result, shouldFinish: shouldFinish)
+    }
+
+    private func complete(_ result: (HTTPURLResponse, Data), shouldFinish: Bool) {
         client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: result.1)
         if shouldFinish {

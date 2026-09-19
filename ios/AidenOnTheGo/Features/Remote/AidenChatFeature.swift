@@ -890,6 +890,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
+    @ObservationIgnored private var composerGeneration: UInt64 = 0
 
     private(set) var chat: AidenChat
     private(set) var catalog: AidenModelCatalog?
@@ -908,7 +909,11 @@ final class AidenChatViewModel {
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
     private(set) var pendingApproval: AidenPendingApproval?
-    private(set) var pendingAttachments: [AidenAttachmentReference] = []
+    private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
+        didSet {
+            if pendingAttachments != oldValue { composerGeneration &+= 1 }
+        }
+    }
     private(set) var isUploadingAttachment = false
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
@@ -921,6 +926,7 @@ final class AidenChatViewModel {
         didSet {
             guard draft != oldValue else { return }
             draftGeneration &+= 1
+            composerGeneration &+= 1
             guard !suppressesDraftPersistence else { return }
             scheduleDraftPersistence()
         }
@@ -1119,15 +1125,17 @@ final class AidenChatViewModel {
         isLoading = true
         defer { isLoading = false }
         if draftSession == nil {
-            let restorationGeneration = draftGeneration
+            let restorationGeneration = composerGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard coordinator.isCurrent(context) else { return }
             draftSession = session
-            if draft.isEmpty, let savedDraft = await draftStore.load(session: session) {
+            if draft.isEmpty, pendingAttachments.isEmpty, !isUploadingAttachment, !isStarting,
+               let savedDraft = await draftStore.load(session: session) {
                 guard coordinator.isCurrent(context), draftSession == session else { return }
                 // Disk access yields the main actor while the composer remains
-                // editable. Even typing and then clearing must win over restore.
-                if draftGeneration == restorationGeneration, draft.isEmpty {
+                // editable. Text edits, uploads, attachment removal and Send
+                // must all win over restoring the previous composer's text.
+                if composerGeneration == restorationGeneration, draft.isEmpty {
                     draft = savedDraft
                 }
             }
@@ -1613,6 +1621,7 @@ final class AidenChatViewModel {
             createdAt: now
         )
 
+        composerGeneration &+= 1
         isStarting = true
         defer { isStarting = false }
         presentedError = nil
@@ -1701,11 +1710,13 @@ final class AidenChatViewModel {
 
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
+        guard !uploads.isEmpty else { return 0 }
         guard !isReadOnlyPresentation else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
             return uploads.count
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return uploads.count }
+        composerGeneration &+= 1
         isUploadingAttachment = true
         presentedError = nil
         defer { isUploadingAttachment = false }

@@ -538,3 +538,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Worktree has no tracked `.memory/`; read the shared checkout's project context and will add a unique lane note.
 - Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.
+
+- Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
