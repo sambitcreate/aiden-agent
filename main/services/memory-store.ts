@@ -323,8 +323,10 @@ export class MemoryStore {
       SELECT * FROM memory_facts
       WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
     `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
-    if (existing && !supersedesId) return factFromRow(existing);
-    if (existing && existing.id !== supersedesId) {
+    const existingExpired = existing !== undefined
+      && existing.expires_at !== null && existing.expires_at <= now;
+    if (existing && !existingExpired && !supersedesId) return factFromRow(existing);
+    if (existing && !existingExpired && existing.id !== supersedesId) {
       throw new Error("The replacement duplicates another active fact in this scope.");
     }
     const count = database.prepare(`
@@ -348,6 +350,12 @@ export class MemoryStore {
     const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
     database.exec("BEGIN IMMEDIATE");
     try {
+      // Expired rows still occupy the active-text unique index. Keep their
+      // history, but free the text atomically with the newly approved insert.
+      if (existing && existingExpired) {
+        database.prepare("UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
+          .run(now, existing.id);
+      }
       if (supersedesId) {
         database.prepare("UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
           .run(now, supersedesId);

@@ -5,9 +5,9 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { MemoryStore, normalizeMemoryText, type MemoryScope } from "./memory-store.js";
 
-async function fixture(t: TestContext, now = 1_000) {
+async function fixture(t: TestContext, now: number | (() => number) = 1_000) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-"));
-  const store = new MemoryStore({ root: () => root, now: () => now });
+  const store = new MemoryStore({ root: () => root, now: () => typeof now === "number" ? now : now() });
   t.after(async () => {
     await store.close();
     await rm(root, { recursive: true, force: true });
@@ -271,4 +271,125 @@ test("bounded transcript and artifact metadata recall is scoped and source-cited
   assert.equal(recalled.some(({ text }) => text.includes("only to the Bot")), false);
   await store.deleteSourceChat("chat-a");
   assert.deepEqual(await store.recall(workspace, "cobalt release"), []);
+});
+
+test("re-approving expired text stores fresh metadata and restores recall at the expiry boundary", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const original = await store.put({
+    id: "expired",
+    scope: workspace,
+    text: "Prefer concise release notes.",
+    provenance: { kind: "chat_message", chatId: "old-chat", messageId: "old-message" },
+    expiresAt: 2_000,
+    alwaysOn: true,
+  });
+  const foreign = await store.put({
+    id: "foreign",
+    scope: bot,
+    text: original.text,
+    provenance: { kind: "user_edit", sourceId: "bot-editor" },
+    expiresAt: 2_000,
+  });
+  now = 2_000;
+  assert.deepEqual(await store.search(workspace, "release"), []);
+  assert.deepEqual(await store.alwaysOn(workspace), []);
+  const renewed = await store.put({
+    id: "renewed",
+    scope: workspace,
+    text: "  Prefer   concise release notes. ",
+    provenance: { kind: "model_proposal", chatId: "new-chat", turnId: "new-turn", anchorMessageId: "new-message" },
+    confidence: 0.8,
+    expiresAt: 4_000,
+    alwaysOn: true,
+  });
+  assert.equal(renewed.id, "renewed");
+  assert.equal(renewed.createdAt, now);
+  assert.equal(renewed.expiresAt, 4_000);
+  assert.equal(renewed.confidence, 0.8);
+  assert.deepEqual(renewed.provenance, {
+    kind: "model_proposal", chatId: "new-chat", turnId: "new-turn", anchorMessageId: "new-message",
+  });
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), [renewed.id]);
+  assert.deepEqual((await store.alwaysOn(workspace)).map(({ id }) => id), [renewed.id]);
+  assert.deepEqual((await store.recall(workspace, "release")).map(({ citation }) => citation), ["memory:renewed"]);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === original.id), {
+    ...original, state: "superseded", updatedAt: now,
+  });
+  assert.deepEqual(await store.list(bot), [foreign]);
+
+  // Reopening preserves the renewal; deleting old provenance cannot remove it.
+  await store.close();
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), [renewed.id]);
+  assert.equal(await store.deleteSourceChat("old-chat"), 1);
+  assert.deepEqual(await store.list(workspace), [renewed]);
+  now = 4_000;
+  assert.deepEqual(await store.recall(workspace, "release"), []);
+});
+
+test("unexpired duplicates remain idempotent and an expired fact can be renewed without expiry", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const original = await store.put({ ...input, id: "original", expiresAt: 2_000 });
+  now = 1_999;
+  assert.deepEqual(await store.put({ ...input, id: "duplicate" }), original);
+  now = 2_001;
+  const renewed = await store.put({ ...input, id: "renewed" });
+  assert.equal(renewed.id, "renewed");
+  assert.equal(renewed.expiresAt, undefined);
+  assert.deepEqual(await store.put({ ...input, id: "duplicate-again" }), renewed);
+});
+
+test("expired text collisions permit explicit replacement and roll back on insertion failure", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const expired = await store.put({ ...input, id: "expired", text: "Deploy on Wednesday.", expiresAt: 2_000 });
+  const prior = await store.put({ ...input, id: "prior", text: "Deploy on Tuesday." });
+  now = 3_000;
+  await assert.rejects(store.put({
+    ...input, id: prior.id, text: expired.text, supersedesId: prior.id,
+  }), /UNIQUE constraint failed/u);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === prior.id), prior);
+  assert.deepEqual((await store.search(workspace, "Deploy")).map(({ id }) => id), [prior.id]);
+
+  const replacement = await store.put({
+    ...input, id: "replacement", text: expired.text, supersedesId: prior.id,
+  });
+  assert.equal(replacement.supersedesId, prior.id);
+  const facts = await store.list(workspace);
+  assert.equal(facts.find(({ id }) => id === expired.id)?.state, "superseded");
+  assert.equal(facts.find(({ id }) => id === prior.id)?.state, "superseded");
+  assert.deepEqual((await store.search(workspace, "Deploy")).map(({ id }) => id), [replacement.id]);
+});
+
+test("renewing expired text cannot bypass the always-on quota", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    text: "Keep release notes concise.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+    alwaysOn: true,
+  };
+  const expired = await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+  now = 3_000;
+  for (let index = 0; index < 12; index += 1) {
+    await store.put({ ...input, id: `current-${index}`, text: `Current preference number ${index}.` });
+  }
+  await assert.rejects(store.put({ ...input, id: "renewed" }), /maximum always-on facts/u);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+  assert.deepEqual(await store.search(workspace, "concise"), []);
+  await store.remove(workspace, "current-0");
+  assert.equal((await store.put({ ...input, id: "renewed" })).id, "renewed");
+  assert.equal((await store.alwaysOn(workspace, 12)).length, 12);
 });

@@ -533,3 +533,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 — Upgrade 11: memory expiry
+
+- Fresh worktree omits ignored `.memory/` and dependencies. Read main-checkout memory and checked-in plans; installed dependencies locally with lifecycle scripts disabled for scoped tests.
+- `aiden-plugins` is a container directory; use the nested `context-mode` Git SHA for reference evidence.
+- Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
+- GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
