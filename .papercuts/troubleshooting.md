@@ -539,3 +539,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Broad service searches hit a large generated browser source string; restrict searches to skill files to keep inspection usable.
 - Dependencies installed locally with lifecycle scripts disabled; this service-only lane needs no Electron/native build.
 - YAML AST map `get()` generic inference narrowed scalar text to `never`; treat the retrieved node as `unknown` and narrow through `isScalar` plus a string check before reading metadata.
+- Pullfrog follow-up: `yaml@2.9.0` `uniqueKeys` checks scalar equality but admits alias-equivalent duplicate mapping keys. Validate root key node types before extraction; retain unrelated alias values without expansion.

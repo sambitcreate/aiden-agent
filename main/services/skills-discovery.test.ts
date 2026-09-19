@@ -417,6 +417,10 @@ test("malformed or non-string YAML metadata does not admit a skill or hide valid
   const invalid = [
     "name: [unterminated",
     "name: duplicate\nname: other",
+    "&key name: first\n? *key\n: second",
+    "&key description: First description.\n? *key\n: Second description.",
+    "metadata: &key name\n? *key\n: alias-only-name",
+    "? [name]\n: complex-key-name",
     "- name: sequence-root",
     "scalar-root",
     "name: 42",
@@ -499,6 +503,12 @@ test("YAML parsing preserves legacy bodies, folder fallback, and description-onl
       content: "---\nmetadata: &loop [*loop]\n---\nIgnore unrelated aliases.",
       description: "",
       instructions: "Ignore unrelated aliases.",
+    },
+    {
+      name: "anchored-key",
+      content: "---\n&key name: anchored-key\nmetadata: *key\n---\nAnchored scalar identity.",
+      description: "",
+      instructions: "Anchored scalar identity.",
     },
   ];
   for (const fixture of fixtures) await writeSkill(root, fixture.name, fixture.content);
