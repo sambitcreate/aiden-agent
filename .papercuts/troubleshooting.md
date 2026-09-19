@@ -533,3 +533,15 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 — upgrade-10-schedules
+- This fresh worktree has no `.memory/` directory or installed dependencies. Read the current scheduler recovery plan and prior scheduler notes; create the lane memory file and install private worktree dependencies.
+- Whole-file `oxfmt` rewrote unrelated existing scheduler formatting; restored untouched lines to keep the PR focused. New tests use current formatter output.
+- Explicit `git add` rejects the tracked troubleshooting path because its parent is ignored; use `git add -u -- .papercuts/troubleshooting.md` and force-add only the requested new lane memory.
+- Central review found that startup ownership was checked before, but not inside, runtime persistence. Added a deferred commit fixture to reproduce stale failure quarantine and next-run writes; carry authority into the existing DataStore commit guard.
+- Pullfrog identified a separate stale Cron error callback path. Reproduced deferred lookup, run-history publication, and runtime publication; bind failure recording to current job ownership and carry the guard through both stores.
+- Follow-up catch-up audit found two missed-run advances: job setup and dispatch claim. Guarding only the claim would still lose due state. Preserve overdue nextRunAt through setup, require authority on every automatic dispatch, and settle a cancelled predecessor before restart admission.
+- Lane checkout had been removed between review turns; recreated the existing branch worktree at its original path before continuing.
+- Pullfrog run-slot finding reproduced for stale arrival and deferred lookup. Reclaiming stale preparation also exposes delayed workspace cancellation by task ID; fence cancellation by the exact state object to protect replacement execution.
+- Independent review found expected automatic/manual overlap is still classified as failure. Reproduced real Cron error publication and startup rejection; distinguish a typed automatic skip from genuine executor errors, including identical error text.
+- Base ESLint no-redeclare rejects TypeScript overload declarations; dispatch now returns an explicit admission outcome with a separate completion promise, avoiding overloads and error-string classification.
