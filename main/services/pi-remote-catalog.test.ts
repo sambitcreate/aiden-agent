@@ -786,101 +786,296 @@ for (const operation of ["read", "write", "delete"] as const) {
   });
 }
 
-for (const invalidation of ["credential-change", "abort"] as const) {
-  for (const newer of ["none", "identical", "different"] as const) {
-    test(`Radius offline restart retires ${invalidation} write and preserves ${newer} publisher`, async (t) => {
-      const root = await mkdtemp(join(tmpdir(), "aiden-catalog-ownership-"));
-      t.after(() => rm(root, { recursive: true, force: true }));
-      const disk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
-      const writing = deferred<void>();
-      const release = deferred<void>();
-      const written = deferred<void>();
-      let admitted: ModelsStoreEntry | undefined;
-      const backing: ModelsStore = {
-        read: async () => (await disk.load()).entry,
-        write: async (_id, entry) => {
-          admitted = entry;
-          writing.resolve();
-          await release.promise;
-          await disk.update((draft) => { draft.entry = entry; });
-          written.resolve();
-        },
-        delete: async () => { await disk.update((draft) => { delete draft.entry; }); },
-      };
-      const owned = createOwnedPiModelsStore(backing);
-      const store = owned.providerStore("radius");
+for (const mode of ["scoped", "full"] as const) {
+  for (const invalidation of ["credential-change", "abort"] as const) {
+    for (const newer of ["none", "identical", "different"] as const) {
+      test(`${mode} Radius offline restart retires ${invalidation} write and preserves ${newer} publisher`, async (t) => {
+        const root = await mkdtemp(join(tmpdir(), "aiden-catalog-ownership-"));
+        t.after(() => rm(root, { recursive: true, force: true }));
+        const disk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+        const writing = deferred<void>();
+        const release = deferred<void>();
+        const written = deferred<void>();
+        let admitted: ModelsStoreEntry | undefined;
+        const backing: ModelsStore = {
+          read: async () => (await disk.load()).entry,
+          write: async (_id, entry) => {
+            admitted = entry;
+            writing.resolve();
+            await release.promise;
+            await disk.update((draft) => { draft.entry = entry; });
+            written.resolve();
+          },
+          delete: async () => { await disk.update((draft) => { delete draft.entry; }); },
+        };
+        const owned = createOwnedPiModelsStore(backing);
+        const store = owned.providerStore("radius");
+        const credentials = new InMemoryCredentialStore();
+        await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+        const models = createModels({ credentials, modelsStore: owned.modelsStore });
+        const radius = builtinProviders().find((provider) => provider.id === "radius")!;
+        models.setProvider(radius);
+        t.mock.method(globalThis, "fetch", async () => Response.json({
+          baseUrl: "https://radius.invalid", models: [{ ...oxAlphaModel(), id: "old-account-model" }],
+        }));
+        const controller = new AbortController();
+        const pending = refreshPiCatalogs({
+          models, credentials, providerModelsStore: () => store,
+          ...(mode === "scoped" ? { providerIds: ["radius"] } : {}), signal: controller.signal,
+        });
+        await writing.promise;
+        if (invalidation === "credential-change") {
+          await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+        } else controller.abort();
+        const latest = structuredClone(admitted!);
+        if (newer === "different") latest.models = [{ ...latest.models[0], id: "new-account-model" }];
+        const newerWrite = newer === "none" ? Promise.resolve() : owned.modelsStore.write("radius", latest);
+        let readFinished = false;
+        const waitingRead = store.read().then((entry) => { readFinished = true; return entry; });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(readFinished, false, "offline reads wait for ownership validation and retirement");
+        release.resolve();
+        await written.promise;
+        await pending;
+        await newerWrite;
+        assert.deepEqual(await waitingRead, newer === "none" ? undefined : latest);
+        // A fresh disk reader and real pinned Radius provider reproduce startup hydration.
+        const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+        const restarted = createModels({
+          credentials,
+          modelsStore: { ...backing, read: async () => (await restartedDisk.load()).entry },
+        });
+        restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+        await restarted.refresh({ providers: ["radius"], allowNetwork: false });
+        assert.deepEqual(restarted.getModels("radius").map((model) => model.id),
+          newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]);
+      });
+    }
+  }
+}
+
+for (const mode of ["scoped", "full"] as const) {
+  for (const change of ["replace", "logout"] as const) {
+    test(`${mode} pi.dev response cannot publish after credential ${change}`, async () => {
       const credentials = new InMemoryCredentialStore();
-      await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
-      const models = createModels({ credentials, modelsStore: owned.modelsStore });
-      const radius = builtinProviders().find((provider) => provider.id === "radius")!;
-      models.setProvider(radius);
-      t.mock.method(globalThis, "fetch", async () => Response.json({
-        baseUrl: "https://radius.invalid", models: [{ ...oxAlphaModel(), id: "old-account-model" }],
-      }));
-      const controller = new AbortController();
+      const store = memoryProviderStore();
+      const models = createModels({ credentials, modelsStore: {
+        read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+      } });
+      const started = deferred<void>();
+      const response = deferred<Response>();
+      const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+        now: () => Date.parse("2026-09-10T16:01:00Z"),
+        fetchImpl: async () => {
+          started.resolve();
+          return response.promise;
+        },
+      });
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "old-synthetic" }));
       const pending = refreshPiCatalogs({
         models, credentials, providerModelsStore: () => store,
-        providerIds: ["radius"], signal: controller.signal,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
       });
-      await writing.promise;
-      if (invalidation === "credential-change") {
-        await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
-      } else controller.abort();
-      const latest = structuredClone(admitted!);
-      if (newer === "different") latest.models = [{ ...latest.models[0], id: "new-account-model" }];
-      const newerWrite = newer === "none" ? Promise.resolve() : owned.modelsStore.write("radius", latest);
-      let readFinished = false;
-      const waitingRead = store.read().then((entry) => { readFinished = true; return entry; });
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.equal(readFinished, false, "offline reads wait for ownership validation and retirement");
-      release.resolve();
-      await written.promise;
-      await pending;
-      await newerWrite;
-      assert.deepEqual(await waitingRead, newer === "none" ? undefined : latest);
-      // A fresh disk reader and real pinned Radius provider reproduce startup hydration.
-      const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
-      const restarted = createModels({
-        credentials,
-        modelsStore: { ...backing, read: async () => (await restartedDisk.load()).entry },
+      await started.promise;
+      if (change === "replace") await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+      else await credentials.delete(provider.id);
+      const obsolete = { ...oxAlphaModel(), id: "obsolete-catalog-model" };
+      response.resolve(Response.json([obsolete], {
+        headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+      }));
+      const result = await pending;
+      assert.equal(result.errors.size, 0);
+      assert.equal(store.snapshot(), undefined);
+      assert.equal(models.getModel(provider.id, obsolete.id), undefined);
+    });
+
+  }
+}
+
+for (const mode of ["full", "scoped", "offline"] as const) {
+  for (const expires of [0, Date.now() + 3_600_000]) {
+    test(`${mode} catalog preserves native OAuth policy for ${expires === 0 ? "expired" : "valid"} credentials`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const store = memoryProviderStore();
+      const original: Credential = { type: "oauth", access: "old-access", refresh: "synthetic", expires };
+      const rotated: Credential = { ...original, access: "rotated-access", expires: Date.now() + 3_600_000 };
+      let rotations = 0;
+      let published = false;
+      let networkPhases = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        auth: { oauth: {
+          name: "Synthetic OAuth",
+          login: async () => original,
+          refresh: async () => { rotations += 1; return rotated; },
+          toAuth: async () => { throw new Error("Catalog refresh does not resolve inference auth"); },
+        } },
+        refreshModels: async (context) => {
+          if (!context.allowNetwork) return;
+          networkPhases += 1;
+          const expected = mode === "full" && expires === 0 ? rotated : original;
+          assert.deepEqual(context.credential, expected);
+          published = await context.publish({ persist: { models: [], checkedAt: 1 } });
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => original);
+      const result = await refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
+        allowNetwork: mode !== "offline",
       });
-      restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
-      await restarted.refresh({ providers: ["radius"], allowNetwork: false });
-      assert.deepEqual(restarted.getModels("radius").map((model) => model.id),
-        newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]);
+      assert.equal(result.errors.size, 0);
+      assert.equal(rotations, mode === "full" && expires === 0 ? 1 : 0);
+      assert.equal(networkPhases, mode === "offline" ? 0 : 1);
+      assert.equal(published, mode !== "offline");
+      assert.deepEqual(await credentials.read(provider.id), rotations ? rotated : original);
     });
   }
 }
 
-test("pi.dev response cannot publish after the configured credential changes", async () => {
+test("full OAuth refresh rejects a later account replacement after its legitimate rotation", async () => {
   const credentials = new InMemoryCredentialStore();
   const models = createModels({ credentials });
   const store = memoryProviderStore();
   const started = deferred<void>();
-  const response = deferred<Response>();
+  const release = deferred<void>();
+  let accepted: boolean | undefined;
+  let updates = 0;
+  const expired: Credential = { type: "oauth", access: "expired", refresh: "synthetic", expires: 0 };
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    auth: { oauth: {
+      name: "Synthetic OAuth", login: async () => expired,
+      refresh: async () => ({ ...expired, access: "rotated", expires: Date.now() + 3_600_000 }),
+      toAuth: async (credential) => ({ apiKey: credential.access }),
+    } },
+    refreshModels: async (context) => {
+      if (!context.allowNetwork) return;
+      assert.equal(context.credential?.type, "oauth");
+      assert.equal(context.credential?.access, "rotated");
+      started.resolve();
+      await release.promise;
+      accepted = await context.publish({
+        persist: { models: [], checkedAt: 1 }, update: () => { updates += 1; },
+      });
+    },
+  };
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => expired);
+  const pending = refreshPiCatalogs({ models, credentials, providerModelsStore: () => store });
+  await started.promise;
+  await credentials.modify(provider.id, async () => ({ ...expired, access: "new-account", expires: Date.now() + 3_600_000 }));
+  release.resolve();
+  assert.equal((await pending).errors.size, 0);
+  assert.equal(accepted, false);
+  assert.equal(updates, 0);
+  assert.equal(store.snapshot(), undefined);
+});
+
+test("offline startup rejects Radius hydration after a credential changes during the cache read", async (t) => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const reading = deferred<void>();
+  const release = deferred<void>();
+  const owned = createOwnedPiModelsStore({
+    read: async () => {
+      reading.resolve();
+      await release.promise;
+      return { models: [{ ...oxAlphaModel(), provider: "radius", id: "old-account-model" }] };
+    },
+    write: async () => { throw new Error("Offline hydration must not write"); },
+    delete: async () => { throw new Error("Offline hydration must not delete"); },
+  });
+  models.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+  await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+  let networkCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => { networkCalls += 1; throw new Error("Unexpected network"); });
+  const pending = refreshPiCatalogs({
+    models, credentials, providerModelsStore: owned.providerStore, allowNetwork: false,
+  });
+  await reading.promise;
+  await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+  release.resolve();
+  assert.equal((await pending).errors.size, 0);
+  assert.equal(networkCalls, 0);
+  assert.equal(models.getModel("radius", "old-account-model"), undefined);
+});
+
+test("a new full pi.dev refresh does not join the aborted scoped network request", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  const requests: ReturnType<typeof deferred<Response>>[] = [];
+  const started = deferred<void>();
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
     now: () => Date.parse("2026-09-10T16:01:00Z"),
     fetchImpl: async () => {
+      const response = deferred<Response>();
+      requests.push(response);
       started.resolve();
       return response.promise;
     },
   });
   models.setProvider(provider);
-  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "old-synthetic" }));
-  const pending = refreshPiCatalogs({
-    models, credentials, providerModelsStore: () => store, providerIds: [provider.id],
-  });
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+  const options = { models, credentials, providerModelsStore: () => store };
+  const old = refreshPiCatalogs({ ...options, providerIds: [provider.id] });
   await started.promise;
-  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
-  const obsolete = { ...oxAlphaModel(), id: "obsolete-catalog-model" };
-  response.resolve(Response.json([obsolete], {
-    headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
-  }));
-  const result = await pending;
-  assert.equal(result.errors.size, 0);
-  assert.equal(store.snapshot(), undefined);
-  assert.equal(models.getModel(provider.id, obsolete.id), undefined);
+  const next = refreshPiCatalogs(options);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const count = requests.length;
+  requests.forEach((request, index) => request.resolve(Response.json([
+    { ...oxAlphaModel(), id: index === 0 ? "obsolete-model" : "newest-model" },
+  ], { headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" } })));
+  await Promise.all([old, next]);
+  assert.equal(count, 2);
+  assert.equal(models.getModel(provider.id, "obsolete-model"), undefined);
+  assert.ok(models.getModel(provider.id, "newest-model"));
 });
+
+for (const firstMode of ["scoped", "full"] as const) {
+  for (const nextMode of ["scoped", "full"] as const) {
+    test(`${nextMode} refresh supersedes an older ${firstMode} refresh without late publication`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const store = memoryProviderStore();
+      const started = deferred<void>();
+      const release = deferred<void>();
+      const late = deferred<boolean>();
+      let requests = 0;
+      let live = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        refreshModels: async (context) => {
+          if (!context.allowNetwork) return;
+          const request = ++requests;
+          if (request === 1) { started.resolve(); await release.promise; }
+          const accepted = await context.publish({
+            persist: { models: [], checkedAt: request }, update: () => { live = request; },
+          });
+          if (request === 1) late.resolve(accepted);
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+      const refresh = (mode: "scoped" | "full") => refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
+      });
+      const first = refresh(firstMode);
+      await started.promise;
+      assert.equal((await refresh(nextMode)).errors.size, 0);
+      await first; // Supersession must release the old caller even when the provider ignores abort.
+      release.resolve();
+      assert.equal(await late.promise, false);
+      assert.equal(live, 2);
+      assert.equal(store.snapshot()?.checkedAt, 2);
+    });
+  }
+}
 
 test("scoped catalog cancellation fences a hung publication credential check", async () => {
   const underlying = new InMemoryCredentialStore();

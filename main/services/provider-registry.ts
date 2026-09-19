@@ -289,8 +289,12 @@ export class ProviderRegistry {
   /** Restore durable dynamic catalogs before exposing any Pi snapshot. */
   async ensureBuiltinCatalogs(): Promise<void> {
     if (!this.catalogHydration) {
-      this.catalogHydration = this.models
-        .refresh({ allowNetwork: false })
+      this.catalogHydration = refreshPiCatalogs({
+        models: this.models,
+        credentials: this.credentials,
+        providerModelsStore: this.providerModelsStore,
+        allowNetwork: false,
+      })
         .then(() => undefined)
         .catch(() => undefined);
     }
