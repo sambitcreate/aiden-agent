@@ -648,3 +648,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-19 auth lane: fresh worktree has no ignored .memory directory; read canonical project context and create a lane-specific note. Installed isolated dependencies with npm ci.
 - 2026-09-19 lane 21: Fresh worktree has no .memory or dependencies; consulted canonical project memory and installed isolated dependencies with lifecycle scripts disabled for server-only tests.
 - 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
+- 2026-09-19 (22-telegram): Fresh worktree omits ignored .memory and dependencies; read relevant project memory from primary checkout and install isolated dependencies. Hermes Telegram adapter moved from gateway/platforms to plugins/platforms/telegram/adapter.py.
