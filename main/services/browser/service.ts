@@ -309,6 +309,10 @@ export class BrowserService {
     tab.previewNavigation = undefined;
     pending?.release();
   }
+  private cancelCrashRecovery(tab: LiveTab): void {
+    if (tab.crashTimer) clearTimeout(tab.crashTimer);
+    tab.crashTimer = undefined;
+  }
   private cancelFileAcquisitions(workspaceId: string): void {
     for (const controller of this.agentFileAcquisitions.get(workspaceId) ?? [])
       controller.abort(new Error("Agent browser file access was revoked."));
@@ -492,6 +496,7 @@ export class BrowserService {
     });
     wc.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
       if (isMainFrame && !inPlace) {
+        this.cancelCrashRecovery(tab);
         try { this.beginPreviewNavigation(tab, url); } catch (error) { wc.stop(); this.finishPreviewNavigation(tab); tab.state.error = String(error); }
         tab.navigationSequence += 1;
         tab.contextId = undefined;
@@ -520,6 +525,8 @@ export class BrowserService {
       }
     });
     wc.on("render-process-gone", (_event, details) => {
+      this.cancelCrashRecovery(tab);
+      if (tab.closing || wc.isDestroyed()) return;
       tab.queue.interrupt();
       tab.contextId = undefined;
       tab.state.crashed = true;
@@ -528,8 +535,10 @@ export class BrowserService {
       tab.crashTimes.push(Date.now());
       if (tab.crashTimes.length <= 3) {
         tab.state.error = "The page crashed. Restoring it…";
-        tab.crashTimer = setTimeout(
+        const timer = setTimeout(
           () => {
+            if (tab.crashTimer !== timer) return;
+            tab.crashTimer = undefined;
             if (!tab.closing && !wc.isDestroyed()) {
               tab.state.crashed = false;
               tab.state.error = undefined;
@@ -538,6 +547,7 @@ export class BrowserService {
           },
           [300, 1000, 2000][tab.crashTimes.length - 1],
         );
+        tab.crashTimer = timer;
       } else tab.state.error = `Page process ${details.reason} repeatedly. Reload to recover.`;
       this.emit(tab.state.workspaceId);
     });
@@ -832,7 +842,7 @@ export class BrowserService {
     tab.queue.interrupt();
     this.detach(tab);
     if (tab.pipTimer) clearInterval(tab.pipTimer);
-    if (tab.crashTimer) clearTimeout(tab.crashTimer);
+    this.cancelCrashRecovery(tab);
     if (tab.pip && !tab.pip.isDestroyed()) tab.pip.destroy();
     if (tab.recording) {
       clearTimeout(tab.recording.stopTimer);
@@ -1980,12 +1990,15 @@ export class BrowserService {
                 if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
                 break;
               case "stop":
+                this.cancelCrashRecovery(tab);
+                if (tab.state.crashed) tab.state.error = "The page crashed. Reload to recover.";
                 wc.stop();
                 break;
               case "focus":
                 wc.focus();
                 break;
               case "reload":
+                this.cancelCrashRecovery(tab);
                 tab.state.crashed = false;
                 tab.state.error = undefined;
                 if (command.ignoreCache) wc.reloadIgnoringCache();

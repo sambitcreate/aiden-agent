@@ -637,3 +637,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A separate cmdk automatic-selection active-descendant gap reproduces on the unchanged initial PR head before metadata updates; reported centrally. The focused regression preserves explicit arrow-navigation accessibility checks.
 - Follow-up catch-up audit found two missed-run advances: job setup and dispatch claim. Guarding only the claim would still lose due state. Preserve overdue nextRunAt through setup, require authority on every automatic dispatch, and settle a cancelled predecessor before restart admission.
 - Lock-wait expiry regressions can stay deterministic: advance the injected clock while the competing SQLite connection owns its transaction, then admit the store without wall-clock sleeps.
+## 2026-09-19 — lane 18 browser lifecycle
+- Fresh worktree lacks the gitignored `.memory/` directory; read relevant project history from the primary checkout before creating a lane-specific note.
+- Crash recovery regression needs controlled Electron event/timer delivery: wall-clock sleeps cannot reliably put navigation inside the 300 ms retry window. Tests hold handler-created timers, then deliver stale callbacks deterministically against real guests.
+- Full browser Electron run reached an annotation click timeout: Aiden Live's floating app-icon launcher intercepts `Add to chat` at browser.spec.ts:89. New crash regressions pass; checking the unchanged baseline separately before classifying the broader failure.
+- Confirmed identical annotation interception on unchanged baseline `5cc831a`; screenshot visibly shows the Live launcher over Add to chat. Reported to campaign root and attachment owner; retain this as an explicit suite limitation.
