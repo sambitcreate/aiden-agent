@@ -21,3 +21,15 @@ Verification:
 Independent integration review found that `deleteAllDiagnosticData` repeated raw removal of live journal files after its owner finished, erasing fresh records. Capture the live journal's exact paths before invoking its deletion helper and exclude only those owned paths from the later allowlist fallback. The fallback still removes inactive-profile and legacy logs, disabled journal files, other diagnostic categories, and dumps, and still propagates removal errors. No health implementation files changed.
 
 Deterministic production/development support regressions hold subagent cleanup after the journal barrier, write fresh general/fatal records and rotate the live log, then resume the outer sweep. Both fail against initial PR head `8b5e6ee4` and pass with the fix. Disabled-journal cleanup and inactive cleanup failure controls pass. Final `test:diagnostics`: 84 diagnostics + 10 policy pass; type-check and lint pass.
+
+## Fatal snapshot and retention ordering follow-up
+
+Review at `e70911c0` reproduced an older queued snapshot reading the newly reset fatal file: its old record vanished and a post-delete fatal record entered the earlier export. Holding destination creation deterministically exposes this. An immediately requested snapshot/delete pair also showed that awaiting pruning before queue reservation allowed snapshot admission to be overtaken.
+
+The ownership invariants now cover all participants:
+- General appends, rotations, retention, snapshot publication and deletion reserve their queue position before yielding. Snapshot pruning runs inside that same reserved operation.
+- Fatal writes, deletion resets, retention, and snapshot reads complete synchronously at admission. General maintenance never revisits the live fatal file later.
+- A snapshot captures up to the existing 64 KiB fatal cap through an owned regular-file descriptor with no symlink following; its queued publication uses those immutable bytes, not the subsequently reset live path. Earlier snapshots retain earlier fatal evidence; later snapshots see the new file. No fatal writes are deferred, preserving crash evidence.
+- Source/read or destination/publication failures reject and set journal failure status; settled queues remain usable. Destination publication retains exclusive creation and owner-only permissions.
+
+Three additional ordering regressions fail against `e70911c0` (held pre-delete snapshot, held general retention with fatal maintenance, and immediate snapshot/delete admission). A destination collision control verifies error reporting, preservation and recovery. Final diagnostics suite: 88 diagnostics and 10 policy tests pass; type-check and lint pass. This changes no retention limits or external contracts.

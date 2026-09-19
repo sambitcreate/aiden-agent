@@ -698,3 +698,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Lane 30: reusing canonical dependencies exposed `thinking-orbs` 0.1.1 against this worktree's locked 0.3.1, yielding three unrelated orb-state type errors on both baseline and patched source. Replaced only this worktree's dependency symlink with a lockfile-local installation; canonical dependencies remain untouched.
 
 - Integration wave4 status schema: lane31 represented its PR as an integer, unlike prior URL entries. Normalize both forms in the validation helper; exact fetched-head verification remains required.
+
+- Review exposed fatal reset bypassing an earlier queued snapshot. Fatal writes, reset, retention and bounded snapshot reads must all finish synchronously at admission; queue only general-file work and immutable fatal snapshot publication.
