@@ -193,3 +193,27 @@ test("chunkForTelegram preserves converter output for long headings, quotes and 
     `[${"linked text ".repeat(800)}](https://example.com/?q=hello&lang=en)`,
   ]) assertHtmlChunks(markdownToTelegramHtml(markdown));
 });
+
+test("chunkForTelegram does not separate combining marks or emoji graphemes", () => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const grapheme of ["e\u0301", "👩‍💻", "👨‍👩‍👧‍👦", "🇺🇸", "👍🏽", "1️⃣"]) {
+    for (let offset = 4025; offset <= 4033; offset += 1) {
+      const text = `${"a".repeat(offset)}${grapheme}${"z".repeat(100)}`;
+      const chunks = assertHtmlChunks(`<b>${text}</b>`).map((chunk) => readTelegramHtml(chunk).text);
+      assert.deepEqual(chunks.flatMap((chunk) => Array.from(segmenter.segment(chunk), ({ segment }) => segment)),
+        Array.from(segmenter.segment(text), ({ segment }) => segment), `whole grapheme ${grapheme} at ${offset}`);
+    }
+  }
+  for (const html of [
+    `${"a".repeat(4031)}<b>e</b>&#769;${"z".repeat(100)}`,
+    `${"a".repeat(4030)}&#x1F469;<i>&#8205;</i>&#x1F4BB;${"z".repeat(100)}`,
+  ]) {
+    const chunks = assertHtmlChunks(html).map((chunk) => readTelegramHtml(chunk).text);
+    assert.ok(chunks[1].startsWith("é") || chunks[1].startsWith("👩‍💻"));
+  }
+});
+
+test("chunkForTelegram progresses when one grapheme exceeds the provider limit", () => {
+  const html = `<b>e${"\u0301".repeat(9000)}</b>`;
+  assert.ok(assertHtmlChunks(html).length >= 3);
+});
