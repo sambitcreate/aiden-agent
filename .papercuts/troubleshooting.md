@@ -615,3 +615,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Baseline crash-handler assertions still require pre-diagnostics callback parameters and pre-backoff reload shape; scope matching to the crash callback while retaining recovery checks.
 - Lint requires `{2}` for the callback-closing indentation in source-contract regex (`no-regex-spaces`). Corrected and reran lint.
 - npm ci completed without Electron executable; ran node_modules/electron/install.js explicitly before Electron E2E.
+## 2026-09-19 iOS upgrade
+
+- This isolated checkout has no `.memory/`; read the source checkout project context and create a lane-specific memory note.
+- `xcrun devicectl list devices` hangs without output; use bounded device discovery and retain physical acceptance as an explicit gate if unavailable.
+- Stable Xcode stalls in `xcodebuild -runFirstLaunch`; per-command `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` builds successfully. The available physical iPhone remains in Xcode device-symbol preparation, blocking focused XCTest launch.
+- Physical XCTest retry also reported missing compatible DeviceSupport symbols and remained preparing beyond its destination timeout; stopped it and recorded hardware execution as outstanding. A temporary macOS probe reproduced the baseline framing bug and verified the fixed production parser/decoder/byte loop.
