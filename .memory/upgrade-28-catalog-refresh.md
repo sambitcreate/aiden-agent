@@ -18,8 +18,8 @@ reads/writes, and offline hydration now share a per-provider queue in
 retired before releasing that slot. This prevents restart hydration of rejected
 account catalogs and prevents retirement from deleting a newer writer's entry,
 even if it has identical bytes. Native operations queued behind publication
-check their signal before touching storage. This is not a general
-same-provider/same-credential refresh-generation arbiter.
+check their signal before touching storage. Scoped and full attempts now share
+per-provider cancellation ownership, so newer attempts supersede older ones.
 
 Reference: Pi checkout `2a9b4ebc680053c64e31f635b0b22d5e22564001` (MIT),
 `packages/ai/src/models.ts` checks generation before/after publication persistence.
@@ -52,3 +52,41 @@ reads see only settled state. Additional cases check post-write keychain failure
 cleanup and queued native read/write/delete cancellation. Tests remain in the
 existing registered catalog file. Type check, lint, and diff checks pass.
 No DataStore core, credential adapter, native wire, or network policy changes.
+
+## Full-refresh ownership correction
+
+Luna review of `2fcc0658` proved the full/native branch still bypassed account
+checks. Production `providers:refresh`, `providers:updateCatalogs`, and the
+command palette call `refreshBuiltinCatalogs()` without provider IDs. Startup
+`ensureBuiltinCatalogs()` was another direct native refresh path. Both now use
+the common refresh helper; no production `models.refresh` caller remains outside
+its guarded path.
+
+Full refresh retains exact pinned Pi OAuth and ambient-auth behavior using the
+public `createModels`/provider-filter API in a per-call refresh-only collection.
+Its credential adapter records the snapshots Pi reads and post-modify credentials
+Pi commits, so legitimate OAuth rotation becomes the new ownership snapshot.
+The collection delegates to original provider objects and Aiden's shared durable
+store; it neither copies runtime catalogs nor replaces registered providers.
+Production and this collection both use Pi's default AuthContext. Per-provider
+attempt signals fence and supersede both full and scoped runs; finished attempts
+release their map entries. Scoped setup still uses non-mutating checkAuth only.
+Offline startup uses the same guarded callback without auth resolution/network.
+
+Deferred real pi.dev full-refresh replacement/logout cases fail the previous
+head. Durable/restart tests now cover both modes. Six OAuth validity/policy
+controls verify full refresh rotates expired credentials, retains valid ones,
+and accepts its own rotation while scoped/offline paths do not rotate. A further
+case rejects an account replacement after legitimate rotation. Mixed-mode
+supersession controls reject late old publication and release old callers.
+Overlay coalescing now joins only a live network request; a previously failing
+deferred-fetch control proves that a replacement starts its own request instead
+of joining an aborted predecessor.
+
+Final validation: 140/140 focused tests across catalog, credential, pinned-provider
+contract, auth-flow-core, model-info, remote-model and DataStore tests; typecheck,
+lint and diff checks pass. No full npm test during integration. Reference-source
+semantics were checked against the pinned Pi source; no private SDK API or copied
+OAuth implementation is used. Added product file scope: provider-registry.ts and
+pi-remote-catalog.ts. No network endpoints, credential-storage format, shared
+wire contracts, models.dev authority, UI, native, or dependency changes.

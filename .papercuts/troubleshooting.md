@@ -735,3 +735,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Lane 33 causal review: fs.watch offers no operation identity; even callback-time content plus a quiet interval can misattribute delayed events. Use controlled delivery of the real listener for causal assertions and limit native-filesystem tests to smoke/continuity claims.
 - Independent review found expected automatic/manual overlap is still classified as failure. Reproduced real Cron error publication and startup rejection; distinguish a typed automatic skip from genuine executor errors, including identical error text.
 - Base ESLint no-redeclare rejects TypeScript overload declarations; dispatch now returns an explicit admission outcome with a separate completion promise, avoiding overloads and error-string classification.
+
+- PR168 Luna re-review found production full Settings/command refresh still delegated to Pi without account ownership checks; expand the real-wrapper regressions to full refresh, trace startup separately, and preserve native OAuth resolution through a public SDK refresh context.
+- Shared auth-lane dependency directory was removed; installed this worktree lockfile with npm ci --ignore-scripts before revalidation.
+- Unified refresh supersession exposed overlay coalescing that joined an already-aborted request; a deferred fetch regression proves it. Retain the active request signal and only join live work.
