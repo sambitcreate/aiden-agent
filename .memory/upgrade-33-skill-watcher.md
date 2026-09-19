@@ -1,0 +1,11 @@
+# Lane 33: skill watcher disposal ownership
+
+- Baseline: `5cc831a17aa8971fb5b89c7dd9278a6ec4022beb`; branch `feature/upgrade-33-skill-watcher`.
+- `main/index.ts` disposes the global Bot skill watcher during shutdown. A pending `watchSkillFiles()` filesystem validation could resume afterward and create a native watcher; a subsequent call could also restart the disposed singleton.
+- Make disposal terminal for an instance. Fence entry, the continuation after `lstat`, and queued change/error callbacks. Keep immediate active-skill invalidation, additive registrations for multiple Bots, one watcher per admitted directory, and nonpersistent native handles.
+- Real temporary-filesystem regressions reproduce both races on baseline; also cover installed-watcher disposal, fresh independent instances, atomic skill replacement and subsequent edits. Tests assert no retained registrations as well as no callback, so callback suppression cannot conceal leaked watchers. Existing test file remains registered in `test:bots`.
+- Stabilize existing live-lease and warm-cache test setup by allowing macOS creation events to settle before acquiring the lease or priming the cache; no waits were added to production.
+- Rejected hypotheses: atomic saves already observed by the directory watcher. Directory replacement and retired-directory edit isolation passed on this Mac; research control retained outside the source tree, with no unsupported cross-platform claim. Pruning a call's omitted paths would incorrectly remove registrations serving other Bots.
+- References: Pi theme watcher stop/stale-callback handling; OMP explicit plugin-root cache invalidation; pi-subagents result watcher ownership revocation before teardown. All MIT, conceptual study only. Exact reference repository heads and file SHA256s are in campaign `33-skill-watcher.json`.
+- Desktop-internal lifecycle only; no UI, onboarding, native/server contracts, skill parser/discovery, or plan milestone changed. Native suites are therefore outside scope. Full npm test delegated to the campaign integration owner.
+- Validation: final baseline 5 pass / 2 fail; corrected `test:bots` 444/444, watcher suite repeated five times 35/35, TypeScript, lint, whitespace checks passed.

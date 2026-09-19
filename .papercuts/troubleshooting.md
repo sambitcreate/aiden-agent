@@ -709,3 +709,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh detached worktree omits ignored `.memory` and `node_modules`; read canonical project memory and linked the existing matching dependency installation without changing it.
 - No execution test seam existed for scheduled notification failures. The existing registered notification suite now bundles the real execution module with synthetic service ports, avoiding Electron, scripts, network and user data.
 - Shared checkout dependencies were stale (`thinking-orbs` 0.1.1 vs locked 0.3.1), causing unrelated OrbState type errors. Replaced only this worktree's dependency symlink with an isolated `npm ci --ignore-scripts`; shared installation remains untouched.
+# Upgrade lane 33
+
+- Fresh worktree omits ignored `.memory/`; read canonical checkout project context and keep a unique lane note here. Dependencies also absent; installing lockfile dependencies before real watcher regressions.
+- Real fs baseline reproduced two disposal failures; pre-existing warm-cache immediate-write test also timed out once. Stabilize its setup boundary so queued creation events cannot masquerade as the edit under test. Directory replacement already works on this macOS host; do not generalize inode-watcher assumptions into speculative code.
+- Git rejects staging the ignored `.papercuts` path with ordinary add in this worktree; force-add the explicit note path together with the required unique `.memory` note.

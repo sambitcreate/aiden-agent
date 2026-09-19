@@ -16,6 +16,7 @@ interface WatchedDirectory {
  */
 export class BotSkillContentWatcher {
   private readonly directories = new Map<string, WatchedDirectory>();
+  private disposed = false;
 
   constructor(
     private readonly onChanged: () => void = () => {
@@ -25,9 +26,12 @@ export class BotSkillContentWatcher {
   ) {}
 
   async watchSkillFiles(skillFiles: readonly string[]): Promise<void> {
+    if (this.disposed) return;
     for (const skillFile of new Set(skillFiles)) {
       if (!path.isAbsolute(skillFile) || path.basename(skillFile) !== "SKILL.md") continue;
       const metadata = await fs.lstat(skillFile).catch(() => null);
+      // Shutdown can dispose this instance while filesystem validation awaits.
+      if (this.disposed) return;
       if (!metadata?.isFile() || metadata.isSymbolicLink()) continue;
       const directory = path.dirname(skillFile);
       const filename = path.basename(skillFile);
@@ -40,6 +44,7 @@ export class BotSkillContentWatcher {
       let watcher: FSWatcher;
       try {
         watcher = watch(directory, { persistent: false }, (_event, changed) => {
+          if (this.disposed) return;
           const changedName = changed?.toString();
           // Some platforms omit the filename. Conservatively fence the active
           // Bot authority for any event in this narrowly watched directory.
@@ -51,12 +56,15 @@ export class BotSkillContentWatcher {
         // cannot establish a watcher for this directory.
         continue;
       }
-      watcher.on("error", () => this.onChanged());
+      watcher.on("error", () => {
+        if (!this.disposed) this.onChanged();
+      });
       this.directories.set(directory, { watcher, filenames });
     }
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const { watcher } of this.directories.values()) watcher.close();
     this.directories.clear();
   }
