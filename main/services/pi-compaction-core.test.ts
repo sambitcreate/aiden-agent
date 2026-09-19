@@ -993,6 +993,110 @@ test("cancellation racing checkpoint append restores the exact prior branch leaf
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
+for (const failure of ["before-append", "after-append", "reconstruction", "cancelled-reconstruction"] as const) {
+  test(`failed checkpoint publication restores durable context: ${failure}`, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "aiden-checkpoint-rollback-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const { faux, models, model } = compactionFixture();
+    faux.setResponses([fauxAssistantMessage(structuredSummary("must not become active"))]);
+    const session = await new PiCompactionSessionStore({ root: async () => root }).openChat("rollback-test");
+    await appendCompressibleHistory(session, model);
+    const priorLeaf = await session.getLeafId();
+    const priorContext = await session.buildContext();
+    const appendCompaction = session.appendCompaction.bind(session);
+    let coordinator!: PiCompactionCoordinator;
+    session.appendCompaction = async (...args) => {
+      if (failure === "before-append") throw new Error("private append failure");
+      const checkpoint = await appendCompaction(...args);
+      if (failure === "after-append") throw new Error("private append acknowledgement failure");
+      if (failure === "cancelled-reconstruction") coordinator.abort();
+      return checkpoint;
+    };
+    session.buildContext = async () => {
+      throw new Error("private reconstruction failure");
+    };
+    const events: PiCompactionEvent[] = [];
+    coordinator = new PiCompactionCoordinator({
+      session, models, model, thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+      onEvent: (event) => events.push(event),
+    });
+
+    const result = await coordinator.compact();
+
+    assert.equal(result.compacted, false);
+    assert.equal(result.shouldRetry, false);
+    assert.equal(result.failureCode, "session-failed");
+    assert.doesNotMatch(JSON.stringify({ result, events }), /private /u);
+    assert.equal(await session.getLeafId(), priorLeaf);
+    const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat("rollback-test");
+    assert.equal(await reopened.getLeafId(), priorLeaf);
+    assert.deepEqual(await reopened.buildContext(), priorContext);
+    assert.equal((await reopened.getBranch()).some((entry) => entry.type === "compaction"), false);
+    assert.equal(
+      (await reopened.getEntries()).filter((entry) => entry.type === "compaction").length,
+      failure === "before-append" ? 0 : 1,
+      "rollback changes the active branch while preserving append-only history",
+    );
+    const terminal = events.filter((event) => event.type === "end");
+    assert.equal(terminal.length, 1);
+    assert.equal(terminal[0]?.aborted, failure === "cancelled-reconstruction");
+    assert.equal(terminal[0]?.result, undefined);
+  });
+}
+
+test("failed checkpoint rollback preserves a newer journal leaf", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("checkpoint"))]);
+  const session = await memorySession("checkpoint-newer-leaf");
+  await appendCompressibleHistory(session, model);
+  const appendCompaction = session.appendCompaction.bind(session);
+  let newerLeaf: string | undefined;
+  session.appendCompaction = async (...args) => {
+    const checkpoint = await appendCompaction(...args);
+    newerLeaf = await session.appendMessage(user("newer durable evidence"));
+    return checkpoint;
+  };
+  session.buildContext = async () => { throw new Error("private reconstruction failure"); };
+  let rollbackCalls = 0;
+  session.moveTo = async () => { rollbackCalls += 1; };
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.compact();
+
+  assert.equal(result.failureCode, "session-failed");
+  assert.equal(result.shouldRetry, false);
+  assert.equal(rollbackCalls, 0);
+  assert.equal(await session.getLeafId(), newerLeaf);
+});
+
+test("checkpoint rollback failure remains a closed session failure", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("checkpoint"))]);
+  const session = await memorySession("checkpoint-rollback-failure");
+  await appendCompressibleHistory(session, model);
+  session.buildContext = async () => { throw new Error("private reconstruction failure"); };
+  let rollbackCalls = 0;
+  session.moveTo = async () => {
+    rollbackCalls += 1;
+    throw new Error("private rollback failure");
+  };
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.compact();
+
+  assert.equal(rollbackCalls, 1);
+  assert.equal(result.failureCode, "session-failed");
+  assert.equal(result.shouldRetry, false);
+  assert.doesNotMatch(result.errorMessage ?? "", /private /u);
+});
+
 test("chat synchronization is idempotent and markers stay out of context", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();

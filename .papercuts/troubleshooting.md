@@ -536,3 +536,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - 2026-09-19 provider-streams: fresh worktree omits ignored `.memory`; read canonical checkout project context and will add a lane-specific note. Installed private node_modules with scripts disabled to avoid concurrent native/Electron builds.
 - 2026-09-19 provider-streams: explicit `git add` reported ignored `.papercuts` even while staging its tracked file; used explicit force-add for required lane artifacts.
+## 2026-09-19 — upgrade compaction checkpoint recovery
+
+- Worktree has no `.memory/` or dependencies; used checked-in plans and installed isolated dependencies with scripts disabled.
+- `.papercuts/` is ignored but its troubleshooting file is tracked. Restored its full existing contents after detecting an accidental replacement during diff review; appended only this entry.
