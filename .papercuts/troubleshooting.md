@@ -604,3 +604,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Fresh worktree has no `.memory/`; read main checkout context and create a lane-specific memory note.
 - Three existing RemoteClient tests used `trimIndent()` SSE fixtures without a final blank line, silently relying on the EOF flush bug; terminate those fixtures explicitly.
+
+## 2026-09-19 — Campaign integration validation
+- Fresh validation worktree omits ignored project memory and dependencies; read canonical project context and install a private dependency tree.
+- Independent lane appends conflict in the tracked troubleshooting file; preserve both three-way append histories. Package test registrations and yaml dependency merged cleanly without lock regeneration.
+- Avoid full troubleshooting/toolchain dumps in tool output; retain exact logs and print bounded summaries.
