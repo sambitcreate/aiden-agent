@@ -743,10 +743,12 @@ export class AidenRemoteStreamService {
       .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
     for (const entry of terminalStreams) {
-      if (entry.subscribers.size > 0) {
+      if (entry.subscribers.size > 0 || entry.evictAfterDelivery) {
         // Keep accepted terminal bytes and replay state until delivery settles.
-        // Remember the eviction so the last subscriber releases capacity even
-        // if no further events arrive. Trimming below still bounds the journal.
+        // A disconnected or timed-out subscriber may not have received it.
+        // Defer until successful delivery or normal retention expiry, even if
+        // further pressure arrives with no subscribers. Trimming still bounds
+        // journal bytes; undelivered records legitimately consume stream slots.
         entry.evictAfterDelivery = true;
         continue;
       }
@@ -1237,6 +1239,7 @@ export class AidenRemoteStreamService {
     // it into Node's writable buffer while a client is waiting for drain.
     let closed = false;
     let blocked = false;
+    let ending = false;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let drainTimeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
@@ -1247,21 +1250,34 @@ export class AidenRemoteStreamService {
       response.off("close", cleanup);
       response.off("error", abort);
       response.off("drain", onDrain);
+      response.off("finish", onFinish);
       stream.subscribers.delete(subscriber);
+    };
+    const abort = () => {
+      cleanup();
+      response.destroy();
+    };
+    const onFinish = () => {
+      cleanup();
+      // Only fully flushed terminal delivery can satisfy deferred eviction.
+      // Disconnect/error/timeout cleanup must leave replay available.
       if (stream.evictAfterDelivery && stream.subscribers.size === 0 && this.streams.get(streamId) === stream) {
         stream.owner.invalidate();
         this.streams.delete(streamId);
         this.persist();
       }
     };
-    const abort = () => {
-      cleanup();
-      response.destroy();
-    };
     const close = () => {
-      if (closed) return;
-      cleanup();
-      response.end();
+      if (closed || ending) return;
+      ending = true;
+      response.once("finish", onFinish);
+      drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
+      drainTimeout.unref?.();
+      try {
+        response.end();
+      } catch {
+        abort();
+      }
     };
     const write = (frame: string): boolean => {
       try {
@@ -1281,7 +1297,7 @@ export class AidenRemoteStreamService {
       return !blocked && !closed;
     };
     const flush = () => {
-      if (closed || blocked) return;
+      if (closed || blocked || ending) return;
       const firstSequence = stream.events[0]?.sequence ?? 1;
       if (after < firstSequence - 1) {
         // The client fell behind retention. Reconnect uses the existing
@@ -1297,6 +1313,7 @@ export class AidenRemoteStreamService {
       if (terminal(stream.state)) close();
     };
     const onDrain = () => {
+      if (closed || ending) return;
       blocked = false;
       clearTimeout(drainTimeout);
       drainTimeout = undefined;
@@ -1319,7 +1336,7 @@ export class AidenRemoteStreamService {
       flush();
       if (!closed) {
         heartbeat = setInterval(() => {
-          if (!closed && !blocked) write(": heartbeat\n\n");
+          if (!closed && !blocked && !ending) write(": heartbeat\n\n");
         }, 15_000);
         heartbeat.unref?.();
       }

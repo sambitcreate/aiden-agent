@@ -128,7 +128,7 @@ test("provider failure remains a replayable terminal error with its safe message
   const response = Object.assign(new EventEmitter(), {
     writeHead() { return this; },
     write(value: string) { output.push(value); return true; },
-    end() { ended = true; return this; },
+    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(ended, true);
@@ -185,7 +185,7 @@ test("subscriber disconnect does not cancel work and reconnect replays completio
   const replay = Object.assign(new EventEmitter(), {
     writeHead() { return this; },
     write(value: string) { replayOutput.push(value); return true; },
-    end() { replayEnded = true; return this; },
+    end() { replayEnded = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 1, replay);
   assert.equal(replayEnded, true);
@@ -204,7 +204,7 @@ test("SSE replay emits frozen envelopes and closes after a terminal event", () =
   const response = Object.assign(new EventEmitter(), {
     writeHead(value: number) { status = value; return this; },
     write(value: string) { output.push(value); return true; },
-    end() { ended = true; return this; },
+    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(status, 200);
@@ -755,10 +755,11 @@ function blockedResponse() {
   const response = Object.assign(emitter, {
     destroyed: false,
     ended: false,
+    autoFinish: true,
     blocked: true,
     writeHead() { return this; },
     write(value: string) { output.push(value); return !this.blocked; },
-    end() { this.ended = true; return this; },
+    end() { this.ended = true; if (this.autoFinish) emitter.emit("finish"); return this; },
     destroy() { this.destroyed = true; emitter.emit("close"); return this; },
   });
   return { response, output, http: response as unknown as ServerResponse };
@@ -916,7 +917,7 @@ test("a synchronous socket write failure cannot interrupt generation publication
   assert.equal(events[events.length - 1]?.payload.text, "Saved");
 });
 
-for (const settlement of ["drain", "timeout", "abort"] as const) {
+for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-timeout", "retention"] as const) {
   test(`aggregate pressure preserves blocked terminal delivery until ${settlement}`, (t) => {
     t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     const app = fixture();
@@ -942,12 +943,6 @@ for (const settlement of ["drain", "timeout", "abort"] as const) {
     assert.equal(client.response.destroyed, false, "pressure must not discard accepted terminal bytes");
     assert.equal(app.service.status("device-1", "terminal").state, "done");
     assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
-    const replay = blockedResponse();
-    replay.response.blocked = false;
-    app.service.openEvents("device-1", "terminal", 1, replay.http);
-    assert.match(replay.output.join(""), /event: done/u);
-    assert.equal(replay.response.ended, true);
-
     assert.throws(
       () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
@@ -956,14 +951,41 @@ for (const settlement of ["drain", "timeout", "abort"] as const) {
       client.response.emit("drain");
       assert.equal(client.response.ended, true);
       assert.equal(client.response.destroyed, false);
-    } else if (settlement === "timeout") {
+    } else if (settlement === "timeout" || settlement === "retention") {
       t.mock.timers.tick(30_000);
       assert.equal(client.response.destroyed, true);
+    } else if (settlement === "finish-abort" || settlement === "finish-timeout") {
+      client.response.autoFinish = false;
+      client.response.emit("drain");
+      assert.equal(client.response.ended, true);
+      assert.equal(app.service.status("device-1", "terminal").state, "done");
+      if (settlement === "finish-timeout") t.mock.timers.tick(30_000);
+      else client.response.destroy();
     } else {
       client.response.destroy();
     }
     assert.equal(client.response.listenerCount("drain"), 0);
-    // Settlement must release deferred eviction without an unrelated event.
+    if (settlement !== "drain") {
+      assert.equal(app.service.status("device-1", "terminal").state, "done");
+      assert.throws(
+        () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
+        (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+      );
+      // New pressure must not evict the disconnected client's replay record.
+      producers[0]!.owner.send("chat:delta", { delta: "y".repeat(200_000) });
+      assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+      if (settlement === "retention") {
+        app.setNow(1_000 + 24 * 60 * 60 * 1_000);
+      } else {
+        const replay = blockedResponse();
+        replay.response.blocked = false;
+        app.service.openEvents("device-1", "terminal", 1, replay.http);
+        assert.match(replay.output.join(""), /event: done/u);
+        assert.equal(replay.response.ended, true);
+      }
+    }
+    // Successful terminal delivery frees deferred capacity without another
+    // append. Abandoned replay remains bounded by ordinary terminal retention.
     assert.doesNotThrow(() => app.service.create("device-1", "new-stream", "new-chat", "new-turn"));
     assert.throws(
       () => app.service.status("device-1", "terminal"),

@@ -538,3 +538,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
 - 2026-09-19 lane 21 review: Terminal subscribers remain registered until drain; aggregate eviction must account for pending delivery, not just terminal generation state. Added cross-stream pressure/drain/deadline regressions.
 - 2026-09-19 lane 21 follow-up: Byte-budget trimming can leave the stream registry full after delivery ends; deferred eviction must release count capacity at subscriber settlement without waiting for another append.
+- 2026-09-19 lane 21 replay review: Socket teardown does not establish terminal delivery; reserve capacity reclamation for response finish. Abort/timeout must preserve replay despite renewed pressure, with count/byte/retention bounds.
