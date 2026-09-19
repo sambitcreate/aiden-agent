@@ -537,3 +537,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 voice upgrade
 - This fresh main worktree has no `.memory/` directory; inspected the completed dictation plan and current source, and will add a scoped implementation note.
 - Renderer build passes with pre-existing Ghostty mixed static/dynamic import and large-chunk warnings; no voice build failure. Repository `.memory/` is ignored, so the scoped delivery note requires explicit force-add.
+- Pullfrog exposed a timer-only deadline blind spot: synchronous encoding prevents timeout callbacks from running. Added monotonic pre-dispatch expiry checks and deterministic tests that advance elapsed time without running timers.

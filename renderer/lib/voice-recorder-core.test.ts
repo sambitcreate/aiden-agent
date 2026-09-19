@@ -60,7 +60,11 @@ function deferred<T>() {
 }
 
 /** Browser conversion remains pending until the test delivers its callback. */
-function deferredConversion(t: TestContext, provider: "openai" | "gemini" | "local") {
+function deferredConversion(
+  t: TestContext,
+  provider: "openai" | "gemini" | "local",
+  onReadResult: () => void = () => {},
+) {
   const ready = deferred<void>();
   let finish!: () => void;
   if (provider === "openai") {
@@ -68,7 +72,10 @@ function deferredConversion(t: TestContext, provider: "openai" | "gemini" | "loc
       t,
       "FileReader",
       class {
-        result = "data:audio/webm;base64,YXVkaW8=";
+        get result() {
+          onReadResult();
+          return "data:audio/webm;base64,YXVkaW8=";
+        }
         onload: (() => void) | null = null;
         readAsDataURL() {
           finish = () => this.onload?.();
@@ -213,3 +220,63 @@ test("an active request times out without awaiting cancellation IPC", async (t) 
     [["active-timeout"]],
   );
 });
+
+for (const provider of ["openai", "gemini", "local"] as const) {
+  for (const offset of [-1, 0, 1]) {
+    test(`${provider} checks elapsed time after synchronous encoding at budget ${offset}`, async (t) => {
+      // Advance the monotonic clock inside encoding, without letting timers run.
+      // The wall clock jumps the opposite way to catch Date.now-based fencing.
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      let elapsed = 0;
+      let wallClock = 1_000_000;
+      t.mock.method(performance, "now", () => elapsed);
+      t.mock.method(Date, "now", () => wallClock);
+      const consumeBudget = () => {
+        elapsed = transcriptionBudgetMs(provider) + offset;
+        wallClock += offset < 0 ? 86_400_000 : -86_400_000;
+      };
+      const conversion = deferredConversion(t, provider, consumeBudget);
+      if (provider !== "openai") {
+        const encode = globalThis.btoa;
+        t.mock.method(globalThis, "btoa", (input: string) => {
+          consumeBudget();
+          return encode(input);
+        });
+      }
+      const cloud = t.mock.method(voiceApi, "transcribe", async () => "spoken text");
+      const local = t.mock.method(voiceApi, "transcribeLocal", async () => "spoken text");
+      const cancel = t.mock.method(
+        voiceApi,
+        provider === "local" ? "cancelLocalTranscription" : "cancelTranscription",
+        () => new Promise<void>(() => {}),
+      );
+      const pending = transcribeBlob(new Blob(["audio"], { type: "audio/webm" }), {
+        provider,
+        localModel: "parakeet",
+        operationId: `sync-${provider}`,
+      }).then(
+        (text) => ({ text, error: null }),
+        (error) => ({ text: null, error }),
+      );
+      await conversion.ready;
+      conversion.finish();
+      const outcome = await pending;
+      if (offset < 0) {
+        assert.equal(outcome.text, "spoken text");
+        assert.equal(cloud.mock.callCount() + local.mock.callCount(), 1);
+        assert.equal(cancel.mock.callCount(), 0);
+      } else {
+        assert.equal(cloud.mock.callCount(), 0);
+        assert.equal(local.mock.callCount(), 0);
+        assert.match(String(outcome.error), /took too long/u);
+        assert.deepEqual(
+          cancel.mock.calls.map((call) => call.arguments),
+          [[`sync-${provider}`]],
+        );
+      }
+      // A timer queued behind the encoding must not cancel a second time.
+      t.mock.timers.tick(transcriptionBudgetMs(provider));
+      assert.equal(cancel.mock.callCount(), offset < 0 ? 0 : 1);
+    });
+  }
+}

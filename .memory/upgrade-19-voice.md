@@ -21,3 +21,11 @@ Original Aiden implementation; no upstream source copied. Rejected hypotheses: s
 - `npm run type-check`, scoped ESLint and `npx vite build` passed.
 - Hosted exact-head CI and central review remain separate gates.
 - Browser decode/resampling is not forcibly interrupted; completion cannot dispatch late transcription. Physical microphone, OS permission and credentialed-provider acceptance were not exercised.
+
+## Pullfrog synchronous-encoding correction
+
+Pullfrog thread `PRRT_kwDOTctvDc6j9r2f` identified that synchronous encoding can cross the deadline while the timer callback is blocked. Reproduced on `b4c69ecd` with deterministic clock advancement inside base64 encoding (PCM/WAV paths) and FileReader result delivery (OpenAI): six expired-boundary cases dispatched unexpectedly.
+
+Batch deadlines now use `performance.now()` and check remaining time immediately before each provider IPC. Explicit expiry and timer expiry share one idempotent abort/cancel path and the canonical timeout error. This preserves cancellation of already-started requests, observes best-effort cancellation failures, and prevents wall-clock jumps from shortening or extending the elapsed budget. Nine new cases cover just-before, exact and past expiry for all three providers, with opposing wall-clock jumps and no timer advancement during encoding.
+
+Validation: 90 voice tests, type-check, scoped ESLint, renderer Vite build and diff checks passed. Hosted CI and central re-review remain pending for the corrected head.
