@@ -506,3 +506,55 @@ test("renewal rechecks capacity filled by a competing writer and preserves expir
     });
   }
 });
+
+test("renewal uses lock-admission time when collisions and quota entries expire during the wait", async (t) => {
+  for (const { limit, alwaysOn } of [
+    { limit: 12, alwaysOn: true },
+    { limit: 2_000, alwaysOn: false },
+  ]) {
+    await t.test(alwaysOn ? "always-on quota" : "scope quota", async (t) => {
+      let now = 1_000;
+      const { root, store } = await fixture(t, () => now);
+      const input = {
+        scope: workspace, alwaysOn,
+        provenance: { kind: "user_edit" as const, sourceId: "editor" },
+      };
+      for (let index = 0; index < limit; index += 1) {
+        await store.put({ ...input, id: `old-${index}`, text: `Preference ${index}.`, expiresAt: 2_000 });
+      }
+      // Advance the injected clock while the other writer owns the lock. This
+      // deterministically models a wait crossing expiry without wall-clock sleeps.
+      const renewed = await withCompetingWrite(t, root, () => { now = 2_000; }, () => store.put({
+        ...input, id: "renewed", text: "Preference 0.", expiresAt: 4_000,
+        provenance: { kind: "user_edit", sourceId: "new-editor" },
+      }));
+      assert.equal(renewed.id, "renewed");
+      assert.equal(renewed.createdAt, 2_000);
+      assert.equal(renewed.updatedAt, 2_000);
+      assert.equal(renewed.expiresAt, 4_000);
+      assert.deepEqual(renewed.provenance, { kind: "user_edit", sourceId: "new-editor" });
+      const retired = (await store.list(workspace)).find(({ id }) => id === "old-0");
+      assert.equal(retired?.state, "superseded");
+      assert.equal(retired?.updatedAt, 2_000);
+      assert.deepEqual((await store.search(workspace, "Preference")).map(({ id }) => id), [renewed.id]);
+    });
+  }
+});
+
+test("requested expiry elapsed during lock admission rejects without superseding the prior fact", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const prior = await store.put({ ...input, id: "prior", text: "Deploy on Tuesday." });
+  await assert.rejects(withCompetingWrite(t, root, () => { now = 2_000; }, () => store.put({
+    ...input, id: "elapsed", text: "Deploy on Wednesday.", expiresAt: 2_000, supersedesId: prior.id,
+  })), /future millisecond timestamp/u);
+  assert.deepEqual(await store.list(workspace), [prior]);
+  const replacement = await store.put({
+    ...input, id: "valid", text: "Deploy on Wednesday.", expiresAt: 3_000, supersedesId: prior.id,
+  });
+  assert.equal(replacement.createdAt, 2_000);
+});
