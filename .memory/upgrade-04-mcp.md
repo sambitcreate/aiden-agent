@@ -21,3 +21,11 @@ Pullfrog identified that SDK 1.30.0 remote failures use `onerror` instead of `on
 ## Optional HTTP GET retry exhaustion evidence
 
 A Luna follow-up questioned retaining an HTTP session after optional GET-stream retry exhaustion. The pinned SDK's `_startOrAuthSse` treats GET as optional (including accepting 405); `_scheduleReconnection` exhaustion emits an error and returns without closing the session. `send` independently POSTs using the existing session ID. The new regression starts a real HTTP transport, ends its GET stream, returns 503 for both reconnect attempts, waits for the SDK's exact exhaustion error, and then successfully performs `tools/list` POST on the same cached client and session ID, without another initialization. Production behavior is unchanged; GET exhaustion alone does not establish an unusable session. The expanded MCP suite passes 74 tests.
+
+## Authenticated legacy SSE recovery
+
+Pullfrog's OAuth follow-up was reproduced for SSE only. After GET 401, real SDK refresh-token exchange and redirect rejection leave the mandatory receive stream CLOSED; later tools/list POST can refresh credentials but times out because no receive stream delivers its response. HTTP controls prove subsequent POST refresh/discovery still succeeds after all optional GET-stream auth retries fail, so HTTP auth eviction is intentionally unchanged.
+
+Added `mcp-sse-auth-lifecycle.ts` as an isolated compatibility adapter for pinned SDK 1.30 / EventSource 3.0.7. There is no public settled-reauth hook; it preserves the receiver of `_authThenStart`, then retires only failed reauth whose `_eventSource` is CLOSED (or an unsupported state). OPEN/CONNECTING retain their SDK recovery. Missing method shape fails closed with an explicit compatibility error. This private seam must be rechecked on dependency upgrades; installed-SDK regression controls exercise failed auth, successful refresh, and a transient fetch failure after refresh for both transports. Additional tests cover shape drift, receiver preservation, and late failures after cache replacement. No failed tool replay is introduced.
+
+OAuth correction validation: `npm run test:mcp` 82/82 passed; full type-check, lint, and diff-check passed. Independent Luna and hosted checks on the new head remain delivery gates.

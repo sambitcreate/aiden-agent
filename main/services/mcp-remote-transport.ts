@@ -2,6 +2,7 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontex
 import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { createMcpFetchPolicy, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
+import { observeSseReauthentication } from "./mcp-sse-auth-lifecycle.js";
 
 /** Shared by attended sign-in, stored-token connections, and isolated children. */
 export function createMcpRemoteTransport(
@@ -30,6 +31,16 @@ export function createMcpRemoteTransport(
     lifetime.abort(new Error("MCP connection closed."));
     await close();
   };
+  const retireTerminalConnection = () => {
+    if (terminalClose || lifetime.signal.aborted) return;
+    options.onTerminalFailure?.();
+    // Release cache ownership now; close after SDK error/reconnect callbacks
+    // settle so they cannot install a retry timer after our teardown.
+    terminalClose = setImmediate(() => {
+      terminalClose = undefined;
+      void transport.close().catch(() => undefined);
+    });
+  };
   transport.onerror = (error) => {
     // In the pinned SDK/EventSource, SSE response failures have an HTTP code
     // and stop reconnecting; EOF/network errors have no code and reconnect.
@@ -39,15 +50,11 @@ export function createMcpRemoteTransport(
       ? error instanceof SseError && typeof error.code === "number"
       : error instanceof StreamableHTTPError && error.code === 404 &&
         transport.sessionId !== undefined;
-    if (!terminal || terminalClose || lifetime.signal.aborted) return;
-    options.onTerminalFailure?.();
-    // Release cache ownership now; close after SDK error/reconnect callbacks
-    // settle so they cannot install a retry timer after our teardown.
-    terminalClose = setImmediate(() => {
-      terminalClose = undefined;
-      void transport.close().catch(() => undefined);
-    });
+    if (terminal) retireTerminalConnection();
   };
+  if (transport instanceof SSEClientTransport && options.authProvider) {
+    observeSseReauthentication(transport, retireTerminalConnection);
+  }
   // Client.connect closes HTTP transports when OAuth opens the browser. The
   // SDK deliberately supports finishAuth on that same object afterward so it
   // retains discovered resource metadata. Exchange is a new network phase,
