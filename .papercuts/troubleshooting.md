@@ -547,3 +547,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - PR168 Luna re-review found production full Settings/command refresh still delegated to Pi without account ownership checks; expand the real-wrapper regressions to full refresh, trace startup separately, and preserve native OAuth resolution through a public SDK refresh context.
 - Shared auth-lane dependency directory was removed; installed this worktree lockfile with npm ci --ignore-scripts before revalidation.
 - Unified refresh supersession exposed overlay coalescing that joined an already-aborted request; a deferred fetch regression proves it. Retain the active request signal and only join live work.
+
+- Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
+- Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.

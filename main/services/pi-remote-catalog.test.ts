@@ -754,6 +754,95 @@ test("post-write validation errors retire the entry before a queued native publi
   assert.deepEqual(await backing.read(), latest);
 });
 
+for (const cleanup of ["delete", "empty-fallback", "fallback-fsync-error"] as const) {
+  for (const newer of [false, true]) {
+    test(`committed write rejection uses ${cleanup} before ${newer ? "new publisher" : "offline restart"}`, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "aiden-catalog-uncertain-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const disk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+      const writing = deferred<void>();
+      const release = deferred<void>();
+      const failure = new Error("directory fsync failed after rename");
+      let writes = 0;
+      let deletions = 0;
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+      const expected = await credentials.read("radius");
+      const stale = { models: [{ ...oxAlphaModel(), provider: "radius", id: "old-account-model" }] };
+      const fresh = { models: [{ ...oxAlphaModel(), provider: "radius", id: "new-account-model" }] };
+      const owned = createOwnedPiModelsStore({
+        read: async () => (await disk.load()).entry,
+        write: async (_id, entry) => {
+          const count = ++writes;
+          if (count === 1) { writing.resolve(); await release.promise; }
+          await disk.update((draft) => { draft.entry = entry; });
+          if (count === 1 || (count === 2 && cleanup === "fallback-fsync-error")) throw failure;
+        },
+        delete: async () => {
+          deletions += 1;
+          if (cleanup !== "delete") throw new Error("retirement delete failed");
+          await disk.update((draft) => { delete draft.entry; });
+        },
+      });
+      const publication = owned.providerStore("radius").publish({ persist: stale },
+        async () => JSON.stringify(await credentials.read("radius")) === JSON.stringify(expected), () => true);
+      const rejected = assert.rejects(publication, (error) => {
+        if (cleanup === "fallback-fsync-error") assert.equal((error as { cause: unknown }).cause, failure);
+        else assert.equal(error, failure);
+        return true;
+      });
+      await writing.promise;
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+      const next = newer ? owned.modelsStore.write("radius", fresh) : Promise.resolve();
+      release.resolve();
+      await rejected;
+      await next;
+      assert.equal(deletions, 1);
+      assert.deepEqual((await owned.modelsStore.read("radius"))?.models ?? [], newer ? fresh.models : []);
+      const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+      const restarted = createModels({ modelsStore: {
+        read: async () => (await restartedDisk.load()).entry,
+        write: async () => { throw new Error("offline write"); },
+        delete: async () => { throw new Error("offline delete"); },
+      } });
+      restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+      await restarted.refresh({ providers: ["radius"], allowNetwork: false });
+      assert.deepEqual(restarted.getModels("radius").map((model) => model.id), newer ? ["new-account-model"] : []);
+    });
+  }
+}
+
+test("failed retirement quarantines same-process hydration until a confirmed replacement", async () => {
+  let entry: ModelsStoreEntry | undefined;
+  let storageFailed = true;
+  let writes = 0;
+  const original = new Error("uncertain initial write");
+  const owned = createOwnedPiModelsStore({
+    read: async () => entry,
+    write: async (_id, next) => {
+      if (storageFailed && ++writes > 1) throw new Error("replacement unavailable");
+      entry = next;
+      if (storageFailed) throw original;
+    },
+    delete: async () => { if (storageFailed) throw new Error("delete unavailable"); entry = undefined; },
+  });
+  await assert.rejects(owned.providerStore("radius").publish({
+    persist: { models: [{ ...oxAlphaModel(), provider: "radius", id: "uncertain-model" }] },
+  }, async () => true, () => true), (error) => {
+    assert.equal((error as { cause: unknown }).cause, original);
+    return true;
+  });
+  assert.ok(entry, "all cleanup writes failed, so the backing store remains uncertain");
+  const offline = createModels({ modelsStore: owned.modelsStore });
+  offline.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+  await offline.refresh({ providers: ["radius"], allowNetwork: false });
+  assert.equal(offline.getModel("radius", "uncertain-model"), undefined);
+  storageFailed = false;
+  const replacement = { models: [], checkedAt: 5 };
+  await owned.modelsStore.write("radius", replacement);
+  assert.deepEqual(await owned.modelsStore.read("radius"), replacement);
+});
+
 for (const operation of ["read", "write", "delete"] as const) {
   test(`queued native catalog ${operation} observes cancellation before touching storage`, async () => {
     const backing = memoryProviderStore({ models: [], checkedAt: 1 });

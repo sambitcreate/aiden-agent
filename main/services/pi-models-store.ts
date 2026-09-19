@@ -130,16 +130,43 @@ export interface ProviderModelsStore {
   ): Promise<boolean>;
 }
 
+class CatalogPublicationError extends Error {
+  readonly cause: unknown;
+
+  constructor(message: string, readonly errors: readonly unknown[]) {
+    super(message);
+    this.name = "CatalogPublicationError";
+    this.cause = errors[0];
+  }
+}
+
 /**
  * Every reader/writer, including native Pi refresh and offline hydration, shares
- * the publication queue. A rejected write is retired before another publisher
- * can write, so cleanup cannot erase a newer catalog (even identical bytes).
+ * the publication queue. Rejected writes are retired, or reads quarantined if
+ * cleanup fails, before another publisher can write. Cleanup cannot erase a
+ * newer catalog (even identical bytes).
  */
 export function createOwnedPiModelsStore(backing: ModelsStore): {
   modelsStore: ModelsStore;
   providerStore: (providerId: string) => ProviderModelsStore;
 } {
   const tails = new Map<string, Promise<void>>();
+  const quarantined = new Set<string>();
+  const retire = async (providerId: string) => {
+    quarantined.add(providerId);
+    try {
+      await backing.delete(providerId);
+    } catch (deleteError) {
+      try {
+        // A failed delete may have committed, or may have left the old entry.
+        // An empty replacement is safe for both Pi hydration and our overlays.
+        await backing.write(providerId, { models: [] });
+      } catch (fallbackError) {
+        throw new CatalogPublicationError("Could not retire an obsolete model catalog.", [deleteError, fallbackError]);
+      }
+    }
+    quarantined.delete(providerId);
+  };
   const serialized = <T>(providerId: string, action: () => Promise<T>): Promise<T> => {
     const previous = tails.get(providerId) ?? Promise.resolve();
     const result = previous.then(action);
@@ -149,20 +176,22 @@ export function createOwnedPiModelsStore(backing: ModelsStore): {
     return result;
   };
   const modelsStore: ModelsStore = {
-    read: (id, options) => serialized(id, () => {
+    read: (id, options) => serialized(id, async () => {
       options?.signal?.throwIfAborted();
-      return backing.read(id, options);
+      return quarantined.has(id) ? undefined : backing.read(id, options);
     }),
     write: (id, entry, options) => {
       const snapshot = clone(entry);
-      return serialized(id, () => {
+      return serialized(id, async () => {
         options?.signal?.throwIfAborted();
-        return backing.write(id, snapshot, options);
+        await backing.write(id, snapshot, options);
+        quarantined.delete(id);
       });
     },
-    delete: (id, options) => serialized(id, () => {
+    delete: (id, options) => serialized(id, async () => {
       options?.signal?.throwIfAborted();
-      return backing.delete(id, options);
+      await backing.delete(id, options);
+      quarantined.delete(id);
     }),
   };
   return {
@@ -173,17 +202,30 @@ export function createOwnedPiModelsStore(backing: ModelsStore): {
       delete: () => modelsStore.delete(providerId),
       publish: (publication, canPublish, isCurrent) => serialized(providerId, async () => {
         if (!isCurrent() || !await canPublish() || !isCurrent()) return false;
-        if (publication.persist === null) await backing.delete(providerId);
-        else if (publication.persist !== undefined) await backing.write(providerId, clone(publication.persist));
         let accepted = false;
+        let failed = false;
+        let failure: unknown;
         try {
+          if (publication.persist === null) await backing.delete(providerId);
+          else if (publication.persist !== undefined) await backing.write(providerId, clone(publication.persist));
           accepted = isCurrent() && await canPublish() && isCurrent();
-        } finally {
-          // The mutation has settled and still owns this queue slot. Remove
-          // only its new entry; no competing writer can have replaced it yet.
-          if (!accepted && publication.persist != null) await backing.delete(providerId);
+        } catch (error) {
+          // A rejected write may already have replaced the file. Keep ownership
+          // until that uncertain entry is retired, including on IO rejection.
+          failed = true;
+          failure = error;
         }
+        if (!accepted && publication.persist !== undefined) {
+          try {
+            await retire(providerId);
+          } catch (cleanupError) {
+            if (failed) throw new CatalogPublicationError("Catalog publication and retirement failed.", [failure, cleanupError]);
+            throw cleanupError;
+          }
+        }
+        if (failed) throw failure;
         if (!accepted) return false;
+        if (publication.persist !== undefined) quarantined.delete(providerId);
         publication.update?.();
         return true;
       }),
