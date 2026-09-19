@@ -242,26 +242,30 @@ export const EXTERNAL_EDITOR_DEFINITIONS = [
 ] as const satisfies readonly ExternalEditorDefinition[];
 
 // Only launchers for existing editor IDs are eligible; never interpret $EDITOR as shell code.
-const LINUX_EDITOR_COMMANDS: Readonly<Record<string, string>> = {
-  cursor: "cursor",
-  vscode: "code",
-  "vscode-insiders": "code-insiders",
-  vscodium: "codium",
-  zed: "zed",
-  "sublime-text": "subl",
+// Cursor is intentionally excluded on Linux: its editor-window routing varies by
+// build and AppImage/CLI launcher, so neither bare cursor nor --classic is reliable.
+const LINUX_EDITOR_COMMANDS: Readonly<Record<string, readonly string[]>> = {
+  vscode: ["code"],
+  "vscode-insiders": ["code-insiders"],
+  vscodium: ["codium"],
+  zed: ["zed", "zeditor"],
+  "sublime-text": ["subl"],
 };
 
-async function findLinuxExecutable(command: string): Promise<string | undefined> {
+async function findLinuxExecutable(commands: readonly string[]): Promise<string | undefined> {
   // Ignore cwd/relative PATH entries: a workspace must not supply its own editor launcher.
   const roots = [...new Set((process.env.PATH ?? "").split(":").filter(path.isAbsolute))];
   for (const root of roots) {
-    const executablePath = path.join(root, command);
-    try {
-      if (!(await fs.stat(executablePath)).isFile()) continue;
-      await fs.access(executablePath, fs.constants.X_OK);
-      return executablePath;
-    } catch {
-      // Missing or non-executable entries must not shadow a later installed launcher.
+    // PATH directory order wins; alias order only breaks ties within a directory.
+    for (const command of commands) {
+      const executablePath = path.join(root, command);
+      try {
+        if (!(await fs.stat(executablePath)).isFile()) continue;
+        await fs.access(executablePath, fs.constants.X_OK);
+        return executablePath;
+      } catch {
+        // Missing or non-executable entries must not shadow a later installed launcher.
+      }
     }
   }
   return undefined;
@@ -270,9 +274,9 @@ async function findLinuxExecutable(command: string): Promise<string | undefined>
 async function discoverLinuxEditors(): Promise<ResolvedExternalEditor[]> {
   const editors: ResolvedExternalEditor[] = [];
   for (const definition of EXTERNAL_EDITOR_DEFINITIONS) {
-    const command = LINUX_EDITOR_COMMANDS[definition.id];
-    if (!command) continue;
-    const executablePath = await findLinuxExecutable(command);
+    const commands = LINUX_EDITOR_COMMANDS[definition.id];
+    if (!commands) continue;
+    const executablePath = await findLinuxExecutable(commands);
     if (!executablePath) continue;
     editors.push({
       id: definition.id,
@@ -593,7 +597,12 @@ export async function openFolderInExternalEditor(
   if (!stats.isDirectory()) throw new Error(`Workspace path is not a folder: ${folderPath}`);
 
   const editor = (await dependencies.editors(true)).find((candidate) => candidate.id === editorId);
-  if (!editor) throw new Error(`${definition.label} is no longer installed.`);
+  if (!editor) {
+    if (process.platform === "linux" && editorId !== "finder" && !LINUX_EDITOR_COMMANDS[editorId]) {
+      throw new Error(`Opening ${definition.label} from Aiden is not supported on Linux.`);
+    }
+    throw new Error(`${definition.label} is no longer installed.`);
+  }
 
   if (editor.id === "finder") {
     const error = await dependencies.openPath(folderPath);

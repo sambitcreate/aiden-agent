@@ -144,10 +144,10 @@ test("rejects an editor that disappeared after discovery", async () => {
   await assert.rejects(
     openFolderInExternalEditor(
       "/tmp/workspace",
-      "cursor",
+      "vscode",
       dependencies({ editors: async () => [] }),
     ),
-    /Cursor is no longer installed/,
+    /VS Code is no longer installed/,
   );
 });
 
@@ -176,7 +176,7 @@ test("Linux discovers executable editor launchers and keeps the file manager las
     }
     const editors = await listExternalEditors(true);
     assert.deepEqual(editors.map(({ id }) => id), [
-      "cursor", "vscode", "vscode-insiders", "vscodium", "zed", "sublime-text", "finder",
+      "vscode", "vscode-insiders", "vscodium", "zed", "sublime-text", "finder",
     ]);
     assert.equal(editors[editors.length - 1]?.label, "File Manager");
     assert.ok(editors.every((editor) => !("appPath" in editor)));
@@ -271,5 +271,60 @@ test("Linux honors PATH precedence, follows launcher symlinks and skips unusable
     assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
     delete process.env.PATH;
     assert.equal((await listExternalEditors(true)).find(({ id }) => id === "finder")?.label, "File Manager");
+  });
+});
+
+
+test("Linux Zed aliases preserve PATH precedence, executable guards and literal workspace argv", async () => {
+  await withLinuxPath(async (root) => {
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    await fs.mkdir(first);
+    await fs.mkdir(second);
+    const workspace = path.join(root, "--project ; $() ' spaces");
+    await fs.mkdir(workspace);
+    const marker = path.join(root, "zed-argv.json");
+    const writeLauncher = async (directory: string, name: string) => {
+      const executable = path.join(directory, name);
+      await fs.writeFile(executable,
+        `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ executable: ${JSON.stringify(executable)}, args: process.argv.slice(2) }));`,
+        { mode: 0o755 });
+      return executable;
+    };
+    const assertLaunch = async (expected: string) => {
+      await fs.rm(marker, { force: true });
+      assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["zed", "finder"]);
+      await openFolderInExternalEditor(workspace, "zed");
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await fs.stat(marker).then(() => true, () => false)) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.deepEqual(JSON.parse(await fs.readFile(marker, "utf8")), { executable: expected, args: [workspace] });
+    };
+    process.env.PATH = `${first}:${second}`;
+    const alias = await writeLauncher(first, "zeditor");
+    await assertLaunch(alias); // A zeditor-only installation must be available.
+    const laterZed = await writeLauncher(second, "zed");
+    await assertLaunch(alias); // Earlier PATH entry beats a preferred name in a later entry.
+    const preferred = await writeLauncher(first, "zed");
+    await assertLaunch(preferred); // Deterministic tie-break in a single directory.
+    await fs.chmod(preferred, 0o644);
+    await assertLaunch(alias);
+    await fs.chmod(alias, 0o644);
+    await assertLaunch(laterZed);
+    await fs.unlink(alias);
+    await fs.mkdir(alias);
+    await assertLaunch(laterZed); // An executable directory is not a launcher.
+    await fs.unlink(laterZed);
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
+    await assert.rejects(openFolderInExternalEditor(workspace, "zed"), /no longer installed/);
+  });
+});
+
+test("Linux excludes Cursor until its launcher has a reliable editor-surface contract", async () => {
+  await withLinuxPath(async (root) => {
+    await fs.writeFile(path.join(root, "cursor"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    assert.deepEqual((await listExternalEditors(true)).map(({ id }) => id), ["finder"]);
+    await assert.rejects(openFolderInExternalEditor(root, "cursor"), /Opening Cursor from Aiden is not supported on Linux/);
   });
 });
