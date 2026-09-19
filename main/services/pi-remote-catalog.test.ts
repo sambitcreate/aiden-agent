@@ -33,6 +33,7 @@ import {
 import {
   normalizePiModelsDocument,
   createOwnedPiModelsStore,
+  createPiModelsBackingStore,
   type ProviderModelsStore,
 } from "./pi-models-store.js";
 import { concentrateProvider } from "./concentrate-provider.js";
@@ -753,6 +754,58 @@ test("post-write validation errors retire the entry before a queued native publi
   await rejection;
   assert.deepEqual(await backing.read(), latest);
 });
+
+for (const stage of ["size-check", "before-rename", "directory-fsync", "after-rename"] as const) {
+  for (const changed of [false, true]) {
+    test(`DataStore ${stage} rejection preserves only a still-owned previous catalog (${changed ? "changed" : "stable"} account)`, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "aiden-catalog-commit-state-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const original = { models: [{ ...oxAlphaModel(), provider: "radius", id: "last-good" }] };
+      let fail = false;
+      const injected = new Error(`${stage} failure`);
+      const disk = new DataStore<{ version: 1; entries: Record<string, ModelsStoreEntry> }>(
+        "catalog.json", { version: 1, entries: {} }, () => root, {
+          maxBytes: 4096,
+          beforeWritePublish: () => {
+            if (fail && stage === "before-rename") { fail = false; throw injected; }
+          },
+          afterWritePublish: () => {
+            if (fail && stage === "after-rename") { fail = false; throw injected; }
+          },
+        },
+      );
+      // Fault injection at the actual private fsync boundary, without changing
+      // production filesystem calls or interpreting a generic mock rejection.
+      const syncBoundary = disk as unknown as { syncDirectory(directory: string): Promise<void> };
+      const syncDirectory = syncBoundary.syncDirectory.bind(disk);
+      t.mock.method(syncBoundary, "syncDirectory", async (directory: string) => {
+        if (fail && stage === "directory-fsync") { fail = false; throw injected; }
+        await syncDirectory(directory);
+      });
+      await disk.update((draft) => { draft.entries.radius = original; });
+      const owned = createOwnedPiModelsStore(createPiModelsBackingStore(disk));
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "original-synthetic" }));
+      const expected = await credentials.read("radius");
+      let checks = 0;
+      fail = true;
+      const next = { models: [{ ...original.models[0], id: stage === "size-check" ? "x".repeat(5000) : "rejected-model" }] };
+      await assert.rejects(owned.providerStore("radius").publish({ persist: next }, async () => {
+        const current = await credentials.read("radius");
+        if (++checks === 1 && changed) {
+          await credentials.modify("radius", async () => ({ type: "api_key", key: "replacement-synthetic" }));
+        }
+        return JSON.stringify(current) === JSON.stringify(expected);
+      }, () => true), stage === "size-check" ? /schema is not safe/u : (error) => error === injected);
+      const retained = !changed && (stage === "size-check" || stage === "before-rename") ? original : undefined;
+      assert.deepEqual(await owned.modelsStore.read("radius"), retained);
+      const freshDisk = new DataStore<{ version: 1; entries: Record<string, ModelsStoreEntry> }>(
+        "catalog.json", { version: 1, entries: {} }, () => root,
+      );
+      assert.deepEqual((await freshDisk.load()).entries.radius, retained);
+    });
+  }
+}
 
 for (const cleanup of ["delete", "empty-fallback", "fallback-fsync-error"] as const) {
   for (const newer of [false, true]) {

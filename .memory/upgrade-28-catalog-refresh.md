@@ -115,3 +115,36 @@ The original and cleanup failures remain visible instead of claiming success.
 Final focused suites: 147/147 pass; typecheck, lint, and diff checks pass. No
 DataStore core or credential adapter changes. Synthetic account replacements
 and temporary directories only.
+
+## Preserve proven unmodified current-owner caches
+
+Luna review of `79da0580` correctly identified over-retirement after failures
+before publication. Two actual DataStore regressions failed that head: size
+validation and a pre-rename hook failure erased a still-owned last-good entry.
+The corresponding changed-account and post-rename cases already passed and
+must continue retiring the obsolete cache.
+
+DataStore.update now accepts an optional per-call publication receipt. It starts
+not-published, becomes uncertain immediately before rename/link, and published
+once that syscall resolves (before directory fsync). Original errors and existing
+caller behavior are unchanged. The production Pi backing-store adapter passes
+this receipt through both writes and deletes. Generic backends that do not
+report an outcome remain conservatively uncertain; a generic throwing mock is
+not evidence of a production pre-commit failure.
+
+After a proven not-published failure, the queue rechecks credential/provider/
+attempt ownership before preserving the previous entry. Ownership loss or an
+unverifiable owner still takes retirement. Potentially committed rejection still
+uses guarded retirement/fallback/quarantine and cannot erase a queued newer
+writer. Synchronous cloning happens before entering the mutation-error path.
+
+Eight source-backed DataStore/production-adapter cases cover size validation,
+pre-rename failure, actual directory-fsync injection after rename, and post-write
+hook failure, each with stable or replaced credentials; fresh disk readers prove
+the result. Six direct receipt tests cover ordinary/protected updates and both
+failure sides plus success. All remain in already-registered files.
+Final expanded focused validation: 377/377 pass across catalog/auth/model suites,
+DataStore/resilience, and config/portable roundtrip consumers. Typecheck, lint,
+and diff checks pass. Product scope now includes data-store.ts (optional receipt
+instrumentation only), plus existing catalog files. No persisted schema/wire
+change, no native client change, and no new network calls.
