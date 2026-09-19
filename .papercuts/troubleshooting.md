@@ -538,3 +538,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh worktree omits ignored `.memory/`; read main checkout project context/history and create a unique lane note.
 - Initial broad source reads were truncated; use targeted ranges for attachment investigation.
 - TypeScript targets a pre-ES2022 library: regression fixtures must use indexed access instead of `Array.at`.
+- Pullfrog caught a missing established-chat boundary: attachment intake must check the synchronous pending-send ref before optimistic-clear recovery can restore its payload. Mounted regression reproduced 23 restored attachments from a 20-attachment draft.
+- Mounted Composer fixture must explicitly externalize React in esbuild; repository TypeScript wildcard paths can otherwise bundle a second hook runtime despite packages=external.
