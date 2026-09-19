@@ -535,3 +535,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
 
 - 2026-09-19 lane38: isolated checkout lacks `.memory` and dependencies; read canonical checkout memory and installed this worktree with `npm ci`. Type-check targets pre-ES2022 libs, so test helpers must avoid `Array.at` / `Object.hasOwn` even though the host Node supports them. Linux regression fixtures must assert discovery before launching, otherwise the unfixed macOS service can open an actual installed Mac editor.
+
+- 2026-09-19 lane38 review: Zed's documented Linux binary can be `zeditor`; resolve aliases inside each PATH directory so aliases do not override user PATH precedence. Cursor's agent installation docs do not define desktop editor routing, and vendor support reports both version-dependent `--classic` support and Linux AppImage launchers ignoring it; keep Cursor outside this new Linux support instead of guessing flags/version thresholds.
