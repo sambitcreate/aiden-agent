@@ -752,3 +752,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
 
 - Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
+### 2026-09-19 — lane36 startup deadline fixture
+- Isolated worktree omits ignored `.memory`; read canonical project context/history without editing that checkout and keep lane notes locally.
+- Baseline startup deadline test depends on a child-owned log that may never initialize before termination; replace cleanup evidence with parent-observed real children and control the deadline phase.
+- Explicit `git add` of the tracked troubleshooting file is rejected because its parent directory is ignored; stage its tracked update with `git add -u`.
