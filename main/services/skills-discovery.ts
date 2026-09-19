@@ -50,6 +50,12 @@ function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string }
     if (document.errors.length || document.warnings.length) return null;
     if (document.contents === null) return { frontmatter: {}, body };
     if (!isMap(document.contents)) return null;
+    // uniqueKeys compares scalar keys but does not resolve alias-equivalent
+    // keys. Require literal string keys so lookup cannot hide an ambiguous
+    // identity. Unrelated alias values remain untouched and unexpanded.
+    for (const { key } of document.contents.items) {
+      if (!isScalar(key) || typeof key.value !== "string") return null;
+    }
     const frontmatter: Frontmatter = {};
     for (const key of ["name", "description"] as const) {
       if (!document.contents.has(key)) continue;
