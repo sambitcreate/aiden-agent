@@ -691,3 +691,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Playwright clears its output directory on a new invocation. Copy screenshots, traces and error context into the batch log directory before reproducing a failure.
 - Pullfrog follow-up: Electron 43 posts native crash notifications asynchronously and omits document identity. Added a real renderer-crash probe that holds notification delivery across pending/committed replacement navigation, instead of relying solely on synthetic crash events.
 - 2026-09-19 lane 21 review: Terminal subscribers remain registered until drain; aggregate eviction must account for pending delivery, not just terminal generation state. Added cross-stream pressure/drain/deadline regressions.
+
+- Integration review found `deleteAllDiagnosticData` repeats live journal removal after its queue barrier; add support-level coverage and leave active journal cleanup with its owner while retaining inactive/legacy allowlist cleanup.
