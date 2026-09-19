@@ -646,3 +646,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - This fresh main worktree has no `.memory/` directory; inspected the completed dictation plan and current source, and will add a scoped implementation note.
 - Renderer build passes with pre-existing Ghostty mixed static/dynamic import and large-chunk warnings; no voice build failure. Repository `.memory/` is ignored, so the scoped delivery note requires explicit force-add.
 - 2026-09-19 auth lane: fresh worktree has no ignored .memory directory; read canonical project context and create a lane-specific note. Installed isolated dependencies with npm ci.
+- 2026-09-19 lane 21: Fresh worktree has no .memory or dependencies; consulted canonical project memory and installed isolated dependencies with lifecycle scripts disabled for server-only tests.
+- 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
