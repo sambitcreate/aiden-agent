@@ -540,3 +540,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.
 
 - Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
+
+- Lane 34 picker follow-up: view-local photo/file conversion happened before model upload ownership. Moved the shared preparation lifetime to the model and expanded proof to the actual picker callback plus held transfer, including cancellation ownership and Send blocking.

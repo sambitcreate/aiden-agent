@@ -350,9 +350,115 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testFileSelectionOwnsDraftBeforeDeferredPreparationOrUpload() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "selected-\(UUID()).txt")
+        try Data("fixture".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let preparation = AidenHeldAttachmentPreparation()
+        defer { preparation.release() }
+        let started = expectation(description: "Selected file preparation is suspended")
+        try await assertDraftRestoration(edit: nil, expected: "", afterRestore: { model in
+            XCTAssertTrue(model.isPreparingAttachments)
+            XCTAssertFalse(model.isUploadingAttachment)
+            preparation.release()
+        }) { model in
+            // This is the exact synchronous entry point used by both picker
+            // callbacks, with real file conversion held before its first await.
+            let task = try XCTUnwrap(model.prepareAttachments(.success([file])) { url in
+                await preparation.wait { started.fulfill() }
+                return try await AidenAttachmentPreparation.fileUploadAsync(url: url)
+            })
+            XCTAssertTrue(model.isPreparingAttachments, "Selection must claim ownership before its task starts")
+            await self.fulfillment(of: [started], timeout: 5)
+            XCTAssertTrue(model.pendingAttachments.isEmpty)
+            return Task {
+                await task.value
+                XCTAssertFalse(model.isPreparingAttachments)
+                XCTAssertEqual(model.pendingAttachments.count, 1)
+            }
+        }
+    }
+
+    @MainActor
+    func testSelectedAttachmentPreparationBlocksTextSendUntilItFinishes() async throws {
+        let preparation = AidenHeldAttachmentPreparation()
+        defer { preparation.release() }
+        let started = expectation(description: "Preparation blocks Send")
+        try await assertDraftRestoration(edit: "New message", expected: "New message", afterRestore: { _ in
+            preparation.release()
+        }) { model in
+            XCTAssertTrue(model.canSend)
+            let task = try XCTUnwrap(model.prepareAttachments(.success(["synthetic selection"])) { _ in
+                await preparation.wait { started.fulfill() }
+                return .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+            })
+            await self.fulfillment(of: [started], timeout: 5)
+            XCTAssertFalse(model.canSend)
+            await model.send()
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 0)
+            return Task {
+                await task.value
+                XCTAssertTrue(model.canSend)
+            }
+        }
+    }
+
+    @MainActor
+    func testEmptyAndCancelledPickerSelectionsLeaveDraftRestorationUntouched() async throws {
+        for selection in [Result<[URL], Error>.success([]), .failure(CancellationError()), .failure(CocoaError(.userCancelled))] {
+            try await assertDraftRestoration(edit: nil, expected: "Previously saved draft") { model in
+                let task = model.prepareAttachments(selection) { _ in
+                    XCTFail("An empty or cancelled picker must not prepare a file")
+                    return .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+                }
+                XCTAssertNil(task)
+                XCTAssertFalse(model.isPreparingAttachments)
+                XCTAssertNil(model.presentedError)
+                return nil
+            }
+        }
+    }
+
+    @MainActor
+    func testCancelledPreparationCannotClearTheNextSelectionsSendBlocker() async throws {
+        let oldPreparation = AidenHeldAttachmentPreparation()
+        let newPreparation = AidenHeldAttachmentPreparation()
+        defer { oldPreparation.release(); newPreparation.release() }
+        let oldStarted = expectation(description: "Old selection is preparing")
+        let newStarted = expectation(description: "New selection is preparing")
+        try await assertDraftRestoration(edit: "New message", expected: "New message", afterRestore: { _ in
+            newPreparation.release()
+        }) { model in
+            let oldTask = try XCTUnwrap(model.prepareAttachments(.success(["old selection"])) { _ in
+                await oldPreparation.wait { oldStarted.fulfill() }
+                return .text(name: "old.txt", mimeType: "text/plain", text: "old")
+            })
+            await self.fulfillment(of: [oldStarted], timeout: 5)
+            model.cancelAttachmentPreparation()
+            XCTAssertTrue(model.canSend)
+            let newTask = try XCTUnwrap(model.prepareAttachments(.success(["new selection"])) { _ in
+                await newPreparation.wait { newStarted.fulfill() }
+                return .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+            })
+            await self.fulfillment(of: [newStarted], timeout: 5)
+            oldPreparation.release()
+            await oldTask.value
+            XCTAssertTrue(model.isPreparingAttachments)
+            XCTAssertFalse(model.canSend)
+            XCTAssertTrue(model.pendingAttachments.isEmpty, "Cancelled conversion must not upload")
+            return Task {
+                await newTask.value
+                XCTAssertFalse(model.isPreparingAttachments)
+                XCTAssertTrue(model.canSend)
+            }
+        }
+    }
+
+    @MainActor
     private func assertDraftRestoration(
         edit: String?,
         expected: String,
+        afterRestore: @MainActor (AidenChatViewModel) -> Void = { _ in },
         whileReading: @MainActor (AidenChatViewModel) async throws -> Task<Void, Never>? = { _ in nil }
     ) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "draft-load-\(UUID().uuidString)")
@@ -386,6 +492,7 @@ final class AidenChatTests: XCTestCase {
         await load.value
         XCTAssertFalse(fileManager.didTimeOut, "The held read must be released by the test")
         XCTAssertEqual(model.draft, expected)
+        afterRestore(model)
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await pendingAction?.value
         XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
@@ -2710,6 +2817,23 @@ final class AidenChatTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class AidenHeldAttachmentPreparation {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait(onStart: () -> Void) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            onStart()
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private final class AidenHeldDraftReadFileManager: FileManager, @unchecked Sendable {
     private let lock = NSLock()
     private let release = DispatchSemaphore(value: 0)
@@ -2780,6 +2904,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
+    nonisolated(unsafe) private static var _turnRequestCount = 0
+    static var turnRequestCount: Int { lock.withLock { _turnRequestCount } }
     nonisolated(unsafe) private static var heldPathSuffix: String?
     nonisolated(unsafe) private static var onHeldRequest: (@Sendable () -> Void)?
     nonisolated(unsafe) private static var heldCompletion: (@Sendable () -> Void)?
@@ -2818,6 +2944,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         self.mode = mode
         _progressRequestCount = 0
         _agentRequestCount = 0
+        _turnRequestCount = 0
         heldPathSuffix = nil
         onHeldRequest = nil
         lock.unlock()
@@ -2829,6 +2956,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
 
     override func startLoading() {
         let path = request.url?.path ?? ""
+        if path.hasSuffix("/turns") { Self.lock.withLock { Self._turnRequestCount += 1 } }
         let result: (HTTPURLResponse, Data)
         var shouldFinish = true
         switch path {
