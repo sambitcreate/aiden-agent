@@ -18,3 +18,9 @@ Read-only references; implementation is original:
 Pullfrog PRRT_kwDOTctvDc6j9u0k demonstrated aggregate eviction could destroy accepted but undrained terminal bytes and remove replay state. Two cross-stream pressure regressions failed against PR head 25934fbe. Aggregate eviction now excludes terminal records with subscribers; ordinary journal trimming still enforces the 16 MiB budget. Successful drain or the existing 30-second timeout releases the subscriber so the next pressure pass can evict the record. Tests prove terminal replay remains available during the drain, healthy terminal completion, timeout cleanup, bounded snapshot memory, and subsequent eviction (no indefinite capacity pin).
 
 Review-fix validation: 37 stream tests passed; full remote suite 452 passed, one occupied legacy-port skip; type-check, scoped ESLint and diff check passed.
+
+## Idle-capacity correction
+
+Pullfrog comment 4052529509 and independent Luna reproduction showed that a full 256-record registry could stay full after a preserved terminal subscriber settled. Drain/timeout/abort regressions now fill the registry before aggregate pressure and create a new stream immediately after settlement without an intervening append; all three failed on ff61d680. Aggregate eviction now records a transient `evictAfterDelivery` intent, and the final subscriber's idempotent cleanup removes that exact record and persists the deletion. Replay remains retained while any subscriber is pending. Active records remain admission-limited. The marker never changes persisted/wire schemas. This supersedes the earlier note that a subsequent pressure pass performs removal.
+
+Idle-capacity validation: 39 stream tests passed; remote suite 454 passed, one occupied legacy-port skip; type-check, scoped ESLint and diff check passed.
