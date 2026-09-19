@@ -579,3 +579,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - This fresh worktree has no `.memory/` directory or installed dependencies. Read the current scheduler recovery plan and prior scheduler notes; create the lane memory file and install private worktree dependencies.
 - Whole-file `oxfmt` rewrote unrelated existing scheduler formatting; restored untouched lines to keep the PR focused. New tests use current formatter output.
 - Explicit `git add` rejects the tracked troubleshooting path because its parent is ignored; use `git add -u -- .papercuts/troubleshooting.md` and force-add only the requested new lane memory.
+## 2026-09-19 — Upgrade 11: memory expiry
+
+- Fresh worktree omits ignored `.memory/` and dependencies. Read main-checkout memory and checked-in plans; installed dependencies locally with lifecycle scripts disabled for scoped tests.
+- `aiden-plugins` is a container directory; use the nested `context-mode` Git SHA for reference evidence.
+- Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
+- GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
