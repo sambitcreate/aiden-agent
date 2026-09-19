@@ -696,3 +696,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Lane 30 export investigation: fresh worktree omits ignored `.memory` and dependencies. Read the canonical checkout's relevant project context and reuse its installed dependencies through a worktree-local symlink for scoped checks.
 - Lane 30: artifact-descriptor budget omission is bounded in normal operation by the upstream 40-artifact/chat limit; rejected the artificial large-metadata candidate. Linux filename probe over the configured bitcreate.cloud SSH host could not authenticate; no credentials or settings changed.
 - Lane 30: reusing canonical dependencies exposed `thinking-orbs` 0.1.1 against this worktree's locked 0.3.1, yielding three unrelated orb-state type errors on both baseline and patched source. Replaced only this worktree's dependency symlink with a lockfile-local installation; canonical dependencies remain untouched.
+
+- Integration wave4 status schema: lane31 represented its PR as an integer, unlike prior URL entries. Normalize both forms in the validation helper; exact fetched-head verification remains required.
