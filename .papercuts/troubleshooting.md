@@ -566,3 +566,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh worktree has no ignored `.memory/` or dependencies. Read relevant canonical project memory; install isolated dependencies with `npm ci --ignore-scripts` and explicitly build only the native worktree-remover needed by Git tests.
 - Git service and its tests are large; use targeted function/range reads to avoid truncated investigation output.
 - Explicit `git add` rejected the ignored `.papercuts/` parent even though the log is tracked; stage the tracked log with `git add -u -- .papercuts/troubleshooting.md`.
+## 2026-09-19 terminal startup upgrade
+
+- Fresh worktree has no `.memory/` because the folder is ignored; read canonical checkout terminal history and create a lane-specific local note.
+- Fresh worktree has no dependencies; installed lockfile dependencies locally without building or packaging Electron.
+- Initial papercut write replaced the existing tracked log; diff review caught it and restored all baseline entries before appending this section.
