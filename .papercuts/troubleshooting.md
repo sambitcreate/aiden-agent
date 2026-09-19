@@ -533,3 +533,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## Upgrade 15 Linux
+
+- Fresh worktree has no ignored `.memory/`; read canonical project context, then create the lane-specific note locally.
+- `gh pr view --json files` truncates PR #71 at 100 files; use paginated REST files to check overlap against its full change list.
+- Troubleshooting log is tracked despite its ignore rule; preserved baseline entries and appended lane notes.
+- This checkout does not include Prettier; matched existing formatting manually and used repository ESLint.

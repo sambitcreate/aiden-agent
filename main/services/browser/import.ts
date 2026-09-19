@@ -131,18 +131,38 @@ async function runningBrowsers(): Promise<Set<string>> {
 }
 
 /** Listing only discovers known browser paths. It never reads credentials or cookie values. */
-export async function browserImportSources(): Promise<BrowserImportSource[]> {
+export async function browserImportSources({
+  platform = process.platform,
+  home = os.homedir(),
+  env = process.env,
+  readRunningBrowsers = runningBrowsers,
+}: {
+  platform?: NodeJS.Platform;
+  home?: string;
+  env?: NodeJS.ProcessEnv;
+  readRunningBrowsers?: () => Promise<Set<string>>;
+} = {}): Promise<BrowserImportSource[]> {
   sourceRegistry.clear();
-  const home = os.homedir();
-  if (process.platform === "darwin" || process.platform === "linux")
+  // XDG roots must be absolute; a relative override must not scan the app's cwd.
+  const configHome =
+    env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME)
+      ? env.XDG_CONFIG_HOME
+      : path.join(home, ".config");
+  const chromeConfigHome =
+    env.CHROME_CONFIG_HOME && path.isAbsolute(env.CHROME_CONFIG_HOME)
+      ? env.CHROME_CONFIG_HOME
+      : configHome;
+  if (platform === "darwin" || platform === "linux")
     for (const definition of chromiumDefinitions) {
-      const parts = process.platform === "darwin" ? definition.mac : definition.linux;
+      const parts = platform === "darwin" ? definition.mac : definition.linux;
       if (!parts.length) continue;
-      const root = path.join(
-        home,
-        process.platform === "darwin" ? "Library/Application Support" : ".config",
-        ...parts,
-      );
+      const configRoot =
+        platform === "darwin"
+          ? path.join(home, "Library/Application Support")
+          : definition.id === "chrome"
+            ? chromeConfigHome
+            : configHome;
+      const root = path.join(configRoot, ...parts);
       let profiles: Record<string, { name?: string }> = {};
       try {
         profiles =
@@ -182,10 +202,10 @@ export async function browserImportSources(): Promise<BrowserImportSource[]> {
       }
     }
   const firefoxRoot =
-    process.platform === "darwin"
+    platform === "darwin"
       ? path.join(home, "Library/Application Support/Firefox")
-      : process.platform === "win32"
-        ? path.join(process.env.APPDATA ?? home, "Mozilla/Firefox")
+      : platform === "win32"
+        ? path.join(env.APPDATA ?? home, "Mozilla/Firefox")
         : path.join(home, ".mozilla/firefox");
   try {
     const ini = await fs.readFile(path.join(firefoxRoot, "profiles.ini"), "utf8");
@@ -210,7 +230,7 @@ export async function browserImportSources(): Promise<BrowserImportSource[]> {
   } catch {
     /* This browser may not have a readable profile inventory. */
   }
-  if (process.platform === "darwin") {
+  if (platform === "darwin") {
     const container = path.join(home, "Library/Containers/com.apple.Safari/Data/Library");
     for (const file of [
       path.join(container, "Cookies/Cookies.binarycookies"),
@@ -221,7 +241,7 @@ export async function browserImportSources(): Promise<BrowserImportSource[]> {
         break;
       }
   }
-  const running = await runningBrowsers();
+  const running = await readRunningBrowsers();
   for (const source of sourceRegistry.values()) source.running = running.has(source.browser);
   return [...sourceRegistry.values()].map(({ id, browser, profile, path: file, running }) => ({
     id,
