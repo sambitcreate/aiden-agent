@@ -594,3 +594,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Android upgrade lane
 - Fresh origin/main has no `.memory/` directory; read the mobile plan and create the required lane-specific memory note.
 - OkHttp `responseBodyStart` fires after its first underlying read; use a tracked source to coordinate cancellation before a deliberately stalled read in the regression test.
+## Upgrade 15 Linux
+
+- Fresh worktree has no ignored `.memory/`; read canonical project context, then create the lane-specific note locally.
+- `gh pr view --json files` truncates PR #71 at 100 files; use paginated REST files to check overlap against its full change list.
+- Troubleshooting log is tracked despite its ignore rule; preserved baseline entries and appended lane notes.
+- This checkout does not include Prettier; matched existing formatting manually and used repository ESLint.
