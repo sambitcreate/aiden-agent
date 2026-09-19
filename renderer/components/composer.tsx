@@ -390,7 +390,7 @@ export function Composer({
       return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
     };
     const receive = (annotation: BrowserAnnotation) => {
-      if (firstSendPendingRef.current || !available()) return false;
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
       const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
@@ -1124,6 +1124,10 @@ export function Composer({
 
   const beginAttachmentRead = (status: string): number | null => {
     if (firstSendPendingRef.current) return null;
+    if (sendPendingRef.current) {
+      toast.info("Wait for the current message to finish sending before attaching files.");
+      return null;
+    }
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
       return null;
