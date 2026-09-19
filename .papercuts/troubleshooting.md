@@ -763,3 +763,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Luna79da0580 review identified destructive retirement after known pre-publication failures. Add actual DataStore size/pre-rename/post-rename controls and carry an explicit publication receipt instead of guessing from a generic rejected promise.
 
 - Pullfrog f62 review found initial credential read errors masked as supersession; test actual Radius full/offline phases against missing-credential controls. A separate custom AuthContext report has no current production caller; verify default env/file resolution before choosing scope.
+# Lane 39
+- Fresh worktree has no ignored `.memory/`; read primary project context for persistence/lifecycle before changes.
+- Fresh worktree has no dependencies; install own lockfile dependencies for isolated validation.
+- esbuild stdin requires explicit TypeScript loader even with a .ts sourcefile; corrected native harness builder after initial parse failure.
+- Native harness cleanup raced Chromium Session Storage teardown; moved temporary-directory cleanup to the parent after Electron exits.
+- Initial papercut write replaced a tracked history file; restored original contents before appending this lane.
