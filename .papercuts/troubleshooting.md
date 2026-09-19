@@ -550,3 +550,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
 - Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
+
+- Luna79da0580 review identified destructive retirement after known pre-publication failures. Add actual DataStore size/pre-rename/post-rename controls and carry an explicit publication receipt instead of guessing from a generic rejected promise.

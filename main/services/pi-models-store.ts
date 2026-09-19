@@ -2,9 +2,10 @@ import type {
   ModelsPublication,
   ModelsStore,
   ModelsStoreEntry,
+  ModelsStoreOperationOptions,
 } from "@earendil-works/pi-ai";
 
-import { DataStore } from "./data-store.js";
+import { DataStore, type DataStorePublicationReceipt } from "./data-store.js";
 import { parsePiRemoteCatalog } from "./pi-remote-catalog.js";
 
 const MAX_STORE_BYTES = 32 * 1024 * 1024;
@@ -94,29 +95,38 @@ function clone(entry: ModelsStoreEntry): ModelsStoreEntry {
  * Device-local, non-secret cache for Pi dynamic catalogs. Pi owns validation
  * and retry behavior; this store only gives it durable last-known snapshots.
  */
-const backingModelsStore: ModelsStore = {
-  async read(providerId) {
-    if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
-    const document = await store.load();
-    const entry = document.entries[providerId];
-    return entry ? clone(entry) : undefined;
-  },
+interface CatalogBackingStore extends ModelsStore {
+  write(id: string, entry: ModelsStoreEntry, options?: ModelsStoreOperationOptions, receipt?: DataStorePublicationReceipt): Promise<void>;
+  delete(id: string, options?: ModelsStoreOperationOptions, receipt?: DataStorePublicationReceipt): Promise<void>;
+}
 
-  async write(providerId, entry) {
-    if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
-    await store.update((document) => {
-      document.version = 1;
-      document.entries[providerId] = clone(entry);
-    });
-  },
+export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): CatalogBackingStore {
+  return {
+    async read(providerId) {
+      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      const document = await store.load();
+      const entry = document.entries[providerId];
+      return entry ? clone(entry) : undefined;
+    },
 
-  async delete(providerId) {
-    if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
-    await store.update((document) => {
-      delete document.entries[providerId];
-    });
-  },
-};
+    async write(providerId, entry, _options, receipt) {
+      if (receipt) receipt.state = "not-published";
+      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      await store.update((document) => {
+        document.version = 1;
+        document.entries[providerId] = clone(entry);
+      }, undefined, receipt);
+    },
+
+    async delete(providerId, _options, receipt) {
+      if (receipt) receipt.state = "not-published";
+      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      await store.update((document) => {
+        delete document.entries[providerId];
+      }, undefined, receipt);
+    },
+  };
+}
 
 export interface ProviderModelsStore {
   read(): Promise<ModelsStoreEntry | undefined>;
@@ -146,7 +156,7 @@ class CatalogPublicationError extends Error {
  * cleanup fails, before another publisher can write. Cleanup cannot erase a
  * newer catalog (even identical bytes).
  */
-export function createOwnedPiModelsStore(backing: ModelsStore): {
+export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
   modelsStore: ModelsStore;
   providerStore: (providerId: string) => ProviderModelsStore;
 } {
@@ -202,12 +212,17 @@ export function createOwnedPiModelsStore(backing: ModelsStore): {
       delete: () => modelsStore.delete(providerId),
       publish: (publication, canPublish, isCurrent) => serialized(providerId, async () => {
         if (!isCurrent() || !await canPublish() || !isCurrent()) return false;
+        // Cloning is synchronous and cannot have published anything.
+        const snapshot = publication.persist == null ? publication.persist : clone(publication.persist);
         let accepted = false;
         let failed = false;
         let failure: unknown;
+        // Generic stores cannot prove non-commit. The DataStore adapter records
+        // the exact pre-publication/entered-publication boundary for each call.
+        const receipt: DataStorePublicationReceipt = { state: "uncertain" };
         try {
-          if (publication.persist === null) await backing.delete(providerId);
-          else if (publication.persist !== undefined) await backing.write(providerId, clone(publication.persist));
+          if (snapshot === null) await backing.delete(providerId, undefined, receipt);
+          else if (snapshot !== undefined) await backing.write(providerId, snapshot, undefined, receipt);
           accepted = isCurrent() && await canPublish() && isCurrent();
         } catch (error) {
           // A rejected write may already have replaced the file. Keep ownership
@@ -215,7 +230,15 @@ export function createOwnedPiModelsStore(backing: ModelsStore): {
           failed = true;
           failure = error;
         }
-        if (!accepted && publication.persist !== undefined) {
+        let preservePrevious = false;
+        if (failed && receipt.state === "not-published") {
+          try {
+            preservePrevious = isCurrent() && await canPublish() && isCurrent();
+          } catch {
+            // Without current ownership evidence, retain the fail-closed path.
+          }
+        }
+        if (!accepted && !preservePrevious && publication.persist !== undefined) {
           try {
             await retire(providerId);
           } catch (cleanupError) {
@@ -233,6 +256,6 @@ export function createOwnedPiModelsStore(backing: ModelsStore): {
   };
 }
 
-const ownedStore = createOwnedPiModelsStore(backingModelsStore);
+const ownedStore = createOwnedPiModelsStore(createPiModelsBackingStore(store));
 export const piModelsStore = ownedStore.modelsStore;
 export const piProviderModelsStore = ownedStore.providerStore;
