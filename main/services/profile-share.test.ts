@@ -32,6 +32,7 @@ function harness() {
     removeError: false,
     writes: 0,
     focusedWindow: null as unknown,
+    liveWindows: [] as unknown[],
   };
   const exports = {} as { shareProfilePng: (data: unknown, parent: unknown) => Promise<void> };
   const module = { exports };
@@ -58,10 +59,16 @@ function harness() {
           }
           popup(options: (typeof popups)[number]) {
             if (state.popupError) throw new Error("popup failed");
-            // Electron falls back to another window when the requested owner
-            // is no longer in its live window list; it need not throw here.
-            const requested = options.window as { isDestroyed: () => boolean };
-            popups.push({ ...options, window: requested.isDestroyed() ? state.focusedWindow : requested });
+            // Electron 43.1.1 lib/browser/api/menu.ts:119-130 selects by
+            // BaseWindow.getAllWindows() membership, not isDestroyed().
+            let window = options.window;
+            const wins = state.liveWindows;
+            if (!wins.includes(window)) {
+              window = state.focusedWindow;
+              if (!window && wins.length > 0) window = wins[0];
+              if (!window) throw new Error("Cannot open Menu without a BaseWindow present");
+            }
+            popups.push({ ...options, window });
           }
         },
       };
@@ -86,55 +93,97 @@ function harness() {
       return require(specifier);
     },
   });
-  return { state, removed, popups, timers, share: module.exports.shareProfilePng };
+  function windowOwner(name = "owner") {
+    const window = {
+      name,
+      destroyed: false,
+      isDestroyed() { return this.destroyed; },
+      destroy() {
+        this.destroyed = true;
+        state.liveWindows = state.liveWindows.filter((live) => live !== this);
+        if (state.focusedWindow === this) state.focusedWindow = null;
+      },
+    };
+    state.liveWindows.push(window);
+    return window;
+  }
+  return { state, removed, popups, timers, windowOwner, share: module.exports.shareProfilePng };
 }
 
-function windowOwner() {
-  return { destroyed: false, isDestroyed() { return this.destroyed; } };
+for (const fallback of ["focused", "first live"] as const) {
+  test(`popup models Electron's ${fallback} fallback using membership independently of isDestroyed`, async () => {
+    const h = harness();
+    const owner = h.windowOwner();
+    const first = h.windowOwner("first live replacement");
+    const focused = h.windowOwner("focused replacement");
+    // Deliberately separate the two mock inputs to verify that popup selects
+    // by live membership. This is a harness contract, not a new lifecycle claim.
+    h.state.liveWindows = [first, focused];
+    h.state.focusedWindow = fallback === "focused" ? focused : null;
+    assert.equal(owner.isDestroyed(), false);
+    await h.share("synthetic", owner);
+    assert.equal(h.popups[0].window, fallback === "focused" ? focused : first);
+  });
 }
+
+test("popup models Electron's error when no live window is available", async () => {
+  const h = harness();
+  const owner = h.windowOwner();
+  h.state.liveWindows = [];
+  await assert.rejects(h.share("synthetic", owner), /Cannot open Menu without a BaseWindow/u);
+  assert.deepEqual(h.removed, ["/synthetic/share-1"]);
+});
 
 for (const boundary of ["cleanup", "write"] as const) {
-  test(`closing the owner during ${boundary} cannot redirect sharing to a replacement window`, async () => {
-    const h = harness();
-    const entered = deferred();
-    const release = deferred();
-    h.state[boundary] = async () => { entered.resolve(); await release.promise; };
-    const owner = windowOwner();
-    const pending = h.share("synthetic", owner);
-    await entered.promise;
-    owner.destroyed = true;
-    h.state.focusedWindow = windowOwner();
-    release.resolve();
-    await assert.rejects(pending, /no longer available/u);
-    assert.equal(h.popups.length, 0);
-    assert.deepEqual(h.removed, boundary === "write" ? ["/synthetic/share-1"] : []);
-    assert.equal(h.timers.size, 0);
-    await h.share("synthetic", h.state.focusedWindow);
-    assert.equal(h.popups.length, 1);
-    assert.equal(h.popups[0].window, h.state.focusedWindow);
-  });
+  for (const fallback of ["focused", "first live"] as const) {
+    test(`closing the owner during ${boundary} cannot use Electron's ${fallback} fallback`, async () => {
+      const h = harness();
+      const entered = deferred();
+      const release = deferred();
+      h.state[boundary] = async () => { entered.resolve(); await release.promise; };
+      const owner = h.windowOwner();
+      const pending = h.share("synthetic", owner);
+      await entered.promise;
+      owner.destroy();
+      const first = h.windowOwner("first live replacement");
+      const focused = h.windowOwner("focused replacement");
+      h.state.focusedWindow = fallback === "focused" ? focused : null;
+      const replacement = fallback === "focused" ? focused : first;
+      release.resolve();
+      const error: unknown = await pending.then(() => undefined, (error: unknown) => error);
+      // On the pre-fix service this reports which replacement received the
+      // popup, proving both fallback paths before the owner-loss assertion.
+      assert.deepEqual(h.popups.map((popup) => popup.window), []);
+      assert.match(String(error), /no longer available/u);
+      assert.deepEqual(h.removed, boundary === "write" ? ["/synthetic/share-1"] : []);
+      assert.equal(h.timers.size, 0);
+      await h.share("synthetic", replacement);
+      assert.equal(h.popups.length, 1);
+      assert.equal(h.popups[0].window, replacement);
+    });
+  }
 
   test(`preparation reserves admission during ${boundary} and releases it on failure`, async () => {
     const h = harness();
     const entered = deferred();
     const release = deferred();
     h.state[boundary] = async () => { entered.resolve(); await release.promise; };
-    const owner = windowOwner();
+    const owner = h.windowOwner();
     const pending = h.share("synthetic", owner);
     await entered.promise;
-    const competing = assert.rejects(h.share("synthetic", windowOwner()), /current share menu/u);
-    owner.destroyed = true;
+    const competing = assert.rejects(h.share("synthetic", h.windowOwner()), /current share menu/u);
+    owner.destroy();
     release.resolve();
     await pending.catch(() => {});
     await competing;
-    await h.share("synthetic", windowOwner());
+    await h.share("synthetic", h.windowOwner());
     assert.equal(h.popups.length, 1);
   });
 }
 
 test("normal menu dismissal permits retry while retaining the first file for its consumer", async () => {
   const h = harness();
-  const owner = windowOwner();
+  const owner = h.windowOwner();
   await h.share("synthetic", owner);
   assert.equal(h.popups[0].window, owner);
   await assert.rejects(h.share("synthetic", owner), /current share menu/u);
@@ -155,11 +204,11 @@ for (const failure of ["decodeError", "constructorError", "popupError"] as const
   test(`${failure} releases preparation and cleans any created file`, async () => {
     const h = harness();
     h.state[failure] = true;
-    await assert.rejects(h.share("synthetic", windowOwner()));
+    await assert.rejects(h.share("synthetic", h.windowOwner()));
     assert.deepEqual(h.removed, failure === "decodeError" ? [] : ["/synthetic/share-1"]);
     assert.equal(h.timers.size, 0);
     h.state[failure] = false;
-    await h.share("synthetic", windowOwner());
+    await h.share("synthetic", h.windowOwner());
     assert.equal(h.popups.length, 1);
   });
 }
@@ -167,20 +216,20 @@ for (const failure of ["decodeError", "constructorError", "popupError"] as const
 test("a failed file write permits a subsequent share", async () => {
   const h = harness();
   h.state.write = async () => { throw new Error("write failed"); };
-  await assert.rejects(h.share("synthetic", windowOwner()), /write failed/u);
+  await assert.rejects(h.share("synthetic", h.windowOwner()), /write failed/u);
   assert.equal(h.popups.length, 0);
   h.state.write = async () => {};
-  await h.share("synthetic", windowOwner());
+  await h.share("synthetic", h.windowOwner());
   assert.equal(h.popups.length, 1);
 });
 
 test("cleanup failure does not mask owner loss or retain admission", async () => {
   const h = harness();
-  const owner = windowOwner();
-  h.state.write = async () => { owner.destroyed = true; };
+  const owner = h.windowOwner();
+  h.state.write = async () => { owner.destroy(); };
   h.state.removeError = true;
   await assert.rejects(h.share("synthetic", owner), /no longer available/u);
   assert.deepEqual(h.removed, ["/synthetic/share-1"]);
-  await h.share("synthetic", windowOwner());
+  await h.share("synthetic", h.windowOwner());
   assert.equal(h.popups.length, 1);
 });
