@@ -540,3 +540,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Worktree has no `.memory/` or dependencies; used checked-in plans and installed isolated dependencies with scripts disabled.
 - `.papercuts/` is ignored but its troubleshooting file is tracked. Restored its full existing contents after detecting an accidental replacement during diff review; appended only this entry.
+## 2026-09-19 — upgrade 03-subagents
+- Fresh worktree omits ignored `.memory`; read relevant project history from the primary checkout and create a lane-specific memory note locally.
+- `aiden-plugins` is a collection rather than a Git root; pin the nested `pi-subagents` repository.
+- No worktree dependencies; install a private node_modules with lifecycle scripts disabled for focused TypeScript tests (no Electron packaging needed).
+- Explicit staging of `.papercuts/troubleshooting.md` hit the ignored parent-directory rule; force-stage only the authorized lane feedback and memory files.
