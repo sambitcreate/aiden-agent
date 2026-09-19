@@ -148,3 +148,33 @@ DataStore/resilience, and config/portable roundtrip consumers. Typecheck, lint,
 and diff checks pass. Product scope now includes data-store.ts (optional receipt
 instrumentation only), plus existing catalog files. No persisted schema/wire
 change, no native client change, and no new network calls.
+
+## Distinguish credential read failure from supersession
+
+Pullfrog PRRT_kwDOTctvDc6j-CTX targets `f62be0ca` and is reproduced: initial
+credential read failure left no observed snapshot, which incorrectly aborted the
+native attempt and suppressed Pi's saved auth error. The wrapper now skips
+unknown-owner hydration without aborting that attempt. Pinned Pi then reports
+its saved credential-read error normally, retaining the original cause. Four
+full/offline × failed/missing credential cases use actual Radius cache hydration;
+both failure cases failed before the correction and all four now pass. The
+missing-credential case remains distinct from failed storage access.
+
+PRRT_kwDOTctvDc6j-CTa describes a caller with an injected custom AuthContext.
+Live source search found no authContext assignment in main/renderer, exactly one
+ProviderRegistry construction, and its createModels uses Pi's default context.
+Whole-repository callsite search finds only the two ProviderRegistry methods
+and this module's focused tests; there is no other production consumer/barrel.
+The option is generically typed `models: Models`, which does not encode the
+production default-context invariant, but no published documentation explicitly
+promises arbitrary source-context inheritance. Hypothetical custom-context
+collections are not a supported production path here. A new bounded
+control compares original models.refresh with guarded full refresh using a
+synthetic environment value and a temporary file via ctx.fileExists: effective
+credentials match. No production context regression is demonstrated, so no
+speculative custom-context parameter or private SDK introspection was added.
+This evidence is provided to the orchestrator for review disposition.
+
+Final focused run: 166/166 catalog/auth/model/DataStore tests; typecheck, lint,
+and diff checks pass. The previous 377-test expanded DataStore/config receipt
+validation remains applicable; this change does not alter that layer.

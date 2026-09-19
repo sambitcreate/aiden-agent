@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DataStore } from "./data-store.js";
@@ -1034,6 +1034,80 @@ for (const mode of ["scoped", "full"] as const) {
 
   }
 }
+
+for (const allowNetwork of [false, true]) {
+  for (const failRead of [false, true]) {
+    test(`${allowNetwork ? "full" : "offline"} refresh distinguishes ${failRead ? "failed" : "missing"} credentials`, async () => {
+      const underlying = new InMemoryCredentialStore();
+      const readFailure = new Error("synthetic keychain unavailable");
+      const credentials: CredentialStore = {
+        list: underlying.list.bind(underlying),
+        modify: underlying.modify.bind(underlying),
+        delete: underlying.delete.bind(underlying),
+        read: async () => { if (failRead) throw readFailure; return undefined; },
+      };
+      const models = createModels({ credentials });
+      const radius = builtinProviders().find((provider) => provider.id === "radius")!;
+      models.setProvider({ ...radius, auth: { apiKey: { name: "Unconfigured", resolve: async () => undefined } } });
+      const cached = { ...oxAlphaModel(), provider: "radius", id: "cached-model" };
+      const store = memoryProviderStore({ models: [cached] });
+      const result = await refreshPiCatalogs({ models, credentials, providerModelsStore: () => store, allowNetwork });
+      assert.equal(result.aborted, false);
+      if (failRead) {
+        assert.equal(result.errors.size, 1);
+        assert.match(result.errors.get("radius")?.message ?? "", /Credential store read failed/u);
+        assert.equal((result.errors.get("radius") as { cause?: unknown }).cause, readFailure);
+        assert.equal(models.getModel("radius", cached.id), undefined, "unknown ownership does not hydrate");
+      } else {
+        assert.equal(result.errors.size, 0);
+        assert.ok(models.getModel("radius", cached.id));
+      }
+      assert.deepEqual(store.snapshot()?.models, [cached]);
+    });
+  }
+}
+
+test("guarded full refresh preserves production default env and file auth resolution", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-catalog-auth-context-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "synthetic-auth-profile");
+  await writeFile(file, "synthetic fixture");
+  const variable = "AIDEN_CATALOG_AUTH_CONTEXT_TEST";
+  const previous = process.env[variable];
+  process.env[variable] = "synthetic-context-key";
+  t.after(() => { if (previous === undefined) delete process.env[variable]; else process.env[variable] = previous; });
+  const credentials = new InMemoryCredentialStore();
+  const store = memoryProviderStore();
+  const observed: (Credential | undefined)[] = [];
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    auth: { apiKey: {
+      name: "Synthetic ambient auth",
+      resolve: async ({ ctx }) => {
+        const key = await ctx.env(variable);
+        if (!key || !await ctx.fileExists(file)) return undefined;
+        return { auth: { apiKey: key } };
+      },
+    } },
+    refreshModels: async (context) => {
+      if (context.allowNetwork) {
+        observed.push(context.credential);
+        await context.publish({ persist: { models: [], checkedAt: 1 } });
+      }
+    },
+  };
+  // Matches the sole production ProviderRegistry construction: no custom context.
+  const models = createModels({ credentials, modelsStore: {
+    read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+  } });
+  models.setProvider(provider);
+  assert.equal((await models.refresh()).errors.size, 0);
+  assert.equal((await refreshPiCatalogs({ models, credentials, providerModelsStore: () => store })).errors.size, 0);
+  assert.equal(observed.length, 2);
+  assert.deepEqual(observed[1], observed[0]);
+  assert.equal(observed[1]?.type, "api_key");
+  assert.equal(observed[1]?.key, "synthetic-context-key");
+});
 
 for (const mode of ["full", "scoped", "offline"] as const) {
   for (const expires of [0, Date.now() + 3_600_000]) {

@@ -552,3 +552,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
 
 - Luna79da0580 review identified destructive retirement after known pre-publication failures. Add actual DataStore size/pre-rename/post-rename controls and carry an explicit publication receipt instead of guessing from a generic rejected promise.
+
+- Pullfrog f62 review found initial credential read errors masked as supersession; test actual Radius full/offline phases against missing-credential controls. A separate custom AuthContext report has no current production caller; verify default env/file resolution before choosing scope.

@@ -167,7 +167,11 @@ async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise
         const canPublish = publicationOwnership(
           credentials, provider.id, snapshots.get(provider.id), effectiveSignal, isCurrent,
         );
-        if (!snapshots.has(provider.id) || !await canPublish() || !isCurrent()) {
+        // A missing snapshot means Pi's initial credential read failed. Pi
+        // rethrows that saved auth error after the offline phase; aborting here
+        // would suppress it as cancellation. Unknown ownership cannot hydrate.
+        if (!snapshots.has(provider.id)) return;
+        if (!await canPublish() || !isCurrent()) {
           attempt.abort();
           return;
         }
