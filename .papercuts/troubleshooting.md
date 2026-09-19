@@ -659,3 +659,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Repository ignores `.memory/`; explicitly stage the requested unique lane note with `git add -f`.
 ## 2026-09-19 — updater lane 25
 - Fresh worktree has no .memory directory or dependencies; read canonical project history and install isolated dependencies with scripts disabled for simulated updater tests.
+- Hosted queue-image E2E raced send settlement: Stop generating appeared before attachment admission reopened; synthetic paste was intentionally rejected. The test must await the production Attach button enabled state.
+- In-progress workflow logs require the direct jobs/logs API; gh run view refuses them and gh api needs --allow-escape-sequences when writing colored logs to a local file. Hosted artifacts intentionally contain only sanitized receipts.
