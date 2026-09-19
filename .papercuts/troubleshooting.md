@@ -756,3 +756,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Isolated worktree omits ignored `.memory`; read canonical project context/history without editing that checkout and keep lane notes locally.
 - Baseline startup deadline test depends on a child-owned log that may never initialize before termination; replace cleanup evidence with parent-observed real children and control the deadline phase.
 - Explicit `git add` of the tracked troubleshooting file is rejected because its parent directory is ignored; stage its tracked update with `git add -u`.
+- Lane 37: isolated checkout omits ignored `.memory/` and dependencies; read project memory from the saved repository and install this checkout with `npm ci` before validation.
+
+- Integration lane37: test and coverage registration shared long-line conflicts. Preserved all existing script tokens and dependency fields, adding only the new profile-share test once per affected script; merged independent troubleshooting histories.
