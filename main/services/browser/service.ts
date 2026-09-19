@@ -106,6 +106,7 @@ interface LiveTab {
   pendingNavigationUrl?: string;
   pendingNavigationRequest?: { id: number; sequence: number };
   navigationSequence: number;
+  navigationCommand?: { url: string; epoch: number; sequence?: number };
   committedNavigation: number;
   lastCursor?: { x: number; y: number };
   previewNavigation?: BrowserFileReservation;
@@ -549,13 +550,20 @@ export class BrowserService {
           tab.state.error = String(error);
         }
         tab.navigationSequence += 1;
+        const command = tab.navigationCommand;
+        if (command && command.sequence === undefined && command.url === url &&
+          command.epoch === tab.queue.epoch) command.sequence = tab.navigationSequence;
+        else tab.navigationCommand = undefined;
         tab.contextId = undefined;
         tab.refs.clear();
       }
     });
     wc.on("will-navigate", (event, url) => {
+      // Renderer-initiated starts (including the same URL) are not the pending
+      // loadURL command. This event does not fire for programmatic loadURL.
       try {
         browserUrl(url);
+        tab.navigationCommand = undefined;
       } catch {
         event.preventDefault();
       }
@@ -582,6 +590,7 @@ export class BrowserService {
       // main-frame response is pending. Renderer recreation resets ownership.
       if (!wc.isCrashed() || navigationSupersededCrash) return;
       this.cancelCrashRecovery(tab);
+      tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.contextId = undefined;
       tab.state.crashed = true;
@@ -709,7 +718,10 @@ export class BrowserService {
           },
         };
       if (this.defaults.linkTarget === "external") void shell.openExternal(url);
-      else void wc.loadURL(url).catch(() => {});
+      else {
+        tab.navigationCommand = undefined;
+        void wc.loadURL(url).catch(() => {});
+      }
       return { action: "deny" };
     });
     wc.on("did-create-window", (window, details) => {
@@ -2020,9 +2032,10 @@ export class BrowserService {
                 const url = browserUrl(command.url);
                 this.beginPreviewNavigation(tab, url);
                 const sequence = tab.committedNavigation;
-                const startedAtSequence = tab.navigationSequence;
-                const loading = wc.loadURL(url);
+                const navigation = { url, epoch: tab.queue.epoch, sequence: undefined as number | undefined };
+                tab.navigationCommand = navigation;
                 try {
+                  const loading = wc.loadURL(url);
                   if (input.readiness === "none") void loading.catch(() => {});
                   else if (input.readiness === "domContentLoaded") {
                     void loading.catch(() => {});
@@ -2034,13 +2047,17 @@ export class BrowserService {
                     );
                   } else await browserDeadline(loading, input.timeoutMs ?? 15000, signal);
                 } catch (error) {
-                  if (!wc.isDestroyed() && tab.navigationSequence <= startedAtSequence + 1) {
+                  if (!wc.isDestroyed() && tab.navigationCommand === navigation &&
+                    navigation.sequence !== undefined && tab.navigationSequence === navigation.sequence &&
+                    tab.queue.epoch === navigation.epoch) {
                     tab.pendingNavigationUrl = undefined;
                     tab.pendingNavigationRequest = undefined;
                     wc.stop();
                     this.finishPreviewNavigation(tab);
                   }
                   throw error;
+                } finally {
+                  if (tab.navigationCommand === navigation) tab.navigationCommand = undefined;
                 }
                 break;
               }
