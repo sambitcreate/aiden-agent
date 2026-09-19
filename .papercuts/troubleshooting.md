@@ -585,3 +585,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `aiden-plugins` is a container directory; use the nested `context-mode` Git SHA for reference evidence.
 - Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
 - GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
+## Upgrade 12 desktop UI — 2026-09-19
+- Fresh worktrees omit ignored `.memory` context; read the canonical project's command-system history and create a lane-specific note here.
+- No local dependencies are present; install this worktree's dependencies before renderer regression validation.
+- `npm ci` omitted Electron's executable; restored with its install script. Renderer/main-only bundles then exited before first window, so focused UI validation needs the normal native helper build prerequisites too.
+- Command-system aggregate has a pre-existing stale source assertion in `main/services/renderer-readiness-core.test.ts`: it expects a no-argument crash callback immediately resetting readiness, while main now records crash diagnostics first. Reported to campaign coordinator; preserve renderer-only scope.
+- Palette regression assertions must inspect loaded chat content because the desktop router uses memory history; the file URL does not change on chat navigation.

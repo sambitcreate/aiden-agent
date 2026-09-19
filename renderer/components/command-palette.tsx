@@ -2,6 +2,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { defaultFilter } from "cmdk";
 import {
   ArrowLeft,
   Bot,
@@ -364,7 +365,13 @@ export function AppCommandPalette({
           <DialogPrimitive.Title className="sr-only">
             {MODE_LABELS[palette.mode]}
           </DialogPrimitive.Title>
-          <Command className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control">
+          <Command
+            className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control"
+            // Dynamic values identify rows; search only their human-readable metadata.
+            filter={(value, search, keywords) =>
+              defaultFilter(keywords?.length ? keywords.join(" ") : value, search)
+            }
+          >
             <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
                 <span className="mr-2 flex size-6 items-center justify-center rounded-md bg-control text-secondary">
@@ -494,7 +501,8 @@ export function AppCommandPalette({
                     .map((chat) => (
                       <CommandItem
                         key={chat.id}
-                        value={`${chat.title} ${new Date(chat.updatedAt).toLocaleString()}`}
+                        value={`chat:${chat.id}`}
+                        keywords={[chat.title, new Date(chat.updatedAt).toLocaleString()]}
                         onSelect={() => void openChat(chat.id)}
                         className="min-h-11 px-3"
                       >
@@ -532,7 +540,8 @@ export function AppCommandPalette({
                       return (
                         <CommandItem
                           key={entry.value}
-                          value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
+                          value={`model:${entry.value}`}
+                          keywords={[entry.label, entry.model, entry.providerLabel]}
                           onSelect={() => void selectModel(entry.providerId, entry.model)}
                           disabled={busy}
                           aria-current={selected ? "true" : undefined}
@@ -554,7 +563,8 @@ export function AppCommandPalette({
                       unavailableModelProviders.map((provider) => (
                         <CommandItem
                           key={`unavailable-${provider.id}`}
-                          value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
+                          value={`unavailable-provider:${provider.id}`}
+                          keywords={[provider.label, ...provider.models, "unavailable setup provider"]}
                           onSelect={() => {
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
@@ -615,7 +625,8 @@ export function AppCommandPalette({
                   {(providers.data ?? []).map((provider) => (
                     <CommandItem
                       key={provider.id}
-                      value={`${provider.label} ${provider.id} manage connection models`}
+                      value={`provider:${provider.id}`}
+                      keywords={[provider.label, provider.id, "manage connection models"]}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
