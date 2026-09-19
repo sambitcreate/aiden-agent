@@ -1499,9 +1499,29 @@ function QuickViewCard({
                   const destination = menuDestinationRef.current;
                   menuDestinationRef.current = null;
                   if (!destination) return;
-                  event.preventDefault();
                   const trigger = menuButtonRef.current;
-                  if (!open || !presented || panel.gitOperationBusy || !trigger?.isConnected) return;
+                  const triggerAvailable =
+                    trigger?.isConnected &&
+                    !trigger.closest('[inert], [aria-hidden="true"]');
+                  if (!open || !presented || panel.gitOperationBusy || !triggerAvailable) {
+                    // Keep Radix's normal restoration when the trigger is usable. If
+                    // it disappeared or became inert, preserve newer focus or use the
+                    // application fallback instead of leaving focus in the removed menu.
+                    if (!triggerAvailable) {
+                      event.preventDefault();
+                      const focused = document.activeElement;
+                      if (
+                        !(focused instanceof HTMLElement) ||
+                        focused === document.body ||
+                        !focused.isConnected ||
+                        focused.closest('[inert], [aria-hidden="true"]')
+                      ) {
+                        document.querySelector<HTMLElement>("[data-app-focus-root]")?.focus();
+                      }
+                    }
+                    return;
+                  }
+                  event.preventDefault();
                   // Finish the menu's focus scope before opening tools. Otherwise its
                   // return focus reactivates Quick View and covers tools in narrow layouts.
                   // Remember the durable trigger, not the menu item that just unmounted.

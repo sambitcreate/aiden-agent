@@ -180,3 +180,36 @@ test("unmounting Quick View with its actions menu open does not reopen tools", a
   await page.getByRole("menuitem", { name: "Browse files" }).click();
   await expect(page.getByRole("tab", { name: "Files", exact: true })).toBeFocused();
 });
+
+for (const invalidation of [
+  "remove-trigger",
+  "close-surface",
+  "remove-trigger-new-focus",
+] as const) {
+  test(`menu selection restores safe focus when teardown invalidates its destination: ${invalidation}`, async ({
+    aiden,
+  }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.locator("[data-quick-view-toggle]").click();
+    await page.getByRole("button", { name: "Quick View actions" }).click();
+    // Exercise the actual menu selection before Radix's deferred close autofocus.
+    await page.getByRole("menuitem", { name: "Browse files" }).evaluate((item, invalidation) => {
+      (item as HTMLElement).click();
+      if (invalidation.startsWith("remove-trigger"))
+        document.querySelector('[aria-label="Quick View actions"]')?.remove();
+      else document.querySelector<HTMLButtonElement>("[data-quick-view-toggle]")?.click();
+      if (invalidation === "remove-trigger-new-focus")
+        queueMicrotask(() => document.querySelector("textarea")?.focus());
+    }, invalidation);
+    await expect(page.getByRole("menu")).toBeHidden();
+    await expect(
+      page.getByRole("complementary", { name: "Environment work surface" }),
+    ).toBeHidden();
+    await expect(
+      page.locator(
+        invalidation === "remove-trigger-new-focus" ? "textarea" : "[data-app-focus-root]",
+      ),
+    ).toBeFocused();
+  });
+}
