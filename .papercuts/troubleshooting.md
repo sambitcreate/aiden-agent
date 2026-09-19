@@ -614,3 +614,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-19: Fresh worktree has no ignored `.memory/` or dependencies. Read relevant project memory from the saved project and install isolated dependencies with scripts skipped; this test-only lane requires no Electron/native builds.
 - Baseline crash-handler assertions still require pre-diagnostics callback parameters and pre-backoff reload shape; scope matching to the crash callback while retaining recovery checks.
 - Lint requires `{2}` for the callback-closing indentation in source-contract regex (`no-regex-spaces`). Corrected and reran lint.
+- npm ci completed without Electron executable; ran node_modules/electron/install.js explicitly before Electron E2E.
