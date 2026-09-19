@@ -891,6 +891,9 @@ final class AidenChatViewModel {
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
+    @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
+    private var attachmentPreparationID: UUID?
+    var isPreparingAttachments: Bool { attachmentPreparationID != nil }
 
     private(set) var chat: AidenChat
     private(set) var catalog: AidenModelCatalog?
@@ -951,6 +954,7 @@ final class AidenChatViewModel {
         if !allowed {
             draftPersistenceTask?.cancel()
             draftPersistenceTask = nil
+            cancelAttachmentPreparation()
         }
     }
 
@@ -1029,6 +1033,7 @@ final class AidenChatViewModel {
         titleRefreshTask?.cancel()
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
+        attachmentPreparationTask?.cancel()
     }
 
     var isConnected: Bool {
@@ -1040,7 +1045,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
-            && !isStarting && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
+            && !isStarting && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
     }
 
     var selectedProvider: AidenProvider? {
@@ -1129,7 +1134,7 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard coordinator.isCurrent(context) else { return }
             draftSession = session
-            if draft.isEmpty, pendingAttachments.isEmpty, !isUploadingAttachment, !isStarting,
+            if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard coordinator.isCurrent(context), draftSession == session else { return }
                 // Disk access yields the main actor while the composer remains
@@ -1706,6 +1711,74 @@ final class AidenChatViewModel {
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
         }
+    }
+
+    /// Both picker callbacks enter here synchronously, before transferring or
+    /// converting selected files. Selection already owns the composer even
+    /// though no upload reference exists yet.
+    @discardableResult
+    func prepareAttachments<Selection>(
+        _ selection: Result<[Selection], Error>,
+        prepare: @escaping @MainActor (Selection) async throws -> AidenAttachmentUpload
+    ) -> Task<Void, Never>? {
+        guard !isReadOnlyPresentation else { return nil }
+        let selections: [Selection]
+        do {
+            selections = try selection.get()
+        } catch let error where aidenIsCancellation(error) {
+            return nil
+        } catch let error as CocoaError where error.code == .userCancelled {
+            return nil
+        } catch {
+            presentedError = String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+            return nil
+        }
+        let capacity = max(0, 10 - pendingAttachments.count)
+        guard !selections.isEmpty, capacity > 0,
+              isConnected, !isPreparingAttachments, !isUploadingAttachment, !isStarting, !isStreaming,
+              let context = try? coordinator.requestContext(for: instanceId) else { return nil }
+        composerGeneration &+= 1
+        let preparationID = UUID()
+        attachmentPreparationID = preparationID
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if attachmentPreparationID == preparationID {
+                    attachmentPreparationID = nil
+                    attachmentPreparationTask = nil
+                }
+            }
+            var uploads: [AidenAttachmentUpload] = []
+            var failures = max(0, selections.count - capacity)
+            for selection in selections.prefix(capacity) {
+                guard !Task.isCancelled, coordinator.isCurrent(context) else { return }
+                do {
+                    uploads.append(try await prepare(selection))
+                } catch let error where aidenIsCancellation(error) {
+                    return
+                } catch {
+                    failures += 1
+                }
+            }
+            guard !Task.isCancelled, coordinator.isCurrent(context),
+                  attachmentPreparationID == preparationID else { return }
+            failures += await upload(uploads)
+            guard !Task.isCancelled, coordinator.isCurrent(context),
+                  attachmentPreparationID == preparationID else { return }
+            if failures > 0 {
+                presentedError = failures == 1
+                    ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+                    : String(localized: "\(failures) selected attachments could not be added. Other attachments are still ready to send.")
+            }
+        }
+        attachmentPreparationTask = task
+        return task
+    }
+
+    func cancelAttachmentPreparation() {
+        attachmentPreparationTask?.cancel()
+        attachmentPreparationTask = nil
+        attachmentPreparationID = nil
     }
 
     @discardableResult
@@ -4844,8 +4917,6 @@ private struct AidenComposerView: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isPhotoPickerPresented = false
     @State private var isFileImporterPresented = false
-    @State private var isPreparingAttachments = false
-    @State private var attachmentPreparationTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -4889,7 +4960,7 @@ private struct AidenComposerView: View {
 
                 HStack(alignment: .center, spacing: 10) {
                 AidenUIKitMenuButton {
-                    if model.isUploadingAttachment || isPreparingAttachments {
+                    if model.isUploadingAttachment || model.isPreparingAttachments {
                         ProgressView().controlSize(.small).frame(width: 44, height: 44)
                     } else {
                         Image(systemName: "plus")
@@ -4901,7 +4972,7 @@ private struct AidenComposerView: View {
                 }
                 .disabled(
                     !model.isConnected || model.isStreaming || model.isUploadingAttachment
-                        || isPreparingAttachments || model.pendingAttachments.count >= 10
+                        || model.isPreparingAttachments || model.pendingAttachments.count >= 10
                 )
                 .accessibilityLabel("Add attachment")
                 .accessibilityHint(model.acceptsImageAttachments
@@ -5090,40 +5161,18 @@ private struct AidenComposerView: View {
             )
         }
         .onChange(of: selectedPhotos) { _, items in
-            guard !model.isReadOnlyPresentation, !items.isEmpty, !isPreparingAttachments else { return }
-            let selected = Array(items.prefix(attachmentCapacity))
+            guard !items.isEmpty else { return }
             selectedPhotos = []
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
-                defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
+            model.prepareAttachments(.success(items)) { item in
+                guard let picked = try await item.loadTransferable(type: AidenPickedImageFile.self) else {
+                    throw AidenAttachmentPreparationError.invalidImage
                 }
-                var uploads: [AidenAttachmentUpload] = []
-                var preparationFailures = 0
-                for item in selected {
-                    guard !Task.isCancelled else { return }
-                    do {
-                        guard let picked = try await item.loadTransferable(type: AidenPickedImageFile.self) else {
-                            throw AidenAttachmentPreparationError.invalidImage
-                        }
-                        defer { try? FileManager.default.removeItem(at: picked.url) }
-                        let upload = try await AidenAttachmentPreparation.fileUploadAsync(
-                            url: picked.url,
-                            preferredName: picked.name,
-                            forceImage: true
-                        )
-                        uploads.append(upload)
-                    } catch let error where aidenIsCancellation(error) {
-                        return
-                    } catch {
-                        preparationFailures += 1
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                let uploadFailures = await model.upload(uploads)
-                guard !Task.isCancelled else { return }
-                presentAttachmentFailures(preparationFailures + uploadFailures)
+                defer { try? FileManager.default.removeItem(at: picked.url) }
+                return try await AidenAttachmentPreparation.fileUploadAsync(
+                    url: picked.url,
+                    preferredName: picked.name,
+                    forceImage: true
+                )
             }
         }
         .fileImporter(
@@ -5131,45 +5180,13 @@ private struct AidenComposerView: View {
             allowedContentTypes: allowedAttachmentContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            guard !model.isReadOnlyPresentation else { return }
-            let capacity = attachmentCapacity
-            guard capacity > 0, !isPreparingAttachments else { return }
-            isPreparingAttachments = true
-            attachmentPreparationTask = Task {
-                defer {
-                    isPreparingAttachments = false
-                    attachmentPreparationTask = nil
-                }
-                var uploads: [AidenAttachmentUpload] = []
-                var preparationFailures = 0
-                do {
-                    let urls = try result.get()
-                    preparationFailures += max(0, urls.count - capacity)
-                    for url in urls.prefix(capacity) {
-                        guard !Task.isCancelled else { return }
-                        do {
-                            let upload = try await AidenAttachmentPreparation.fileUploadAsync(url: url)
-                            uploads.append(upload)
-                        } catch let error where aidenIsCancellation(error) {
-                            return
-                        } catch {
-                            preparationFailures += 1
-                        }
-                    }
-                } catch {
-                    preparationFailures += 1
-                }
-                guard !Task.isCancelled else { return }
-                let uploadFailures = await model.upload(uploads)
-                guard !Task.isCancelled else { return }
-                presentAttachmentFailures(preparationFailures + uploadFailures)
+            model.prepareAttachments(result) { url in
+                try await AidenAttachmentPreparation.fileUploadAsync(url: url)
             }
         }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
-            attachmentPreparationTask?.cancel()
-            attachmentPreparationTask = nil
-            isPreparingAttachments = false
+            model.cancelAttachmentPreparation()
         }
         .onChange(of: scenePhase) { _, phase in
             if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
@@ -5213,13 +5230,6 @@ private struct AidenComposerView: View {
     private var allowedAttachmentContentTypes: [UTType] {
         let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
         return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
-    }
-
-    private func presentAttachmentFailures(_ count: Int) {
-        guard count > 0 else { return }
-        model.presentedError = count == 1
-            ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
-            : String(localized: "\(count) selected attachments could not be added. Other attachments are still ready to send.")
     }
 
     private var sendButtonBackground: Color {

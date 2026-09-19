@@ -769,3 +769,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - esbuild stdin requires explicit TypeScript loader even with a .ts sourcefile; corrected native harness builder after initial parse failure.
 - Native harness cleanup raced Chromium Session Storage teardown; moved temporary-directory cleanup to the parent after Electron exits.
 - Initial papercut write replaced a tracked history file; restored original contents before appending this lane.
+
+- Lane 34 picker follow-up: view-local photo/file conversion happened before model upload ownership. Moved the shared preparation lifetime to the model and expanded proof to the actual picker callback plus held transfer, including cancellation ownership and Send blocking.
