@@ -785,3 +785,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh isolated worktree omits ignored `.memory/` and dependencies; read canonical project memory and install worktree-local dependencies without touching primary checkout.
 - Held Git IPC test must dismiss the modal branch picker before querying Quick View controls, and release the gate in `finally` to avoid teardown shutdown timeouts.
 - Radix close autofocus runs after a timeout: checking destination availability after canceling autofocus loses fallback focus. A still-connected but inert Quick View trigger is also unusable; preserve newer focus or use the app root when abandoning the handoff.
+- 2026-09-19 lane41: Fresh baseline worktree has no .memory directory or node_modules; read primary-checkout project notes and install isolated dependencies before Electron validation.
+
+- 2026-09-19 lane41: Sidebar state assertions must locate Settings navigation with includeHidden:true; ordinary role queries intentionally stop matching after aria-hidden collapse. Initial strict repeats failed at this locator and were not accepted as product regressions.
