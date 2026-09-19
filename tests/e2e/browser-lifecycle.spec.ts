@@ -619,3 +619,61 @@ for (const scenario of ["queued-before-abort", "queued-before-network-error", "q
     }
   });
 }
+
+for (const abort of ["timeout", "expired-preview"] as const) {
+  test(`local ${abort} before request callbacks abandons its crash recovery target`, async ({ aiden }) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.end("<!doctype html><title>Original local-abort document</title>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/original`;
+    try {
+      await finishLmStudioOnboarding(aiden.page);
+      const opened = await command(aiden.page, { action: "create", url });
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().some((contents) => contents.getURL() === target), url)).toBe(true);
+      const id = await aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id, url);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Original local-abort document");
+      await installNativeCrashProbe(aiden, id);
+      if (abort === "expired-preview") {
+        await writeFile(path.join(aiden.workspaceDir, "abort-preview.html"), "<!doctype html><title>Expiring preview</title>");
+        const preview = await command(aiden.page, { action: "open_file", path: "abort-preview.html" });
+        const target = preview.state.tabs.find((tab) => tab.id === preview.tabId)!.url;
+        await command(aiden.page, { action: "close", tabId: preview.tabId! });
+        // Drive the real local preview-admission failure before any request exists.
+        await aiden.app.evaluate(({ webContents }, { id, target }) => {
+          webContents.fromId(id)!.emit("did-start-navigation", {}, target, false, true);
+        }, { id, target });
+        const state = await aiden.page.evaluate((workspaceId) => (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
+        expect(state.tabs.find((tab) => tab.id === opened.tabId)?.error).toContain("preview expired");
+      } else {
+        // Hold native request admission at the documented pre-request boundary.
+        // The real command deadline and local stop run without a request-error
+        // callback to clean up on their behalf.
+        await aiden.app.evaluate(({ webContents }, target) => {
+          const guest = webContents.fromId(target)!;
+          const loadURL = guest.loadURL;
+          guest.loadURL = (pendingUrl) => {
+            guest.loadURL = loadURL;
+            guest.emit("did-start-navigation", {}, pendingUrl, false, true);
+            return new Promise<void>(() => {});
+          };
+        }, id);
+        await expect(command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/abandoned`, timeoutMs: 25 })).rejects.toThrow(/Browser action timed out/);
+      }
+      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
+      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
+        const guest = webContents.fromId(target)!;
+        return !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getURL();
+      }, id)).toBe(url);
+      expect(requests).toBeGreaterThanOrEqual(2);
+    } finally {
+      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}

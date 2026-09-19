@@ -541,7 +541,13 @@ export class BrowserService {
         tab.pendingNavigationUrl = url;
         tab.pendingNavigationRequest = undefined;
         this.cancelCrashRecovery(tab);
-        try { this.beginPreviewNavigation(tab, url); } catch (error) { wc.stop(); this.finishPreviewNavigation(tab); tab.state.error = String(error); }
+        try { this.beginPreviewNavigation(tab, url); } catch (error) {
+          tab.pendingNavigationUrl = undefined;
+          tab.pendingNavigationRequest = undefined;
+          wc.stop();
+          this.finishPreviewNavigation(tab);
+          tab.state.error = String(error);
+        }
         tab.navigationSequence += 1;
         tab.contextId = undefined;
         tab.refs.clear();
@@ -2029,6 +2035,8 @@ export class BrowserService {
                   } else await browserDeadline(loading, input.timeoutMs ?? 15000, signal);
                 } catch (error) {
                   if (!wc.isDestroyed() && tab.navigationSequence <= startedAtSequence + 1) {
+                    tab.pendingNavigationUrl = undefined;
+                    tab.pendingNavigationRequest = undefined;
                     wc.stop();
                     this.finishPreviewNavigation(tab);
                   }
@@ -2045,6 +2053,7 @@ export class BrowserService {
               case "stop":
                 this.cancelCrashRecovery(tab);
                 tab.pendingNavigationUrl = undefined;
+                tab.pendingNavigationRequest = undefined;
                 if (tab.state.crashed) tab.state.error = "The page crashed. Reload to recover.";
                 wc.stop();
                 break;
