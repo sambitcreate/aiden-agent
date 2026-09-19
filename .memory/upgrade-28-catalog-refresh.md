@@ -178,3 +178,19 @@ This evidence is provided to the orchestrator for review disposition.
 Final focused run: 166/166 catalog/auth/model/DataStore tests; typecheck, lint,
 and diff checks pass. The previous 377-test expanded DataStore/config receipt
 validation remains applicable; this change does not alter that layer.
+
+## Explicit custom AuthContext compatibility
+
+Independent Luna confirmed PRRT_kwDOTctvDc6j-CTa as P2 helper compatibility,
+not a current production outage. Root authorized a bounded explicit option.
+`RefreshPiCatalogsOptions.authContext` now passes directly into the public Pi
+refresh collection. Its documentation requires callers to supply the same context
+used to construct the source Models; omit only for Pi defaults. Pi exposes no
+public source-context getter. The existing registry construction/callers remain
+unchanged and default-context parity remains covered.
+
+Two direct/guarded custom env + virtual-file context tests failed on `8d4e8c2d`.
+Both now pass, for available and absent auth profiles. An offline control proves
+that supplying a custom context does not introduce ambient-auth resolution.
+No private SDK introspection or user-facing configuration was added.
+Final focused validation: 169/169 tests; typecheck, lint, diff checks pass.

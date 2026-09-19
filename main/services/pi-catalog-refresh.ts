@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { createModels } from "@earendil-works/pi-ai";
 import type {
+  AuthContext,
   Credential,
   CredentialStore,
   Models,
@@ -14,6 +15,8 @@ import {
 
 export interface RefreshPiCatalogsOptions {
   models: Models;
+  /** Pass the same context used to create models; omit only for Pi's default context. */
+  authContext?: AuthContext;
   credentials: CredentialStore;
   providerModelsStore: (providerId: string) => ProviderModelsStore;
   providerIds?: readonly string[];
@@ -125,12 +128,13 @@ function publicationOwnership(
 /**
  * Keep Pi's exact full-refresh OAuth/ambient-auth behavior in a per-call SDK
  * collection. Observe its credential reads and committed refreshes, then route
- * provider publications through Aiden's shared ownership queue. Aiden's native
- * collection uses Pi's default AuthContext, as does this refresh-only collection.
+ * provider publications through Aiden's shared ownership queue. Custom-context
+ * callers supply the same AuthContext used to create their source collection;
+ * Pi has no public context getter. The production registry uses Pi's default.
  * Provider state stays on the original provider objects; no catalog is copied.
  */
 async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise<RefreshPiCatalogsResult> {
-  const { models, credentials, providerModelsStore, providerIds, signal, force = true, allowNetwork = true } = options;
+  const { models, authContext, credentials, providerModelsStore, providerIds, signal, force = true, allowNetwork = true } = options;
   const snapshots = new Map<string, Credential | undefined>();
   const observedCredentials: CredentialStore = {
     read: async (id, authOptions) => {
@@ -147,6 +151,7 @@ async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise
     delete: (id, authOptions) => credentials.delete(id, authOptions),
   };
   const native = createModels({
+    authContext,
     credentials: observedCredentials,
     modelsStore: {
       read: (id) => providerModelsStore(id).read(),
@@ -199,6 +204,7 @@ async function refreshNativeCatalogs(options: RefreshPiCatalogsOptions): Promise
 /** Scoped setup checks auth without rotation; full/manual refresh retains Pi OAuth resolution. */
 export async function refreshPiCatalogs({
   models,
+  authContext,
   credentials,
   providerModelsStore,
   providerIds,
@@ -208,7 +214,7 @@ export async function refreshPiCatalogs({
 }: RefreshPiCatalogsOptions): Promise<RefreshPiCatalogsResult> {
   if (signal?.aborted) return { aborted: true, errors: new Map() };
   if (providerIds === undefined || !allowNetwork) {
-    return refreshNativeCatalogs({ models, credentials, providerModelsStore, providerIds, force, allowNetwork, signal });
+    return refreshNativeCatalogs({ models, authContext, credentials, providerModelsStore, providerIds, force, allowNetwork, signal });
   }
 
   const errors = new Map<string, Error>();
