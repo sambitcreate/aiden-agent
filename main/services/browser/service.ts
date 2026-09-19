@@ -444,6 +444,8 @@ export class BrowserService {
   }
   private observe(tab: LiveTab): void {
     const wc = tab.view.webContents;
+    let navigationSupersededCrash = false;
+    let pendingNavigationUrl: string | undefined;
     const publish = () => {
       if (tab.closing || wc.isDestroyed()) return;
       Object.assign(tab.state, {
@@ -464,7 +466,12 @@ export class BrowserService {
     wc.on("media-started-playing", publish);
     wc.on("media-paused", publish);
     wc.on("audio-state-changed", publish);
+    wc.on("frame-created", (_event, details) => {
+      if (details.frame === wc.mainFrame) navigationSupersededCrash = false;
+    });
     wc.on("did-navigate", () => {
+      navigationSupersededCrash = false;
+      pendingNavigationUrl = undefined;
       this.cancelCrashRecovery(tab);
       browserFileService.commitConsumer(tab.state.workspaceId, tab.state.id, wc.getURL());
       this.finishPreviewNavigation(tab);
@@ -497,6 +504,10 @@ export class BrowserService {
     });
     wc.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
       if (isMainFrame && !inPlace) {
+        // Capture native state before Electron delivers its queued crash event.
+        // Loading alone cannot distinguish a replacement from a current crash.
+        navigationSupersededCrash = wc.isCrashed();
+        pendingNavigationUrl = url;
         this.cancelCrashRecovery(tab);
         try { this.beginPreviewNavigation(tab, url); } catch (error) { wc.stop(); this.finishPreviewNavigation(tab); tab.state.error = String(error); }
         tab.navigationSequence += 1;
@@ -528,9 +539,10 @@ export class BrowserService {
     wc.on("render-process-gone", (_event, details) => {
       if (tab.closing || wc.isDestroyed()) return;
       // Electron 43 posts this notification without a document identity. The
-      // native crash/loading state belongs to the current document: a live
-      // replacement or an in-flight navigation supersedes the old crash.
-      if (!wc.isCrashed() || wc.isLoadingMainFrame()) return;
+      // navigation that began after native process death supersedes that crash.
+      // A crash after navigation started still needs recovery, even while the
+      // main-frame response is pending. Renderer recreation resets ownership.
+      if (!wc.isCrashed() || navigationSupersededCrash) return;
       this.cancelCrashRecovery(tab);
       tab.queue.interrupt();
       tab.contextId = undefined;
@@ -539,6 +551,7 @@ export class BrowserService {
       tab.crashTimes = tab.crashTimes.filter((time) => Date.now() - time < 30_000);
       tab.crashTimes.push(Date.now());
       if (tab.crashTimes.length <= 3) {
+        const recoveryUrl = pendingNavigationUrl;
         tab.state.error = "The page crashed. Restoring it…";
         const timer = setTimeout(
           () => {
@@ -547,7 +560,10 @@ export class BrowserService {
             if (!tab.closing && !wc.isDestroyed()) {
               tab.state.crashed = false;
               tab.state.error = undefined;
-              wc.reload();
+              // An initial navigation has no committed history entry to reload.
+              // Preserve the interrupted target instead of reloading the old page.
+              if (recoveryUrl) void wc.loadURL(recoveryUrl).catch(() => {});
+              else wc.reload();
             }
           },
           [300, 1000, 2000][tab.crashTimes.length - 1],

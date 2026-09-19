@@ -349,6 +349,57 @@ type NativeCrashProbe = {
 };
 type NativeCrashGlobal = typeof globalThis & { __nativeCrashProbe: NativeCrashProbe };
 
+async function installNativeCrashProbe(aiden: { app: import("@playwright/test").ElectronApplication }, target: string | number) {
+  await aiden.app.evaluate(({ webContents }, target) => {
+        const guest = typeof target === "number" ? webContents.fromId(target)! : webContents.getAllWebContents().find((contents) => contents.getURL() === target)!;
+        const emit = guest.emit.bind(guest);
+        const reload = guest.reload.bind(guest);
+        const loadURL = guest.loadURL.bind(guest);
+        let notification: (() => void) | undefined;
+        let arrived: (() => void) | undefined;
+        let reloads = 0;
+        let firing = false;
+        const callbacks: Array<() => void> = [];
+        const handles: ReturnType<typeof setTimeout>[] = [];
+        guest.emit = ((event: string, ...args: unknown[]) => {
+          if (event !== "render-process-gone") return emit(event, ...args);
+          notification = () => { emit(event, ...args); };
+          arrived?.();
+          return true;
+        }) as typeof guest.emit;
+        guest.reload = () => { reloads += 1; reload(); };
+        guest.loadURL = (...args) => { if (firing) reloads += 1; return loadURL(...args); };
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe = {
+          crash: () => new Promise<void>((resolve) => { arrived = resolve; guest.forcefullyCrashRenderer(); }),
+          deliver() {
+            const crashed = guest.isCrashed();
+            const loading = guest.isLoadingMainFrame();
+            const schedule = globalThis.setTimeout;
+            globalThis.setTimeout = ((callback: () => void, delay: number) => {
+              if (![300, 1000, 2000].includes(delay)) throw new Error(`Unexpected crash timer: ${delay}`);
+              callbacks.push(callback);
+              const handle = schedule(() => {}, 60_000);
+              handles.push(handle);
+              return handle;
+            }) as typeof setTimeout;
+            try { notification!(); notification = undefined; }
+            finally { globalThis.setTimeout = schedule; }
+            return { crashed, loading, timers: callbacks.length };
+          },
+          fire() {
+            firing = true;
+            try { for (const callback of callbacks.splice(0)) callback(); }
+            finally { firing = false; }
+            return reloads;
+          },
+          restore() {
+            for (const handle of handles) clearTimeout(handle);
+            if (!guest.isDestroyed()) { guest.emit = emit; guest.reload = reload; guest.loadURL = loadURL; }
+          },
+        };
+  }, target);
+}
+
 for (const delivery of ["pending", "committed"] as const) {
   test(`queued native crash after ${delivery} replacement navigation cannot schedule a stale reload`, async ({ aiden }) => {
     let releaseNext: (() => void) | undefined;
@@ -373,46 +424,7 @@ for (const delivery of ["pending", "committed"] as const) {
       const opened = await command(aiden.page, { action: "create", url: `${url}/start` });
       const tabId = opened.tabId!;
       await expect.poll(async () => (await command(aiden.page, { action: "snapshot", tabId, includeImage: false })).state.tabs.find((tab) => tab.id === tabId)?.title).toBe("Original document");
-      await aiden.app.evaluate(({ webContents }, target) => {
-        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === target)!;
-        const emit = guest.emit.bind(guest);
-        const reload = guest.reload.bind(guest);
-        let notification: (() => void) | undefined;
-        let arrived: (() => void) | undefined;
-        let reloads = 0;
-        const callbacks: Array<() => void> = [];
-        const handles: ReturnType<typeof setTimeout>[] = [];
-        guest.emit = ((event: string, ...args: unknown[]) => {
-          if (event !== "render-process-gone") return emit(event, ...args);
-          notification = () => { emit(event, ...args); };
-          arrived?.();
-          return true;
-        }) as typeof guest.emit;
-        guest.reload = () => { reloads += 1; reload(); };
-        (globalThis as NativeCrashGlobal).__nativeCrashProbe = {
-          crash: () => new Promise<void>((resolve) => { arrived = resolve; guest.forcefullyCrashRenderer(); }),
-          deliver() {
-            const crashed = guest.isCrashed();
-            const loading = guest.isLoadingMainFrame();
-            const schedule = globalThis.setTimeout;
-            globalThis.setTimeout = ((callback: () => void, delay: number) => {
-              if (![300, 1000, 2000].includes(delay)) throw new Error(`Unexpected crash timer: ${delay}`);
-              callbacks.push(callback);
-              const handle = schedule(() => {}, 60_000);
-              handles.push(handle);
-              return handle;
-            }) as typeof setTimeout;
-            try { notification!(); notification = undefined; }
-            finally { globalThis.setTimeout = schedule; }
-            return { crashed, loading, timers: callbacks.length };
-          },
-          fire() { for (const callback of callbacks.splice(0)) callback(); return reloads; },
-          restore() {
-            for (const handle of handles) clearTimeout(handle);
-            if (!guest.isDestroyed()) { guest.emit = emit; guest.reload = reload; }
-          },
-        };
-      }, `${url}/start`);
+      await installNativeCrashProbe(aiden, `${url}/start`);
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
       await command(aiden.page, { action: "navigate", tabId, url: `${url}/next`, readiness: "none" });
       await expect.poll(() => Boolean(releaseNext)).toBe(true);
@@ -452,3 +464,46 @@ for (const delivery of ["pending", "committed"] as const) {
     }
   });
 }
+
+test("current native crash during a subsequent held main-frame response still recovers", async ({ aiden }) => {
+    let heldRequest = false;
+    let hold = true;
+    const server = createServer((request, response) => {
+      if (request.url === "/held" && hold) { heldRequest = true; return; }
+      response.setHeader("content-type", "text/html");
+      response.end("<!doctype html><title>Recovered document</title>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      await finishLmStudioOnboarding(aiden.page);
+      const ids = await aiden.app.evaluate(({ webContents }) => webContents.getAllWebContents().map((contents) => contents.id));
+      // Finish Playwright attachment before intentionally crashing the guest.
+      const windowCount = aiden.app.windows().length;
+      const opened = await command(aiden.page, { action: "create", url: `${url}/start` });
+      await expect.poll(() => aiden.app.windows().length).toBe(windowCount + 1);
+      const id = await aiden.app.evaluate(({ webContents }, previous) => webContents.getAllWebContents().find((contents) => !previous.includes(contents.id))!.id, ids);
+      await installNativeCrashProbe(aiden, id);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Recovered document");
+      await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/held`, readiness: "none" });
+      await expect.poll(() => heldRequest).toBe(true);
+      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+      const crash = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
+      expect(crash).toMatchObject({ crashed: true, timers: 1 });
+
+      const state = await aiden.page.evaluate((workspaceId) =>
+        (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
+      expect(state.tabs.find((tab) => tab.id === opened.tabId)).toMatchObject({ crashed: true, loading: false, error: "The page crashed. Restoring it…" });
+      hold = false;
+      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
+        const guest = webContents.fromId(target);
+        return guest && { crashed: guest.isCrashed(), loading: guest.isLoadingMainFrame(), title: guest.getTitle(), url: guest.getURL() };
+      }, id)).toEqual({ crashed: false, loading: false, title: "Recovered document", url: `${url}/held` });
+      expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getURL(), id)).toBe(`${url}/held`);
+    } finally {
+      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
