@@ -1422,6 +1422,7 @@ function QuickViewCard({
   const open = panel.quickViewOpen;
   const [present, setPresent] = React.useState(open);
   const menuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const menuDestinationRef = React.useRef<EnvironmentReviewMode | "files" | null>(null);
   const subagentCounts = panel.subagentCounts;
   const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
   const representativeSubagent =
@@ -1491,16 +1492,48 @@ function QuickViewCard({
                   <Plus />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onSelect={() => panel.openReview("changes")}>
+              <DropdownMenuContent
+                align="end"
+                className="w-52"
+                onCloseAutoFocus={(event) => {
+                  const destination = menuDestinationRef.current;
+                  menuDestinationRef.current = null;
+                  if (!destination) return;
+                  event.preventDefault();
+                  const trigger = menuButtonRef.current;
+                  if (!open || !presented || panel.gitOperationBusy || !trigger?.isConnected) return;
+                  // Finish the menu's focus scope before opening tools. Otherwise its
+                  // return focus reactivates Quick View and covers tools in narrow layouts.
+                  // Remember the durable trigger, not the menu item that just unmounted.
+                  trigger.focus();
+                  if (destination === "files") panel.showTools("files");
+                  else panel.openReview(destination);
+                }}
+              >
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "changes";
+                  }}
+                >
                   <GitCompareArrows className="size-4" aria-hidden="true" />
                   Review changes
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => panel.showTools("files")}>
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "files";
+                  }}
+                >
                   <Files className="size-4" aria-hidden="true" />
                   Browse files
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => panel.openReview("compare")}>
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "compare";
+                  }}
+                >
                   <GitCompareArrows className="size-4" aria-hidden="true" />
                   Compare branch
                 </DropdownMenuItem>
