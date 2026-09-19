@@ -193,6 +193,23 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testSSEStreamDiscardsUnterminatedDoneEvent() = runBlocking {
+        val sseBody = """
+            event: done
+            id: 4
+            data: {"protocolVersion":1,"streamId":"stream_test","sequence":4,"timestamp":"2026-09-19T00:00:00Z","type":"done","terminal":true,"payload":{"messageId":"msg_done"}}
+        """.trimIndent() + "\n"
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(sseBody)
+        )
+
+        assertTrue(client.openStream("chat_1", "stream_test", lastEventId = 3).toList().isEmpty())
+        assertEquals("3", server.takeRequest().getHeader("Last-Event-ID"))
+    }
+
+    @Test
     fun testSSEStreamParsing() = runBlocking {
         val sseBody = """
             event: text_delta
@@ -211,7 +228,7 @@ class AidenRemoteClientTest {
             id: 4
             data: {"protocolVersion":1,"streamId":"stream_test","sequence":4,"timestamp":"2026-08-24T00:00:03Z","type":"done","terminal":true,"payload":{"messageId":"msg_done"}}
 
-        """.trimIndent()
+        """.trimIndent() + "\n\n"
 
         server.enqueue(
             MockResponse()
@@ -319,7 +336,7 @@ class AidenRemoteClientTest {
                     id: 1
                     data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"chat_progress","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[{"id":1,"subject":"Check progress","status":"completed"}]}}
 
-                    """.trimIndent()
+                    """.trimIndent() + "\n\n"
                 )
         )
 
@@ -342,7 +359,7 @@ class AidenRemoteClientTest {
             id: 1
             data: {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"task_update","terminal":false,"payload":{"version":1,"chatId":"stream_test","availability":"ready","epoch":"epoch_progress","revision":1,"updatedAt":"2026-08-24T00:00:00Z","tasks":[]}}
 
-        """.trimIndent()
+        """.trimIndent() + "\n\n"
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)
@@ -363,7 +380,7 @@ class AidenRemoteClientTest {
             id: 1
             data: {"protocolVersion":1,"streamId":"chat_progress","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"parent text"}}
 
-        """.trimIndent()
+        """.trimIndent() + "\n\n"
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)

@@ -600,3 +600,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `gh pr view --json files` truncates PR #71 at 100 files; use paginated REST files to check overlap against its full change list.
 - Troubleshooting log is tracked despite its ignore rule; preserved baseline entries and appended lane notes.
 - This checkout does not include Prettier; matched existing formatting manually and used repository ESLint.
+## 2026-09-19 — Android SSE EOF regression
+
+- Fresh worktree has no `.memory/`; read main checkout context and create a lane-specific memory note.
+- Three existing RemoteClient tests used `trimIndent()` SSE fixtures without a final blank line, silently relying on the EOF flush bug; terminate those fixtures explicitly.
