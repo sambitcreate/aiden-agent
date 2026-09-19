@@ -38,6 +38,7 @@ export function createScheduleServiceCore(
   const blockedWorkspaces = new Set<string>();
   let started = false;
   let globallyEnabled = true;
+  let startupRevision = 0;
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
     if (signal?.aborted)
@@ -246,21 +247,28 @@ export function createScheduleServiceCore(
     async start(): Promise<void> {
       if (started) return;
       started = true;
+      const revision = ++startupRevision;
+      const isCurrent = () => started && startupRevision === revision;
       try {
-        globallyEnabled = await dependencies.globallyEnabled();
+        const enabled = await dependencies.globallyEnabled();
+        if (!isCurrent()) return;
+        globallyEnabled = enabled;
         if (!globallyEnabled) return;
         const now = Date.now();
         const tasks = await store.list();
+        if (!isCurrent()) return;
         for (const task of tasks) {
           if (!task.enabled) continue;
           let latest: ScheduledTask | undefined;
           latest = await withTaskLifecycle(task.id, async () => {
+            if (!isCurrent()) return undefined;
             try {
               const current = await store.get(task.id);
-              if (!current?.enabled) return undefined;
+              if (!isCurrent() || !current?.enabled) return undefined;
               await schedule(current);
               return current;
             } catch (error) {
+              if (!isCurrent()) return undefined;
               stopJob(task.id);
               const message =
                 error instanceof Error ? error.message : String(error);
@@ -277,6 +285,7 @@ export function createScheduleServiceCore(
               return undefined;
             }
           });
+          if (!isCurrent()) return;
           if (!latest) continue;
           const missed =
             latest.nextRunAt !== undefined && latest.nextRunAt < now;
@@ -287,6 +296,7 @@ export function createScheduleServiceCore(
           }
         }
       } catch (error) {
+        if (!isCurrent()) return;
         started = false;
         for (const job of jobs.values()) job.stop();
         jobs.clear();
@@ -295,6 +305,7 @@ export function createScheduleServiceCore(
     },
 
     stop(): void {
+      startupRevision += 1;
       started = false;
       for (const job of jobs.values()) job.stop();
       jobs.clear();
@@ -484,6 +495,9 @@ export function createScheduleServiceCore(
     },
 
     async setGlobalEnabled(enabled: boolean): Promise<void> {
+      // Explicit settings changes own scheduling from this point onward;
+      // pending startup reads must not restore old settings or dispatch catch-up.
+      startupRevision += 1;
       globallyEnabled = enabled;
       if (!enabled) {
         for (const job of jobs.values()) job.stop();
