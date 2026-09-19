@@ -32,8 +32,8 @@ pass, alongside two controls proving current failures still disable the affected
 task or reject startup and allow retry. Existing core tests are already registered
 in both relevant package scripts.
 
-- `npm run test:scheduled`: 136 passed.
-- `npm run test:assistant-automations`: 171 passed.
+- `npm run test:scheduled`: 140 passed.
+- `npm run test:assistant-automations`: 175 passed.
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
 - `git diff --check`: passed.
@@ -128,3 +128,19 @@ preparation reservations. Validation: 136 scheduled and 171 automation tests,
 type-check, lint, and diff checks pass. Worktree was recreated at the original d8f0
 path after it was absent; private npm-ci dependencies were reinstalled. Usage was
 30% remaining at this follow-up. Fresh hosted review/CI remain pending.
+
+## Expected automatic overlap is not a run failure
+
+Independent review at `456840bc` found real Cron/manual overlap recording a
+synthetic failed run and startup/manual catch-up rejecting scheduler startup.
+Both caller-level negative proofs fail on that head. Dispatch now returns an
+explicit discriminated admission outcome: skipped/already-running or dispatched
+with a completion promise. Cron and catch-up skip expected overlap; manual runNow
+converts the skipped outcome into its existing caller-facing rejection. Actual
+executor rejections still reach the error recorder, including an error whose text
+exactly matches the overlap message (positive controls cover both callers).
+
+Validation totals: 140 scheduled and 175 automation tests; type-check, lint and
+diff checks pass. No automatic skip mutates task/run state or emits an error or
+broadcast, and existing manual/executing-run overlap protection is preserved.
+Fresh exact-head hosted gates and independent re-review remain pending.
