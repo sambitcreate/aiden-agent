@@ -343,3 +343,214 @@ test("returns empty array when no skill directories exist", async (t) => {
   const skills = await discoverSkills(undefined, home);
   assert.equal(skills.length, 0);
 });
+
+test("YAML skill metadata reaches the catalog and tools without losing multiline descriptions", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const fixtures = [
+    {
+      directory: "folded",
+      metadata:
+        "name: folded\ndescription: >-\n  Review code changes\n  and explain actionable findings.",
+      description: "Review code changes and explain actionable findings.",
+    },
+    {
+      directory: "literal",
+      metadata:
+        "name: literal\ndescription: |\n  Find matching files.\n  Explain why each file matters.",
+      description: "Find matching files. Explain why each file matters.",
+    },
+    {
+      directory: "quoted",
+      metadata: `name: 'quoted' # a comment\ndescription: "Explain \\"quoted\\" text: # literally."`,
+      description: 'Explain "quoted" text: # literally.',
+    },
+    {
+      directory: "nested",
+      metadata:
+        "name: nested\ndescription: Top-level description.\nmetadata:\n  name: wrong-name\n  description: Wrong description.",
+      description: "Top-level description.",
+    },
+    {
+      directory: "single-quoted",
+      metadata: "name: single-quoted\ndescription: 'Explain the author''s intent.'",
+      description: "Explain the author's intent.",
+    },
+  ];
+  for (const fixture of fixtures) {
+    await writeSkill(
+      path.join(home, ".aiden", "skills"),
+      fixture.directory,
+      `\uFEFF---\r\n${fixture.metadata.replace(/\n/g, "\r\n")}\r\n---\r\n# Instructions\r\n\r\nKeep this body.\r\n`,
+    );
+  }
+
+  const { SkillRegistry, formatAvailableSkills } = await import("./skill-registry.js");
+  const { buildSkillTools } = await import("./skill-tools.js");
+  const registry = new SkillRegistry({
+    getWorkspace: async () => undefined,
+    listConfigured: async () => [],
+    discover: () => discoverSkillCandidates(undefined, home),
+  });
+  const snapshot = await registry.snapshotResolved({ id: "workspace", permission: "ask" });
+  const tools = buildSkillTools(snapshot);
+  assert.equal(snapshot.available.length, fixtures.length);
+  for (const fixture of fixtures) {
+    const skill = snapshot.available.find((entry) => entry.name === fixture.directory);
+    assert.ok(skill, fixture.directory);
+    assert.equal(skill.description, fixture.description);
+    assert.equal(skill.instructions, "# Instructions\r\n\r\nKeep this body.");
+    assert.equal(
+      snapshot.catalog.find((entry) => entry.name === fixture.directory)?.description,
+      fixture.description,
+    );
+    assert.ok(
+      tools.find((tool) => tool.name === skill.toolKey)?.description.includes(fixture.description),
+    );
+    assert.ok(formatAvailableSkills(snapshot)?.includes(fixture.description));
+  }
+});
+
+test("malformed or non-string YAML metadata does not admit a skill or hide valid neighbors", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-invalid-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const invalid = [
+    "name: [unterminated",
+    "name: duplicate\nname: other",
+    "- name: sequence-root",
+    "scalar-root",
+    "name: 42",
+    "description: false",
+    "name: { nested: value }",
+    "description: [first, second]",
+    "name: !!unknown tagged",
+    "metadata: &identity alias-name\nname: *identity",
+    "metadata: &loop [*loop]\ndescription: *loop",
+  ];
+  for (const [index, metadata] of invalid.entries()) {
+    await writeSkill(
+      path.join(home, ".aiden", "skills"),
+      `a-invalid-${index}`,
+      `---\n${metadata}\n---\nInstructions`,
+    );
+  }
+  await writeSkill(
+    path.join(home, ".aiden", "skills"),
+    "z-valid",
+    "---\nname: valid\n---\nValid instructions",
+  );
+  const skills = await discoverSkillCandidates(undefined, home);
+  assert.deepEqual(
+    skills.map((skill) => skill.name),
+    ["valid"],
+  );
+});
+
+test("nested skill names cannot shadow a separately authored skill", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-identity-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, ".aiden", "skills");
+  await writeSkill(
+    root,
+    "a-first",
+    "---\nname: first\nmetadata:\n  name: target\n---\nFirst instructions",
+  );
+  await writeSkill(root, "z-target", "---\nname: target\n---\nTarget instructions");
+  const skills = await discoverSkills(undefined, home);
+  assert.equal(skills.length, 2);
+  assert.equal(
+    skills.find((skill) => skill.name === "target")?.instructions,
+    "Target instructions",
+  );
+});
+
+test("YAML parsing preserves legacy bodies, folder fallback, and description-only skills", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-fallback-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, ".aiden", "skills");
+  const fixtures = [
+    {
+      name: "plain",
+      content: "# Plain instructions\n\n---\nKeep the separator.",
+      description: "",
+      instructions: "# Plain instructions\n\n---\nKeep the separator.",
+    },
+    {
+      name: "empty",
+      content: "---\n---\nEmpty metadata body.",
+      description: "",
+      instructions: "Empty metadata body.",
+    },
+    {
+      name: "nested-only",
+      content:
+        "---\nmetadata:\n  name: nested-name\n  description: Nested metadata.\n---\nFolder identity body.",
+      description: "",
+      instructions: "Folder identity body.",
+    },
+    {
+      name: "description-only",
+      content: "---\ndescription: >\n  Use this description\n  as instructions.\n---",
+      description: "Use this description as instructions.",
+      instructions: "Use this description as instructions.",
+    },
+    {
+      name: "ignored-alias",
+      content: "---\nmetadata: &loop [*loop]\n---\nIgnore unrelated aliases.",
+      description: "",
+      instructions: "Ignore unrelated aliases.",
+    },
+  ];
+  for (const fixture of fixtures) await writeSkill(root, fixture.name, fixture.content);
+  await writeSkill(root, "unclosed", "---\nname: unclosed\nNo closing delimiter.");
+  const skills = await discoverSkillCandidates(undefined, home);
+  assert.equal(skills.length, fixtures.length);
+  for (const fixture of fixtures) {
+    const skill = skills.find((entry) => entry.name === fixture.name);
+    assert.ok(skill, fixture.name);
+    assert.equal(skill.description, fixture.description);
+    assert.equal(skill.instructions, fixture.instructions);
+  }
+});
+
+test("fresh skill resolution rejects selections after YAML description edits or parse errors", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-reload-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, ".aiden", "skills");
+  await writeSkill(
+    root,
+    "review",
+    "---\nname: review\ndescription: >\n  Review the first draft.\n---\nInstructions",
+  );
+  const { SkillRegistry } = await import("./skill-registry.js");
+  const workspace = {
+    id: "workspace",
+    name: "Workspace",
+    permission: "ask" as const,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const registry = new SkillRegistry({
+    getWorkspace: async () => workspace,
+    listConfigured: async () => [],
+    discover: () => discoverSkillCandidates(undefined, home),
+  });
+  const initial = (await registry.snapshot(workspace.id)).available[0];
+  assert.ok(initial);
+  await writeSkill(
+    root,
+    "review",
+    "---\nname: review\ndescription: >\n  Review the second draft.\n---\nInstructions",
+  );
+  await assert.rejects(registry.resolveFresh(workspace.id, initial.invocationId), {
+    code: "invalid_reference",
+  });
+  registry.invalidate();
+  const updated = (await registry.snapshot(workspace.id)).available[0];
+  assert.equal(updated?.description, "Review the second draft.");
+  assert.notEqual(updated.invocationId, initial.invocationId);
+  await writeSkill(root, "review", "---\nname: [broken\n---\nInstructions");
+  await assert.rejects(registry.resolveFresh(workspace.id, updated.invocationId), {
+    code: "invalid_reference",
+  });
+});
