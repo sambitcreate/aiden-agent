@@ -2195,6 +2195,87 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testStreamEOFDiscardsUnterminatedFramesAndReplaysFromLastCompleteEvent() async throws {
+        let client = makeClient()
+        let first = #"{"protocolVersion":1,"streamId":"stream-1","sequence":1,"timestamp":"2026-09-19T12:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"Hello"}}"#
+        let second = #"{"protocolVersion":1,"streamId":"stream-1","sequence":2,"timestamp":"2026-09-19T12:00:01Z","type":"text_delta","terminal":false,"payload":{"text":" world"}}"#
+        let terminal = #"{"protocolVersion":1,"streamId":"stream-1","sequence":2,"timestamp":"2026-09-19T12:00:01Z","type":"done","terminal":true,"payload":{"messageId":"message-1"}}"#
+
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decodeSSEEvent(from: Data(terminal.utf8)).terminal)
+
+        // Include complete JSON without a frame terminator, partial JSON, a
+        // header-only tail, and a UTF-8 scalar interrupted at the byte boundary.
+        for newline in ["\n", "\r\n"] {
+            let complete = "id: 1\(newline)data: \(first)\(newline)\(newline)"
+            let tails = [
+                Data("id: 2\(newline)data: \(second)".utf8),
+                Data("id: 2\(newline)data: \(second)\(newline)".utf8),
+                Data("id: 2\(newline)data: \(terminal)\(newline)".utf8),
+                Data("id: 2\(newline)data: {\"protocolVersion\":1".utf8),
+                Data("id: 2\(newline)".utf8),
+                Data("id: 2\(newline)data: ".utf8) + Data([0xF0, 0x9F])
+            ]
+            for tail in tails {
+                AidenRemoteMockURLProtocol.handler = { request in
+                    XCTAssertEqual(request.httpMethod, "GET")
+                    XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-1/events")
+                    let after = request.value(forHTTPHeaderField: "Last-Event-ID")
+                    let body: Data
+                    if after == "1" {
+                        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+                        XCTAssertEqual(query, [URLQueryItem(name: "after", value: "1")])
+                        body = Data("id: 2\(newline)data: \(second)\(newline)\(newline)".utf8)
+                    } else {
+                        XCTAssertNil(after)
+                        body = Data(complete.utf8) + tail
+                    }
+                    let response = HTTPURLResponse(
+                        url: try XCTUnwrap(request.url), statusCode: 200,
+                        httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+                    )!
+                    return (response, body)
+                }
+
+                var events: [AidenRemoteStreamEvent] = []
+                for try await event in client.streamEvents(id: "stream-1", after: 0) {
+                    events.append(event)
+                }
+                XCTAssertEqual(events.map(\.sequence), [1], "EOF must not acknowledge an incomplete frame.")
+                XCTAssertEqual(events.map { $0.payload?.text }, ["Hello"])
+                XCTAssertFalse(events.contains { $0.terminal })
+
+                let cursor = try XCTUnwrap(events.last?.sequence)
+                for try await event in client.streamEvents(id: "stream-1", after: cursor) {
+                    events.append(event)
+                }
+                XCTAssertEqual(events.map(\.sequence), [1, 2])
+                XCTAssertEqual(events.compactMap { $0.payload?.text }.joined(), "Hello world")
+            }
+        }
+    }
+
+    func testStreamCompleteTerminalFrameStillDispatchesAtEOF() async throws {
+        let client = makeClient()
+        let terminal = #"{"protocolVersion":1,"streamId":"stream-1","sequence":1,"timestamp":"2026-09-19T12:00:01Z","type":"done","terminal":true,"payload":{"messageId":"message-1"}}"#
+        for newline in ["\n", "\r\n"] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url), statusCode: 200,
+                    httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("id: 1\(newline)data: \(terminal)\(newline)\(newline)".utf8))
+            }
+            var events: [AidenRemoteStreamEvent] = []
+            for try await event in client.streamEvents(id: "stream-1", after: 0) {
+                events.append(event)
+            }
+            XCTAssertEqual(events.map(\.sequence), [1])
+            XCTAssertEqual(events.first?.type, .done)
+            XCTAssertEqual(events.first?.terminal, true)
+            XCTAssertEqual(events.first?.payload?.messageId, "message-1")
+        }
+    }
+
     func testProgressClientUsesNegotiatedRoutesAndChatScopedDirectSnapshotEvents() async throws {
         let client = makeClient()
         let taskData = try botFixtureData(at: ["taskProgress"])

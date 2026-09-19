@@ -533,3 +533,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 iOS upgrade
+
+- This isolated checkout has no `.memory/`; read the source checkout project context and create a lane-specific memory note.
+- `xcrun devicectl list devices` hangs without output; use bounded device discovery and retain physical acceptance as an explicit gate if unavailable.
+- Stable Xcode stalls in `xcodebuild -runFirstLaunch`; per-command `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` builds successfully. The available physical iPhone remains in Xcode device-symbol preparation, blocking focused XCTest launch.
+- Physical XCTest retry also reported missing compatible DeviceSupport symbols and remained preparing beyond its destination timeout; stopped it and recorded hardware execution as outstanding. A temporary macOS probe reproduced the baseline framing bug and verified the fixed production parser/decoder/byte loop.
