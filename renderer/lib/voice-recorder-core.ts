@@ -8,7 +8,11 @@ import { voiceApi } from "./ipc";
 import type { VoiceProvider } from "./types";
 import { bytesToBase64 } from "./live-pcm-capture";
 import { encodeMonoPcm16Wav } from "./wav-audio";
-import { DictationDeadline, transcriptionBudgetMs } from "./dictation-operation-gate";
+import {
+  DictationDeadline,
+  transcriptionBudgetMs,
+  transcriptionTimeoutError,
+} from "./dictation-operation-gate";
 import { GEMINI_TRANSCRIPTION_MODEL } from "../shared/voice-models";
 
 export interface TranscribeOptions {
@@ -116,18 +120,35 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutController.signal])
     : timeoutController.signal;
-  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider));
-  return deadline.run(convertAndTranscribeBlob(blob, { ...options, operationId, signal }), () => {
+  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider), () =>
+    performance.now(),
+  );
+  const onTimeout = () => {
+    if (timeoutController.signal.aborted) return;
     // Main cannot cancel a request that conversion has not submitted yet.
     // Fence late browser callbacks before asking it to cancel active inference.
-    timeoutController.abort();
-    return cancelTranscription(options.provider, operationId);
-  });
+    timeoutController.abort(transcriptionTimeoutError());
+    return Promise.resolve().then(() => cancelTranscription(options.provider, operationId));
+  };
+  const beforeDispatch = () => {
+    // Encoding can block the event loop beyond the budget before the timer runs.
+    if (deadline.remaining() <= 0) {
+      void onTimeout()?.catch(() => {
+        // Best-effort cancellation must not replace the terminal timeout error.
+      });
+    }
+    signal.throwIfAborted();
+  };
+  return deadline.run(
+    convertAndTranscribeBlob(blob, { ...options, operationId, signal }, beforeDispatch),
+    onTimeout,
+  );
 }
 
 async function convertAndTranscribeBlob(
   blob: Blob,
   options: TranscribeOptions & { operationId: string },
+  beforeDispatch: () => void,
 ): Promise<string> {
   const operationId = options.operationId;
   if (options.provider === "local") {
@@ -135,19 +156,20 @@ async function convertAndTranscribeBlob(
       throw new Error("Download and select an on-device model in Settings → Voice.");
     }
     const pcm = float32ToBase64(await blobToMono16k(blob));
-    options.signal?.throwIfAborted();
+    beforeDispatch();
     return (await voiceApi.transcribeLocal(pcm, options.localModel, operationId)).trim();
   }
   if (options.provider === "gemini") {
     const samples = await blobToMono16k(blob);
     options.signal?.throwIfAborted();
     const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
+    beforeDispatch();
     return (
       await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL, operationId)
     ).trim();
   }
   const base64 = await blobToBase64(blob);
-  options.signal?.throwIfAborted();
+  beforeDispatch();
   return (await voiceApi.transcribe(base64, blob.type, options.model, operationId)).trim();
 }
 
