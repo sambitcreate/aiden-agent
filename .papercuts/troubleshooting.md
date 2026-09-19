@@ -556,3 +556,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Dependencies are absent; install locally without Electron lifecycle downloads for focused service tests.
 
 - Restored existing troubleshooting history after detecting an overwrite in diff review; lane notes are appended.
+## 2026-09-19 — upgrade-06-skills
+- Fresh worktree has no ignored `.memory/`; read canonical project context/history and the completed skill plan, then create a lane-specific memory note locally.
+- Broad service searches hit a large generated browser source string; restrict searches to skill files to keep inspection usable.
+- Dependencies installed locally with lifecycle scripts disabled; this service-only lane needs no Electron/native build.
+- YAML AST map `get()` generic inference narrowed scalar text to `never`; treat the retrieved node as `unknown` and narrow through `isScalar` plus a string check before reading metadata.
