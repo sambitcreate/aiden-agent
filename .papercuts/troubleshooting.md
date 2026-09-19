@@ -716,3 +716,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Git rejects staging the ignored `.papercuts` path with ordinary add in this worktree; force-add the explicit note path together with the required unique `.memory` note.
 - Third Pullfrog regression: an unmatched static root selection survived direct submode entry. Render and reconcile all selectable static and dynamic rows from complete mode inventories, including disabled and force-mounted retry controls.
 - Integration palette flake reproduced deterministically: providers resolved before settings, but the model memo omitted settings readiness and stayed empty when hidden-model preferences remained undefined. Include settings data in the memo dependencies and gate settings delivery in an Electron regression.
+
+- PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.

@@ -140,16 +140,7 @@ export async function refreshPiCatalogs({
         await raceWithAbort(provider.refreshModels({
           credential,
           stored,
-          publish: async (publication) => {
-            if (!await canPublish() || !isCurrent()) return false;
-            if (publication.persist === null) await store.delete();
-            else if (publication.persist !== undefined) await store.write(publication.persist);
-            // Persistence may already have started when ownership is lost.
-            // Never let its completion publish obsolete provider-private state.
-            if (!await canPublish() || !isCurrent()) return false;
-            publication.update?.();
-            return true;
-          },
+          publish: (publication) => store.publish(publication, canPublish, isCurrent),
           allowNetwork: true,
           force,
           signal: effectiveSignal,
