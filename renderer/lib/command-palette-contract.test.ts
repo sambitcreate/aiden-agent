@@ -115,3 +115,41 @@ test("selection excludes disabled or hidden results and respects force-mounted r
   assert.equal(reconcilePaletteResult(root.value, [retry], "zzq-no-match"), retry.value);
   assert.equal(reconcilePaletteResult(root.value, [disabled, loading, retry], ""), retry.value);
 });
+
+test("ordinary enabled matches take precedence over selected forced retries", () => {
+  const retry = staticPaletteResult("Retry loading providers", { forceMount: true });
+  const refresh = staticPaletteResult("Refresh provider model catalogs update");
+  const provider = paletteResult("provider:one", ["Local provider"]);
+  const loading = staticPaletteResult("Loading providers", { disabled: true, forceMount: true });
+  const results = [retry, loading, refresh, provider];
+  assert.equal(reconcilePaletteResult(retry.value, results, "Refresh"), refresh.value);
+  assert.equal(reconcilePaletteResult(retry.value, results, "Local"), provider.value);
+  assert.equal(reconcilePaletteResult(retry.value, results, ""), refresh.value);
+  assert.equal(reconcilePaletteResult(retry.value, results, "Retry"), retry.value);
+  assert.equal(reconcilePaletteResult(refresh.value, results, "zzq-no-match"), retry.value);
+  assert.equal(reconcilePaletteResult(retry.value, [retry, { ...refresh, disabled: true }], "Refresh"), retry.value);
+  assert.equal(reconcilePaletteResult(retry.value, [loading, { ...refresh, disabled: true }], "Refresh"), "");
+  // Within ordinary matches, preserve a selected record through metadata changes.
+  const renamed = paletteResult(provider.identity, ["Local provider renamed"]);
+  assert.equal(reconcilePaletteResult(provider.value, [retry, refresh, renamed], "provider"), renamed.value);
+});
+
+test("every mode uses retries only when ordinary enabled matches are absent", () => {
+  for (const [mode, ordinary, hasRetry] of [
+    ["root", staticPaletteResult("Toggle sidebar"), false],
+    ["chats", staticPaletteResult("New chat conversation"), true],
+    ["models", paletteResult("model:one", ["Local model"]), true],
+    ["providers", staticPaletteResult("Refresh provider catalogs"), true],
+    ["settings", staticPaletteResult("Use dark appearance"), false],
+  ] as const) {
+    const retry = staticPaletteResult(`Retry loading ${mode}`, { forceMount: true });
+    const loading = staticPaletteResult(`Loading ${mode}`, { forceMount: true, disabled: true });
+    const fallback = hasRetry ? [retry] : [];
+    const results = [...fallback, loading, ordinary];
+    assert.equal(reconcilePaletteResult(retry.value, results, ordinary.keywords[0]), ordinary.value, mode);
+    assert.equal(reconcilePaletteResult(retry.value, results, ""), ordinary.value, mode);
+    assert.equal(reconcilePaletteResult(ordinary.value, results, "zzq-no-match"), hasRetry ? retry.value : "", mode);
+    assert.equal(reconcilePaletteResult(ordinary.value, [...fallback, loading, { ...ordinary, disabled: true }], ""), hasRetry ? retry.value : "", mode);
+    assert.equal(reconcilePaletteResult(retry.value, [loading], ""), "", mode);
+  }
+});
