@@ -41,21 +41,28 @@ export function reconcilePaletteResult(
     // Static commands use their literal value as identity, but still must exist
     // in this mode's visible, enabled result inventory.
   }
-  const scoreResult = (result: PaletteResult): number => {
-    if (result.disabled) return 0;
-    if (!search || result.forceMount) return 1;
-    return filterPaletteResult(result.value, search, result.keywords);
-  };
-  const current = results.find((result) => result.identity === identity);
-  if (current && scoreResult(current) > 0) {
-    return current.value;
+  // cmdk excludes forceMount items from its filter inventory. Their visibility
+  // is not evidence of a query match: use them only when no enabled ordinary
+  // result matches, including when an ordinary action becomes enabled again.
+  const matches = results
+    .filter((result) => !result.disabled && !result.forceMount)
+    .map((result) => ({
+      result,
+      score: search ? filterPaletteResult(result.value, search, result.keywords) : 1,
+    }))
+    .filter(({ score }) => score > 0);
+  const candidates = matches.length > 0 ? matches : results
+    .filter((result) => !result.disabled && result.forceMount)
+    .map((result) => ({ result, score: 1 }));
+  const current = candidates.find(({ result }) => result.identity === identity);
+  if (current) {
+    return current.result.value;
   }
   // If a rename/removal excludes the selected record, keep a visible destination
   // selected using cmdk scoring with stable input-order tie breaking.
   let bestValue = "";
   let bestScore = 0;
-  for (const result of results) {
-    const score = scoreResult(result);
+  for (const { result, score } of candidates) {
     if (score > bestScore) {
       bestScore = score;
       bestValue = result.value;

@@ -862,3 +862,146 @@ test("command palette loads model results when settings resolve after providers"
   await search.press("Enter");
   await expect(palette).toBeHidden();
 });
+
+test("command palette prefers matching provider actions over forced retries", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ ipcMain }) => {
+    const state = { listCalls: 0, refreshCalls: 0, releaseRefresh: () => {} };
+    const refreshGate = new Promise<void>((resolve) => { state.releaseRefresh = resolve; });
+    Object.assign(globalThis, { paletteProviderError: state });
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => {
+      state.listCalls++;
+      throw new Error("Intentional palette provider failure");
+    });
+    ipcMain.removeHandler("providers:refresh");
+    ipcMain.handle("providers:refresh", async () => {
+      state.refreshCalls++;
+      await refreshGate;
+      throw new Error("Intentional catalog refresh failure");
+    });
+  });
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("app:command", { commandId: "provider.manage" });
+    }
+  });
+  const palette = page.locator("[data-command-palette-content]");
+  const search = palette.getByRole("combobox", { name: "Search providers" });
+  const retry = palette.getByRole("option", { name: /Providers could not be loaded/u });
+  const refresh = palette.getByRole("option", { name: /Refresh.*providers|Refresh provider catalogs/u });
+  await expect(retry).toBeVisible();
+  await search.fill("Retry");
+  await expect(retry).toHaveAttribute("aria-selected", "true");
+  await search.fill("Refresh");
+  // Activate immediately after editing, without waiting for selection or arrows.
+  await search.press("Enter");
+  await expect.poll(() => app.evaluate(() =>
+    (globalThis as unknown as { paletteProviderError: { refreshCalls: number } }).paletteProviderError.refreshCalls,
+  )).toBe(1);
+  // Refresh is disabled while busy, so the visible retry becomes the fallback.
+  await expect(refresh).toHaveAttribute("aria-disabled", "true");
+  await expect(retry).toHaveAttribute("aria-selected", "true");
+  await search.fill("🧪 no matching palette result");
+  await expect(retry).toHaveAttribute("aria-selected", "true");
+  const callsBeforeRetry = await app.evaluate(() =>
+    (globalThis as unknown as { paletteProviderError: { listCalls: number } }).paletteProviderError.listCalls,
+  );
+  await search.press("Enter");
+  await expect.poll(() => app.evaluate(() =>
+    (globalThis as unknown as { paletteProviderError: { listCalls: number } }).paletteProviderError.listCalls,
+  )).toBeGreaterThan(callsBeforeRetry);
+  await search.fill("");
+  await expect(retry).toHaveAttribute("aria-selected", "true");
+  await search.fill("Refresh");
+  await expect(retry).toHaveAttribute("aria-selected", "true");
+  await app.evaluate(() => {
+    (globalThis as unknown as { paletteProviderError: { releaseRefresh: () => void } }).paletteProviderError.releaseRefresh();
+  });
+  await expect(refresh).toHaveAttribute("aria-disabled", "false");
+  // The query is unchanged when Refresh becomes enabled. cmdk does not perform
+  // its query-change auto-selection here; reconciliation must leave the fallback.
+  await expect(refresh).toHaveAttribute("aria-selected", "true");
+  await expect(retry).toHaveAttribute("aria-selected", "false");
+  await search.press("Enter");
+  await expect.poll(() => app.evaluate(() =>
+    (globalThis as unknown as { paletteProviderError: { refreshCalls: number } }).paletteProviderError.refreshCalls,
+  )).toBe(2);
+});
+
+for (const mode of [
+  { command: "chat.search", label: "chats", channel: "chats:list", ordinary: "New chat" },
+  { command: "model.change", label: "models", channel: "providers:list", ordinary: "Aiden E2E Vision" },
+]) {
+  test(`command palette ${mode.label} retry fallback follows errors and recovery`, async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const providers = await page.evaluate(() =>
+      (window as unknown as { aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } } })
+        .aidenAPI.ipc.invoke("providers:list"),
+    );
+    await app.evaluate(({ ipcMain }, { channel, providers }) => {
+      const state = { recovered: false, calls: 0, release: () => {} };
+      const gate = new Promise<void>((resolve) => { state.release = resolve; });
+      // Initial provider loading gates the entire shell; let it reach error so
+      // model mode can open. Chats loading leaves the palette shell available.
+      if (channel === "providers:list") state.release();
+      Object.assign(globalThis, { paletteRecovery: state });
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, async () => {
+        state.calls++;
+        await gate;
+        if (!state.recovered) throw new Error("Intentional palette loading failure");
+        return channel === "chats:list" ? [] : providers;
+      });
+    }, { channel: mode.channel, providers });
+    await page.reload();
+    // The composer waits on these reads; the shell and palette are available
+    // while they are pending, which is the loading state under test.
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible({ timeout: 15_000 });
+    await app.evaluate(({ BrowserWindow }, command) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send("app:command", { commandId: command });
+      }
+    }, mode.command);
+    const palette = page.locator("[data-command-palette-content]");
+    const search = palette.getByRole("combobox", { name: `Search ${mode.label}` });
+    await search.fill("🧪 no matching palette result");
+    const selected = palette.locator('[role="option"][aria-selected="true"]');
+    if (mode.label === "chats") {
+      await expect(palette.getByRole("option", { name: "Loading chats…" })).toHaveAttribute("aria-disabled", "true");
+      await expect(selected).toHaveCount(0);
+      await search.press("Enter");
+      await expect(palette).toBeVisible();
+      await app.evaluate(() => {
+        (globalThis as unknown as { paletteRecovery: { release: () => void } }).paletteRecovery.release();
+      });
+    }
+    const retry = palette.getByRole("option", { name: /could not be loaded/u });
+    await expect(retry).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
+    await search.fill(mode.ordinary);
+    if (mode.label === "chats") {
+      await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute("aria-selected", "true");
+      await expect(retry).toHaveAttribute("aria-selected", "false");
+    } else {
+      // Model errors replace ordinary results; retry is the only enabled row.
+      await expect(retry).toHaveAttribute("aria-selected", "true");
+    }
+    await search.fill("🧪 no matching palette result");
+    await expect(retry).toHaveAttribute("aria-selected", "true");
+    await app.evaluate(() => {
+      (globalThis as unknown as { paletteRecovery: { recovered: boolean } }).paletteRecovery.recovered = true;
+    });
+    await search.press("Enter");
+    await expect(retry).toHaveCount(0);
+    await expect(palette.getByRole("option")).toHaveCount(0);
+    await expect(selected).toHaveCount(0);
+    await search.fill(mode.ordinary);
+    await expect(selected).toHaveCount(1);
+    await search.press("Enter");
+    await expect(palette).toBeHidden();
+  });
+}
