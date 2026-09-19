@@ -741,3 +741,124 @@ for (const field of ["title", "timestamp"] as const) {
     await expect(page.getByText("Opened palette-chat-first", { exact: true })).toHaveCount(0);
   });
 }
+
+for (const mode of [
+  { command: "chat.search", label: "chats" },
+  { command: "model.change", label: "models" },
+  { command: "provider.manage", label: "providers" },
+  { command: "settings.search", label: "settings" },
+]) {
+  test(`command palette direct ${mode.label} entry discards stale root selection`, async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.keyboard.press("Meta+k");
+    const palette = page.locator("[data-command-palette-content]");
+    await palette.getByRole("combobox").fill("Toggle sidebar");
+    await expect(palette.getByRole("option", { name: /Toggle sidebar/u })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+    await app.evaluate(({ BrowserWindow, ipcMain }, command) => {
+      // Avoid any provider-network work: Enter only verifies the palette action.
+      ipcMain.removeHandler("providers:refresh");
+      ipcMain.handle("providers:refresh", () => ({ providers: [], errors: [] }));
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send("app:command", { commandId: command });
+      }
+    }, mode.command);
+    const search = palette.getByRole("combobox", { name: `Search ${mode.label}` });
+    await expect(search).toBeVisible();
+    await expect(search).toHaveValue("");
+    const selected = palette.locator('[role="option"][aria-selected="true"]');
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toHaveAttribute("aria-disabled", "false");
+    await search.press("Enter");
+    if (mode.label === "providers") {
+      await expect(page.getByText("Provider model catalogs refreshed", { exact: true })).toBeVisible();
+    } else {
+      await expect(palette).toBeHidden();
+    }
+  });
+}
+
+test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.keyboard.press("Meta+k");
+  const palette = page.locator("[data-command-palette-content]");
+  const search = palette.getByRole("combobox");
+  await search.fill("Toggle sidebar");
+  await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
+  await search.fill("zzq-no-such-command");
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(0);
+  await search.press("Enter");
+  await expect(palette).toBeVisible();
+  await search.fill("Open workspace in preferred editor");
+  await expect(palette.getByRole("option").first()).toHaveAttribute("aria-disabled", "true");
+  await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(0);
+  await search.press("Enter");
+  await expect(palette).toBeVisible();
+  await search.fill("Search chats");
+  await search.press("Enter");
+  await expect(search).toHaveAttribute("aria-label", "Search chats");
+  await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute("aria-selected", "true");
+  await search.press("Escape");
+  await expect(search).toHaveAttribute("aria-label", "Search commands");
+  await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
+  // Search chats is now the recent root command. Enter re-enters that mode,
+  // and the next Enter activates its New chat default without arrow recovery.
+  await expect(palette.getByRole("option", { name: "Search chats" })).toHaveAttribute("aria-selected", "true");
+  await search.press("Enter");
+  await expect(search).toHaveAttribute("aria-label", "Search chats");
+  await search.press("Enter");
+  await expect(palette).toBeHidden();
+});
+
+test("command palette loads model results when settings resolve after providers", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const settings = await page.evaluate(async () => {
+    const { ipc } = (window as unknown as {
+      aidenAPI: { ipc: { invoke(channel: string): Promise<Record<string, unknown>> } };
+    }).aidenAPI;
+    const settings = await ipc.invoke("settings:get");
+    delete settings.hiddenModelsByProvider;
+    return settings;
+  });
+  await app.evaluate(({ ipcMain }, settings) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    Object.assign(globalThis, { paletteReleaseSettings: release });
+    ipcMain.removeHandler("settings:get");
+    ipcMain.handle("settings:get", async () => { await gate; return settings; });
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => ["first", "second"].map((id) => ({
+      id: `late-settings-${id}`,
+      kind: "openai",
+      label: "Delayed settings provider",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      models: ["readiness-model"],
+      needsKey: false,
+      hasKey: false,
+      deployment: "local",
+    })));
+  }, settings);
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+  await page.keyboard.press("Meta+k");
+  const palette = page.locator("[data-command-palette-content]");
+  await palette.getByRole("option", { name: "Change model" }).click();
+  const search = palette.getByRole("combobox", { name: "Search models" });
+  await expect(search).toBeVisible();
+  await expect(palette.getByText("Loading models…", { exact: true })).toBeHidden();
+  await expect(palette.getByRole("option")).toHaveCount(0);
+  await app.evaluate(() => {
+    (globalThis as unknown as { paletteReleaseSettings: () => void }).paletteReleaseSettings();
+  });
+  await expect(palette.getByRole("option")).toHaveCount(2);
+  await search.fill("Delayed settings provider");
+  await expect(palette.getByRole("option")).toHaveCount(2);
+  await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
+  await search.press("Enter");
+  await expect(palette).toBeHidden();
+});

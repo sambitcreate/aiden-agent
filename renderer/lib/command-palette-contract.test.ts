@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { filterPaletteResult, paletteResult, reconcilePaletteResult } from "./command-palette-results";
+import { filterPaletteResult, paletteResult, reconcilePaletteResult, staticPaletteResult } from "./command-palette-results";
 
 const source = readFileSync(new URL("../components/command-palette.tsx", import.meta.url), "utf8");
 
@@ -74,7 +74,7 @@ test("a selected result excluded by rename or removal falls back to a visible ma
   assert.equal(reconcilePaletteResult(previous.value, [renamed, remaining], "apple"), remaining.value);
   assert.equal(reconcilePaletteResult(previous.value, [remaining], "apple"), remaining.value);
   assert.equal(reconcilePaletteResult(previous.value, [renamed], "apple"), "");
-  assert.equal(reconcilePaletteResult("Search chats", [renamed], ""), "Search chats");
+  assert.equal(reconcilePaletteResult("Search chats", [renamed], ""), renamed.value);
 });
 
 test("provider and model metadata updates preserve selection through the record ID", () => {
@@ -85,4 +85,33 @@ test("provider and model metadata updates preserve selection through the record 
     assert.equal(filterPaletteResult(updated.value, "Old label", updated.keywords), 0);
     assert.ok(filterPaletteResult(updated.value, "New label", updated.keywords) > 0);
   }
+});
+
+test("mode transitions reconcile both stale static and dynamic selections", () => {
+  const root = staticPaletteResult("Toggle sidebar");
+  const newChat = staticPaletteResult("New chat conversation");
+  const model = paletteResult("model:provider::model", ["Model", "Provider"]);
+  const refresh = staticPaletteResult("Refresh provider model catalogs update");
+  const appearance = staticPaletteResult("Follow macOS appearance theme appearance");
+  const destination = staticPaletteResult("Keyboard shortcuts keyboard bindings");
+  for (const entry of [newChat, model, refresh, appearance, destination]) {
+    assert.equal(reconcilePaletteResult(root.value, [entry], ""), entry.value);
+    assert.equal(reconcilePaletteResult(entry.value, [root], ""), root.value);
+    assert.equal(reconcilePaletteResult(entry.value, [entry], ""), entry.value);
+  }
+  assert.equal(reconcilePaletteResult("", [root], ""), root.value);
+});
+
+test("selection excludes disabled or hidden results and respects force-mounted retry actions", () => {
+  const disabled = staticPaletteResult("Refresh providers", { disabled: true });
+  const root = staticPaletteResult("Toggle sidebar");
+  const retry = staticPaletteResult("Retry loading models", { forceMount: true });
+  const loading = staticPaletteResult("Loading models", { disabled: true, forceMount: true });
+  assert.equal(reconcilePaletteResult(disabled.value, [disabled, root], ""), root.value);
+  assert.equal(reconcilePaletteResult(root.value, [disabled], ""), "");
+  assert.equal(reconcilePaletteResult(root.value, [root], "zzq-no-match"), "");
+  assert.equal(reconcilePaletteResult(root.value, [], ""), "");
+  assert.equal(reconcilePaletteResult(root.value, [loading], "zzq-no-match"), "");
+  assert.equal(reconcilePaletteResult(root.value, [retry], "zzq-no-match"), retry.value);
+  assert.equal(reconcilePaletteResult(root.value, [disabled, loading, retry], ""), retry.value);
 });
