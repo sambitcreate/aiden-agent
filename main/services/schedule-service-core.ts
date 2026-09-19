@@ -22,6 +22,15 @@ interface RunningTask {
   workspaceReady: Promise<void>;
 }
 
+type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
+  | { automatic: true; isCurrent: () => boolean }
+  | { automatic: false }
+);
+
+type DispatchResult =
+  | { kind: "skipped"; reason: "already-running" }
+  | { kind: "dispatched"; completion: Promise<ScheduledRun> };
+
 export interface ScheduleServiceDependencies {
   store: ScheduleStore;
   execution: ScheduleExecutionLike;
@@ -118,18 +127,15 @@ export function createScheduleServiceCore(
 
   function dispatch(
     taskId: string,
-    options: { runId?: string; expectedUpdatedAt?: number } & (
-      | { automatic: true; isCurrent: () => boolean }
-      | { automatic: false }
-    ),
-  ): Promise<ScheduledRun> {
+    options: DispatchOptions,
+  ): DispatchResult {
     if (options.automatic && !options.isCurrent()) {
       throw new Error("This scheduled task was cancelled.");
     }
     const previous = runningTasks.get(taskId);
     if (previous) {
       if (!previous.automatic || previous.executionStarted || previous.isCurrent()) {
-        throw new Error("This scheduled task is already running.");
+        return { kind: "skipped", reason: "already-running" };
       }
       // Supersede only obsolete automatic preparation. It cannot enter execution
       // or publish its pending claim once cancelled; real runs retain their slot.
@@ -190,7 +196,7 @@ export function createScheduleServiceCore(
       if (runningTasks.get(taskId) === state) runningTasks.delete(taskId);
     });
     runningTasks.set(taskId, state);
-    return state.promise;
+    return { kind: "dispatched", completion: state.promise };
   }
 
   async function cancelAndSettle(taskId?: string): Promise<void> {
@@ -256,7 +262,8 @@ export function createScheduleServiceCore(
         },
       },
       async () => {
-        await dispatch(task.id, { automatic: true, isCurrent: ownsJob });
+        const result = dispatch(task.id, { automatic: true, isCurrent: ownsJob });
+        if (result.kind === "dispatched") await result.completion;
       },
     );
     const ownsJob = () =>
@@ -341,9 +348,12 @@ export function createScheduleServiceCore(
             const job = jobs.get(latest.id);
             if (!job) continue;
             const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
-            void dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup }).catch((error) =>
-              recordUnexpectedFailure(latest, error, ownsCatchup),
-            );
+            const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
+            if (result.kind === "dispatched") {
+              void result.completion.catch((error) =>
+                recordUnexpectedFailure(latest, error, ownsCatchup),
+              );
+            }
           }
         }
       } catch (error) {
@@ -528,11 +538,13 @@ export function createScheduleServiceCore(
       options: { signal?: AbortSignal; runId?: string; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledRun> {
       throwIfAborted(options.signal, "run");
-      const operation = dispatch(id, {
+      const result = dispatch(id, {
         automatic: false,
         runId: options.runId,
         expectedUpdatedAt: options.expectedUpdatedAt,
       });
+      if (result.kind === "skipped") throw new Error("This scheduled task is already running.");
+      const operation = result.completion;
       if (!options.signal) return operation;
       const state = runningTasks.get(id);
       const cancel = () => {

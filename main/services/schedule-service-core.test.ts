@@ -92,6 +92,7 @@ function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
     store,
     taskPersistence,
     runPersistence,
+    execution,
     service,
     broadcasts,
     errors,
@@ -1052,3 +1053,63 @@ test("replacement Cron reclaims an obsolete pending claim without stale publicat
   testbed.service.stop();
   await current;
 });
+
+for (const automaticSource of ["Cron", "startup catch-up"] as const) {
+  test(`${automaticSource} skips overlap with an active manual run without a synthetic failure`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    if (automaticSource === "Cron") await testbed.service.start();
+    else await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+    const manual = testbed.service.runNow(task.id);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(testbed.hasPending(task.id), true);
+    const before = await testbed.store.get(task.id);
+    const broadcasts = testbed.broadcasts.length;
+
+    if (automaticSource === "Cron") {
+      const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+      await job.trigger();
+    } else {
+      await testbed.service.start();
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(await testbed.store.runs(task.id), []);
+    assert.deepEqual(await testbed.store.get(task.id), before);
+    assert.deepEqual(testbed.errors, []);
+    assert.equal(testbed.broadcasts.length, broadcasts);
+    assert.equal(testbed.hasPending(task.id), true);
+    assert.equal(testbed.service.isRunning(task.id), true);
+    assert.throws(() => testbed.service.runNow(task.id), /already running/u);
+    testbed.service.stop();
+    await manual;
+  });
+
+  test(`${automaticSource} still records a real executor error even with the overlap message`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    testbed.execution.run = async () => {
+      throw new Error("This scheduled task is already running.");
+    };
+    if (automaticSource === "Cron") {
+      await testbed.service.start();
+      const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+      await job.trigger();
+    } else {
+      await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+      await testbed.service.start();
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const runs = await testbed.store.runs(task.id);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.result, "error");
+    assert.equal(runs[0]?.error, "This scheduled task is already running.");
+    assert.equal((await testbed.store.get(task.id))?.lastError, "This scheduled task is already running.");
+    assert.equal(testbed.errors.length, 1);
+    assert.deepEqual(testbed.broadcasts, [{ taskId: task.id }]);
+    assert.equal(testbed.service.isRunning(task.id), false);
+  });
+}
