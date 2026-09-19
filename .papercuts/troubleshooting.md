@@ -545,3 +545,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `aiden-plugins` is a collection rather than a Git root; pin the nested `pi-subagents` repository.
 - No worktree dependencies; install a private node_modules with lifecycle scripts disabled for focused TypeScript tests (no Electron packaging needed).
 - Explicit staging of `.papercuts/troubleshooting.md` hit the ignored parent-directory rule; force-stage only the authorized lane feedback and memory files.
+## Upgrade 04 MCP
+
+- Fresh worktree omits ignored `.memory`; consulted main checkout PROJECT-CONTEXT and DIAGNOSTICS-CAUSES, and will write a lane-specific note locally.
+- Dependencies absent in isolated worktree; installing locally with Electron payload download skipped because tests need only SDK/TypeScript.
