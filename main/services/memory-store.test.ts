@@ -507,7 +507,7 @@ test("renewal rechecks capacity filled by a competing writer and preserves expir
   }
 });
 
-test("renewal uses lock-admission time when collisions and quota entries expire during the wait", async (t) => {
+test("renewal samples time after admission when collisions and quota entries expire before BEGIN", async (t) => {
   for (const { limit, alwaysOn } of [
     { limit: 12, alwaysOn: true },
     { limit: 2_000, alwaysOn: false },
@@ -522,8 +522,9 @@ test("renewal uses lock-admission time when collisions and quota entries expire 
       for (let index = 0; index < limit; index += 1) {
         await store.put({ ...input, id: `old-${index}`, text: `Preference ${index}.`, expiresAt: 2_000 });
       }
-      // Advance the injected clock while the other writer owns the lock. This
-      // deterministically models a wait crossing expiry without wall-clock sleeps.
+      // Advance the injected clock in the other writer's transaction, which
+      // commits before the target BEGIN. This tests timestamp ordering after
+      // admission; it does not make SQLite block waiting for a held lock.
       const renewed = await withCompetingWrite(t, root, () => { now = 2_000; }, () => store.put({
         ...input, id: "renewed", text: "Preference 0.", expiresAt: 4_000,
         provenance: { kind: "user_edit", sourceId: "new-editor" },
@@ -541,7 +542,7 @@ test("renewal uses lock-admission time when collisions and quota entries expire 
   }
 });
 
-test("requested expiry elapsed during lock admission rejects without superseding the prior fact", async (t) => {
+test("requested expiry elapsed before BEGIN rejects without superseding the prior fact", async (t) => {
   let now = 1_000;
   const { root, store } = await fixture(t, () => now);
   const input = {

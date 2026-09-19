@@ -684,3 +684,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh worktree has no dependencies or local `.memory`; read canonical project Telegram history, install lockfile dependencies with lifecycle scripts disabled for pure service tests.
 - Repository ignore rules reject staging the required campaign memory/papercut notes; add only the two explicit documentation paths with `git add -f`.
 - Review follow-up: raw code-point safety still splits combining/ZWJ graphemes; segment only the bounded decoded chunk plus one code point, with explicit oversized-grapheme progress coverage. Reviewer task is a multi-agent subagent, so app-server direct messages are rejected; route updates through the campaign root.
+- Clock-ordering expiry regressions advance the injected clock in a second-connection transaction that commits before the target BEGIN. This tests post-admission timestamp sampling, not an actually blocked SQLite lock wait.
