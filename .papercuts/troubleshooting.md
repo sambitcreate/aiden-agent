@@ -533,3 +533,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## Lane 17 readiness regression
+
+- 2026-09-19: Fresh worktree has no ignored `.memory/` or dependencies. Read relevant project memory from the saved project and install isolated dependencies with scripts skipped; this test-only lane requires no Electron/native builds.
+- Baseline crash-handler assertions still require pre-diagnostics callback parameters and pre-backoff reload shape; scope matching to the crash callback while retaining recovery checks.
+- Lint requires `{2}` for the callback-closing indentation in source-contract regex (`no-regex-spaces`). Corrected and reran lint.
