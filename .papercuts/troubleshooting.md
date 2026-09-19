@@ -670,3 +670,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Pullfrog exposed a timer-only deadline blind spot: synchronous encoding prevents timeout callbacks from running. Added monotonic pre-dispatch expiry checks and deterministic tests that advance elapsed time without running timers.
 - 2026-09-19 lane26: Fresh worktree omits ignored `.memory` and dependencies; read canonical project memory, installed lockfile dependencies. Electron postinstall omitted macOS payload; restoring with its install script before isolated E2E.
 - 2026-09-19 lane26: Minimum-width Electron resize correctly collapses the sidebar persistently; restore it through Show sidebar before continuing the existing browser scenario into Settings. Initial extended run passed new overlap checks but failed that later navigation.
+## 2026-09-19 — Upgrade lane 27 journal
+
+- Fresh worktree has no dependencies or ignored `.memory` notes; installing locked dependencies locally and reading lane 23 diagnostics context from its existing worktree before editing.

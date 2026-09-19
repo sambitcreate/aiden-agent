@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -14,6 +16,7 @@ import {
   MAX_DIAGNOSTIC_LOG_BYTES,
   MAX_DIAGNOSTIC_LOG_FILES,
   pruneDiagnosticJournalRetention,
+  snapshotDiagnosticJournalFiles,
   writeDiagnosticEvent,
   writeDiagnosticEventSync,
   writeLegacyDiagnostic,
@@ -398,4 +401,161 @@ test("unusable paths never throw and expose an in-memory failure status", async 
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function withHeldDeletion(
+  context: test.TestContext,
+  target: string,
+  run: () => Promise<void>,
+): Promise<void> {
+  const remove = fsPromises.rm;
+  const started = deferred();
+  const held = deferred();
+  const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
+    if (args[0] === target) {
+      started.resolve();
+      await held.promise;
+    }
+    return remove(...args);
+  });
+  syncBuiltinESMExports();
+  const deletion = deleteDiagnosticJournalFiles();
+  // Production flush deadlines are unref'd; keep blocked synthetic I/O alive.
+  const keepAlive = setInterval(() => undefined, 1_000);
+  try {
+    await started.promise;
+    await run();
+  } finally {
+    held.resolve();
+    await deletion;
+    await flushDiagnosticJournal();
+    clearInterval(keepAlive);
+    removeMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+}
+
+test("flush waits for an in-flight journal deletion", async (context) => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    await withHeldDeletion(context, target, async () => {
+      assert.equal(await flushDiagnosticJournal(0), false);
+    });
+    assert.equal(await flushDiagnosticJournal(), true);
+  });
+});
+
+test("journal deletion preserves later accepted writes even when they would rotate old logs", async (context) => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    const currentBytes = (await fs.stat(target)).size;
+    await fs.appendFile(target, "x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 64));
+    await withHeldDeletion(context, target, async () => {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: 27 } });
+      // A broken queue can drain the new append while removal is held, erasing it
+      // when deletion resumes. A correct queue remains blocked behind deletion.
+      await flushDiagnosticJournal(100);
+    });
+    assert.match(await fs.readFile(target, "utf8"), /"sequence":27/u);
+    assert.doesNotMatch(await fs.readFile(target, "utf8"), /session-started|xxx/u);
+    for (let index = 1; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
+      await assert.rejects(fs.stat(`${target}.${index}`), { code: "ENOENT" });
+    }
+    assert.equal(diagnosticJournalStatus().pendingWrites, 0);
+    assert.equal(diagnosticJournalStatus().writeFailed, false);
+  });
+});
+
+test("snapshots admitted during journal deletion exclude deleted records", async (context) => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    let snapshot: Promise<string[]> | undefined;
+    await withHeldDeletion(context, target, async () => {
+      snapshot = snapshotDiagnosticJournalFiles(path.join(dir, "snapshot"));
+      await Promise.race([snapshot, new Promise((resolve) => setTimeout(resolve, 100))]);
+    });
+    assert.ok(snapshot);
+    const files = await snapshot;
+    for (const file of files) assert.equal(await fs.readFile(file, "utf8"), "");
+  });
+});
+
+test("deletion preserves synchronous fatal records accepted after its request", async () => {
+  await withJournal("production", async (_target, dir) => {
+    await flushDiagnosticJournal();
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    const deletion = deleteDiagnosticJournalFiles();
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    await deletion;
+    const contents = await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8");
+    assert.doesNotMatch(contents, /"sequence":1/u);
+    assert.match(contents, /"sequence":2/u);
+  });
+});
+
+test("failed journal deletion rejects, reports failure, and leaves the queue usable", async (context) => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    const remove = fsPromises.rm;
+    const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
+      if (args[0] === target) throw Object.assign(new Error("Synthetic removal failure"), { code: "EACCES" });
+      return remove(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(deleteDiagnosticJournalFiles(), { code: "EACCES" });
+      assert.equal(diagnosticJournalStatus().writeFailed, true);
+    } finally {
+      removeMock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 27 } });
+    await flushDiagnosticJournal();
+    assert.match(await fs.readFile(target, "utf8"), /"sequence":27/u);
+    await deleteDiagnosticJournalFiles();
+    assert.equal(await fs.readFile(target, "utf8"), "");
+  });
+});
+
+
+test("successive journal deletions retain only writes admitted after the last request", async () => {
+  await withJournal("production", async (target, dir) => {
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    const first = deleteDiagnosticJournalFiles();
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    const second = deleteDiagnosticJournalFiles();
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 3 } });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 3 } });
+    await Promise.all([first, second, flushDiagnosticJournal()]);
+    for (const file of [target, path.join(dir, "aiden-fatal.log")]) {
+      const contents = await fs.readFile(file, "utf8");
+      assert.match(contents, /"sequence":3/u);
+      assert.doesNotMatch(contents, /"sequence":[12]|session-started/u);
+      assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    }
+  });
+});
+
+test("fatal deletion failure is reported without poisoning later journal operations", async () => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    const fatal = path.join(dir, "aiden-fatal.log");
+    await fs.rm(fatal);
+    await fs.mkdir(fatal);
+    await assert.rejects(deleteDiagnosticJournalFiles());
+    assert.equal(diagnosticJournalStatus().writeFailed, true);
+    await fs.rmdir(fatal);
+    await deleteDiagnosticJournalFiles();
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 27 } });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 27 } });
+    await flushDiagnosticJournal();
+    for (const file of [target, fatal]) assert.match(await fs.readFile(file, "utf8"), /"sequence":27/u);
+  });
 });
