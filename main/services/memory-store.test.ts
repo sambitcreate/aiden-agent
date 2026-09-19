@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { MemoryStore, normalizeMemoryText, type MemoryScope } from "./memory-store.js";
 
@@ -392,4 +393,116 @@ test("renewing expired text cannot bypass the always-on quota", async (t) => {
   await store.remove(workspace, "current-0");
   assert.equal((await store.put({ ...input, id: "renewed" })).id, "renewed");
   assert.equal((await store.alwaysOn(workspace, 12)).length, 12);
+});
+
+// Commit a real second-connection write at the exact lock-acquisition boundary,
+// without timing sleeps or a production test hook. This models shared-store
+// integration; today's Electron topology uses one main-process store owner.
+async function withCompetingWrite<T>(
+  t: TestContext,
+  root: string,
+  mutate: (writer: DatabaseSync) => void,
+  action: () => Promise<T>,
+): Promise<T> {
+  const writer = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  const exec = DatabaseSync.prototype.exec;
+  let interleaved = false;
+  const mocked = t.mock.method(DatabaseSync.prototype, "exec", function (this: DatabaseSync, sql: string) {
+    if (this !== writer && sql === "BEGIN IMMEDIATE" && !interleaved) {
+      interleaved = true;
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        mutate(writer);
+        writer.exec("COMMIT");
+      } catch (error) {
+        writer.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    return exec.call(this, sql);
+  });
+  try {
+    return await action();
+  } finally {
+    mocked.mock.restore();
+    writer.close();
+    assert.equal(interleaved, true, "the competing writer must commit before lock acquisition");
+  }
+}
+
+function insertCompetingFact(writer: DatabaseSync, id: string, scope: MemoryScope, text: string, alwaysOn = true) {
+  writer.prepare(`
+    INSERT INTO memory_facts (
+      id, scope_kind, scope_id, normalized_text, provenance_kind, source_id,
+      created_at, updated_at, confidence, review_state, state, always_on
+    ) VALUES (?, ?, ?, ?, 'user_edit', 'competing-editor', 3000, 3000, 1, 'approved', 'active', ?)
+  `).run(id, scope.kind, scope.id, text, alwaysOn ? 1 : 0);
+}
+
+test("renewal does not retire an expired ID reused by a competing writer in another scope", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  await store.put({
+    id: "reused-id", scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit", sourceId: "editor" }, expiresAt: 2_000,
+  });
+  now = 3_000;
+  await withCompetingWrite(t, root, (writer) => {
+    writer.prepare("DELETE FROM memory_facts WHERE id = ?").run("reused-id");
+    insertCompetingFact(writer, "reused-id", bot, "Prefer concise release notes.");
+  }, () => store.put({
+    id: "renewed", scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit", sourceId: "new-editor" },
+  }));
+  assert.equal((await store.list(bot))[0]?.state, "active");
+  assert.deepEqual((await store.search(bot, "release")).map(({ id }) => id), ["reused-id"]);
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), ["renewed"]);
+});
+
+test("renewal deduplicates against a competing writer's fresh fact and releases the transaction", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+  now = 3_000;
+  const renewed = await withCompetingWrite(t, root, (writer) => {
+    writer.prepare("UPDATE memory_facts SET state = 'superseded' WHERE id = ?").run("expired");
+    insertCompetingFact(writer, "competing-renewal", workspace, input.text);
+  }, () => store.put({ ...input, id: "losing-renewal" }));
+  assert.equal(renewed.id, "competing-renewal");
+  assert.equal((await store.list(workspace)).length, 2);
+  // A forgotten COMMIT on the idempotent return would reject this next write.
+  await store.put({ ...input, id: "next", text: "Deploy on Wednesday." });
+});
+
+test("renewal rechecks capacity filled by a competing writer and preserves expired history", async (t) => {
+  for (const { limit, alwaysOn, error } of [
+    { limit: 12, alwaysOn: true, error: /maximum always-on facts/u },
+    { limit: 2_000, alwaysOn: false, error: /scope is full/u },
+  ]) {
+    await t.test(alwaysOn ? "always-on quota" : "scope quota", async (t) => {
+      let now = 1_000;
+      const { root, store } = await fixture(t, () => now);
+      const input = {
+        scope: workspace, text: "Prefer concise release notes.", alwaysOn,
+        provenance: { kind: "user_edit" as const, sourceId: "editor" },
+      };
+      const expired = await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+      now = 3_000;
+      for (let index = 0; index < limit - 1; index += 1) {
+        await store.put({ ...input, id: `seed-${index}`, text: `Current preference ${index}.` });
+      }
+      await assert.rejects(withCompetingWrite(t, root, (writer) => {
+        insertCompetingFact(writer, "last-slot", workspace, "The last preference.", alwaysOn);
+      }, () => store.put({ ...input, id: "over-quota" })), error);
+      assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+      assert.equal((await store.list(workspace)).length, limit + 1);
+      // Rejection must roll back its transaction so a subsequent write can proceed.
+      await store.remove(workspace, "last-slot");
+      assert.equal((await store.put({ ...input, id: "renewed" })).id, "renewed");
+    });
+  }
 });

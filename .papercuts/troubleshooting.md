@@ -626,3 +626,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - SDK 1.30 remote transports report failures through `onerror`, not `onclose`; the EventSource onerror property callback runs before dispatch, so its event target is still null. Its pinned terminal response errors carry a numeric HTTP code, whereas reconnectable EOF/network errors do not. HTTP reconnect callbacks can schedule a timer after error notification, requiring teardown after those callbacks settle.
 - Pullfrog identified a separate stale Cron error callback path. Reproduced deferred lookup, run-history publication, and runtime publication; bind failure recording to current job ownership and carry the guard through both stores.
+- Reproducing the shared-store renewal race needs deterministic interleaving: a test-local SQLite exec hook lets a second real connection commit immediately before lock acquisition without sleeps or production hooks.
