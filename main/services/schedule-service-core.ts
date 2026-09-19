@@ -81,12 +81,10 @@ export function createScheduleServiceCore(
   async function recordUnexpectedFailure(
     task: ScheduledTask,
     cause: unknown,
+    isCurrent: () => boolean,
   ): Promise<void> {
+    if (!isCurrent()) return;
     const message = cause instanceof Error ? cause.message : String(cause);
-    dependencies.error(
-      `Scheduled task ${task.id} failed outside its execution boundary.`,
-      cause,
-    );
     try {
       await store.recordRun({
         taskId: task.id,
@@ -96,9 +94,15 @@ export function createScheduleServiceCore(
         output: "",
         error: message,
         chatId: task.chatId,
-      });
+      }, isCurrent);
+      if (!isCurrent()) return;
+      dependencies.error(
+        `Scheduled task ${task.id} failed outside its execution boundary.`,
+        cause,
+      );
       dependencies.broadcast({ taskId: task.id });
     } catch (recordError) {
+      if (!isCurrent()) return;
       dependencies.error(
         `Could not record failure for scheduled task ${task.id}.`,
         recordError,
@@ -213,16 +217,24 @@ export function createScheduleServiceCore(
             `Skipped overlapping cron callback for task ${task.id}.`,
           );
         },
-        catch: (error) => {
-          void store.get(task.id).then((latest) => {
-            if (latest) return recordUnexpectedFailure(latest, error);
-          });
+        catch: async (error) => {
+          if (!ownsJob()) return;
+          try {
+            const latest = await store.get(task.id);
+            if (latest) await recordUnexpectedFailure(latest, error, ownsJob);
+          } catch (readError) {
+            if (ownsJob()) {
+              dependencies.error(`Could not read failed scheduled task ${task.id}.`, readError);
+            }
+          }
         },
       },
       async () => {
         await dispatch(task.id, { automatic: true });
       },
     );
+    const ownsJob = () =>
+      isCurrent() && started && globallyEnabled && jobs.get(task.id) === job;
     jobs.set(task.id, job);
     const nextRunAt = job.nextRun()?.getTime();
     await store.updateRuntime(task.id, { nextRunAt }, isCurrent);
@@ -294,7 +306,7 @@ export function createScheduleServiceCore(
             latest.nextRunAt !== undefined && latest.nextRunAt < now;
           if (missed) {
             void dispatch(latest.id, { automatic: true }).catch((error) =>
-              recordUnexpectedFailure(latest, error),
+              recordUnexpectedFailure(latest, error, isCurrent),
             );
           }
         }

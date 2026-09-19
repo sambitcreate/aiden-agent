@@ -625,3 +625,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Full combined npm test passed with one environment skip: legacy endpoint port 65535 is occupied on this host. Preserve that skip instead of stopping another process or claiming complete port coverage.
 
 - SDK 1.30 remote transports report failures through `onerror`, not `onclose`; the EventSource onerror property callback runs before dispatch, so its event target is still null. Its pinned terminal response errors carry a numeric HTTP code, whereas reconnectable EOF/network errors do not. HTTP reconnect callbacks can schedule a timer after error notification, requiring teardown after those callbacks settle.
+- Pullfrog identified a separate stale Cron error callback path. Reproduced deferred lookup, run-history publication, and runtime publication; bind failure recording to current job ownership and carry the guard through both stores.

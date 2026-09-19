@@ -32,8 +32,8 @@ pass, alongside two controls proving current failures still disable the affected
 task or reject startup and allow retry. Existing core tests are already registered
 in both relevant package scripts.
 
-- `npm run test:scheduled`: 120 passed.
-- `npm run test:assistant-automations`: 155 passed.
+- `npm run test:scheduled`: 125 passed.
+- `npm run test:assistant-automations`: 160 passed.
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
 - `git diff --check`: passed.
@@ -59,3 +59,18 @@ ownership after disk staging, verifies unchanged bytes and cache, and checks tha
 later runtime updates survive. All four added regressions pass with the updated
 120 scheduled / 155 automation totals and green type-check, lint, and diff checks.
 Central re-review and exact-head hosted CI remain pending.
+
+## Pullfrog Cron callback follow-up
+
+The review also identified a separate obsolete Cron error path. Three regressions
+failed at `2909bb9c` when stop/restart happened during task lookup, run-history
+publication, or runtime publication. Cron failures now require both startup
+ownership and exact current job identity. `recordRun` accepts a guard for both
+persistence calls; stale callbacks cannot publish newer runtime changes, broadcast,
+or log a false failure. Catch-up failure recording uses the startup guard too.
+Already-published run history remains intact; there is no destructive rollback.
+
+Additional controls cover legitimate current errors and callbacks from a job
+replaced by pause/resume. Latest totals: 125 scheduled and 160 automation tests;
+type-check, lint, and diff checks passed. The resolved Pullfrog finding still needs
+a fresh exact-head review; old-head review results are not current signoff.

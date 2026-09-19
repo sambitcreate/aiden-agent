@@ -601,7 +601,10 @@ export function createScheduleStore(
       });
     },
 
-    async recordRun(run: Omit<ScheduledRun, "id"> & { id?: string }): Promise<ScheduledRun> {
+    async recordRun(
+      run: Omit<ScheduledRun, "id"> & { id?: string },
+      isCurrent: () => boolean = () => true,
+    ): Promise<ScheduledRun> {
       const stored: ScheduledRun = {
         ...run,
         id: run.id ?? randomUUID(),
@@ -619,12 +622,12 @@ export function createScheduleStore(
           .slice(0, RUNS_PER_TASK);
         const other = normalized.filter((value) => value.taskId !== stored.taskId);
         draft.splice(0, draft.length, ...other, ...retained);
-      });
+      }, isCurrent);
       await updateRuntime(stored.taskId, {
         lastRunAt: stored.finishedAt,
         lastResult: stored.result,
         lastError: stored.error,
-      });
+      }, isCurrent);
       return stored;
     },
 
