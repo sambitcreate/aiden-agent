@@ -609,3 +609,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh validation worktree omits ignored project memory and dependencies; read canonical project context and install a private dependency tree.
 - Independent lane appends conflict in the tracked troubleshooting file; preserve both three-way append histories. Package test registrations and yaml dependency merged cleanly without lock regeneration.
 - Avoid full troubleshooting/toolchain dumps in tool output; retain exact logs and print bounded summaries.
+## Lane 17 readiness regression
+
+- 2026-09-19: Fresh worktree has no ignored `.memory/` or dependencies. Read relevant project memory from the saved project and install isolated dependencies with scripts skipped; this test-only lane requires no Electron/native builds.
+- Baseline crash-handler assertions still require pre-diagnostics callback parameters and pre-backoff reload shape; scope matching to the crash callback while retaining recovery checks.
+- Lint requires `{2}` for the callback-closing indentation in source-contract regex (`no-regex-spaces`). Corrected and reran lint.
