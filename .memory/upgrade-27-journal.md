@@ -15,3 +15,9 @@ Verification:
 - Fixed `npm run test:diagnostics`: 80 diagnostics tests plus 10 policy tests passed. Existing journal test registration covers all additions.
 - `npm run type-check`, `npm run lint`, and `git diff --check` passed.
 - No private journal data read. No UI, onboarding, shared server/native contract, schema, endpoint, retention limit, release or version change. Diagnostics plan status remains implemented with the existing physical-device acceptance gate. Hosted CI and independent review remain separate publication gates.
+
+## Support boundary follow-up
+
+Independent integration review found that `deleteAllDiagnosticData` repeated raw removal of live journal files after its owner finished, erasing fresh records. Capture the live journal's exact paths before invoking its deletion helper and exclude only those owned paths from the later allowlist fallback. The fallback still removes inactive-profile and legacy logs, disabled journal files, other diagnostic categories, and dumps, and still propagates removal errors. No health implementation files changed.
+
+Deterministic production/development support regressions hold subagent cleanup after the journal barrier, write fresh general/fatal records and rotate the live log, then resume the outer sweep. Both fail against initial PR head `8b5e6ee4` and pass with the fix. Disabled-journal cleanup and inactive cleanup failure controls pass. Final `test:diagnostics`: 84 diagnostics + 10 policy pass; type-check and lint pass.

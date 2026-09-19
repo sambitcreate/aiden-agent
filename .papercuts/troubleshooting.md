@@ -537,3 +537,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Upgrade lane 27 journal
 
 - Fresh worktree has no dependencies or ignored `.memory` notes; installing locked dependencies locally and reading lane 23 diagnostics context from its existing worktree before editing.
+
+- Integration review found `deleteAllDiagnosticData` repeats live journal removal after its queue barrier; add support-level coverage and leave active journal cleanup with its owner while retaining inactive/legacy allowlist cleanup.
