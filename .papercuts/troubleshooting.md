@@ -689,3 +689,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Integration wave 3 palette failure
 - Strict combined Electron validation exposed an intermittent model-provider filter result: 0 rows instead of 2. Three unchanged isolated repeats produced two passes and one failure; retain the failed status instead of treating retries as a clean result.
 - Playwright clears its output directory on a new invocation. Copy screenshots, traces and error context into the batch log directory before reproducing a failure.
+- Pullfrog follow-up: Electron 43 posts native crash notifications asynchronously and omits document identity. Added a real renderer-crash probe that holds notification delivery across pending/committed replacement navigation, instead of relying solely on synthetic crash events.

@@ -465,6 +465,7 @@ export class BrowserService {
     wc.on("media-paused", publish);
     wc.on("audio-state-changed", publish);
     wc.on("did-navigate", () => {
+      this.cancelCrashRecovery(tab);
       browserFileService.commitConsumer(tab.state.workspaceId, tab.state.id, wc.getURL());
       this.finishPreviewNavigation(tab);
       tab.committedNavigation += 1;
@@ -525,8 +526,12 @@ export class BrowserService {
       }
     });
     wc.on("render-process-gone", (_event, details) => {
-      this.cancelCrashRecovery(tab);
       if (tab.closing || wc.isDestroyed()) return;
+      // Electron 43 posts this notification without a document identity. The
+      // native crash/loading state belongs to the current document: a live
+      // replacement or an in-flight navigation supersedes the old crash.
+      if (!wc.isCrashed() || wc.isLoadingMainFrame()) return;
+      this.cancelCrashRecovery(tab);
       tab.queue.interrupt();
       tab.contextId = undefined;
       tab.state.crashed = true;
