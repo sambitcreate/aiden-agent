@@ -540,3 +540,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `aiden-plugins` is a container directory; use the nested `context-mode` Git SHA for reference evidence.
 - Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
 - GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
+- Reproducing the shared-store renewal race needs deterministic interleaving: a test-local SQLite exec hook lets a second real connection commit immediately before lock acquisition without sleeps or production hooks.
