@@ -13,7 +13,7 @@ export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const TELEGRAM_RICH_MESSAGE_LIMIT = 32_768;
 export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
 
-/** Safety margin so HTML entity expansion doesn't push past the limit. */
+/** Preserve the existing safety margin within the parsed-text budget. */
 const CHUNK_HEADROOM = 64;
 
 const CODE_SPAN_SENTINEL = String.fromCharCode(0);
@@ -429,77 +429,89 @@ export function markdownToTelegramHtml(markdown: string): string {
   return output.join("\n").trim();
 }
 
+interface TelegramHtmlTag {
+  name: string;
+  opening: string;
+  parent?: TelegramHtmlTag;
+}
+
+interface TelegramHtmlBoundary {
+  offset: number;
+  tag?: TelegramHtmlTag;
+}
+
+function closeTelegramTags(tag: TelegramHtmlTag | undefined): string {
+  let closing = "";
+  for (; tag; tag = tag.parent) closing += `</${tag.name}>`;
+  return closing;
+}
+
+function reopenTelegramTags(tag: TelegramHtmlTag | undefined): string {
+  const openings: string[] = [];
+  for (; tag; tag = tag.parent) openings.push(tag.opening);
+  return openings.reverse().join("");
+}
+
 /**
- * Split HTML text into chunks under the Telegram message limit.
- * Prefers splitting at double-newline boundaries (paragraph breaks);
- * falls back to hard splits if a single paragraph exceeds the limit.
- * Tracks <pre> state across chunk boundaries so tags stay balanced.
+ * Split the restricted HTML emitted by markdownToTelegramHtml. Telegram limits
+ * text after entity parsing, so markup has no weight and entities are atomic.
+ * Count UTF-16 conservatively, without ever splitting a Unicode code point.
+ * Prefer paragraph/line boundaries and preserve whitespace (especially code).
+ * Carry only the active tags and two boundary snapshots; no DOM or recursion.
  */
 export function chunkForTelegram(html: string): string[] {
   const limit = TELEGRAM_MESSAGE_LIMIT - CHUNK_HEADROOM;
   if (html.length <= limit) return html.length > 0 ? [html] : [];
 
+  // Sticky matching scans only the next token. Attributes from the converter
+  // contain escaped angle brackets; supported entities and code points remain
+  // indivisible even when their serialized representation exceeds the budget.
+  const tokenPattern = /<(\/?)(b|i|s|u|a|pre|code|blockquote)(?:\s[^<>]*)?>|&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);|[\s\S]/uy;
   const chunks: string[] = [];
-  const paragraphs = html.split(/\n\n+/);
-  let current = "";
-
-  for (const para of paragraphs) {
-    if (para.length > limit) {
-      if (current) {
-        chunks.push(current.trim());
-        current = "";
+  let start = 0;
+  let tag: TelegramHtmlTag | undefined;
+  while (start < html.length) {
+    const prefix = reopenTelegramTags(tag);
+    let offset = start;
+    let length = 0;
+    let line: TelegramHtmlBoundary | undefined;
+    let paragraph: TelegramHtmlBoundary | undefined;
+    let previousNewline = false;
+    while (offset < html.length) {
+      tokenPattern.lastIndex = offset;
+      const match = tokenPattern.exec(html)!;
+      const [token, closing, name, entity] = match;
+      let width = name ? 0 : token.length;
+      if (entity) {
+        const codePoint = entity.startsWith("#x") ? Number.parseInt(entity.slice(2), 16)
+          : entity.startsWith("#") ? Number(entity.slice(1)) : 0;
+        width = codePoint > 0xffff ? 2 : 1;
       }
-      for (const piece of hardSplit(para, limit)) chunks.push(piece);
-      continue;
-    }
-
-    if ((current + "\n\n" + para).length > limit) {
-      chunks.push(current.trim());
-      current = para;
-    } else {
-      current = current ? `${current}\n\n${para}` : para;
-    }
-  }
-
-  if (current.trim()) chunks.push(current.trim());
-  return chunks.map(balancePreTags);
-}
-
-/**
- * Ensure each chunk has balanced <pre> tags. If a chunk opens <pre>
- * without closing it, append </pre>; if it closes </pre> without
- * opening one, prepend <pre>.
- */
-function balancePreTags(chunk: string): string {
-  const opens = (chunk.match(/<pre[^>]*>/g) ?? []).length;
-  const closes = (chunk.match(/<\/pre>/g) ?? []).length;
-  if (opens === closes) return chunk;
-  if (opens > closes) return chunk + "\n</pre>".repeat(opens - closes);
-  return "<pre>".repeat(closes - opens) + chunk;
-}
-
-/** Hard-split a long block at newline boundaries, then by char count. */
-function hardSplit(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  const lines = text.split("\n");
-  let current = "";
-
-  for (const line of lines) {
-    if ((current + "\n" + line).length > limit) {
-      if (current) chunks.push(current.trim());
-      if (line.length > limit) {
-        for (let i = 0; i < line.length; i += limit) {
-          chunks.push(line.slice(i, i + limit));
+      if (length + width > limit) break;
+      offset = tokenPattern.lastIndex;
+      length += width;
+      if (name) {
+        if (closing) {
+          if (tag?.name === name) tag = tag.parent;
+        } else {
+          tag = { name, opening: token, parent: tag };
         }
-        current = "";
-      } else {
-        current = line;
       }
-    } else {
-      current = current ? `${current}\n${line}` : line;
+      if (token === "\n") {
+        line = { offset, tag };
+        if (previousNewline) paragraph = line;
+      }
+      previousNewline = token === "\n";
     }
+    if (offset < html.length) {
+      const boundary = paragraph ?? line;
+      if (boundary) {
+        offset = boundary.offset;
+        tag = boundary.tag;
+      }
+    }
+    chunks.push(prefix + html.slice(start, offset) + closeTelegramTags(tag));
+    start = offset;
   }
-
-  if (current.trim()) chunks.push(current.trim());
   return chunks;
 }

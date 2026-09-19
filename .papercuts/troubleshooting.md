@@ -680,3 +680,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
 - Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.
+## 2026-09-19 — Telegram HTML chunks (lane 29)
+- Fresh worktree has no dependencies or local `.memory`; read canonical project Telegram history, install lockfile dependencies with lifecycle scripts disabled for pure service tests.
+- Repository ignore rules reject staging the required campaign memory/papercut notes; add only the two explicit documentation paths with `git add -f`.
