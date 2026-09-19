@@ -685,3 +685,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Repository ignore rules reject staging the required campaign memory/papercut notes; add only the two explicit documentation paths with `git add -f`.
 - Review follow-up: raw code-point safety still splits combining/ZWJ graphemes; segment only the bounded decoded chunk plus one code point, with explicit oversized-grapheme progress coverage. Reviewer task is a multi-agent subagent, so app-server direct messages are rejected; route updates through the campaign root.
 - Clock-ordering expiry regressions advance the injected clock in a second-connection transaction that commits before the target BEGIN. This tests post-admission timestamp sampling, not an actually blocked SQLite lock wait.
+
+## 2026-09-19 — Integration wave 3 palette failure
+- Strict combined Electron validation exposed an intermittent model-provider filter result: 0 rows instead of 2. Three unchanged isolated repeats produced two passes and one failure; retain the failed status instead of treating retries as a clean result.
+- Playwright clears its output directory on a new invocation. Copy screenshots, traces and error context into the batch log directory before reproducing a failure.
