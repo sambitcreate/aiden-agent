@@ -747,3 +747,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Loading-state Electron fixtures cannot await the composer while holding initial chat/provider IPC reads; the composer depends on them. Wait for the shell Settings control before opening the palette during a pending read.
 - Initial provider loading gates the whole shell (unlike pending chats). Model retry tests must let the provider query reach its error state before opening the palette; loading exclusion is exercised through chats and the shared contract matrix.
 - ASCII no-match sentinels can fuzzily match the concatenated model inventory of an unavailable provider. Error-recovery tests use an emoji absent from fixture metadata to guarantee no ordinary search match.
+
+- Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
+- Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.

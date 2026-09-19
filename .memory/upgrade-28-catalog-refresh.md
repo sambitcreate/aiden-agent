@@ -90,3 +90,28 @@ semantics were checked against the pinned Pi source; no private SDK API or copie
 OAuth implementation is used. Added product file scope: provider-registry.ts and
 pi-remote-catalog.ts. No network endpoints, credential-storage format, shared
 wire contracts, models.dev authority, UI, native, or dependency changes.
+
+## Rejected post-commit write correction
+
+Pullfrog PRRT_kwDOTctvDc6j96o2 applies to `2ee5f306`: DataStore renames the staged
+file before its directory fsync, so backing.write rejection does not prove that
+no publication occurred. The mutation is now inside the error/retirement scope.
+A rejected mutation retains the provider queue while removing the uncertain
+entry. If deletion fails, an empty-catalog replacement is attempted. Original
+write errors are rethrown unchanged after successful cleanup; if cleanup also
+fails, CatalogPublicationError preserves the original failure as its cause and includes
+cleanup failures. A queued newer publisher remains protected and can recover.
+
+Six committed-then-rejected real-disk regressions fail the previous head. They
+cover successful deletion, delete failure with empty fallback, fallback commit
+followed by durability rejection, and a queued new publisher for each. Fresh
+DataStore and pinned Radius instances verify no obsolete offline hydration.
+A seventh case checks failure to modify storage during either cleanup: reads
+fail closed in the current process until a confirmed replacement. This is a
+bounded IO guarantee, not filesystem atomicity: if both retirement operations
+cannot modify the file, durable removal across process restart is not promised.
+The original and cleanup failures remain visible instead of claiming success.
+
+Final focused suites: 147/147 pass; typecheck, lint, and diff checks pass. No
+DataStore core or credential adapter changes. Synthetic account replacements
+and temporary directories only.
