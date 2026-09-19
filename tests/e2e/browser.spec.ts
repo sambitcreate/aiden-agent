@@ -86,9 +86,58 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     expect((await command(page, { action: "evaluate", tabId, expression: "globalThis.pickSideEffects" })).value).toBe(0);
     await page.getByRole("textbox", { name: "Annotation comment" }).fill("Make this button clearer.");
     await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = true; });
-    await page.getByRole("button", { name: "Add to chat", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
-    await expect(draft).toHaveValue("Existing draft.");
+    // Keep the annotation open while checking the same real pointer action at
+    // the default, minimum supported, compact and side-by-side window sizes.
+    const addToChat = page.getByRole("button", { name: "Add to chat", exact: true });
+    const liveTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
+    for (const [width, height, mode] of [
+      [1280, 800, "tools-floating"],
+      [390, 456, "tools-floating"],
+      [900, 600, "tools-floating"],
+      [1600, 900, "tools-pinned"],
+    ] as const) {
+      await page.emulateMedia({ reducedMotion: width === 390 ? "reduce" : "no-preference" });
+      await aiden.app.evaluate(({ BrowserWindow }, size) => {
+        BrowserWindow.getAllWindows()[0].setSize(size.width, size.height);
+      }, { width, height });
+      await expect(surface).toHaveAttribute("data-surface-mode", mode);
+      await addToChat.click();
+      await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
+      await expect(draft).toHaveValue("Existing draft.");
+      await expect.poll(async () => {
+        const panel = await surface.boundingBox();
+        const launcher = await liveTrigger.boundingBox();
+        if (!panel || !launcher) return false;
+        return mode === "tools-floating"
+          ? panel.y + panel.height <= launcher.y
+          : launcher.x + launcher.width <= panel.x;
+      }).toBe(true);
+      await addToChat.scrollIntoViewIfNeeded();
+      const screenshot = testInfo.outputPath(`annotation-controls-${width}x${height}.png`);
+      await page.screenshot({ path: screenshot });
+      await testInfo.attach(`annotation-controls-${width}x${height}`, {
+        path: screenshot, contentType: "image/png",
+      });
+      // Ordinary pointer and keyboard activation still open the setup dialog.
+      // No microphone permissions or provider requests are needed for this path.
+      await liveTrigger.click();
+      const setup = page.getByRole("dialog", { name: "Set up Aiden Live" });
+      await expect(setup).toBeVisible();
+      await setup.getByRole("button", { name: "Not now", exact: true }).click();
+      await expect(setup).toBeHidden();
+      await liveTrigger.focus();
+      await page.keyboard.press("Enter");
+      await expect(setup).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(setup).toBeHidden();
+      await addToChat.focus();
+      await expect(addToChat).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(draft).toHaveValue("Existing draft.");
+    }
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    // Compact windows collapse the sidebar until the user explicitly reopens it.
+    await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = false; });
     await page.getByRole("textbox", { name: "Annotation comment" }).press("Meta+Enter");
     await expect(draft).toHaveValue("Existing draft.\n\nMake this button clearer.");
