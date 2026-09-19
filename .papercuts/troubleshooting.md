@@ -726,3 +726,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Worktree has no tracked `.memory/`; read the shared checkout's project context and will add a unique lane note.
 - Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.
+## 2026-09-19 — Android draft recovery lane 35
+- Fresh isolated checkout has no tracked `.memory/` directory or Android-specific AGENTS.md; read canonical project memory and root/native guidance, then add a unique lane note.
+- Failed-send restoration bypasses `updateDraft`, so visible recovery never reaches the draft file. Use real ViewModel/HTTP regression and reopen the store to distinguish memory from persistence.
+- Regression harness initially used `sendMessage`; Android exposes the action as `send`. Corrected the test entry point before collecting baseline behavior.
+- `.memory/` and `.papercuts/` are ignored by default; explicit force-add is needed for the authorized lane note and troubleshooting update.
