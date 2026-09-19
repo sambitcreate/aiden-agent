@@ -70,12 +70,15 @@ export function createScheduleServiceCore(
     jobs.delete(taskId);
   }
 
-  async function advanceBeforeRun(task: ScheduledTask): Promise<ScheduledTask> {
+  async function advanceBeforeRun(
+    task: ScheduledTask,
+    isCurrent: () => boolean,
+  ): Promise<ScheduledTask> {
     return store.updateRuntime(task.id, {
       nextRunAt: task.enabled
         ? nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1))
         : undefined,
-    });
+    }, isCurrent);
   }
 
   async function recordUnexpectedFailure(
@@ -112,7 +115,10 @@ export function createScheduleServiceCore(
 
   function dispatch(
     taskId: string,
-    options: { automatic: boolean; runId?: string; expectedUpdatedAt?: number },
+    options: { runId?: string; expectedUpdatedAt?: number } & (
+      | { automatic: true; isCurrent: () => boolean }
+      | { automatic: false }
+    ),
   ): Promise<ScheduledRun> {
     if (runningTasks.has(taskId)) {
       throw new Error("This scheduled task is already running.");
@@ -126,6 +132,8 @@ export function createScheduleServiceCore(
         resolveWorkspaceReady = resolve;
       }),
     };
+    const isCurrent = () =>
+      !state.cancelRequested && (!options.automatic || options.isCurrent());
     const operation = (async () => {
       try {
         const task = await store.get(taskId);
@@ -150,8 +158,10 @@ export function createScheduleServiceCore(
         ) {
           throw new Error("This scheduled task is paused.");
         }
-        const claimed = options.automatic ? await advanceBeforeRun(task) : task;
-        if (state.cancelRequested)
+        if (!isCurrent())
+          throw new Error("This scheduled task was cancelled.");
+        const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
+        if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
         return execution.run(claimed, options.runId);
       } finally {
@@ -194,6 +204,7 @@ export function createScheduleServiceCore(
   async function schedule(
     task: ScheduledTask,
     isCurrent: () => boolean = () => true,
+    preserveNextRunAt = false,
   ): Promise<void> {
     stopJob(task.id);
     if (
@@ -230,15 +241,16 @@ export function createScheduleServiceCore(
         },
       },
       async () => {
-        await dispatch(task.id, { automatic: true });
+        await dispatch(task.id, { automatic: true, isCurrent: ownsJob });
       },
     );
     const ownsJob = () =>
       isCurrent() && started && globallyEnabled && jobs.get(task.id) === job;
     jobs.set(task.id, job);
     const nextRunAt = job.nextRun()?.getTime();
-    await store.updateRuntime(task.id, { nextRunAt }, isCurrent);
-    if (jobs.get(task.id) !== job || !started || !globallyEnabled) {
+    // An overdue startup task stays due until dispatch publishes its claim.
+    if (!preserveNextRunAt) await store.updateRuntime(task.id, { nextRunAt }, isCurrent);
+    if (!ownsJob()) {
       job.stop();
       return;
     }
@@ -278,9 +290,14 @@ export function createScheduleServiceCore(
           latest = await withTaskLifecycle(task.id, async () => {
             if (!isCurrent()) return undefined;
             try {
+              // A restart must not lose its catch-up to the cancelled predecessor
+              // still occupying runningTasks while its persistence settles.
+              if (runningTasks.get(task.id)?.cancelRequested) await cancelAndSettle(task.id);
+              if (!isCurrent()) return undefined;
               const current = await store.get(task.id);
               if (!isCurrent() || !current?.enabled) return undefined;
-              await schedule(current, isCurrent);
+              const missed = current.nextRunAt !== undefined && current.nextRunAt < now;
+              await schedule(current, isCurrent, missed);
               return current;
             } catch (error) {
               if (!isCurrent()) return undefined;
@@ -293,6 +310,7 @@ export function createScheduleServiceCore(
                 lastResult: "error",
                 lastError: `Needs attention: ${message}`,
               }, isCurrent);
+              if (!isCurrent()) return undefined;
               dependencies.error(
                 `Could not schedule task ${task.id}; it was disabled.`,
                 error,
@@ -305,8 +323,11 @@ export function createScheduleServiceCore(
           const missed =
             latest.nextRunAt !== undefined && latest.nextRunAt < now;
           if (missed) {
-            void dispatch(latest.id, { automatic: true }).catch((error) =>
-              recordUnexpectedFailure(latest, error, isCurrent),
+            const job = jobs.get(latest.id);
+            if (!job) continue;
+            const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
+            void dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup }).catch((error) =>
+              recordUnexpectedFailure(latest, error, ownsCatchup),
             );
           }
         }

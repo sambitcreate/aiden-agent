@@ -635,3 +635,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Mounted Composer fixture must explicitly externalize React in esbuild; repository TypeScript wildcard paths can otherwise bundle a second hook runtime despite packages=external.
 - Pullfrog found cmdk 1.1.1 retains keyword aliases while item `value` stays unchanged. Dynamic rows need a value including identity plus current metadata, not merely new `keywords` props.
 - A separate cmdk automatic-selection active-descendant gap reproduces on the unchanged initial PR head before metadata updates; reported centrally. The focused regression preserves explicit arrow-navigation accessibility checks.
+- Follow-up catch-up audit found two missed-run advances: job setup and dispatch claim. Guarding only the claim would still lose due state. Preserve overdue nextRunAt through setup, require authority on every automatic dispatch, and settle a cancelled predecessor before restart admission.

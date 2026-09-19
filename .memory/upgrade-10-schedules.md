@@ -32,8 +32,8 @@ pass, alongside two controls proving current failures still disable the affected
 task or reject startup and allow retry. Existing core tests are already registered
 in both relevant package scripts.
 
-- `npm run test:scheduled`: 125 passed.
-- `npm run test:assistant-automations`: 160 passed.
+- `npm run test:scheduled`: 130 passed.
+- `npm run test:assistant-automations`: 165 passed.
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
 - `git diff --check`: passed.
@@ -74,3 +74,36 @@ Additional controls cover legitimate current errors and callbacks from a job
 replaced by pause/resume. Latest totals: 125 scheduled and 160 automation tests;
 type-check, lint, and diff checks passed. The resolved Pullfrog finding still needs
 a fresh exact-head review; old-head review results are not current signoff.
+
+## Catch-up claim and full startup publication audit
+
+Pullfrog's follow-up at `7dd218f4` reproduced a missed-run loss during automatic
+catch-up. The audit also identified an earlier job-setup advance of the same due
+time: guarding dispatch alone would still have lost the missed run. Startup now
+preserves overdue `nextRunAt` through job setup until the automatic claim commits.
+Every automatic dispatch requires an ownership predicate in its TypeScript options;
+the claim combines it with cancellation, checks before/after the persistence await,
+and passes it into the store publication guard. Cron triggers supply exact job
+ownership; startup catch-up supplies job plus startup ownership.
+
+Restart settles a cancelled predecessor before inspecting due state, preventing
+runningTasks overlap from turning the retry into a startup failure. Three new
+regressions fail on the prior head and pass now: cancelled lookup and claim both
+recover on restart, and cancelled claim publication preserves the durable overdue
+timestamp exactly. Normal Cron triggers and explicit manual runs while global/task
+scheduling are paused have positive behavior controls.
+
+Publication audit:
+- Settings/task reads and per-task lifecycle admission revalidate startup ownership.
+- Job map publication is synchronous after the check; resume checks exact ownership.
+- Future-run setup, overdue claims and failure quarantine use guarded publication.
+- Quarantine logs recheck ownership after the write.
+- Unexpected-failure history/runtime writes and logs/broadcasts are guarded.
+- Once execution is admitted synchronously, its AbortController and durable run
+  result own the lifecycle; actual cancellation/history records remain intact.
+- Provider-alias migration in store reads remains independent store-owned identity
+  normalization, not startup scheduling state.
+
+Validation: 130 scheduled tests and 165 automation tests pass; type-check, lint and
+diff checks pass. Final exact-head Pullfrog/CI remain pending. Usage checked before
+this work: 41% remaining, above the campaign's 1% stop threshold.
