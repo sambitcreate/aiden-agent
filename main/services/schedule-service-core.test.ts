@@ -19,7 +19,7 @@ class MemoryPersistence<T> {
   }
 }
 
-function harness() {
+function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
   const store = createScheduleStore(
     new MemoryPersistence<unknown[]>([]),
     new MemoryPersistence<unknown[]>([]),
@@ -71,7 +71,7 @@ function harness() {
   const service = createScheduleServiceCore({
     store,
     execution,
-    globallyEnabled: async () => true,
+    globallyEnabled,
     broadcast: (payload) => broadcasts.push(payload),
     warn: () => undefined,
     error: () => undefined,
@@ -429,4 +429,155 @@ test("aborted resume preserves an already-enabled task", async () => {
   });
   await assert.rejects(testbed.service.resume(task.id, { signal: controller.signal }), /cancelled/iu);
   assert.equal((await testbed.store.get(task.id))?.enabled, true);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+test("disabling schedules during startup overrides the pending settings read", async (t) => {
+  const settings = deferred<boolean>();
+  const testbed = harness(() => settings.promise);
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+
+  const starting = testbed.service.start();
+  await testbed.service.setGlobalEnabled(false);
+  settings.resolve(true);
+  await starting;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    testbed.hasPending(task.id),
+    false,
+    "the kill switch must prevent catch-up execution",
+  );
+  assert.deepEqual(
+    await testbed.store.get(task.id),
+    overdue,
+    "cancelled startup must leave the task untouched",
+  );
+});
+
+test("stopping during startup task lookup preserves the missed run for the next start", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const originalGet = testbed.store.get.bind(testbed.store);
+  let hold = true;
+  testbed.store.get = async (id) => {
+    const current = await originalGet(id);
+    if (hold) {
+      hold = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return current;
+  };
+
+  const starting = testbed.service.start();
+  await entered.promise;
+  testbed.service.stop();
+  release.resolve();
+  await starting;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(await testbed.store.get(task.id), overdue);
+  assert.deepEqual(await testbed.store.runs(task.id), [], "shutdown is not a failed task run");
+  assert.equal(testbed.hasPending(task.id), false);
+
+  await testbed.service.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true, "a healthy restart must still catch up");
+  assert.ok((await testbed.store.get(task.id))!.nextRunAt! > Date.now());
+});
+
+test("an obsolete startup task-read failure cannot disable a task after restart", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  const entered = deferred<void>();
+  const release = deferred<ScheduledTask | undefined>();
+  const originalGet = testbed.store.get.bind(testbed.store);
+  let hold = true;
+  testbed.store.get = async (id) => {
+    if (hold) {
+      hold = false;
+      entered.resolve();
+      return release.promise;
+    }
+    return originalGet(id);
+  };
+
+  const starting = testbed.service.start();
+  await entered.promise;
+  testbed.service.stop();
+  const restarting = testbed.service.start();
+  release.reject(new Error("obsolete task lookup failed"));
+  await Promise.all([starting, restarting]);
+
+  const latest = await testbed.store.get(task.id);
+  assert.equal(latest?.enabled, true);
+  assert.equal(latest?.lastError, undefined);
+  assert.ok(latest?.nextRunAt);
+});
+
+test("an obsolete settings failure cannot stop a newer startup", async (t) => {
+  const settings = deferred<boolean>();
+  let reads = 0;
+  const testbed = harness(() => (++reads === 1 ? settings.promise : Promise.resolve(true)));
+  t.after(() => testbed.service.stop());
+  await addTask(testbed.store);
+
+  const starting = testbed.service.start();
+  testbed.service.stop();
+  await testbed.service.start();
+  settings.reject(new Error("obsolete settings read failed"));
+  await starting;
+  await testbed.service.start();
+
+  assert.equal(reads, 2, "the restarted service must remain started");
+});
+
+test("a current startup settings failure still rejects and permits retry", async (t) => {
+  let reads = 0;
+  const testbed = harness(async () => {
+    if (++reads === 1) throw new Error("settings unavailable");
+    return true;
+  });
+  t.after(() => testbed.service.stop());
+  await addTask(testbed.store);
+
+  await assert.rejects(testbed.service.start(), /settings unavailable/u);
+  await testbed.service.start();
+  await testbed.service.start();
+  assert.equal(reads, 2);
+});
+
+test("a current startup task-read failure still disables only the affected task", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const broken = await addTask(testbed.store);
+  const healthy = await addTask(testbed.store);
+  const originalGet = testbed.store.get.bind(testbed.store);
+  testbed.store.get = async (id) => {
+    if (id === broken.id) throw new Error("task unavailable");
+    return originalGet(id);
+  };
+
+  await testbed.service.start();
+  const failed = await originalGet(broken.id);
+  assert.equal(failed?.enabled, false);
+  assert.equal(failed?.lastError, "Needs attention: task unavailable");
+  assert.equal((await originalGet(healthy.id))?.enabled, true);
 });
