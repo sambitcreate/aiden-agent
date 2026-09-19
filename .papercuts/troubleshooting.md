@@ -732,3 +732,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Regression harness initially used `sendMessage`; Android exposes the action as `send`. Corrected the test entry point before collecting baseline behavior.
 - `.memory/` and `.papercuts/` are ignored by default; explicit force-add is needed for the authorized lane note and troubleshooting update.
 - 2026-09-19 lane 21 replay review: Socket teardown does not establish terminal delivery; reserve capacity reclamation for response finish. Abort/timeout must preserve replay despite renewed pressure, with count/byte/retention bounds.
+- Lane 33 causal review: fs.watch offers no operation identity; even callback-time content plus a quiet interval can misattribute delayed events. Use controlled delivery of the real listener for causal assertions and limit native-filesystem tests to smoke/continuity claims.
