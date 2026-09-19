@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { filterPaletteResult, paletteResult, reconcilePaletteResult } from "./command-palette-results";
 
 const source = readFileSync(new URL("../components/command-palette.tsx", import.meta.url), "utf8");
 
@@ -53,4 +54,35 @@ test("command palette uses spacing instead of separator rules", () => {
   assert.match(source, /showSeparator=\{false\}/u);
   assert.match(source, /cmdk-item\]\[data-selected=true\].*bg-control/u);
   assert.doesNotMatch(source, /↑↓ Navigate|↩ Run|Local app actions/u);
+});
+
+test("metadata updates preserve the selected record even when results reorder", () => {
+  const first = paletteResult("chat:first", ["Repeated title", "2026"]);
+  const second = paletteResult("chat:second", ["Repeated title", "2026"]);
+  const renamed = paletteResult("chat:second", ["Repeated title renamed", "2035"]);
+  assert.notEqual(first.value, second.value);
+  assert.notEqual(second.value, renamed.value);
+  assert.equal(reconcilePaletteResult(second.value, [renamed, first], "Repeated"), renamed.value);
+  assert.equal(reconcilePaletteResult(second.value, [renamed, first], ""), renamed.value);
+  assert.equal(filterPaletteResult(renamed.value, "chat:second", renamed.keywords), 0);
+});
+
+test("a selected result excluded by rename or removal falls back to a visible match", () => {
+  const previous = paletteResult("chat:second", ["apple"]);
+  const renamed = paletteResult("chat:second", ["zebra"]);
+  const remaining = paletteResult("chat:first", ["apple"]);
+  assert.equal(reconcilePaletteResult(previous.value, [renamed, remaining], "apple"), remaining.value);
+  assert.equal(reconcilePaletteResult(previous.value, [remaining], "apple"), remaining.value);
+  assert.equal(reconcilePaletteResult(previous.value, [renamed], "apple"), "");
+  assert.equal(reconcilePaletteResult("Search chats", [renamed], ""), "Search chats");
+});
+
+test("provider and model metadata updates preserve selection through the record ID", () => {
+  for (const identity of ["model:second::model", "provider:second", "unavailable-provider:second"]) {
+    const previous = paletteResult(identity, ["Old label", "model"]);
+    const updated = paletteResult(identity, ["New label", "model"]);
+    assert.equal(reconcilePaletteResult(previous.value, [updated], "model"), updated.value);
+    assert.equal(filterPaletteResult(updated.value, "Old label", updated.keywords), 0);
+    assert.ok(filterPaletteResult(updated.value, "New label", updated.keywords) > 0);
+  }
 });

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
+import { expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const ONE_PIXEL_PNG_BASE64 =
@@ -547,11 +547,7 @@ test("composer selector menus use opaque theme surfaces on hover and keyboard fo
   }
 });
 
-// Human-readable palette labels may legitimately collide. Keyboard selection
-// must target the underlying chat/model identity, not the label string.
-test("command palette selects each chat with identical labels independently", async ({ aiden }) => {
-  const { app, page } = aiden;
-  await finishLmStudioOnboarding(page);
+async function seedPaletteChats({ app, page }: AidenE2e): Promise<void> {
   const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
   expect(workspaceId).toBeTruthy();
   await app.evaluate(({ ipcMain }, workspaceId) => {
@@ -575,6 +571,14 @@ test("command palette selects each chat with identical labels independently", as
   }, workspaceId);
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
+}
+
+// Human-readable palette labels may legitimately collide. Keyboard selection
+// must target the underlying chat/model identity, not the label string.
+test("command palette selects each chat with identical labels independently", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
   await page.keyboard.press("Meta+k");
   const palette = page.locator("[data-command-palette-content]");
   await palette.getByRole("combobox").fill("Search chats");
@@ -671,8 +675,69 @@ test("command palette selects same-named models from distinct provider identitie
   await expect(rows.nth(0)).toHaveAttribute("aria-selected", "true");
   await search.press("ArrowDown");
   await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+  const selectedId = await rows.nth(1).getAttribute("id");
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    const providers = ["zzq-provider-first", "zzq-provider-second"].map((id) => ({
+      id,
+      kind: "openai",
+      label: id === "zzq-provider-second" ? "Renamed provider" : "Repeated provider",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      models: ["repeated-model"],
+      needsKey: false,
+      hasKey: false,
+      deployment: "local",
+    }));
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => providers);
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("app:config-externally-changed");
+    }
+  });
+  const selected = palette.locator('[role="option"][aria-selected="true"]');
+  await expect(selected).toHaveCount(1);
+  await expect(selected).toHaveAttribute("id", selectedId as string);
+  await expect(selected).toContainText("Renamed provider");
+  await expect(search).toHaveAttribute("aria-activedescendant", selectedId as string);
   await search.press("Enter");
   await expect(palette).toBeHidden();
   await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.providerId"))).toBe("zzq-provider-second");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("repeated-model");
 });
+
+for (const field of ["title", "timestamp"] as const) {
+  test(`command palette preserves selected chat on live ${field} change`, async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await seedPaletteChats(aiden);
+    await page.keyboard.press("Meta+k");
+    const palette = page.locator("[data-command-palette-content]");
+    await palette.getByRole("option", { name: "Search chats" }).click();
+    const search = palette.getByRole("combobox", { name: "Search chats" });
+    await search.fill("Repeated palette title");
+    const rows = palette.getByRole("option");
+    await expect(rows).toHaveCount(2);
+    await search.press("ArrowDown");
+    await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+    const selectedId = await rows.nth(1).getAttribute("id");
+    await app.evaluate(({ BrowserWindow }, field) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send("chats:metadata-updated", {
+          chatId: "palette-chat-second",
+          title: field === "title" ? "Repeated palette title renamed" : "Repeated palette title",
+          updatedAt: field === "timestamp" ? Date.UTC(2035, 0, 1, 12) : 1_800_000_000_000,
+        });
+      }
+    }, field);
+    const selected = palette.locator('[role="option"][aria-selected="true"]');
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toHaveAttribute("id", selectedId as string);
+    if (field === "title") await expect(selected).toContainText("renamed");
+    else await expect(selected).toContainText("2035");
+    await expect(search).toHaveAttribute("aria-activedescendant", selectedId as string);
+    // No query edit or arrow recovery between the update and activation.
+    await search.press("Enter");
+    await expect(palette).toBeHidden();
+    await expect(page.getByText("Opened palette-chat-second", { exact: true })).toBeVisible();
+    await expect(page.getByText("Opened palette-chat-first", { exact: true })).toHaveCount(0);
+  });
+}
