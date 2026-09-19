@@ -533,3 +533,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## Upgrade 12 desktop UI — 2026-09-19
+- Fresh worktrees omit ignored `.memory` context; read the canonical project's command-system history and create a lane-specific note here.
+- No local dependencies are present; install this worktree's dependencies before renderer regression validation.
+- `npm ci` omitted Electron's executable; restored with its install script. Renderer/main-only bundles then exited before first window, so focused UI validation needs the normal native helper build prerequisites too.
+- Command-system aggregate has a pre-existing stale source assertion in `main/services/renderer-readiness-core.test.ts`: it expects a no-argument crash callback immediately resetting readiness, while main now records crash diagnostics first. Reported to campaign coordinator; preserve renderer-only scope.
+- Palette regression assertions must inspect loaded chat content because the desktop router uses memory history; the file URL does not change on chat navigation.
