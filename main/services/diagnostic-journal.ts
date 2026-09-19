@@ -785,12 +785,30 @@ export async function snapshotDiagnosticJournalFiles(destinationDirectory: strin
 
 export async function deleteDiagnosticJournalFiles(): Promise<void> {
   if (!targetPath) return;
-  await flushDiagnosticJournal();
-  for (let index = 0; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
-    const candidate = index === 0 ? targetPath : rotatedPath(targetPath, index);
-    await fs.rm(candidate, { force: true });
+  const target = targetPath;
+  let fatalResetFailure: { error: unknown } | undefined;
+  // Reserve deletion before yielding so later appends, rotations, retention and
+  // exports cannot run against the files being removed.
+  const deletion = queue.then(async () => {
+    if (fatalResetFailure) throw fatalResetFailure.error;
+    for (let index = 0; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
+      const candidate = index === 0 ? target : rotatedPath(target, index);
+      await fs.rm(candidate, { force: true });
+    }
+    ensureJournalFile(target);
+    activeSegmentStartedAtMs = now().getTime();
+  });
+  queue = deletion.catch(() => { writeFailed = true; });
+
+  // Fatal writes bypass the queue. Reset their file synchronously at admission
+  // so a crash recorded while general deletion drains is preserved.
+  try {
+    const fatal = fatalPath(target);
+    rmSync(fatal, { force: true });
+    ensureJournalFile(fatal);
+    fatalSegmentStartedAtMs = now().getTime();
+  } catch (error) {
+    fatalResetFailure = { error };
   }
-  await fs.rm(fatalPath(targetPath), { force: true });
-  ensureJournalFile(targetPath);
-  ensureJournalFile(fatalPath(targetPath));
+  return deletion;
 }
