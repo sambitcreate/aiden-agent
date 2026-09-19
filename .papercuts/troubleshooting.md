@@ -533,3 +533,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+- 2026-09-19 lane 21: Fresh worktree has no .memory or dependencies; consulted canonical project memory and installed isolated dependencies with lifecycle scripts disabled for server-only tests.
+- 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
+- 2026-09-19 lane 21 review: Terminal subscribers remain registered until drain; aggregate eviction must account for pending delivery, not just terminal generation state. Added cross-stream pressure/drain/deadline regressions.
+- 2026-09-19 lane 21 follow-up: Byte-budget trimming can leave the stream registry full after delivery ends; deferred eviction must release count capacity at subscriber settlement without waiting for another append.
+- 2026-09-19 lane 21 replay review: Socket teardown does not establish terminal delivery; reserve capacity reclamation for response finish. Abort/timeout must preserve replay despite renewed pressure, with count/byte/retention bounds.
