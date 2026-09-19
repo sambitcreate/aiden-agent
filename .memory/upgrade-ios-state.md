@@ -1,0 +1,13 @@
+# iOS draft restoration ownership — 2026-09-19
+
+`AidenChatViewModel.load` yields while `AidenChatDraftStore` reads disk. The composer remains editable during this interval (`TextField` disables only for voice input). The old empty check occurred before the await, so an older persisted draft could replace new input or resurrect text after an intentional clear.
+
+Capture the existing `draftGeneration` before beginning the restoration session and publish saved text only if that generation is unchanged and the composer remains empty. Continue ordinary chat loading when restoration is superseded. No UI geometry, server contract, transcript rendering, network behavior, or onboarding change.
+
+Three hypotheses were investigated: Bot A-B-A cache publication is already fenced by activation generations and retained-installation gating; interrupted draft/cache writes already use atomic replacement in synchronous actor methods; composer restore ownership was missing and reproduced.
+
+Reference study (conceptual only; no code copied): Pi client session leases invalidate by generation; OMP collab state reconciles authoritative current liveness; OpenCode's pinned 7a6ce05d0939826aa6c8e1c481489a713b2d633f prompt store separates scoped persistence/readiness/current dirty state; Prime Agent harness rereads after external disk changes; aiden-plugins cancels stale curator work; Waku keeps draft workspace intent scoped to a session; Hermes explicitly reconciles stale derived state. These support checking the owner/version at publication rather than assuming an earlier read remains authoritative.
+
+Validation: a host Swift executable compiled the production draft store and verbatim draft-restoration branch with the same held-file-read fixture. Baseline fails typing and intentional-clear cases; fixed code passes both and the untouched-composer control. Three actual AidenChatViewModel XCTest cases were added to the already registered AidenChatTests.swift. Xcode 27 beta unsigned generic iOS build-for-testing passed; XCTest was compiled, not executed. Physical installation is prohibited in this campaign and simulator use is prohibited by ios/AGENTS.md. iOS release checks passed (31 Node tests; 20 Ruby tests/42 assertions). Android initializes its draft synchronously before exposing the view model; desktop owns a different draft lifecycle. Neither consumes this iOS-local async restoration code. No shared behavior or contract was modified.
+
+Campaign evidence and the reproducible host probe generator live under the shared `.papercuts/upgrade-campaign-20260919/34-ios-state*` files. Hosted checks and independent review must be assessed separately from these local results.
