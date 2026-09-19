@@ -540,3 +540,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Dependencies absent in isolated worktree; installing locally with Electron payload download skipped because tests need only SDK/TypeScript.
 
 - SDK 1.30 remote transports report failures through `onerror`, not `onclose`; the EventSource onerror property callback runs before dispatch, so its event target is still null. Its pinned terminal response errors carry a numeric HTTP code, whereas reconnectable EOF/network errors do not. HTTP reconnect callbacks can schedule a timer after error notification, requiring teardown after those callbacks settle.
+- HTTP GET-stream retry exhaustion is not whole-session failure: reproduce a subsequent `tools/list` POST before recommending eviction. The pinned SDK successfully serves POST discovery on the retained session after both optional GET retries fail.

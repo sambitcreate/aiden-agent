@@ -181,3 +181,43 @@ for (const terminal of [true, false]) {
     if (terminal) assert.equal(first.transport, undefined);
   });
 }
+
+test("HTTP tools/list POST succeeds on the same session after optional GET retries are exhausted", async (t) => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let gets = 0;
+  const discoverySessions: Array<string | null> = [];
+  const fixture = harness("http", async (_input, init) => {
+    if (init?.method === "GET") {
+      gets += 1;
+      if (gets > 1) return new Response(null, { status: 503 });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+          controller.enqueue(new TextEncoder().encode("retry: 1\n\n"));
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    }
+    const request = JSON.parse(String(init?.body));
+    if (request.id === undefined) return new Response(null, { status: 202 });
+    if (request.method === "tools/list") {
+      assert.equal(init?.method, "POST");
+      discoverySessions.push(new Headers(init.headers).get("mcp-session-id"));
+    }
+    return Response.json({ jsonrpc: "2.0", id: request.id,
+      result: request.method === "initialize" ? initialized : { tools },
+    }, { headers: { "mcp-session-id": "retained-session" } });
+  });
+  t.after(() => fixture.cache.disconnect("server"));
+  const first = await fixture.acquire();
+  assert.equal((await first.listTools()).tools.length, 1);
+  await until(() => gets === 1);
+  stream.close();
+  await until(() => fixture.errors.some((error) => error.message === "Maximum reconnection attempts (2) exceeded."));
+  assert.equal(gets, 3, "the optional GET stream made both retries before exhausting");
+  const cached = await fixture.acquire();
+  assert.equal(cached, first);
+  assert.equal((await cached.listTools()).tools[0].name, "example");
+  assert.deepEqual(discoverySessions, ["retained-session", "retained-session"]);
+  assert.equal(fixture.created(), 1, "no new initialization was needed for successful discovery");
+  assert.ok(first.transport, "the session remains attached after optional stream exhaustion");
+});
