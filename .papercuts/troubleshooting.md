@@ -537,3 +537,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Android upgrade lane
 - Fresh origin/main has no `.memory/` directory; read the mobile plan and create the required lane-specific memory note.
 - OkHttp `responseBodyStart` fires after its first underlying read; use a tracked source to coordinate cancellation before a deliberately stalled read in the regression test.
+- Pullfrog caught callback-slot starvation: OkHttp 4.12 releases its per-host async slot only after `onResponse` returns. Validate concurrent stalled responses as well as individual cancellation.

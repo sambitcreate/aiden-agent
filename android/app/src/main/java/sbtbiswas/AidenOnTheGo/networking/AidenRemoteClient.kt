@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.networking
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
@@ -1876,28 +1879,35 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
 private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray)
 
 /** Keep cancellation connected to the socket until the body is consumed and closed. */
-private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse =
+@OptIn(DelicateCoroutinesApi::class)
+private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = coroutineScope {
+    val readerScope = this
     suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { cancel() }
+        continuation.invokeOnCancellation { this@awaitBody.cancel() }
         enqueue(object : Callback {
             override fun onResponse(call: Call, response: Response) {
-                val result = try {
-                    response.use {
-                        if (!continuation.isActive) return
-                        val bytes = if (maximumBytes != null) {
-                            it.body.readBounded(maximumBytes)
-                        } else {
-                            it.body?.bytes() ?: ByteArray(0)
+                // Return the OkHttp per-host slot at headers, not after a slow
+                // body. ATOMIC guarantees use/close even if cancellation wins
+                // before the IO worker starts; the scope owns its completion.
+                readerScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+                    val result = try {
+                        response.use {
+                            if (!continuation.isActive) return@launch
+                            val bytes = if (maximumBytes != null) {
+                                it.body.readBounded(maximumBytes)
+                            } else {
+                                it.body?.bytes() ?: ByteArray(0)
+                            }
+                            BufferedHttpResponse(it.code, bytes)
                         }
-                        BufferedHttpResponse(it.code, bytes)
+                    } catch (error: Exception) {
+                        continuation.resumeWithException(error)
+                        return@launch
                     }
-                } catch (error: Exception) {
-                    continuation.resumeWithException(error)
-                    return
+                    // Only plain data crosses the dispatch boundary: cancellation
+                    // cannot discard an open response before the caller receives it.
+                    continuation.resume(result)
                 }
-                // Only plain data crosses the dispatch boundary: cancellation
-                // cannot discard an open response before the caller receives it.
-                continuation.resume(result)
             }
 
             override fun onFailure(call: Call, e: IOException) {
@@ -1905,6 +1915,7 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse =
             }
         })
     }
+}
 
 private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")
 

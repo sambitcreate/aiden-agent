@@ -821,6 +821,58 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testFiveStalledBodiesDoNotBlockAnotherRequestToTheSameHost() = runBlocking {
+        val allBodiesStarted = CompletableDeferred<Unit>()
+        val started = java.util.concurrent.atomic.AtomicInteger()
+        val closed = java.util.concurrent.atomic.AtomicInteger()
+        val transport = httpClient.newBuilder()
+            .readTimeout(4, TimeUnit.SECONDS)
+            .addNetworkInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                if (response.header("X-Stalled-Body") == null) return@addNetworkInterceptor response
+                val body = response.body!!
+                val source = object : ForwardingSource(body.source()) {
+                    private var hasStarted = false
+                    override fun read(sink: okio.Buffer, byteCount: Long): Long {
+                        if (!hasStarted) {
+                            hasStarted = true
+                            if (started.incrementAndGet() == 5) allBodiesStarted.complete(Unit)
+                        }
+                        return super.read(sink, byteCount)
+                    }
+                    override fun close() {
+                        closed.incrementAndGet()
+                        super.close()
+                    }
+                }.buffer()
+                response.newBuilder().body(object : ResponseBody() {
+                    override fun contentType() = body.contentType()
+                    override fun contentLength() = body.contentLength()
+                    override fun source() = source
+                }).build()
+            }.build()
+        assertEquals(5, transport.dispatcher.maxRequestsPerHost)
+        val concurrentClient = AidenRemoteClient(client.endpoint, client.credential, transport)
+        val body = """{"protocolVersion":1,"instanceId":"test_instance","name":"Test Mac","capabilities":[],"appVersion":"1.0.0","connectionMode":"lan","serverTime":"2026-08-24T00:00:00Z"}"""
+        repeat(5) {
+            server.enqueue(MockResponse().setHeader("X-Stalled-Body", "true")
+                .setBody(body).setBodyDelay(3, TimeUnit.SECONDS))
+        }
+        val stalled = List(5) { launch(Dispatchers.IO) { concurrentClient.server() } }
+        try {
+            withTimeout(2_000) { allBodiesStarted.await() }
+            server.enqueue(MockResponse().setBody(body))
+            val fast = withTimeout(1_000) { concurrentClient.server() }
+            assertEquals("Test Mac", fast.name)
+            assertTrue("The slow bodies must still be pending", stalled.all { it.isActive })
+        } finally {
+            stalled.forEach { it.cancel() }
+            stalled.forEach { it.join() }
+        }
+        assertEquals("All cancelled bodies must close", 5, closed.get())
+    }
+
+    @Test
     fun testDeclaredOversizedResponseClosesBodyBeforeRejectingPayload() = runBlocking {
         val bodyClosed = AtomicBoolean(false)
         val transport = httpClient.newBuilder().addInterceptor { chain ->
