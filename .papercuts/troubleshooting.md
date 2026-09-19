@@ -657,3 +657,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Android has no system Java registration; focused native tests pass using Android Studio bundled JBR via explicit `JAVA_HOME`.
 - `xcrun devicectl list devices` stalled; stopped only that discovery process and used bounded `xcodebuild -showdestinations`. iOS verification uses isolated unsigned build-for-testing to avoid installing over the user app.
 - Repository ignores `.memory/`; explicitly stage the requested unique lane note with `git add -f`.
+## 2026-09-19 — updater lane 25
+- Fresh worktree has no .memory directory or dependencies; read canonical project history and install isolated dependencies with scripts disabled for simulated updater tests.
