@@ -876,3 +876,179 @@ test("explicit manual runs still work while scheduling and the task are paused",
   testbed.service.stop();
   assert.equal((await run).result, "blocked");
 });
+
+for (const staleOnArrival of [true, false]) {
+  test(`replacement Cron can run when predecessor ${staleOnArrival ? "arrives stale" : "loses ownership during lookup"}`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    await testbed.service.start();
+    const oldJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const get = testbed.store.get.bind(testbed.store);
+    let invokingOld = false;
+    let oldLookups = 0;
+    testbed.store.get = async (id) => {
+      const hold = invokingOld;
+      const latest = await get(id);
+      if (hold) {
+        oldLookups += 1;
+        entered.resolve();
+        await release.promise;
+      }
+      return latest;
+    };
+    if (staleOnArrival) await testbed.service.resume(task.id);
+    invokingOld = true;
+    const obsolete = oldJob.trigger();
+    invokingOld = false;
+    if (!staleOnArrival) {
+      await entered.promise;
+      assert.throws(() => testbed.service.runNow(task.id), /already running/u);
+      await testbed.service.resume(task.id);
+    }
+    const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+    const current = currentJob.trigger();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(testbed.hasPending(task.id), true, "obsolete lookup must not block replacement execution");
+    release.resolve();
+    await obsolete;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(testbed.service.isRunning(task.id), true, "obsolete cleanup must preserve the replacement slot");
+    assert.throws(() => testbed.service.runNow(task.id), /already running/u);
+    assert.deepEqual(testbed.errors, []);
+    assert.deepEqual(await testbed.store.runs(task.id), []);
+    if (staleOnArrival) assert.equal(oldLookups, 0);
+    testbed.service.stop();
+    await current;
+  });
+}
+
+test("delayed workspace cancellation cannot cancel a replacement run through the old slot", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await testbed.store.save({
+    name: "Workspace brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    workspaceId: "workspace-handoff",
+    prompt: "Summarize changes.",
+  });
+  await testbed.service.start();
+  const oldJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const get = testbed.store.get.bind(testbed.store);
+  let hold = true;
+  testbed.store.get = async (id) => {
+    const latest = await get(id);
+    if (hold) {
+      hold = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return latest;
+  };
+  const obsolete = oldJob.trigger();
+  await entered.promise;
+  const cancelling = testbed.service.cancelWorkspace("workspace-handoff");
+  await new Promise((resolve) => setImmediate(resolve));
+  await testbed.service.resumeWorkspace("workspace-handoff");
+  const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const current = currentJob.trigger();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true);
+  release.resolve();
+  await Promise.all([obsolete, cancelling]);
+
+  assert.equal(testbed.hasPending(task.id), true, "cancelling the obsolete snapshot must not cancel the new owner");
+  assert.equal(testbed.service.isRunning(task.id), true);
+  assert.deepEqual(testbed.errors, []);
+  assert.deepEqual(await testbed.store.runs(task.id), []);
+  testbed.service.stop();
+  await current;
+});
+
+test("a replaced job keeps its run slot once execution has started", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const running = job.trigger();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true);
+  await testbed.service.resume(task.id);
+  assert.throws(() => testbed.service.runNow(task.id), /already running/u);
+  assert.equal(testbed.hasPending(task.id), true);
+  testbed.service.stop();
+  await running;
+});
+
+test("a pending manual run keeps its reservation when Cron ownership changes", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const get = testbed.store.get.bind(testbed.store);
+  let hold = true;
+  testbed.store.get = async (id) => {
+    const latest = await get(id);
+    if (hold) {
+      hold = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return latest;
+  };
+  const running = testbed.service.runNow(task.id);
+  await entered.promise;
+  await testbed.service.resume(task.id);
+  assert.throws(() => testbed.service.runNow(task.id), /already running/u);
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true);
+  testbed.service.stop();
+  await running;
+});
+
+test("replacement Cron reclaims an obsolete pending claim without stale publication or cleanup", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const oldJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let hold = true;
+  testbed.taskPersistence.beforeCommit = async () => {
+    if (hold && testbed.service.isRunning(task.id)) {
+      hold = false;
+      entered.resolve();
+      await release.promise;
+    }
+  };
+  const obsolete = oldJob.trigger();
+  await entered.promise;
+  await testbed.service.resume(task.id);
+  const currentJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const current = currentJob.trigger();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(testbed.hasPending(task.id), true);
+  const newer = await testbed.store.get(task.id);
+  release.resolve();
+  await obsolete;
+
+  assert.deepEqual(await testbed.store.get(task.id), newer);
+  assert.equal(testbed.service.isRunning(task.id), true);
+  assert.equal(testbed.hasPending(task.id), true);
+  assert.deepEqual(testbed.errors, []);
+  assert.deepEqual(await testbed.store.runs(task.id), []);
+  testbed.service.stop();
+  await current;
+});

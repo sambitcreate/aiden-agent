@@ -15,6 +15,9 @@ interface ScheduleExecutionLike {
 interface RunningTask {
   promise: Promise<ScheduledRun>;
   cancelRequested: boolean;
+  automatic: boolean;
+  executionStarted: boolean;
+  isCurrent(): boolean;
   workspaceId?: string;
   workspaceReady: Promise<void>;
 }
@@ -120,20 +123,31 @@ export function createScheduleServiceCore(
       | { automatic: false }
     ),
   ): Promise<ScheduledRun> {
-    if (runningTasks.has(taskId)) {
-      throw new Error("This scheduled task is already running.");
+    if (options.automatic && !options.isCurrent()) {
+      throw new Error("This scheduled task was cancelled.");
+    }
+    const previous = runningTasks.get(taskId);
+    if (previous) {
+      if (!previous.automatic || previous.executionStarted || previous.isCurrent()) {
+        throw new Error("This scheduled task is already running.");
+      }
+      // Supersede only obsolete automatic preparation. It cannot enter execution
+      // or publish its pending claim once cancelled; real runs retain their slot.
+      previous.cancelRequested = true;
     }
     let resolveWorkspaceReady: () => void = () => {};
     let workspaceResolved = false;
     const state: RunningTask = {
       cancelRequested: false,
+      automatic: options.automatic,
+      executionStarted: false,
+      isCurrent: () => !state.cancelRequested && (!options.automatic || options.isCurrent()),
       promise: Promise.resolve(undefined as never),
       workspaceReady: new Promise<void>((resolve) => {
         resolveWorkspaceReady = resolve;
       }),
     };
-    const isCurrent = () =>
-      !state.cancelRequested && (!options.automatic || options.isCurrent());
+    const isCurrent = state.isCurrent;
     const operation = (async () => {
       try {
         const task = await store.get(taskId);
@@ -163,6 +177,7 @@ export function createScheduleServiceCore(
         const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
+        state.executionStarted = true;
         return execution.run(claimed, options.runId);
       } finally {
         if (!workspaceResolved) {
@@ -196,7 +211,7 @@ export function createScheduleServiceCore(
     );
     for (const [taskId, state] of selected) {
       state.cancelRequested = true;
-      execution.cancel(taskId);
+      if (runningTasks.get(taskId) === state) execution.cancel(taskId);
     }
     await Promise.allSettled(selected.map(([, state]) => state.promise));
   }
@@ -519,8 +534,9 @@ export function createScheduleServiceCore(
         expectedUpdatedAt: options.expectedUpdatedAt,
       });
       if (!options.signal) return operation;
+      const state = runningTasks.get(id);
       const cancel = () => {
-        const state = runningTasks.get(id);
+        if (runningTasks.get(id) !== state) return;
         if (state) state.cancelRequested = true;
         execution.cancel(id);
       };
