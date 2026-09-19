@@ -915,3 +915,52 @@ test("a synchronous socket write failure cannot interrupt generation publication
   const events = app.service.snapshot().streams[0]!.events;
   assert.equal(events[events.length - 1]?.payload.text, "Saved");
 });
+
+for (const settlement of ["drain", "timeout"] as const) {
+  test(`aggregate pressure preserves blocked terminal delivery until ${settlement}`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const app = fixture();
+    const owner = app.service.create("device-1", "terminal", "chat-1", "turn-1");
+    const client = blockedResponse();
+    client.response.blocked = false;
+    app.service.openEvents("device-1", "terminal", 0, client.http);
+    client.response.blocked = true;
+    owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+    assert.match(client.output[1]!, /event: done/u);
+    assert.equal(client.response.ended, false);
+
+    // Three active journals exceed the shared 16 MiB limit even though each
+    // remains below its individual limit. The terminal journal is oldest.
+    const producers = Array.from({ length: 3 }, (_, index) =>
+      app.service.create("device-1", `load-${index}`, `chat-${index + 2}`, `turn-${index + 2}`));
+    for (const producer of producers) {
+      for (let index = 0; index < 30; index++) producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
+    }
+    assert.equal(client.response.destroyed, false, "pressure must not discard accepted terminal bytes");
+    assert.equal(app.service.status("device-1", "terminal").state, "done");
+    assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+    const replay = blockedResponse();
+    replay.response.blocked = false;
+    app.service.openEvents("device-1", "terminal", 1, replay.http);
+    assert.match(replay.output.join(""), /event: done/u);
+    assert.equal(replay.response.ended, true);
+
+    if (settlement === "drain") {
+      client.response.emit("drain");
+      assert.equal(client.response.ended, true);
+      assert.equal(client.response.destroyed, false);
+    } else {
+      t.mock.timers.tick(30_000);
+      assert.equal(client.response.destroyed, true);
+    }
+    assert.equal(client.response.listenerCount("drain"), 0);
+    // A completed drain or the bounded stall deadline releases the pin. A
+    // dead client cannot reserve journal capacity indefinitely.
+    producers[0]!.owner.send("chat:delta", { delta: "y".repeat(200_000) });
+    assert.throws(
+      () => app.service.status("device-1", "terminal"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "not_found",
+    );
+    assert.deepEqual(app.cancelled, []);
+  });
+}

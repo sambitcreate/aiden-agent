@@ -12,3 +12,9 @@ Read-only references; implementation is original:
 - opencode-v2-aiden-study `7a6ce05d0939826aa6c8e1c481489a713b2d633f`, `packages/opencode/src/server/instance/event.ts`, MIT; SHA-256 `80596a5f7b52d669c352344b95dfa8d68b62b8b7688605bc297c6696e2915075`. Await stream writes and make abort cleanup idempotent; do not copy unbounded queue.
 - hermes-agent `69ae247cf3dba34a37ab4af8484b96d3559a4fcf`, `tui_gateway/methods_session.py`, MIT; SHA-256 `b7854680f7899d7d874ffa5056c1b7554f0a024a028b943a0fe26d5fbf7a7d55`. Detached transport does not imply finalized generation.
 - waku `6d433e875d57091906ec0770d8bb9ffc9aa29b83`, `src/driver/acp.rs`, GPL-3.0; SHA-256 `38b486abd085a23d1142bc801a844468276f2dde986bdf0c6aad2d804e4ad3e3`. Resume cursors retain explicit owner/provider identity; read-only conceptual study, no copied code.
+
+## Review correction: terminal delivery under aggregate pressure
+
+Pullfrog PRRT_kwDOTctvDc6j9u0k demonstrated aggregate eviction could destroy accepted but undrained terminal bytes and remove replay state. Two cross-stream pressure regressions failed against PR head 25934fbe. Aggregate eviction now excludes terminal records with subscribers; ordinary journal trimming still enforces the 16 MiB budget. Successful drain or the existing 30-second timeout releases the subscriber so the next pressure pass can evict the record. Tests prove terminal replay remains available during the drain, healthy terminal completion, timeout cleanup, bounded snapshot memory, and subsequent eviction (no indefinite capacity pin).
+
+Review-fix validation: 37 stream tests passed; full remote suite 452 passed, one occupied legacy-port skip; type-check, scoped ESLint and diff check passed.

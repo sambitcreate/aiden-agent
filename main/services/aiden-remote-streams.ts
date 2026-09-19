@@ -739,11 +739,14 @@ export class AidenRemoteStreamService {
     const snapshotBytes = () => Buffer.byteLength(JSON.stringify(this.snapshot()), "utf8");
     if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     const terminalStreams = [...this.streams.values()]
-      .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
+      // A terminal subscriber may still be draining accepted bytes. Keep its
+      // replay record until delivery settles (or the drain deadline aborts it).
+      // The trimming pass below still bounds its journal, so this is not a
+      // reservation of the stream's full event history.
+      .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state) && entry.subscribers.size === 0)
       .sort((left, right) => left.updatedAt - right.updatedAt);
     for (const entry of terminalStreams) {
       entry.owner.invalidate();
-      for (const subscriber of entry.subscribers) subscriber.close();
       this.streams.delete(entry.streamId);
       if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     }
