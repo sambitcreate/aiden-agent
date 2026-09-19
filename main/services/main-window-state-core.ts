@@ -140,14 +140,18 @@ export function trackMainWindowState(window: MainWindowStateSource): () => MainW
   const capture = () => {
     if (window.isMinimized() && state) return state;
     const maximized = window.isMaximized();
-    // On macOS even restoring a minimized maximized window can leave
-    // getNormalBounds() reporting the maximized rectangle until unmaximize.
-    const bounds = maximized && state?.maximized ? state.bounds! : window.getNormalBounds();
+    const fullScreen = window.isFullScreen();
+    // Preserve known normal bounds while a presentation mode remains active.
+    // macOS restores minimized maximized windows with presentation bounds.
+    const bounds =
+      (maximized && state?.maximized) || (fullScreen && state?.fullScreen)
+        ? state.bounds!
+        : window.getNormalBounds();
     state = {
       version: 1,
       bounds: { ...bounds },
       maximized,
-      fullScreen: window.isFullScreen(),
+      fullScreen,
     };
     return state;
   };

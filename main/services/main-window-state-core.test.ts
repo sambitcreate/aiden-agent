@@ -176,3 +176,35 @@ test("tracked negative monitor coordinates retain existing disconnected-display 
   );
   assert.equal(state.maximized, true);
 });
+
+test("fullscreen restore keeps normal bounds after the native minimized flag clears", () => {
+  const window = new NativeWindowState();
+  const snapshot = trackMainWindowState(window);
+  const normal = { ...window.bounds };
+  window.fullScreen = true;
+  window.emit("enter-full-screen");
+  window.minimized = true;
+  window.bounds = { x: 0, y: 0, width: 1_920, height: 1_080 };
+  window.emit("minimize");
+  window.minimized = false;
+  // A restore event can clear minimized while fullscreen remains active.
+  // Preserve the cached normal bounds if the getter reports presentation bounds.
+  window.emit("restore");
+  assert.deepEqual(snapshot(), {
+    version: 1,
+    bounds: normal,
+    maximized: false,
+    fullScreen: true,
+  });
+  window.fullScreen = false;
+  window.bounds = normal;
+  window.emit("leave-full-screen");
+  window.bounds = { x: 140, y: 120, width: 950, height: 700 };
+  window.emit("resize");
+  assert.deepEqual(snapshot(), {
+    version: 1,
+    bounds: window.bounds,
+    maximized: false,
+    fullScreen: false,
+  });
+});

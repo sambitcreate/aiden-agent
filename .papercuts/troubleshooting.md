@@ -540,3 +540,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - esbuild stdin requires explicit TypeScript loader even with a .ts sourcefile; corrected native harness builder after initial parse failure.
 - Native harness cleanup raced Chromium Session Storage teardown; moved temporary-directory cleanup to the parent after Electron exits.
 - Initial papercut write replaced a tracked history file; restored original contents before appending this lane.
+
+- 2026-09-19 closeout: macOS native fullscreen minimize emitted no minimize event within the probe deadline. Retained timeout evidence; separate event-model regression and passing ordinary native lifecycle coverage instead of claiming native reproduction.
