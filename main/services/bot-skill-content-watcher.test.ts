@@ -128,17 +128,65 @@ async function waitForChange(readChanges: () => number): Promise<void> {
   assert.ok(readChanges() > 0, "Skill watcher must observe the current skill directory");
 }
 
-async function waitForQuiet(readChanges: () => number): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    const before = readChanges();
-    await settleWatcherEvents();
-    if (readChanges() === before) return;
-  }
-  assert.fail("Skill watcher events did not settle");
-}
+test("each delivered skill event invalidates independently of delayed earlier events", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-events-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const skillFile = path.join(root, "SKILL.md");
+  await fs.writeFile(skillFile, "Before");
+  let deliveringEvent: string | undefined;
+  const observations: Array<{ event: string; content: string }> = [];
+  const watcher = new BotSkillContentWatcher(() => {
+    if (deliveringEvent) {
+      observations.push({ event: deliveringEvent, content: readFileSync(skillFile, "utf8") });
+    }
+  });
+  t.after(() => watcher.dispose());
+  await watcher.watchSkillFiles([skillFile]);
 
-test("watcher observes atomic skill replacement and subsequent edits", async (t) => {
+  // Control delivery of the actual registered listener without changing the
+  // production API. OS notifications have no operation IDs; these test-only
+  // IDs track which synchronous delivery caused each invalidation.
+  const nativeWatcher: FSWatcher = Reflect.get(watcher, "directories").get(root).watcher;
+  const listeners = nativeWatcher.listeners("change");
+  assert.equal(listeners.length, 1);
+  const listener = listeners[0] as (event: string, filename: string | null) => void;
+  nativeWatcher.removeListener("change", listener);
+  const deliver = (id: string, event: string, filename: string | null) => {
+    deliveringEvent = id;
+    try {
+      listener(event, filename);
+    } finally {
+      deliveringEvent = undefined;
+    }
+  };
+  const observed = (event: string) => observations.filter((entry) => entry.event === event);
+
+  const stagedFile = path.join(root, "SKILL.md.tmp");
+  await fs.writeFile(stagedFile, "Replacement");
+  await fs.rename(stagedFile, skillFile);
+  deliver("delayed temp notification", "rename", null);
+  assert.deepEqual(observed("delayed temp notification"), [
+    { event: "delayed temp notification", content: "Replacement" },
+  ], "A delayed earlier event can read the new content, so content alone is not causal proof");
+  assert.deepEqual(observed("atomic replacement"), []);
+  deliver("atomic replacement", "rename", "SKILL.md");
+  assert.deepEqual(observed("atomic replacement"), [
+    { event: "atomic replacement", content: "Replacement" },
+  ]);
+
+  await fs.writeFile(skillFile, "After replacement");
+  deliver("delayed replacement notification", "rename", "SKILL.md");
+  assert.deepEqual(observed("delayed replacement notification"), [
+    { event: "delayed replacement notification", content: "After replacement" },
+  ]);
+  assert.deepEqual(observed("later edit"), []);
+  deliver("later edit", "change", "SKILL.md");
+  assert.deepEqual(observed("later edit"), [
+    { event: "later edit", content: "After replacement" },
+  ]);
+});
+
+test("real filesystem smoke observes current content across an atomic save and edit", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-atomic-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const skillDirectory = path.join(root, "skill");
@@ -147,7 +195,6 @@ test("watcher observes atomic skill replacement and subsequent edits", async (t)
   await fs.writeFile(skillFile, "Before");
   const observedContents: string[] = [];
   const watcher = new BotSkillContentWatcher(() => {
-    // Capture content when the callback arrives, not after the test's wait.
     try {
       observedContents.push(readFileSync(skillFile, "utf8"));
     } catch {
@@ -155,17 +202,14 @@ test("watcher observes atomic skill replacement and subsequent edits", async (t)
     }
   });
   t.after(() => watcher.dispose());
-  // Stage outside the watched directory so its events cannot satisfy rename.
   const stagedFile = path.join(root, "SKILL.md.tmp");
   await fs.writeFile(stagedFile, "Replacement");
   await watcher.watchSkillFiles([skillFile]);
-  await waitForQuiet(() => observedContents.length);
-  observedContents.length = 0;
+  await settleWatcherEvents();
   await fs.rename(stagedFile, skillFile);
-  await waitForChange(() => observedContents.filter((content) => content === "Replacement").length);
-  await waitForQuiet(() => observedContents.length);
-  observedContents.length = 0;
   await fs.writeFile(skillFile, "After replacement");
+  // fs.watch may delay/coalesce events. This smoke check establishes eventual
+  // current-content visibility, not attribution to either individual mutation.
   await waitForChange(() => observedContents.filter((content) => content === "After replacement").length);
 });
 
