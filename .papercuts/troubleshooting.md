@@ -549,3 +549,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Fresh worktree omits ignored `.memory`; consulted main checkout PROJECT-CONTEXT and DIAGNOSTICS-CAUSES, and will write a lane-specific note locally.
 - Dependencies absent in isolated worktree; installing locally with Electron payload download skipped because tests need only SDK/TypeScript.
+## Upgrade campaign: Web access
+
+- Fresh worktree has no `.memory` (gitignored); consulted primary checkout project notes and web-access plan.
+- `aiden-plugins` is a collection, not a Git repo; use the nested `pi-web-access` repository for baseline hashes.
+- Dependencies are absent; install locally without Electron lifecycle downloads for focused service tests.
+
+- Restored existing troubleshooting history after detecting an overwrite in diff review; lane notes are appended.
