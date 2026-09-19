@@ -642,3 +642,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Crash recovery regression needs controlled Electron event/timer delivery: wall-clock sleeps cannot reliably put navigation inside the 300 ms retry window. Tests hold handler-created timers, then deliver stale callbacks deterministically against real guests.
 - Full browser Electron run reached an annotation click timeout: Aiden Live's floating app-icon launcher intercepts `Add to chat` at browser.spec.ts:89. New crash regressions pass; checking the unchanged baseline separately before classifying the broader failure.
 - Confirmed identical annotation interception on unchanged baseline `5cc831a`; screenshot visibly shows the Live launcher over Add to chat. Reported to campaign root and attachment owner; retain this as an explicit suite limitation.
+## 2026-09-19 voice upgrade
+- This fresh main worktree has no `.memory/` directory; inspected the completed dictation plan and current source, and will add a scoped implementation note.
+- Renderer build passes with pre-existing Ghostty mixed static/dynamic import and large-chunk warnings; no voice build failure. Repository `.memory/` is ignored, so the scoped delivery note requires explicit force-add.

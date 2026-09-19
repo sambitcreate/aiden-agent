@@ -8,6 +8,7 @@ import { voiceApi } from "./ipc";
 import type { VoiceProvider } from "./types";
 import { bytesToBase64 } from "./live-pcm-capture";
 import { encodeMonoPcm16Wav } from "./wav-audio";
+import { DictationDeadline, transcriptionBudgetMs } from "./dictation-operation-gate";
 import { GEMINI_TRANSCRIPTION_MODEL } from "../shared/voice-models";
 
 export interface TranscribeOptions {
@@ -111,6 +112,24 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
   const operationId = options.operationId;
   if (!operationId) throw new Error("Voice transcription operation identity is missing.");
   options.signal?.throwIfAborted();
+  const timeoutController = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutController.signal])
+    : timeoutController.signal;
+  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider));
+  return deadline.run(convertAndTranscribeBlob(blob, { ...options, operationId, signal }), () => {
+    // Main cannot cancel a request that conversion has not submitted yet.
+    // Fence late browser callbacks before asking it to cancel active inference.
+    timeoutController.abort();
+    return cancelTranscription(options.provider, operationId);
+  });
+}
+
+async function convertAndTranscribeBlob(
+  blob: Blob,
+  options: TranscribeOptions & { operationId: string },
+): Promise<string> {
+  const operationId = options.operationId;
   if (options.provider === "local") {
     if (!options.localModel) {
       throw new Error("Download and select an on-device model in Settings → Voice.");
