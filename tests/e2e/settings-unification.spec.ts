@@ -156,10 +156,27 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const navigation = page.getByRole("navigation", { name: "Settings" });
+  const sidebar = page.locator("aside").filter({
+    has: page.getByRole("navigation", { name: "Settings", includeHidden: true }),
+  });
+  const resizeWindow = async (width: number, height: number) => {
+    await app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+      { width, height },
+    );
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+    if (width < 700) {
+      // Wait for React's resize handler and the sidebar collapse before another
+      // resize can make the one-shot Show sidebar check observe stale state.
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+      await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().width))
+        .toBe(0);
+    }
+  };
   const destinations = await navigation.getByRole("button").allTextContents();
   for (const destination of destinations) {
     // Navigate with the sidebar exposed, then test the compact content allocation.
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await resizeWindow(1280, 800);
     const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
     if (await showSidebar.isVisible()) await showSidebar.click();
     await navigation.getByRole("button", { name: destination.trim(), exact: true }).click();
@@ -170,10 +187,7 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
       await page.getByText("Advanced Telegram settings", { exact: true }).click();
     }
     for (const width of [1280, 600, 390]) {
-      await app.evaluate(
-        ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 650),
-        width,
-      );
+      await resizeWindow(width, 650);
       await expect
         .configure({ soft: true })
         .poll(
