@@ -719,3 +719,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.
 - 2026-09-19 lane 21 follow-up: Byte-budget trimming can leave the stream registry full after delivery ends; deferred eviction must release count capacity at subscriber settlement without waiting for another append.
+- Lane 33 review: callback counts alone cannot prove which filesystem mutation was observed or whether a suppressed watcher was closed. Correlate observed content, stage outside the watched directory, and assert actual native close plus its close event; validate with omitted-close/missed-edit mutants.
