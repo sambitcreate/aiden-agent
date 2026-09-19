@@ -750,3 +750,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
 - Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
+
+- Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
