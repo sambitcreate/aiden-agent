@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { scheduledJobs } from "croner";
 import { createScheduleServiceCore } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
@@ -29,11 +30,13 @@ class MemoryPersistence<T> {
 
 function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
   const taskPersistence = new MemoryPersistence<unknown[]>([]);
+  const runPersistence = new MemoryPersistence<unknown[]>([]);
   const store = createScheduleStore(
     taskPersistence,
-    new MemoryPersistence<unknown[]>([]),
+    runPersistence,
   );
   const broadcasts: Array<Record<string, unknown>> = [];
+  const errors: string[] = [];
   const pending = new Map<string, (run: ScheduledRun) => void>();
   const deferredCancellations = new Set<string>();
   let deferCancellations = false;
@@ -83,13 +86,15 @@ function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
     globallyEnabled,
     broadcast: (payload) => broadcasts.push(payload),
     warn: () => undefined,
-    error: () => undefined,
+    error: (message) => void errors.push(message),
   });
   return {
     store,
     taskPersistence,
+    runPersistence,
     service,
     broadcasts,
+    errors,
     cancelAllCalls: () => cancelAllCalls,
     hasPending: (taskId: string) => pending.has(taskId),
     holdCancellations: () => void (deferCancellations = true),
@@ -667,4 +672,104 @@ test("stopping while startup stages nextRunAt does not consume a missed run", as
   assert.deepEqual(await testbed.store.get(task.id), overdue);
   assert.deepEqual(await testbed.store.runs(task.id), []);
   assert.equal(testbed.hasPending(task.id), false);
+});
+
+
+for (const boundary of ["lookup", "run publication", "runtime publication"] as const) {
+  test(`obsolete Cron errors cannot publish after restart during ${boundary}`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    await testbed.service.start();
+    const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+    const catchError = job.options.catch;
+    assert.equal(typeof catchError, "function");
+    if (typeof catchError !== "function") return;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    if (boundary === "lookup") {
+      const get = testbed.store.get.bind(testbed.store);
+      let hold = true;
+      testbed.store.get = async (id) => {
+        const latest = await get(id);
+        if (hold) {
+          hold = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return latest;
+      };
+    } else if (boundary === "run publication") {
+      testbed.runPersistence.beforeCommit = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+    } else {
+      testbed.taskPersistence.beforeCommit = async (draft) => {
+        if ((draft[0] as ScheduledTask).lastError === "obsolete cron failure") {
+          entered.resolve();
+          await release.promise;
+        }
+      };
+    }
+    const recording = Promise.resolve(catchError(new Error("obsolete cron failure"), job));
+    await entered.promise;
+    testbed.service.stop();
+    await testbed.service.start();
+    const newer = await testbed.store.updateRuntime(task.id, {
+      lastResult: "success",
+      lastRunAt: Date.now(),
+      chatId: "newer-cron-chat",
+    });
+    const broadcasts = testbed.broadcasts.length;
+    release.resolve();
+    await recording;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(await testbed.store.get(task.id), newer);
+    assert.equal(testbed.broadcasts.length, broadcasts);
+    assert.deepEqual(testbed.errors, []);
+    if (boundary !== "runtime publication") {
+      assert.deepEqual(await testbed.store.runs(task.id), []);
+    }
+  });
+}
+
+test("a current Cron error still records and broadcasts the failure", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const job = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const catchError = job.options.catch;
+  assert.equal(typeof catchError, "function");
+  if (typeof catchError !== "function") return;
+  await catchError(new Error("current cron failure"), job);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await testbed.store.get(task.id))?.lastError, "current cron failure");
+  assert.equal((await testbed.store.runs(task.id)).length, 1);
+  assert.deepEqual(testbed.broadcasts[testbed.broadcasts.length - 1], { taskId: task.id });
+});
+
+
+test("an error from a replaced Cron job cannot update the current task", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const oldJob = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`)!;
+  const catchError = oldJob.options.catch;
+  assert.equal(typeof catchError, "function");
+  if (typeof catchError !== "function") return;
+  await testbed.service.pause(task.id);
+  const resumed = await testbed.service.resume(task.id);
+  const broadcasts = testbed.broadcasts.length;
+
+  await catchError(new Error("replaced cron failure"), oldJob);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(await testbed.store.get(task.id), resumed);
+  assert.deepEqual(await testbed.store.runs(task.id), []);
+  assert.equal(testbed.broadcasts.length, broadcasts);
+  assert.deepEqual(testbed.errors, []);
 });

@@ -539,3 +539,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Whole-file `oxfmt` rewrote unrelated existing scheduler formatting; restored untouched lines to keep the PR focused. New tests use current formatter output.
 - Explicit `git add` rejects the tracked troubleshooting path because its parent is ignored; use `git add -u -- .papercuts/troubleshooting.md` and force-add only the requested new lane memory.
 - Central review found that startup ownership was checked before, but not inside, runtime persistence. Added a deferred commit fixture to reproduce stale failure quarantine and next-run writes; carry authority into the existing DataStore commit guard.
+- Pullfrog identified a separate stale Cron error callback path. Reproduced deferred lookup, run-history publication, and runtime publication; bind failure recording to current job ownership and carry the guard through both stores.
