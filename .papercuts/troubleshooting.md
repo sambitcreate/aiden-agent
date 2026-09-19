@@ -793,3 +793,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Exact-be7 local-abort control: timeout case demonstrably reloads the abandoned URL. The expired-preview control instead lost its Electron application, so that run is retained as inconclusive rather than counted as product regression evidence; the corrected two-case run passes.
 
 - 2026-09-19 PR167 closeout: original637b worktree was absent and no longer registered (cause unknown); recovered existing branch at exacta4c9447f into `/tmp/aiden-pr167-closeout`, preserving all other worktrees. Used existing locked dependencies read-only for focused validation; no install or dependency mutation. Prior parsed-text-only stress checks missed Telegram's separate32KiB raw UTF-8 input cap; primaryserver source and converter regression now cover it.
+
+- PR167 final hosted review found first-grapheme byte seams and formatted bare-link equality were missing from the earlier stress matrix; exactc37 red cases now cover both, including a formatted grapheme exactly at the byte cap and equivalent numeric/named entities.

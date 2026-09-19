@@ -466,6 +466,22 @@ function decodeTelegramEntity(entity: string): string {
   return { amp: "&", lt: "<", gt: ">", quot: '"' }[entity]!;
 }
 
+function decodeTelegramText(text: string): string {
+  return text.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);/g,
+    (_match, value: string) => decodeTelegramEntity(value));
+}
+
+/** Drop unsendable formatting while retaining visible labels and destinations. */
+function plainTelegramHtml(html: string): string {
+  const plain = html.replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g,
+    (_match, destination: string, label: string) => {
+      const renderedLabel = decodeTelegramText(label.replace(/<[^>]*>/g, ""));
+      return renderedLabel === decodeTelegramText(destination) ? label : `${label} (${destination})`;
+    },
+  ).replace(/<[^>]*>/g, "");
+  return escapeHtml(decodeTelegramText(plain));
+}
+
 /**
  * Split the restricted HTML emitted by markdownToTelegramHtml. Telegram limits
  * both text after entity parsing and serialized UTF-8 input before parsing.
@@ -509,17 +525,13 @@ export function chunkForTelegram(html: string): string[] {
           : { name, opening: token, closingBytes: (tag?.closingBytes ?? 0) + name.length + 3, parent: tag }
         : tag;
       const tokenBytes = Buffer.byteLength(token);
-      if (length + width > limit || bytes + tokenBytes + (nextTag?.closingBytes ?? 0) > TELEGRAM_HTML_BYTE_LIMIT) {
+      const exceedsByteLimit = bytes + tokenBytes + (nextTag?.closingBytes ?? 0) > TELEGRAM_HTML_BYTE_LIMIT;
+      if (length + width > limit || exceedsByteLimit) {
         if (length === 0) {
           // An indivisible wrapper cannot carry even one text token. Deliver a
           // plain representation of this message, retaining link labels AND
           // destinations rather than dropping an unsendable attribute silently.
-          const plain = html.replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g,
-            (_match, destination: string, label: string) => label === destination ? label : `${label} (${destination})`,
-          ).replace(/<[^>]*>/g, "");
-          const decoded = plain.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-fA-F]+);/g,
-            (_match, value: string) => decodeTelegramEntity(value));
-          return chunkForTelegram(escapeHtml(decoded));
+          return chunkForTelegram(plainTelegramHtml(html));
         }
         // A byte boundary may fall before a tag. Look through tags for the next
         // text token so a combining mark across a formatting seam stays attached.
@@ -534,6 +546,10 @@ export function chunkForTelegram(html: string): string[] {
         for (const { index } of telegramGraphemeSegmenter.segment(visible + character)) {
           if (index > 0 && index <= length) grapheme = boundaries[index];
         }
+        // No boundary means this is still the first grapheme. A huge carried
+        // wrapper can prevent it fitting even though the plain grapheme fits;
+        // drop that formatting before resorting to code-point splitting.
+        if (exceedsByteLimit && !grapheme) return chunkForTelegram(plainTelegramHtml(html));
         break;
       }
       offset = tokenPattern.lastIndex;
