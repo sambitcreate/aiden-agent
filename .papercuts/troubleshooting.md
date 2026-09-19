@@ -533,3 +533,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## Upgrade 09 attachments
+- Fresh worktree omits ignored `.memory/`; read main checkout project context/history and create a unique lane note.
+- Initial broad source reads were truncated; use targeted ranges for attachment investigation.
+- TypeScript targets a pre-ES2022 library: regression fixtures must use indexed access instead of `Array.at`.
+- Pullfrog caught a missing established-chat boundary: attachment intake must check the synchronous pending-send ref before optimistic-clear recovery can restore its payload. Mounted regression reproduced 23 restored attachments from a 20-attachment draft.
+- Mounted Composer fixture must explicitly externalize React in esbuild; repository TypeScript wildcard paths can otherwise bundle a second hook runtime despite packages=external.
+- Hosted queue-image E2E raced send settlement: Stop generating appeared before attachment admission reopened; synthetic paste was intentionally rejected. The test must await the production Attach button enabled state.
+- In-progress workflow logs require the direct jobs/logs API; gh run view refuses them and gh api needs --allow-escape-sequences when writing colored logs to a local file. Hosted artifacts intentionally contain only sanitized receipts.
