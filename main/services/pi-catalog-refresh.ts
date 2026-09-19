@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   CredentialStore,
   Models,
@@ -81,9 +82,9 @@ async function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Prom
 }
 
 /**
- * Backports provider-scoped catalog refresh to Aiden's pinned Pi runtime.
- * Pi 0.80 refreshes every dynamic provider; setup needs isolation so one
- * unrelated provider cannot make a newly configured provider appear broken.
+ * Refresh only the requested providers without rotating OAuth credentials.
+ * Pinned Pi supports provider filters, but its native refresh resolves OAuth;
+ * setup retains a non-mutating auth check and owns publication fencing here.
  */
 export async function refreshPiCatalogs({
   models,
@@ -121,12 +122,31 @@ export async function refreshPiCatalogs({
         const credential = await raceWithAbort(credentials.read(providerId), signal);
         const stored = await raceWithAbort(store.read(), signal);
         const effectiveSignal = signal ?? new AbortController().signal;
+        const isCurrent = () => !effectiveSignal.aborted && models.getProvider(providerId) === provider;
+        const canPublish = async () => {
+          if (!isCurrent()) return false;
+          try {
+            // A refresh started under a previous account must not replace the
+            // catalog after credential replacement or logout. This only reads.
+            const currentCredential = await raceWithAbort(
+              credentials.read(providerId, { signal: effectiveSignal }), effectiveSignal,
+            );
+            return isCurrent() && isDeepStrictEqual(credential, currentCredential);
+          } catch (error) {
+            if (effectiveSignal.aborted) return false;
+            throw error;
+          }
+        };
         await raceWithAbort(provider.refreshModels({
           credential,
           stored,
           publish: async (publication) => {
+            if (!await canPublish() || !isCurrent()) return false;
             if (publication.persist === null) await store.delete();
             else if (publication.persist !== undefined) await store.write(publication.persist);
+            // Persistence may already have started when ownership is lost.
+            // Never let its completion publish obsolete provider-private state.
+            if (!await canPublish() || !isCurrent()) return false;
             publication.update?.();
             return true;
           },

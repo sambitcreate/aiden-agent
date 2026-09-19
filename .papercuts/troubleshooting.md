@@ -533,3 +533,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+# Upgrade 28 catalog refresh
+
+- Fresh worktree omits ignored `.memory` and dependencies; read canonical project notes and auth-lane note, and reused the matching installed dependency tree for focused checks.
+- Scoped-refresh comment still cites Pi 0.80; pinned 0.84.4 supports provider filters, but its native refresh also resolves/rotates OAuth credentials, unlike Aiden's explicitly non-mutating scoped path.
+
+- Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
+- Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.
