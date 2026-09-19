@@ -126,6 +126,7 @@ interface StreamRecord {
   events: AidenRemoteStreamEvent[];
   eventBytes: number;
   subscribers: Set<StreamSubscriber>;
+  evictAfterDelivery?: boolean;
   owner: RemoteChatGenerationOwnerController;
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
@@ -739,13 +740,16 @@ export class AidenRemoteStreamService {
     const snapshotBytes = () => Buffer.byteLength(JSON.stringify(this.snapshot()), "utf8");
     if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
     const terminalStreams = [...this.streams.values()]
-      // A terminal subscriber may still be draining accepted bytes. Keep its
-      // replay record until delivery settles (or the drain deadline aborts it).
-      // The trimming pass below still bounds its journal, so this is not a
-      // reservation of the stream's full event history.
-      .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state) && entry.subscribers.size === 0)
+      .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
     for (const entry of terminalStreams) {
+      if (entry.subscribers.size > 0) {
+        // Keep accepted terminal bytes and replay state until delivery settles.
+        // Remember the eviction so the last subscriber releases capacity even
+        // if no further events arrive. Trimming below still bounds the journal.
+        entry.evictAfterDelivery = true;
+        continue;
+      }
       entry.owner.invalidate();
       this.streams.delete(entry.streamId);
       if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
@@ -1244,6 +1248,11 @@ export class AidenRemoteStreamService {
       response.off("error", abort);
       response.off("drain", onDrain);
       stream.subscribers.delete(subscriber);
+      if (stream.evictAfterDelivery && stream.subscribers.size === 0 && this.streams.get(streamId) === stream) {
+        stream.owner.invalidate();
+        this.streams.delete(streamId);
+        this.persist();
+      }
     };
     const abort = () => {
       cleanup();

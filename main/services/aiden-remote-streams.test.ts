@@ -916,7 +916,7 @@ test("a synchronous socket write failure cannot interrupt generation publication
   assert.equal(events[events.length - 1]?.payload.text, "Saved");
 });
 
-for (const settlement of ["drain", "timeout"] as const) {
+for (const settlement of ["drain", "timeout", "abort"] as const) {
   test(`aggregate pressure preserves blocked terminal delivery until ${settlement}`, (t) => {
     t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     const app = fixture();
@@ -933,6 +933,9 @@ for (const settlement of ["drain", "timeout"] as const) {
     // remains below its individual limit. The terminal journal is oldest.
     const producers = Array.from({ length: 3 }, (_, index) =>
       app.service.create("device-1", `load-${index}`, `chat-${index + 2}`, `turn-${index + 2}`));
+    for (let index = 0; index < 252; index++) {
+      app.service.create("device-1", `idle-${index}`, `idle-chat-${index}`, `idle-turn-${index}`);
+    }
     for (const producer of producers) {
       for (let index = 0; index < 30; index++) producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
     }
@@ -945,18 +948,23 @@ for (const settlement of ["drain", "timeout"] as const) {
     assert.match(replay.output.join(""), /event: done/u);
     assert.equal(replay.response.ended, true);
 
+    assert.throws(
+      () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+    );
     if (settlement === "drain") {
       client.response.emit("drain");
       assert.equal(client.response.ended, true);
       assert.equal(client.response.destroyed, false);
-    } else {
+    } else if (settlement === "timeout") {
       t.mock.timers.tick(30_000);
       assert.equal(client.response.destroyed, true);
+    } else {
+      client.response.destroy();
     }
     assert.equal(client.response.listenerCount("drain"), 0);
-    // A completed drain or the bounded stall deadline releases the pin. A
-    // dead client cannot reserve journal capacity indefinitely.
-    producers[0]!.owner.send("chat:delta", { delta: "y".repeat(200_000) });
+    // Settlement must release deferred eviction without an unrelated event.
+    assert.doesNotThrow(() => app.service.create("device-1", "new-stream", "new-chat", "new-turn"));
     assert.throws(
       () => app.service.status("device-1", "terminal"),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "not_found",
@@ -964,3 +972,17 @@ for (const settlement of ["drain", "timeout"] as const) {
     assert.deepEqual(app.cancelled, []);
   });
 }
+
+
+test("stream capacity does not reclaim genuinely active generations", () => {
+  const app = fixture();
+  for (let index = 0; index < 256; index++) {
+    app.service.create("device-1", `active-${index}`, `chat-${index}`, `turn-${index}`);
+  }
+  assert.throws(
+    () => app.service.create("device-1", "extra", "extra-chat", "extra-turn"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+  );
+  assert.equal(app.service.snapshot().streams.length, 256);
+  assert.deepEqual(app.cancelled, []);
+});

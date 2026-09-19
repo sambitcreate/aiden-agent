@@ -718,3 +718,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Integration palette flake reproduced deterministically: providers resolved before settings, but the model memo omitted settings readiness and stayed empty when hidden-model preferences remained undefined. Include settings data in the memo dependencies and gate settings delivery in an Electron regression.
 
 - PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.
+- 2026-09-19 lane 21 follow-up: Byte-budget trimming can leave the stream registry full after delivery ends; deferred eviction must release count capacity at subscriber settlement without waiting for another append.
