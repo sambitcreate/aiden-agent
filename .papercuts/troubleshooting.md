@@ -541,4 +541,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
 - GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
 - Reproducing the shared-store renewal race needs deterministic interleaving: a test-local SQLite exec hook lets a second real connection commit immediately before lock acquisition without sleeps or production hooks.
-- Lock-wait expiry regressions can stay deterministic: advance the injected clock while the competing SQLite connection owns its transaction, then admit the store without wall-clock sleeps.
+- Clock-ordering expiry regressions advance the injected clock in a second-connection transaction that commits before the target BEGIN. This tests post-admission timestamp sampling, not an actually blocked SQLite lock wait.
