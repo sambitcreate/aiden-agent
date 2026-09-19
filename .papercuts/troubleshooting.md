@@ -540,3 +540,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Review follow-up: raw code-point safety still splits combining/ZWJ graphemes; segment only the bounded decoded chunk plus one code point, with explicit oversized-grapheme progress coverage. Reviewer task is a multi-agent subagent, so app-server direct messages are rejected; route updates through the campaign root.
 
 - 2026-09-19 PR167 closeout: original637b worktree was absent and no longer registered (cause unknown); recovered existing branch at exacta4c9447f into `/tmp/aiden-pr167-closeout`, preserving all other worktrees. Used existing locked dependencies read-only for focused validation; no install or dependency mutation. Prior parsed-text-only stress checks missed Telegram's separate32KiB raw UTF-8 input cap; primaryserver source and converter regression now cover it.
+
+- PR167 final hosted review found first-grapheme byte seams and formatted bare-link equality were missing from the earlier stress matrix; exactc37 red cases now cover both, including a formatted grapheme exactly at the byte cap and equivalent numeric/named entities.

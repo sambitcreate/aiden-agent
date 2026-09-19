@@ -268,3 +268,31 @@ test("chunkForTelegram normalizes an indivisible oversized numeric entity for pr
   const html = `&#${"0".repeat(33_000)}65;`;
   assert.deepEqual(chunkForTelegram(html), ["A"]);
 });
+
+
+test("chunkForTelegram keeps the first grapheme whole when its formatting exhausts the byte budget", () => {
+  const destination = `https://example.com/${"x".repeat(32_724)}`;
+  const html = markdownToTelegramHtml(`[e**́**](${destination})`);
+  assert.ok(Buffer.byteLength(html) > 32_768);
+  const chunks = chunkForTelegram(html);
+  const rendered = chunks.map((chunk) => {
+    assert.ok(Buffer.byteLength(chunk) <= 32_768);
+    return readTelegramHtml(chunk).text;
+  });
+  assert.ok(rendered.some((chunk) => chunk.includes("é")), "the base and accent must remain in one message");
+  assert.equal(rendered.join(""), `é (${destination})`, "unrepresentable formatting falls back without losing text or destination");
+  const fits = markdownToTelegramHtml(`[e**́**](https://example.com/${"x".repeat(32_723)})`);
+  assert.equal(Buffer.byteLength(fits), 32_768);
+  assert.deepEqual(assertHtmlChunks(fits), [fits], "a whole formatted grapheme at the exact byte cap stays intact");
+});
+
+test("chunkForTelegram compares rendered labels when retaining oversized link destinations", () => {
+  const destination = `https://example.com/${"語&".repeat(12_000)}`;
+  const html = markdownToTelegramHtml(`[**${destination}**](${destination})`);
+  const chunks = chunkForTelegram(html);
+  assert.ok(chunks.every((chunk) => Buffer.byteLength(chunk) <= 32_768));
+  assert.equal(chunks.map((chunk) => readTelegramHtml(chunk).text).join(""), destination);
+  // Equivalent numeric/named entity spellings also compare as rendered text.
+  const equivalent = `<a href="${"x".repeat(33_000)}&amp;"><b>${"x".repeat(33_000)}&#38;</b></a>`;
+  assert.equal(chunkForTelegram(equivalent).map((chunk) => readTelegramHtml(chunk).text).join(""), `${"x".repeat(33_000)}&`);
+});
