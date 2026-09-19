@@ -103,6 +103,7 @@ interface LiveTab {
   picking?: boolean;
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
+  pendingNavigationUrl?: string;
   navigationSequence: number;
   committedNavigation: number;
   lastCursor?: { x: number; y: number };
@@ -445,7 +446,15 @@ export class BrowserService {
   private observe(tab: LiveTab): void {
     const wc = tab.view.webContents;
     let navigationSupersededCrash = false;
-    let pendingNavigationUrl: string | undefined;
+    const finishNavigation = () => {
+      if (tab.closing || wc.isDestroyed() || wc.isLoadingMainFrame() ||
+        wc.isCrashed() || wc.getOSProcessId() === 0) return;
+      // Chromium clears the process handle before crash observers run, whereas
+      // isCrashed may update after did-stop-loading. Require a live process so
+      // crash teardown cannot discard the interrupted navigation's target.
+      // A healthy cancellation (for example HTTP 204) discards its stale target.
+      tab.pendingNavigationUrl = undefined;
+    };
     const publish = () => {
       if (tab.closing || wc.isDestroyed()) return;
       Object.assign(tab.state, {
@@ -462,6 +471,7 @@ export class BrowserService {
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", publish);
     wc.on("did-stop-loading", () => this.finishPreviewNavigation(tab));
+    wc.on("did-stop-loading", finishNavigation);
     wc.on("page-title-updated", publish);
     wc.on("media-started-playing", publish);
     wc.on("media-paused", publish);
@@ -471,7 +481,7 @@ export class BrowserService {
     });
     wc.on("did-navigate", () => {
       navigationSupersededCrash = false;
-      pendingNavigationUrl = undefined;
+      tab.pendingNavigationUrl = undefined;
       this.cancelCrashRecovery(tab);
       browserFileService.commitConsumer(tab.state.workspaceId, tab.state.id, wc.getURL());
       this.finishPreviewNavigation(tab);
@@ -507,7 +517,7 @@ export class BrowserService {
         // Capture native state before Electron delivers its queued crash event.
         // Loading alone cannot distinguish a replacement from a current crash.
         navigationSupersededCrash = wc.isCrashed();
-        pendingNavigationUrl = url;
+        tab.pendingNavigationUrl = url;
         this.cancelCrashRecovery(tab);
         try { this.beginPreviewNavigation(tab, url); } catch (error) { wc.stop(); this.finishPreviewNavigation(tab); tab.state.error = String(error); }
         tab.navigationSequence += 1;
@@ -551,7 +561,7 @@ export class BrowserService {
       tab.crashTimes = tab.crashTimes.filter((time) => Date.now() - time < 30_000);
       tab.crashTimes.push(Date.now());
       if (tab.crashTimes.length <= 3) {
-        const recoveryUrl = pendingNavigationUrl;
+        const recoveryUrl = tab.pendingNavigationUrl;
         tab.state.error = "The page crashed. Restoring it…";
         const timer = setTimeout(
           () => {
@@ -2012,6 +2022,7 @@ export class BrowserService {
                 break;
               case "stop":
                 this.cancelCrashRecovery(tab);
+                tab.pendingNavigationUrl = undefined;
                 if (tab.state.crashed) tab.state.error = "The page crashed. Reload to recover.";
                 wc.stop();
                 break;
