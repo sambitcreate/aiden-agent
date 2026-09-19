@@ -748,3 +748,170 @@ test("turnIdFor resolves issued turn identities and survives pruning and restart
   assert.equal(restored.turnIdFor("chat-1", "stream-1"), "turn-1");
   assert.equal(restored.turnIdFor("chat-2", "stream-2"), undefined);
 });
+
+function blockedResponse() {
+  const output: string[] = [];
+  const emitter = new EventEmitter();
+  const response = Object.assign(emitter, {
+    destroyed: false,
+    ended: false,
+    blocked: true,
+    writeHead() { return this; },
+    write(value: string) { output.push(value); return !this.blocked; },
+    end() { this.ended = true; return this; },
+    destroy() { this.destroyed = true; emitter.emit("close"); return this; },
+  });
+  return { response, output, http: response as unknown as ServerResponse };
+}
+
+test("SSE replay waits for drain and delivers terminal completion in order", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:delta", { delta: "Hello" });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  assert.equal(client.output.length, 1);
+  assert.equal(client.response.ended, false);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.deepEqual(client.output.map((frame) => Number(/^id: (\d+)/u.exec(frame)?.[1])), [1, 2, 3]);
+  assert.equal(client.response.ended, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+});
+
+test("a blocked subscriber does not buffer live events or stall healthy subscribers", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const slow = blockedResponse();
+  const fast = blockedResponse();
+  fast.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, slow.http);
+  app.service.openEvents("device-1", "stream-1", 0, fast.http);
+  for (let i = 0; i < 30; i++) owner.owner.send("chat:delta", { delta: String(i) });
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  assert.equal(slow.output.length, 1);
+  assert.equal(slow.response.ended, false);
+  assert.equal(fast.output.length, 32);
+  assert.equal(fast.response.ended, true);
+  slow.response.blocked = false;
+  slow.response.emit("drain");
+  assert.deepEqual(slow.output, fast.output);
+  assert.equal(slow.response.ended, true);
+  assert.deepEqual(app.cancelled, []);
+});
+
+test("stalled SSE output skips heartbeats and times out without cancelling generation", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  t.mock.timers.tick(15_000);
+  assert.equal(client.output.length, 1);
+  assert.equal(client.response.destroyed, false);
+  t.mock.timers.tick(15_000);
+  assert.equal(client.response.destroyed, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+  assert.equal(client.response.listenerCount("close"), 0);
+  owner.owner.send("chat:delta", { delta: "Still running" });
+  assert.deepEqual(app.cancelled, []);
+  assert.equal(app.service.status("device-1", "stream-1").state, "running");
+  const replay = blockedResponse();
+  replay.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 1, replay.http);
+  assert.match(replay.output.join(""), /Still running/u);
+  replay.response.destroy();
+});
+
+test("heartbeat backpressure pauses live delivery until drain", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  client.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.blocked = true;
+  t.mock.timers.tick(15_000);
+  assert.equal(client.output[1], ": heartbeat\n\n");
+  owner.owner.send("chat:delta", { delta: "Pending" });
+  assert.equal(client.output.length, 2);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.match(client.output[2]!, /Pending/u);
+  t.mock.timers.tick(30_000);
+  assert.equal(client.response.destroyed, false);
+  client.response.destroy();
+});
+
+test("disconnect and response errors release blocked SSE delivery", () => {
+  for (const event of ["close", "error"]) {
+    const app = fixture();
+    const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+    const client = blockedResponse();
+    app.service.openEvents("device-1", "stream-1", 0, client.http);
+    client.response.emit(event);
+    owner.owner.send("chat:delta", { delta: "After disconnect" });
+    client.response.emit("drain");
+    assert.equal(client.output.length, 1);
+    assert.equal(client.response.listenerCount("drain"), 0);
+    assert.deepEqual(app.cancelled, []);
+  }
+});
+
+test("a subscriber overtaken by journal retention disconnects for snapshot recovery", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  for (let i = 0; i < 140; i++) owner.owner.send("chat:delta", { delta: "x".repeat(65_536) });
+  assert.equal(client.output.length, 1);
+  client.response.blocked = false;
+  client.response.emit("drain");
+  assert.equal(client.response.destroyed, true);
+  const replay = blockedResponse();
+  replay.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 1, replay.http);
+  assert.match(replay.output[0]!, /event: snapshot/u);
+  assert.deepEqual(app.cancelled, []);
+  replay.response.destroy();
+});
+
+test("terminal replay drains each accepted frame exactly once before ending", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:done", { chat: { messages: [] } });
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 2);
+  assert.equal(client.response.ended, false);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 2);
+  assert.equal(client.response.ended, true);
+});
+
+test("revocation destroys blocked delivery and removes drain ownership", async () => {
+  const app = fixture();
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  await app.service.revokeDevice("device-1");
+  assert.equal(client.response.destroyed, true);
+  assert.equal(client.response.listenerCount("drain"), 0);
+  client.response.emit("drain");
+  assert.equal(client.output.length, 1);
+});
+
+test("a synchronous socket write failure cannot interrupt generation publication", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const client = blockedResponse();
+  client.response.blocked = false;
+  app.service.openEvents("device-1", "stream-1", 0, client.http);
+  client.response.write = () => { throw new Error("socket closed"); };
+  assert.doesNotThrow(() => owner.owner.send("chat:delta", { delta: "Saved" }));
+  assert.equal(client.response.destroyed, true);
+  const events = app.service.snapshot().streams[0]!.events;
+  assert.equal(events[events.length - 1]?.payload.text, "Saved");
+});
