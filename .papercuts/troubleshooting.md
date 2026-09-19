@@ -662,3 +662,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Hosted queue-image E2E raced send settlement: Stop generating appeared before attachment admission reopened; synthetic paste was intentionally rejected. The test must await the production Attach button enabled state.
 - In-progress workflow logs require the direct jobs/logs API; gh run view refuses them and gh api needs --allow-escape-sequences when writing colored logs to a local file. Hosted artifacts intentionally contain only sanitized receipts.
 - SDK 1.30 legacy SSE reauthentication has no public settled callback; failed refresh/redirect can strand a CLOSED receive stream while HTTP POST remains usable. Isolated the pinned `_authThenStart`/`_eventSource` compatibility hook, rejected unknown shapes, and tested actual auth failure versus successful and transient recovery. Recheck this seam on SDK/EventSource upgrades.
+
+## 2026-09-19 — Integration wave 2
+- Batch expansion requires archiving the frozen original receipt and using a separate log namespace; never carry the original 17-head test counts into a 25-head validation claim.
+- Keep PR discovery capped at the authorized batch while new lanes are dispatched; optional later lanes need an explicit scope update before local integration.
