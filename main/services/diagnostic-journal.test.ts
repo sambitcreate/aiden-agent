@@ -559,3 +559,113 @@ test("fatal deletion failure is reported without poisoning later journal operati
     for (const file of [target, fatal]) assert.match(await fs.readFile(file, "utf8"), /"sequence":27/u);
   });
 });
+
+test("a pre-deletion snapshot retains its fatal evidence across a later fatal reset", async (context) => {
+  await withJournal("production", async (_target, dir) => {
+    await flushDiagnosticJournal();
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    const destination = path.join(dir, "before-delete");
+    const mkdir = fsPromises.mkdir;
+    const started = deferred();
+    const held = deferred();
+    const mkdirMock = context.mock.method(fsPromises, "mkdir", async (...args: Parameters<typeof mkdir>) => {
+      if (args[0] === destination) { started.resolve(); await held.promise; }
+      return mkdir(...args);
+    });
+    syncBuiltinESMExports();
+    const snapshot = snapshotDiagnosticJournalFiles(destination);
+    let deletion: Promise<void> | undefined;
+    try {
+      await started.promise;
+      deletion = deleteDiagnosticJournalFiles();
+      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    } finally {
+      held.resolve();
+      await snapshot;
+      await deletion;
+      mkdirMock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    const before = await fs.readFile(path.join(destination, "aiden-fatal.log"), "utf8");
+    assert.match(before, /"sequence":1/u);
+    assert.doesNotMatch(before, /"sequence":2/u);
+    const live = await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8");
+    assert.match(live, /"sequence":2/u);
+    assert.doesNotMatch(live, /"sequence":1/u);
+    const after = path.join(dir, "after-delete");
+    await snapshotDiagnosticJournalFiles(after);
+    assert.equal(await fs.readFile(path.join(after, "aiden-fatal.log"), "utf8"), live);
+  });
+});
+
+test("fatal retention finishes before queued general maintenance can cross a deletion", async (context) => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    let current = new Date("2026-08-01T00:00:00.000Z");
+    initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    await flushDiagnosticJournal();
+    current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS + 1_000);
+    const stat = fsPromises.lstat;
+    const started = deferred();
+    const held = deferred();
+    const statMock = context.mock.method(fsPromises, "lstat", async (...args: Parameters<typeof stat>) => {
+      if (args[0] === target) { started.resolve(); await held.promise; }
+      return stat(...args);
+    });
+    syncBuiltinESMExports();
+    const sweep = pruneDiagnosticJournalRetention(current);
+    let deletion: Promise<void> | undefined;
+    try {
+      await started.promise;
+      assert.equal(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), "");
+      deletion = deleteDiagnosticJournalFiles();
+      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    } finally {
+      held.resolve();
+      await sweep;
+      await deletion;
+      statMock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.match(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), /"sequence":2/u);
+  });
+});
+
+test("snapshot admission precedes an immediately requested journal deletion", async () => {
+  await withJournal("production", async (target, dir) => {
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    const destination = path.join(dir, "snapshot");
+    const snapshot = snapshotDiagnosticJournalFiles(destination);
+    const deletion = deleteDiagnosticJournalFiles();
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    await Promise.all([snapshot, deletion, flushDiagnosticJournal()]);
+    for (const file of [path.basename(target), "aiden-fatal.log"]) {
+      const before = await fs.readFile(path.join(destination, file), "utf8");
+      assert.match(before, /"sequence":1/u);
+      assert.doesNotMatch(before, /"sequence":2/u);
+      const live = await fs.readFile(path.join(dir, file), "utf8");
+      assert.match(live, /"sequence":2/u);
+      assert.doesNotMatch(live, /"sequence":1/u);
+    }
+  });
+});
+
+test("a fatal snapshot publication failure preserves its destination and releases the queue", async () => {
+  await withJournal("production", async (_target, dir) => {
+    const destination = path.join(dir, "snapshot");
+    await fs.mkdir(destination);
+    const occupied = path.join(destination, "aiden-fatal.log");
+    await fs.writeFile(occupied, "keep");
+    await assert.rejects(snapshotDiagnosticJournalFiles(destination), { code: "EEXIST" });
+    assert.equal(await fs.readFile(occupied, "utf8"), "keep");
+    assert.equal(diagnosticJournalStatus().writeFailed, true);
+    await deleteDiagnosticJournalFiles();
+    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    const next = path.join(dir, "next-snapshot");
+    await snapshotDiagnosticJournalFiles(next);
+    assert.match(await fs.readFile(path.join(next, "aiden-fatal.log"), "utf8"), /"sequence":2/u);
+  });
+});

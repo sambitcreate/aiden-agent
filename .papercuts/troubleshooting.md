@@ -539,3 +539,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh worktree has no dependencies or ignored `.memory` notes; installing locked dependencies locally and reading lane 23 diagnostics context from its existing worktree before editing.
 
 - Integration review found `deleteAllDiagnosticData` repeats live journal removal after its queue barrier; add support-level coverage and leave active journal cleanup with its owner while retaining inactive/legacy allowlist cleanup.
+
+- Review exposed fatal reset bypassing an earlier queued snapshot. Fatal writes, reset, retention and bounded snapshot reads must all finish synchronously at admission; queue only general-file work and immutable fatal snapshot publication.
