@@ -32,8 +32,8 @@ pass, alongside two controls proving current failures still disable the affected
 task or reject startup and allow retry. Existing core tests are already registered
 in both relevant package scripts.
 
-- `npm run test:scheduled`: 130 passed.
-- `npm run test:assistant-automations`: 165 passed.
+- `npm run test:scheduled`: 136 passed.
+- `npm run test:assistant-automations`: 171 passed.
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
 - `git diff --check`: passed.
@@ -107,3 +107,24 @@ Publication audit:
 Validation: 130 scheduled tests and 165 automation tests pass; type-check, lint and
 diff checks pass. Final exact-head Pullfrog/CI remain pending. Usage checked before
 this work: 41% remaining, above the campaign's 1% stop threshold.
+
+## Run-slot handoff follow-up
+
+At `e23c6759`, obsolete automatic callbacks could reserve runningTasks before
+a deferred lookup completed, blocking replacement Cron callbacks with a synthetic
+overlap failure. Three baseline-failing tests cover already-stale arrival, current
+callback ownership loss during lookup, and delayed workspace cancellation.
+
+Dispatch now rejects stale automatic ownership before reservation. Each run state
+tracks its origin, current ownership, and execution admission. Only stale automatic
+preparation can be superseded; it is cancelled before replacement, so pending claims
+cannot publish or reach execution. Existing identity-checked final cleanup keeps
+newer slots intact. Delayed workspace cancellation and manual abort callbacks now
+also check the exact state identity before forwarding cancellation by task ID.
+
+Six added cases cover stale arrival, pending lookup, pending claim publication,
+workspace cancellation handoff, genuine already-executing overlap, and manual
+preparation reservations. Validation: 136 scheduled and 171 automation tests,
+type-check, lint, and diff checks pass. Worktree was recreated at the original d8f0
+path after it was absent; private npm-ci dependencies were reinstalled. Usage was
+30% remaining at this follow-up. Fresh hosted review/CI remain pending.
