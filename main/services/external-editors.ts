@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,6 +25,7 @@ export interface ApplicationCandidate {
 export interface ResolvedExternalEditor extends ExternalEditor {
   appPath: string;
   bundleId: string;
+  executablePath?: string;
 }
 
 export const EXTERNAL_EDITOR_DEFINITIONS = [
@@ -240,6 +241,53 @@ export const EXTERNAL_EDITOR_DEFINITIONS = [
   },
 ] as const satisfies readonly ExternalEditorDefinition[];
 
+// Only launchers for existing editor IDs are eligible; never interpret $EDITOR as shell code.
+const LINUX_EDITOR_COMMANDS: Readonly<Record<string, string>> = {
+  cursor: "cursor",
+  vscode: "code",
+  "vscode-insiders": "code-insiders",
+  vscodium: "codium",
+  zed: "zed",
+  "sublime-text": "subl",
+};
+
+async function findLinuxExecutable(command: string): Promise<string | undefined> {
+  // Ignore cwd/relative PATH entries: a workspace must not supply its own editor launcher.
+  const roots = [...new Set((process.env.PATH ?? "").split(":").filter(path.isAbsolute))];
+  for (const root of roots) {
+    const executablePath = path.join(root, command);
+    try {
+      if (!(await fs.stat(executablePath)).isFile()) continue;
+      await fs.access(executablePath, fs.constants.X_OK);
+      return executablePath;
+    } catch {
+      // Missing or non-executable entries must not shadow a later installed launcher.
+    }
+  }
+  return undefined;
+}
+
+async function discoverLinuxEditors(): Promise<ResolvedExternalEditor[]> {
+  const editors: ResolvedExternalEditor[] = [];
+  for (const definition of EXTERNAL_EDITOR_DEFINITIONS) {
+    const command = LINUX_EDITOR_COMMANDS[definition.id];
+    if (!command) continue;
+    const executablePath = await findLinuxExecutable(command);
+    if (!executablePath) continue;
+    editors.push({
+      id: definition.id,
+      label: definition.label,
+      appPath: executablePath,
+      bundleId: "",
+      executablePath,
+      iconDataUrl: "",
+    });
+  }
+  // Keep the established preference ID and folder icon; Electron selects the OS file manager.
+  editors.push({ id: "finder", label: "File Manager", appPath: "", bundleId: "", iconDataUrl: "" });
+  return editors;
+}
+
 const FINDER_APP_PATH = "/System/Library/CoreServices/Finder.app";
 const CACHE_TTL_MS = 15_000;
 const APPLICATION_ROOTS = [
@@ -423,6 +471,7 @@ async function loadNativeIcon(appPath: string): Promise<string> {
 }
 
 async function discoverExternalEditors(): Promise<ResolvedExternalEditor[]> {
+  if (process.platform === "linux") return discoverLinuxEditors();
   const resolved = resolveInstalledEditorApplications(await locateApplicationCandidates());
   const withIcons = await Promise.all(
     resolved.map(async (editor) => ({
@@ -489,11 +538,29 @@ export async function launchApplicationBundle(
   await runner("/usr/bin/open", buildOpenApplicationArguments(bundleId, folderPath));
 }
 
+export function launchEditorExecutable(executablePath: string, folderPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Absolute paths cannot become CLI options. Detached GUI launchers may live until the
+    // editor closes; do not keep the workspace operation or Aiden shutdown waiting on them.
+    const child = spawn(executablePath, [path.resolve(folderPath)], {
+      detached: true,
+      stdio: "ignore",
+      shell: false,
+    });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
 export interface OpenFolderInEditorDependencies {
   stat: (folderPath: string) => Promise<{ isDirectory(): boolean }>;
   editors: (forceRefresh: boolean) => Promise<ResolvedExternalEditor[]>;
   openPath: (folderPath: string) => Promise<string>;
   launchApplication: (bundleId: string, folderPath: string) => Promise<void>;
+  launchExecutable: (executablePath: string, folderPath: string) => Promise<void>;
 }
 
 const defaultOpenDependencies: OpenFolderInEditorDependencies = {
@@ -504,6 +571,7 @@ const defaultOpenDependencies: OpenFolderInEditorDependencies = {
     return shell.openPath(folderPath);
   },
   launchApplication: launchApplicationBundle,
+  launchExecutable: launchEditorExecutable,
 };
 
 export async function openFolderInExternalEditor(
@@ -514,6 +582,8 @@ export async function openFolderInExternalEditor(
   const definition = getExternalEditorDefinition(editorId);
   if (!definition) throw new Error(`Unknown editor: ${editorId}`);
 
+  // Normalize before validation and launch, including leading-option relative folder names.
+  folderPath = path.resolve(folderPath);
   let stats: { isDirectory(): boolean };
   try {
     stats = await dependencies.stat(folderPath);
@@ -527,12 +597,16 @@ export async function openFolderInExternalEditor(
 
   if (editor.id === "finder") {
     const error = await dependencies.openPath(folderPath);
-    if (error) throw new Error(`Could not open workspace in Finder: ${error}`);
+    if (error) throw new Error(`Could not open workspace in ${editor.label}: ${error}`);
     return;
   }
 
   try {
-    await dependencies.launchApplication(editor.bundleId, folderPath);
+    if (editor.executablePath) {
+      await dependencies.launchExecutable(editor.executablePath, folderPath);
+    } else {
+      await dependencies.launchApplication(editor.bundleId, folderPath);
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not open workspace in ${editor.label}: ${detail}`);
