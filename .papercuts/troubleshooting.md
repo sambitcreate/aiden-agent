@@ -533,3 +533,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## Upgrade 04 MCP
+
+- Fresh worktree omits ignored `.memory`; consulted main checkout PROJECT-CONTEXT and DIAGNOSTICS-CAUSES, and will write a lane-specific note locally.
+- Dependencies absent in isolated worktree; installing locally with Electron payload download skipped because tests need only SDK/TypeScript.
+
+- SDK 1.30 remote transports report failures through `onerror`, not `onclose`; the EventSource onerror property callback runs before dispatch, so its event target is still null. Its pinned terminal response errors carry a numeric HTTP code, whereas reconnectable EOF/network errors do not. HTTP reconnect callbacks can schedule a timer after error notification, requiring teardown after those callbacks settle.
+- HTTP GET-stream retry exhaustion is not whole-session failure: reproduce a subsequent `tools/list` POST before recommending eviction. The pinned SDK successfully serves POST discovery on the retained session after both optional GET retries fail.
+- SDK 1.30 legacy SSE reauthentication has no public settled callback; failed refresh/redirect can strand a CLOSED receive stream while HTTP POST remains usable. Isolated the pinned `_authThenStart`/`_eventSource` compatibility hook, rejected unknown shapes, and tested actual auth failure versus successful and transient recovery. Recheck this seam on SDK/EventSource upgrades.
