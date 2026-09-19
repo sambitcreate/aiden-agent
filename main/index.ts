@@ -1057,6 +1057,7 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
