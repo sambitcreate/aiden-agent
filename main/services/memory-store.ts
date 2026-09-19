@@ -304,16 +304,18 @@ export class MemoryStore {
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
       throw new Error("Memory confidence must be between 0 and 1.");
     }
-    const now = this.now();
-    if (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)) {
-      throw new Error("Memory expiry must be a future millisecond timestamp.");
-    }
     const supersedesId = input.supersedesId === undefined
       ? undefined
       : safeId(input.supersedesId, "superseded fact");
     const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
     database.exec("BEGIN IMMEDIATE");
     try {
+      // Lock acquisition may wait for another writer. Use the admitted time
+      // consistently for expiry, capacity, retirement, and the new record.
+      const now = this.now();
+      if (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)) {
+        throw new Error("Memory expiry must be a future millisecond timestamp.");
+      }
       const prior = supersedesId
         ? database.prepare(`
             SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
