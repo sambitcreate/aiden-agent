@@ -7,21 +7,30 @@ import type { ScheduledRun, ScheduledTask } from "./types.js";
 class MemoryPersistence<T> {
   constructor(private data: T) {}
 
+  beforeCommit?: (draft: T) => Promise<void>;
+
   async load(): Promise<T> {
     return structuredClone(this.data);
   }
 
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
+  async update<R>(
+    mutation: (draft: T) => R | Promise<R>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<R> {
+    if (!isCurrent()) throw new Error("Stale persistence operation.");
     const draft = structuredClone(this.data);
     const result = await mutation(draft);
+    await this.beforeCommit?.(draft);
+    if (!isCurrent()) throw new Error("Stale persistence operation.");
     this.data = draft;
     return result;
   }
 }
 
 function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
+  const taskPersistence = new MemoryPersistence<unknown[]>([]);
   const store = createScheduleStore(
-    new MemoryPersistence<unknown[]>([]),
+    taskPersistence,
     new MemoryPersistence<unknown[]>([]),
   );
   const broadcasts: Array<Record<string, unknown>> = [];
@@ -78,6 +87,7 @@ function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
   });
   return {
     store,
+    taskPersistence,
     service,
     broadcasts,
     cancelAllCalls: () => cancelAllCalls,
@@ -580,4 +590,81 @@ test("a current startup task-read failure still disables only the affected task"
   assert.equal(failed?.enabled, false);
   assert.equal(failed?.lastError, "Needs attention: task unavailable");
   assert.equal((await originalGet(healthy.id))?.enabled, true);
+});
+
+
+for (const invalidation of ["restart", "disable"] as const) {
+  test(`startup quarantine cannot commit after ${invalidation} or overwrite newer runtime state`, async (t) => {
+    const testbed = harness();
+    t.after(() => testbed.service.stop());
+    const task = await addTask(testbed.store);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const originalUpdate = testbed.store.updateRuntime.bind(testbed.store);
+    let failScheduling = true;
+    testbed.store.updateRuntime = async (...args) => {
+      if (failScheduling) {
+        failScheduling = false;
+        throw new Error("startup schedule write failed");
+      }
+      return originalUpdate(...args);
+    };
+    testbed.taskPersistence.beforeCommit = async (draft) => {
+      if ((draft[0] as ScheduledTask).lastError?.includes("startup schedule write failed")) {
+        entered.resolve();
+        await release.promise;
+      }
+    };
+
+    const starting = testbed.service.start();
+    await entered.promise;
+    let restarting: Promise<void> | undefined;
+    if (invalidation === "restart") {
+      testbed.service.stop();
+      restarting = testbed.service.start();
+    } else {
+      await testbed.service.setGlobalEnabled(false);
+    }
+    // Runtime writers are independent of the service's per-task lifecycle queue.
+    // A stale failure must never roll back a newer completion or chat claim.
+    const newer = await originalUpdate(task.id, {
+      lastResult: "success",
+      lastRunAt: Date.now(),
+      chatId: "newer-chat-claim",
+    });
+    release.resolve();
+    await starting;
+    await restarting;
+
+    const latest = await testbed.store.get(task.id);
+    assert.equal(latest?.enabled, true);
+    assert.equal(latest?.lastResult, "success");
+    assert.equal(latest?.lastRunAt, newer.lastRunAt);
+    assert.equal(latest?.lastError, undefined);
+    assert.equal(latest?.chatId, "newer-chat-claim");
+    assert.ok(latest!.updatedAt >= newer.updatedAt);
+  });
+}
+
+test("stopping while startup stages nextRunAt does not consume a missed run", async (t) => {
+  const testbed = harness();
+  t.after(() => testbed.service.stop());
+  const task = await addTask(testbed.store);
+  const overdue = await testbed.store.updateRuntime(task.id, { nextRunAt: 1 });
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  testbed.taskPersistence.beforeCommit = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+
+  const starting = testbed.service.start();
+  await entered.promise;
+  testbed.service.stop();
+  release.resolve();
+  await starting;
+
+  assert.deepEqual(await testbed.store.get(task.id), overdue);
+  assert.deepEqual(await testbed.store.runs(task.id), []);
+  assert.equal(testbed.hasPending(task.id), false);
 });
