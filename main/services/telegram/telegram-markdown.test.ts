@@ -71,8 +71,9 @@ test("chunkForTelegram splits at paragraph boundaries when possible", () => {
       `chunk length ${chunk.length} exceeds limit ${TELEGRAM_MESSAGE_LIMIT}`,
     );
   }
-  // Paragraph-boundary splits reconstruct the original via double newlines.
-  assert.equal(chunks.join("\n\n"), html);
+  // Paragraph separators remain part of the rendered text.
+  assert.ok(chunks[0].endsWith("\n\n"));
+  assert.equal(chunks.join(""), html);
 });
 
 test("chunkForTelegram returns empty array for empty string", () => {
@@ -90,4 +91,208 @@ test("chunkRichMarkdown keeps a wrapped inline block balanced", () => {
   const chunks = chunkRichMarkdown(`**${"word ".repeat(8_000)}**`);
   assert.ok(chunks.length > 1);
   assert.ok(chunks.every((chunk) => chunk.startsWith("**") && chunk.endsWith("**")));
+});
+
+/** Independent strict reader for the converter's HTML subset. */
+function readTelegramHtml(html: string): { text: string; styled: string[] } {
+  const stack: string[] = [];
+  const styled: string[] = [];
+  let text = "";
+  for (const part of html.split(/(<[^>]*>)/)) {
+    if (part.startsWith("<")) {
+      const close = /^<\/(\w+)>$/.exec(part);
+      if (close) {
+        assert.equal(stack.pop()?.match(/^<(\w+)/)?.[1], close[1], "properly nested closing tag");
+      } else {
+        assert.match(part, /^<(b|i|s|u|a|pre|code|blockquote)(?:\s[^<>]*)?>$/);
+        stack.push(part);
+      }
+      continue;
+    }
+    assert.doesNotMatch(part, /[<>]|&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/i, "no partial tags/entities");
+    const decoded = part.replace(/&(amp|lt|gt|quot|#\d+|#x[\da-f]+);/gi, (_match, entity: string) => {
+      if (entity.startsWith("#")) return String.fromCodePoint(Number(entity.startsWith("#x") ? `0x${entity.slice(2)}` : entity.slice(1)));
+      return ({ amp: "&", lt: "<", gt: ">", quot: '"' } as Record<string, string>)[entity];
+    });
+    assert.doesNotMatch(decoded, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/, "no split surrogate pairs");
+    text += decoded;
+    for (const character of decoded) styled.push(JSON.stringify([character, stack]));
+  }
+  assert.deepEqual(stack, [], "all tags close within the message");
+  return { text, styled };
+}
+
+function assertHtmlChunks(html: string): string[] {
+  const expected = readTelegramHtml(html);
+  const chunks = chunkForTelegram(html);
+  const actual = chunks.map((chunk) => {
+    assert.ok(Buffer.byteLength(chunk, "utf8") <= 32_768, "serialized HTML fits the pre-parse byte limit");
+    const parsed = readTelegramHtml(chunk);
+    assert.ok(parsed.text.length > 0 && parsed.text.length <= TELEGRAM_MESSAGE_LIMIT, "parsed UTF-16 length fits Telegram");
+    return parsed;
+  });
+  assert.equal(actual.map(({ text }) => text).join(""), expected.text, "no text or whitespace lost");
+  assert.deepEqual(actual.flatMap(({ styled }) => styled), expected.styled, "formatting and attributes survive every boundary");
+  return chunks;
+}
+
+test("chunkForTelegram preserves long nested inline formatting and links", () => {
+  for (const wrapper of [
+    (text: string) => `<b><i>${text}</i></b>`,
+    (text: string) => `<a href="https://example.com/?a=1&amp;b=2"><s>${text}</s></a>`,
+    (text: string) => `<blockquote><u>${text}</u></blockquote>`,
+    (text: string) => `<code>${text}</code>`,
+  ]) assert.ok(assertHtmlChunks(wrapper("x".repeat(12_500))).length > 1);
+});
+
+test("chunkForTelegram keeps entities and astral Unicode intact around hard boundaries", () => {
+  for (let offset = 4020; offset <= 4034; offset += 1) {
+    assertHtmlChunks(`${"a".repeat(offset)}&amp;&lt;&gt;&quot;&#128512;&#x1F680;😀${"z".repeat(4200)}`);
+  }
+});
+
+test("chunkForTelegram preserves code language, indentation and blank lines across chunks", () => {
+  const markdown = `\`\`\`ts\n${"  const x = '<&😀>';\n\n\n".repeat(700)}  tail\n\`\`\``;
+  const chunks = assertHtmlChunks(markdownToTelegramHtml(markdown));
+  assert.ok(chunks.length > 2);
+  assert.ok(chunks.every((chunk) => chunk.startsWith('<pre><code class="language-ts">') && chunk.endsWith("</code></pre>")));
+});
+
+test("chunkForTelegram counts parsed text rather than indivisible HTML attributes", () => {
+  const html = `<a href="https://example.com/${"a".repeat(5000)}">${"&amp;😀".repeat(2000)}</a>`;
+  assertHtmlChunks(html);
+});
+
+test("chunkForTelegram preserves mixed formatting at deterministic fuzz boundaries", () => {
+  let seed = 29;
+  const next = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+  const atoms = ["x", "😀", "&amp;", "&lt;", "\n", "\n\n\n", "  ", "é", "&#x1F680;"];
+  for (let run = 0; run < 12; run += 1) {
+    let html = "";
+    for (let block = 0; block < 30; block += 1) {
+      const text = Array.from({ length: 100 + next() % 200 }, () => atoms[next() % atoms.length]).join("");
+      html += [text, `<b>${text}</b>`, `<a href="https://example.com"><i>${text}</i></a>`, `<pre><code class="language-ts">${text}</code></pre>`][next() % 4];
+    }
+    assertHtmlChunks(html);
+  }
+});
+
+test("chunkForTelegram handles exact limits and tag transitions without empty tails", () => {
+  for (const length of [4031, 4032, 4033, 4095, 4096, 8064]) {
+    const html = `<b>${"a".repeat(length)}</b><i>😀</i>`;
+    assertHtmlChunks(html);
+    assertHtmlChunks(`${"a".repeat(length)}😀${"b".repeat(4032)}`);
+  }
+  assert.deepEqual(chunkForTelegram(`<b>${"&amp;".repeat(1000)}</b>`), [`<b>${"&amp;".repeat(1000)}</b>`]);
+  assert.equal(assertHtmlChunks(`<b>${"a".repeat(4032)}</b>`).length, 1);
+});
+
+test("chunkForTelegram preserves converter output for long headings, quotes and links", () => {
+  for (const markdown of [
+    `# ${"heading 😀 ".repeat(600)}`,
+    `> **${"quoted & <text> ".repeat(700)}**`,
+    `[${"linked text ".repeat(800)}](https://example.com/?q=hello&lang=en)`,
+  ]) assertHtmlChunks(markdownToTelegramHtml(markdown));
+});
+
+test("chunkForTelegram does not separate combining marks or emoji graphemes", () => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const grapheme of ["e\u0301", "👩‍💻", "👨‍👩‍👧‍👦", "🇺🇸", "👍🏽", "1️⃣"]) {
+    for (let offset = 4025; offset <= 4033; offset += 1) {
+      const text = `${"a".repeat(offset)}${grapheme}${"z".repeat(100)}`;
+      const chunks = assertHtmlChunks(`<b>${text}</b>`).map((chunk) => readTelegramHtml(chunk).text);
+      assert.deepEqual(chunks.flatMap((chunk) => Array.from(segmenter.segment(chunk), ({ segment }) => segment)),
+        Array.from(segmenter.segment(text), ({ segment }) => segment), `whole grapheme ${grapheme} at ${offset}`);
+    }
+  }
+  for (const html of [
+    `${"a".repeat(4031)}<b>e</b>&#769;${"z".repeat(100)}`,
+    `${"a".repeat(4030)}&#x1F469;<i>&#8205;</i>&#x1F4BB;${"z".repeat(100)}`,
+  ]) {
+    const chunks = assertHtmlChunks(html).map((chunk) => readTelegramHtml(chunk).text);
+    assert.ok(chunks[1].startsWith("é") || chunks[1].startsWith("👩‍💻"));
+  }
+});
+
+test("chunkForTelegram progresses when one grapheme exceeds the provider limit", () => {
+  const html = `<b>e${"\u0301".repeat(9000)}</b>`;
+  assert.ok(assertHtmlChunks(html).length >= 3);
+});
+
+
+test("chunkForTelegram bounds formatting-heavy converter output before HTML parsing", () => {
+  const html = markdownToTelegramHtml("> x\n".repeat(1250));
+  assert.equal(Buffer.byteLength(html), 33_749);
+  assert.equal(readTelegramHtml(html).text.length, 2499);
+  assert.ok(assertHtmlChunks(html).length > 1);
+});
+
+test("chunkForTelegram includes UTF-8 attributes and carried tags in the byte budget", () => {
+  const html = markdownToTelegramHtml(`[${"&😀é ".repeat(1500)}](https://example.com/${"語".repeat(9000)})`);
+  assert.ok(assertHtmlChunks(html).length > 2);
+});
+
+test("chunkForTelegram preserves graphemes at serialized-byte boundaries", () => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const grapheme of ["é", "👩‍💻", "🇺🇸", "👍🏽"]) {
+    const html = `<a href="https://example.com/${"a".repeat(32700)}">${grapheme.repeat(30)}</a>`;
+    const chunks = assertHtmlChunks(html);
+    assert.deepEqual(chunks.flatMap((chunk) => Array.from(segmenter.segment(readTelegramHtml(chunk).text), ({ segment }) => segment)),
+      Array.from(segmenter.segment(readTelegramHtml(html).text), ({ segment }) => segment));
+  }
+});
+
+test("chunkForTelegram renders indivisibly oversized links as text without losing their destinations", () => {
+  const destination = `https://example.com/${"語&".repeat(12_000)}`;
+  const html = markdownToTelegramHtml(`before [**useful label**](${destination}) after`);
+  const chunks = chunkForTelegram(html);
+  const parsed = chunks.map((chunk) => {
+    assert.ok(Buffer.byteLength(chunk) <= 32_768);
+    const result = readTelegramHtml(chunk);
+    assert.ok(result.text.length > 0 && result.text.length <= TELEGRAM_MESSAGE_LIMIT);
+    return result.text;
+  });
+  assert.equal(parsed.join(""), `before useful label (${destination}) after`);
+  const bareLink = markdownToTelegramHtml(`[${destination}](${destination})`);
+  assert.equal(chunkForTelegram(bareLink).map((chunk) => readTelegramHtml(chunk).text).join(""), destination);
+});
+
+
+test("chunkForTelegram looks through markup at a byte-limited grapheme seam", () => {
+  const html = `<a href="https://example.com/${"x".repeat(32721)}">ae<b>́</b>z</a>`;
+  const text = assertHtmlChunks(html).map((chunk) => readTelegramHtml(chunk).text);
+  assert.ok(text.some((chunk) => chunk.includes("é")), "combining mark stays with its base across tags");
+});
+
+test("chunkForTelegram normalizes an indivisible oversized numeric entity for progress", () => {
+  const html = `&#${"0".repeat(33_000)}65;`;
+  assert.deepEqual(chunkForTelegram(html), ["A"]);
+});
+
+
+test("chunkForTelegram keeps the first grapheme whole when its formatting exhausts the byte budget", () => {
+  const destination = `https://example.com/${"x".repeat(32_724)}`;
+  const html = markdownToTelegramHtml(`[e**́**](${destination})`);
+  assert.ok(Buffer.byteLength(html) > 32_768);
+  const chunks = chunkForTelegram(html);
+  const rendered = chunks.map((chunk) => {
+    assert.ok(Buffer.byteLength(chunk) <= 32_768);
+    return readTelegramHtml(chunk).text;
+  });
+  assert.ok(rendered.some((chunk) => chunk.includes("é")), "the base and accent must remain in one message");
+  assert.equal(rendered.join(""), `é (${destination})`, "unrepresentable formatting falls back without losing text or destination");
+  const fits = markdownToTelegramHtml(`[e**́**](https://example.com/${"x".repeat(32_723)})`);
+  assert.equal(Buffer.byteLength(fits), 32_768);
+  assert.deepEqual(assertHtmlChunks(fits), [fits], "a whole formatted grapheme at the exact byte cap stays intact");
+});
+
+test("chunkForTelegram compares rendered labels when retaining oversized link destinations", () => {
+  const destination = `https://example.com/${"語&".repeat(12_000)}`;
+  const html = markdownToTelegramHtml(`[**${destination}**](${destination})`);
+  const chunks = chunkForTelegram(html);
+  assert.ok(chunks.every((chunk) => Buffer.byteLength(chunk) <= 32_768));
+  assert.equal(chunks.map((chunk) => readTelegramHtml(chunk).text).join(""), destination);
+  // Equivalent numeric/named entity spellings also compare as rendered text.
+  const equivalent = `<a href="${"x".repeat(33_000)}&amp;"><b>${"x".repeat(33_000)}&#38;</b></a>`;
+  assert.equal(chunkForTelegram(equivalent).map((chunk) => readTelegramHtml(chunk).text).join(""), `${"x".repeat(33_000)}&`);
 });
