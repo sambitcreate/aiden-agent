@@ -705,3 +705,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Initial broad search used a nonexistent `main/ipc*` glob; switched to actual `main/handlers` paths.
 - Extended broker checks initially lacked the native file-mutator helper; built it with the repository script, then all 45 checks passed.
 - Reusing primary checkout dependencies exposed thinking-orbs 0.1.1 versus locked 0.3.1 and unrelated OrbState type failures; installing this worktree lockfile independently.
+### 2026-09-19 — Upgrade lane 32 notifications
+- Fresh detached worktree omits ignored `.memory` and `node_modules`; read canonical project memory and linked the existing matching dependency installation without changing it.
+- No execution test seam existed for scheduled notification failures. The existing registered notification suite now bundles the real execution module with synthetic service ports, avoiding Electron, scripts, network and user data.
+- Shared checkout dependencies were stale (`thinking-orbs` 0.1.1 vs locked 0.3.1), causing unrelated OrbState type errors. Replaced only this worktree's dependency symlink with an isolated `npm ci --ignore-scripts`; shared installation remains untouched.
