@@ -533,3 +533,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+# Lane 34 iOS state
+
+- Worktree has no tracked `.memory/`; read the shared checkout's project context and will add a unique lane note.
+- Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.
+
+- Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
+
+- Lane 34 picker follow-up: view-local photo/file conversion happened before model upload ownership. Moved the shared preparation lifetime to the model and expanded proof to the actual picker callback plus held transfer, including cancellation ownership and Send blocking.
