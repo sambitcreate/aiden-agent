@@ -9,6 +9,7 @@ import {
   InMemoryCredentialStore,
   createModels,
   type Api,
+  type AuthContext,
   type Credential,
   type CredentialStore,
   type Model,
@@ -1107,6 +1108,81 @@ test("guarded full refresh preserves production default env and file auth resolu
   assert.deepEqual(observed[1], observed[0]);
   assert.equal(observed[1]?.type, "api_key");
   assert.equal(observed[1]?.key, "synthetic-context-key");
+});
+
+for (const fileAvailable of [false, true]) {
+  test(`guarded refresh preserves custom env and file auth context (${fileAvailable ? "available" : "missing"} profile)`, async () => {
+    const credentials = new InMemoryCredentialStore();
+    const store = memoryProviderStore();
+    let envReads = 0;
+    let fileReads = 0;
+    const authContext: AuthContext = {
+      env: async (name) => {
+        envReads += 1;
+        return name === "AIDEN_CUSTOM_CONTEXT_CANARY" ? "synthetic-custom-context-key" : undefined;
+      },
+      fileExists: async (path) => {
+        fileReads += 1;
+        return fileAvailable && path === "virtual://aiden-profile";
+      },
+    };
+    const observed: (Credential | undefined)[] = [];
+    const provider: Provider = {
+      ...opencodeGoProvider(),
+      auth: { apiKey: {
+        name: "Synthetic custom-context auth",
+        resolve: async ({ ctx }) => {
+          const key = await ctx.env("AIDEN_CUSTOM_CONTEXT_CANARY");
+          const exists = await ctx.fileExists("virtual://aiden-profile");
+          return key && exists ? { auth: { apiKey: key } } : undefined;
+        },
+      } },
+      refreshModels: async (context) => {
+        if (!context.allowNetwork) return;
+        observed.push(context.credential);
+        await context.publish({ persist: { models: [], checkedAt: 1 } });
+      },
+    };
+    const models = createModels({ credentials, authContext, modelsStore: {
+      read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+    } });
+    models.setProvider(provider);
+    const direct = await models.refresh();
+    // Both collections must receive the same caller-owned context.
+    const options = { models, credentials, authContext, providerModelsStore: () => store };
+    const guarded = await refreshPiCatalogs(options);
+    assert.equal(direct.errors.size, 0);
+    assert.equal(guarded.errors.size, 0);
+    assert.equal(envReads, 2);
+    assert.equal(fileReads, 2);
+    assert.equal(observed.length, fileAvailable ? 2 : 0);
+    if (fileAvailable) {
+      assert.deepEqual(observed[1], observed[0]);
+      assert.equal(observed[1]?.key, "synthetic-custom-context-key");
+    }
+  });
+}
+
+test("offline guarded refresh does not resolve the supplied custom auth context", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const authContext: AuthContext = {
+    env: async () => { throw new Error("offline env resolution"); },
+    fileExists: async () => { throw new Error("offline file resolution"); },
+  };
+  const models = createModels({ credentials, authContext });
+  const store = memoryProviderStore();
+  let offlinePhases = 0;
+  models.setProvider({
+    ...opencodeGoProvider(),
+    refreshModels: async (context) => {
+      assert.equal(context.allowNetwork, false);
+      offlinePhases += 1;
+    },
+  });
+  assert.equal((await models.refresh({ allowNetwork: false })).errors.size, 0);
+  const options = { models, credentials, authContext, providerModelsStore: () => store, allowNetwork: false };
+  assert.equal((await refreshPiCatalogs(options)).errors.size, 0);
+  assert.equal(offlinePhases, 2);
 });
 
 for (const mode of ["full", "scoped", "offline"] as const) {

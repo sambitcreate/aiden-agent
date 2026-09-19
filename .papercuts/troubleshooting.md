@@ -771,3 +771,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Initial papercut write replaced a tracked history file; restored original contents before appending this lane.
 
 - Lane 34 picker follow-up: view-local photo/file conversion happened before model upload ownership. Moved the shared preparation lifetime to the model and expanded proof to the actual picker callback plus held transfer, including cancellation ownership and Send blocking.
+
+- Independent review confirmed custom-context helper compatibility (not a production outage). Root authorized an explicit shared AuthContext option; parity tests avoid private SDK state and keep registry defaults unchanged.
