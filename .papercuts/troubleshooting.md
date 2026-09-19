@@ -645,3 +645,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 voice upgrade
 - This fresh main worktree has no `.memory/` directory; inspected the completed dictation plan and current source, and will add a scoped implementation note.
 - Renderer build passes with pre-existing Ghostty mixed static/dynamic import and large-chunk warnings; no voice build failure. Repository `.memory/` is ignored, so the scoped delivery note requires explicit force-add.
+- 2026-09-19 auth lane: fresh worktree has no ignored .memory directory; read canonical project context and create a lane-specific note. Installed isolated dependencies with npm ci.
