@@ -95,6 +95,7 @@ function makeTransport(
   isCurrent: () => boolean = () => true,
   options: {
     forceNoRedirect?: boolean;
+    onTerminalFailure?: () => void;
     registerCredentialRedactor?: (
       redactor: SubagentMcpCredentialRedactor,
     ) => void;
@@ -137,6 +138,7 @@ function makeTransport(
     isCurrent,
     authProvider,
     fetch: guardedFetch,
+    onTerminalFailure: options.onTerminalFailure,
   });
 }
 
@@ -285,6 +287,7 @@ class McpManager {
           makeTransport(
             await resolveAuth(server, connectionIsCurrent),
             connectionIsCurrent,
+            { onTerminalFailure: onClosed },
           ) as never,
         );
       },

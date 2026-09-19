@@ -1,5 +1,5 @@
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { createMcpFetchPolicy, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
@@ -8,6 +8,7 @@ export function createMcpRemoteTransport(
   options: McpFetchPolicyOptions & {
     transport: "http" | "sse";
     authProvider?: OAuthClientProvider;
+    onTerminalFailure?: () => void;
   },
 ) {
   let lifetime = new AbortController();
@@ -22,9 +23,30 @@ export function createMcpRemoteTransport(
     ? new SSEClientTransport(new URL(options.serviceUrl), transportOptions)
     : new StreamableHTTPClientTransport(new URL(options.serviceUrl), transportOptions);
   const close = transport.close.bind(transport);
+  let terminalClose: ReturnType<typeof setImmediate> | undefined;
   transport.close = async () => {
+    if (terminalClose) clearImmediate(terminalClose);
+    terminalClose = undefined;
     lifetime.abort(new Error("MCP connection closed."));
     await close();
+  };
+  transport.onerror = (error) => {
+    // In the pinned SDK/EventSource, SSE response failures have an HTTP code
+    // and stop reconnecting; EOF/network errors have no code and reconnect.
+    // HTTP 404 only proves session loss when a session was established. Other
+    // POST errors and optional GET-stream failures can leave the client usable.
+    const terminal = transport instanceof SSEClientTransport
+      ? error instanceof SseError && typeof error.code === "number"
+      : error instanceof StreamableHTTPError && error.code === 404 &&
+        transport.sessionId !== undefined;
+    if (!terminal || terminalClose || lifetime.signal.aborted) return;
+    options.onTerminalFailure?.();
+    // Release cache ownership now; close after SDK error/reconnect callbacks
+    // settle so they cannot install a retry timer after our teardown.
+    terminalClose = setImmediate(() => {
+      terminalClose = undefined;
+      void transport.close().catch(() => undefined);
+    });
   };
   // Client.connect closes HTTP transports when OAuth opens the browser. The
   // SDK deliberately supports finishAuth on that same object afterward so it
