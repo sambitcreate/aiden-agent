@@ -571,3 +571,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh worktree has no `.memory/` because the folder is ignored; read canonical checkout terminal history and create a lane-specific local note.
 - Fresh worktree has no dependencies; installed lockfile dependencies locally without building or packaging Electron.
 - Initial papercut write replaced the existing tracked log; diff review caught it and restored all baseline entries before appending this section.
+## Upgrade 09 attachments
+- Fresh worktree omits ignored `.memory/`; read main checkout project context/history and create a unique lane note.
+- Initial broad source reads were truncated; use targeted ranges for attachment investigation.
+- TypeScript targets a pre-ES2022 library: regression fixtures must use indexed access instead of `Array.at`.
