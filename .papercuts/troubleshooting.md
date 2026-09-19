@@ -731,3 +731,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Failed-send restoration bypasses `updateDraft`, so visible recovery never reaches the draft file. Use real ViewModel/HTTP regression and reopen the store to distinguish memory from persistence.
 - Regression harness initially used `sendMessage`; Android exposes the action as `send`. Corrected the test entry point before collecting baseline behavior.
 - `.memory/` and `.papercuts/` are ignored by default; explicit force-add is needed for the authorized lane note and troubleshooting update.
+- 2026-09-19 lane 21 replay review: Socket teardown does not establish terminal delivery; reserve capacity reclamation for response finish. Abort/timeout must preserve replay despite renewed pressure, with count/byte/retention bounds.
