@@ -536,3 +536,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - 2026-09-19 lane 21: Fresh worktree has no .memory or dependencies; consulted canonical project memory and installed isolated dependencies with lifecycle scripts disabled for server-only tests.
 - 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
+- 2026-09-19 lane 21 review: Terminal subscribers remain registered until drain; aggregate eviction must account for pending delivery, not just terminal generation state. Added cross-stream pressure/drain/deadline regressions.
