@@ -666,3 +666,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 — Integration wave 2
 - Batch expansion requires archiving the frozen original receipt and using a separate log namespace; never carry the original 17-head test counts into a 25-head validation claim.
 - Keep PR discovery capped at the authorized batch while new lanes are dispatched; optional later lanes need an explicit scope update before local integration.
+- Second Pullfrog regression: metadata-sensitive values refreshed search but cleared selection on the highlighted record. Reproduced zero selected rows for live selected-chat title, timestamp, and model-provider label updates. Use controlled selection reconciled through the stable record ID and require Enter activation without recovery arrows.

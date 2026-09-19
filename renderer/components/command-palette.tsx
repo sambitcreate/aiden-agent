@@ -2,7 +2,6 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { defaultFilter } from "cmdk";
 import {
   ArrowLeft,
   Bot,
@@ -58,6 +57,12 @@ import {
   persistRecentCommands,
   recordRecentCommand,
 } from "../lib/command-palette-recent";
+import {
+  filterPaletteResult,
+  paletteResult,
+  reconcilePaletteResult,
+  type PaletteResult,
+} from "../lib/command-palette-results";
 
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
@@ -91,18 +96,12 @@ function ItemDetail({ children }: { children: React.ReactNode }) {
 }
 
 function PaletteResultItem({
-  identity,
-  keywords,
+  result,
   ...props
 }: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords"> & {
-  identity: string;
-  keywords: string[];
+  result: PaletteResult;
 }) {
-  // cmdk 1.1.1 refreshes cached aliases only when value changes. Include both
-  // identity and current metadata so duplicate labels stay distinct and edits
-  // refresh search without remounting the option or exposing IDs to filtering.
-  const value = JSON.stringify([identity, keywords]);
-  return <CommandItem {...props} value={value} keywords={keywords} />;
+  return <CommandItem {...props} value={result.value} keywords={result.keywords} />;
 }
 
 export function AppCommandPalette({
@@ -123,6 +122,7 @@ export function AppCommandPalette({
   );
   const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
+  const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const modelSelectionEpoch = React.useRef(0);
   const [recentCommands, setRecentCommands] = React.useState<CommandId[]>(() => {
@@ -156,6 +156,67 @@ export function AppCommandPalette({
         (order.get(right.id) ?? Number.POSITIVE_INFINITY),
     );
   }, [recentCommands]);
+  const chatResults = React.useMemo(
+    () => [...(chats.data ?? [])]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((chat) => ({
+        chat,
+        result: paletteResult(`chat:${chat.id}`, [
+          chat.title,
+          new Date(chat.updatedAt).toLocaleString(),
+        ]),
+      })),
+    [chats.data],
+  );
+  const modelResults = React.useMemo(
+    () => models.map((entry) => ({
+      entry,
+      result: paletteResult(`model:${entry.value}`, [
+        entry.label, entry.model, entry.providerLabel,
+      ]),
+    })),
+    [models],
+  );
+  const unavailableResults = React.useMemo(
+    () => unavailableModelProviders.map((provider) => ({
+      provider,
+      result: paletteResult(`unavailable-provider:${provider.id}`, [
+        provider.label, ...provider.models, "unavailable setup provider",
+      ]),
+    })),
+    [unavailableModelProviders],
+  );
+  const providerResults = React.useMemo(
+    () => (providers.data ?? []).map((provider) => ({
+      provider,
+      result: paletteResult(`provider:${provider.id}`, [
+        provider.label, provider.id, "manage connection models",
+      ]),
+    })),
+    [providers.data],
+  );
+  const currentResults = palette.mode === "chats"
+    ? [
+        ...(canExecute("chat.new") ? [{
+          identity: "chat.new",
+          value: "New chat conversation",
+          keywords: ["New chat conversation"],
+        }] : []),
+        ...chatResults.map(({ result }) => result),
+      ]
+    : palette.mode === "models"
+      ? [...(busy ? [] : modelResults), ...unavailableResults].map(({ result }) => result)
+      : palette.mode === "providers"
+        ? providerResults.map(({ result }) => result)
+        : [];
+  const selectedResultValue = reconcilePaletteResult(activeResult, currentResults, query);
+  React.useLayoutEffect(() => {
+    // Persist a fallback too, so a removed result cannot reclaim selection if it
+    // later reappears. Do not overwrite a newer keyboard/pointer selection.
+    if (selectedResultValue !== activeResult) {
+      setActiveResult((current) => current === activeResult ? selectedResultValue : current);
+    }
+  }, [activeResult, selectedResultValue]);
   const appearanceMode = normalizeAppearanceConfig(
     settings.data?.appearance ?? createDefaultAppearanceConfig(),
   ).mode;
@@ -381,11 +442,11 @@ export function AppCommandPalette({
             {MODE_LABELS[palette.mode]}
           </DialogPrimitive.Title>
           <Command
+            value={selectedResultValue}
+            onValueChange={setActiveResult}
             className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control"
             // Dynamic values identify rows; search only their human-readable metadata.
-            filter={(value, search, keywords) =>
-              defaultFilter(keywords?.length ? keywords.join(" ") : value, search)
-            }
+            filter={filterPaletteResult}
           >
             <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
@@ -511,13 +572,10 @@ export function AppCommandPalette({
                       <ItemDetail>Retry</ItemDetail>
                     </CommandItem>
                   ) : null}
-                  {[...(chats.data ?? [])]
-                    .sort((left, right) => right.updatedAt - left.updatedAt)
-                    .map((chat) => (
+                  {chatResults.map(({ chat, result }) => (
                       <PaletteResultItem
                         key={chat.id}
-                        identity={`chat:${chat.id}`}
-                        keywords={[chat.title, new Date(chat.updatedAt).toLocaleString()]}
+                        result={result}
                         onSelect={() => void openChat(chat.id)}
                         className="min-h-11 px-3"
                       >
@@ -547,16 +605,15 @@ export function AppCommandPalette({
                     <ItemDetail>Retry</ItemDetail>
                   </CommandItem>
                 ) : (
-                  models
-                    .map((entry) => {
+                  modelResults
+                    .map(({ entry, result }) => {
                       const selected =
                         selection.providerId === entry.providerId &&
                         selection.model === entry.model;
                       return (
                         <PaletteResultItem
                           key={entry.value}
-                          identity={`model:${entry.value}`}
-                          keywords={[entry.label, entry.model, entry.providerLabel]}
+                          result={result}
                           onSelect={() => void selectModel(entry.providerId, entry.model)}
                           disabled={busy}
                           aria-current={selected ? "true" : undefined}
@@ -575,11 +632,10 @@ export function AppCommandPalette({
                       );
                     })
                     .concat(
-                      unavailableModelProviders.map((provider) => (
+                      unavailableResults.map(({ provider, result }) => (
                         <PaletteResultItem
                           key={`unavailable-${provider.id}`}
-                          identity={`unavailable-provider:${provider.id}`}
-                          keywords={[provider.label, ...provider.models, "unavailable setup provider"]}
+                          result={result}
                           onSelect={() => {
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
@@ -637,11 +693,10 @@ export function AppCommandPalette({
                       <ItemDetail>Retry</ItemDetail>
                     </CommandItem>
                   ) : null}
-                  {(providers.data ?? []).map((provider) => (
+                  {providerResults.map(({ provider, result }) => (
                     <PaletteResultItem
                       key={provider.id}
-                      identity={`provider:${provider.id}`}
-                      keywords={[provider.label, provider.id, "manage connection models"]}
+                      result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
