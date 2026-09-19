@@ -561,3 +561,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Broad service searches hit a large generated browser source string; restrict searches to skill files to keep inspection usable.
 - Dependencies installed locally with lifecycle scripts disabled; this service-only lane needs no Electron/native build.
 - YAML AST map `get()` generic inference narrowed scalar text to `never`; treat the retrieved node as `unknown` and narrow through `isScalar` plus a string check before reading metadata.
+## Upgrade git worktrees — 2026-09-19
+
+- Fresh worktree has no ignored `.memory/` or dependencies. Read relevant canonical project memory; install isolated dependencies with `npm ci --ignore-scripts` and explicitly build only the native worktree-remover needed by Git tests.
+- Git service and its tests are large; use targeted function/range reads to avoid truncated investigation output.
+- Explicit `git add` rejected the ignored `.papercuts/` parent even though the log is tracked; stage the tracked log with `git add -u -- .papercuts/troubleshooting.md`.
