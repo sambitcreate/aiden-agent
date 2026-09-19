@@ -541,3 +541,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
 - Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.
+
+- PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.
