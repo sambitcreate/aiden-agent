@@ -104,6 +104,7 @@ interface LiveTab {
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
+  pendingNavigationRequest?: { id: number; sequence: number };
   navigationSequence: number;
   committedNavigation: number;
   lastCursor?: { x: number; y: number };
@@ -394,6 +395,36 @@ export class BrowserService {
         );
         return owned ? contents.getURL() : undefined;
       });
+      const navigationTab = (details: { webContentsId?: number; resourceType: string }) =>
+        details.resourceType === "mainFrame" ? [...this.tabs.values()].find((tab) =>
+          !tab.closing && !tab.view.webContents.isDestroyed() && tab.view.webContents.id === details.webContentsId,
+        ) : undefined;
+      browserSession.webRequest.onBeforeRequest((details, callback) => {
+        const tab = navigationTab(details);
+        if (tab?.pendingNavigationUrl === details.url && !tab.pendingNavigationRequest) {
+          tab.pendingNavigationRequest = { id: details.id, sequence: tab.navigationSequence };
+        }
+        callback({});
+      });
+      const finishNavigationRequest = (details: { webContentsId?: number; resourceType: string; id: number }) => {
+        const tab = navigationTab(details);
+        if (!tab || tab.pendingNavigationRequest?.id !== details.id ||
+          tab.pendingNavigationRequest.sequence !== tab.navigationSequence) return;
+        const wc = tab.view.webContents;
+        // A request-specific terminal signal owns this navigation; a global
+        // did-stop-loading can race with an uncommitted replacement navigation.
+        // Process death also aborts requests, so preserve its recovery target.
+        if (wc.isCrashed() || wc.getOSProcessId() === 0) return;
+        tab.pendingNavigationUrl = undefined;
+        tab.pendingNavigationRequest = undefined;
+      };
+      browserSession.webRequest.onHeadersReceived((details, callback) => {
+        // These responses definitively retain the current document. Handle them
+        // before the global loading-stop notification, without a timer heuristic.
+        if (details.statusCode === 204 || details.statusCode === 205) finishNavigationRequest(details);
+        callback({});
+      });
+      browserSession.webRequest.onErrorOccurred(finishNavigationRequest);
       browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
         let authorization: string | undefined;
         try {
@@ -446,15 +477,6 @@ export class BrowserService {
   private observe(tab: LiveTab): void {
     const wc = tab.view.webContents;
     let navigationSupersededCrash = false;
-    const finishNavigation = () => {
-      if (tab.closing || wc.isDestroyed() || wc.isLoadingMainFrame() ||
-        wc.isCrashed() || wc.getOSProcessId() === 0) return;
-      // Chromium clears the process handle before crash observers run, whereas
-      // isCrashed may update after did-stop-loading. Require a live process so
-      // crash teardown cannot discard the interrupted navigation's target.
-      // A healthy cancellation (for example HTTP 204) discards its stale target.
-      tab.pendingNavigationUrl = undefined;
-    };
     const publish = () => {
       if (tab.closing || wc.isDestroyed()) return;
       Object.assign(tab.state, {
@@ -471,7 +493,6 @@ export class BrowserService {
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", publish);
     wc.on("did-stop-loading", () => this.finishPreviewNavigation(tab));
-    wc.on("did-stop-loading", finishNavigation);
     wc.on("page-title-updated", publish);
     wc.on("media-started-playing", publish);
     wc.on("media-paused", publish);
@@ -518,6 +539,7 @@ export class BrowserService {
         // Loading alone cannot distinguish a replacement from a current crash.
         navigationSupersededCrash = wc.isCrashed();
         tab.pendingNavigationUrl = url;
+        tab.pendingNavigationRequest = undefined;
         this.cancelCrashRecovery(tab);
         try { this.beginPreviewNavigation(tab, url); } catch (error) { wc.stop(); this.finishPreviewNavigation(tab); tab.state.error = String(error); }
         tab.navigationSequence += 1;

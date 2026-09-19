@@ -472,11 +472,12 @@ for (const delivery of ["pending", "committed"] as const) {
   });
 }
 
-test("current native crash during a subsequent held main-frame response still recovers", async ({ aiden }) => {
-    let heldRequest = false;
+for (const boundary of ["ordinary", "global-stop", "same-url-replacement"]) {
+  test(`current native crash during a subsequent held main-frame response still recovers${boundary === "global-stop" ? " after an unrelated global stop" : boundary === "same-url-replacement" ? " after a same-URL replacement" : ""}`, async ({ aiden }) => {
+    let heldRequests = 0;
     let hold = true;
     const server = createServer((request, response) => {
-      if (request.url === "/held" && hold) { heldRequest = true; return; }
+      if (request.url === "/held" && hold) { heldRequests += 1; return; }
       response.setHeader("content-type", "text/html");
       response.end("<!doctype html><title>Recovered document</title>");
     });
@@ -493,7 +494,27 @@ test("current native crash during a subsequent held main-frame response still re
       await installNativeCrashProbe(aiden, id);
       await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Recovered document");
       await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/held`, readiness: "none" });
-      await expect.poll(() => heldRequest).toBe(true);
+      await expect.poll(() => heldRequests).toBe(1);
+      if (boundary === "same-url-replacement") {
+        // Cancel the first request with another navigation to the same URL.
+        // The old request error cannot abandon the new navigation's target.
+        await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/held`, readiness: "none" });
+        await expect.poll(() => heldRequests).toBe(2);
+      }
+      if (boundary === "global-stop") {
+        // Exercise Chromium's documented racy frame-tree stop boundary with a
+        // real uncommitted main-frame request and live renderer. Only the global
+        // notification/loading snapshot is controlled; the subsequent crash and
+        // recovery HTTP request are native.
+        await aiden.app.evaluate(({ webContents }, target) => {
+          const guest = webContents.fromId(target)!;
+          if (guest.isCrashed() || guest.getOSProcessId() === 0) throw new Error("Expected a live committed renderer");
+          const isLoadingMainFrame = guest.isLoadingMainFrame;
+          guest.isLoadingMainFrame = () => false;
+          try { guest.emit("did-stop-loading"); }
+          finally { guest.isLoadingMainFrame = isLoadingMainFrame; }
+        }, id);
+      }
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
       const crash = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
       expect(crash).toMatchObject({ crashed: true, timers: 1 });
@@ -517,8 +538,9 @@ test("current native crash during a subsequent held main-frame response still re
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+}
 
-for (const scenario of ["queued-before-abort", "queued-before-network-error", "queued-after-abort", "queued-after-network-error", "current-after-abort", "current-after-stop"] as const) {
+for (const scenario of ["queued-before-abort", "queued-before-network-error", "queued-after-abort", "queued-after-network-error", "current-after-abort", "current-after-reset", "current-after-stop"] as const) {
   test(`native crash ${scenario} preserves the correct recovery document`, async ({ aiden }) => {
     let releaseFailure: (() => void) | undefined;
     let failing = false;
@@ -530,7 +552,7 @@ for (const scenario of ["queued-before-abort", "queued-before-network-error", "q
         const fail = () => {
           failing = true;
           if (scenario.endsWith("network-error")) response.destroy();
-          else { response.writeHead(204); response.end(); }
+          else { response.writeHead(scenario === "current-after-reset" ? 205 : 204); response.end(); }
         };
         if (failing) fail();
         else releaseFailure = fail;

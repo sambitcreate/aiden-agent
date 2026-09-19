@@ -788,3 +788,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-19 lane41: Fresh baseline worktree has no .memory directory or node_modules; read primary-checkout project notes and install isolated dependencies before Electron validation.
 
 - 2026-09-19 lane41: Sidebar state assertions must locate Settings navigation with includeHidden:true; ordinary role queries intentionally stop matching after aria-hidden collapse. Initial strict repeats failed at this locator and were not accepted as product regressions.
+- Closeout review: a healthy WebContents-wide loading stop still lacks main-frame navigation ownership. Electron43 does not emit a provisional failure for HTTP204; a native probe observes ERR_FAILED loadURL rejection and later request completion. Use request-id-scoped no-document headers/errors and navigation generation rather than another loading-state or timer heuristic; preserve the existing session header-auth callback.
