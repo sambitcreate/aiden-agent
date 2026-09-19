@@ -90,6 +90,21 @@ function ItemDetail({ children }: { children: React.ReactNode }) {
   return <span className="ml-auto min-w-0 truncate text-small text-tertiary">{children}</span>;
 }
 
+function PaletteResultItem({
+  identity,
+  keywords,
+  ...props
+}: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords"> & {
+  identity: string;
+  keywords: string[];
+}) {
+  // cmdk 1.1.1 refreshes cached aliases only when value changes. Include both
+  // identity and current metadata so duplicate labels stay distinct and edits
+  // refresh search without remounting the option or exposing IDs to filtering.
+  const value = JSON.stringify([identity, keywords]);
+  return <CommandItem {...props} value={value} keywords={keywords} />;
+}
+
 export function AppCommandPalette({
   navigationBlockedReason,
 }: {
@@ -499,9 +514,9 @@ export function AppCommandPalette({
                   {[...(chats.data ?? [])]
                     .sort((left, right) => right.updatedAt - left.updatedAt)
                     .map((chat) => (
-                      <CommandItem
+                      <PaletteResultItem
                         key={chat.id}
-                        value={`chat:${chat.id}`}
+                        identity={`chat:${chat.id}`}
                         keywords={[chat.title, new Date(chat.updatedAt).toLocaleString()]}
                         onSelect={() => void openChat(chat.id)}
                         className="min-h-11 px-3"
@@ -509,7 +524,7 @@ export function AppCommandPalette({
                         <Clock3 className="size-4 shrink-0 text-secondary" />
                         <span className="min-w-0 flex-1 truncate">{chat.title}</span>
                         <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
-                      </CommandItem>
+                      </PaletteResultItem>
                     ))}
                 </>
               ) : null}
@@ -538,9 +553,9 @@ export function AppCommandPalette({
                         selection.providerId === entry.providerId &&
                         selection.model === entry.model;
                       return (
-                        <CommandItem
+                        <PaletteResultItem
                           key={entry.value}
-                          value={`model:${entry.value}`}
+                          identity={`model:${entry.value}`}
                           keywords={[entry.label, entry.model, entry.providerLabel]}
                           onSelect={() => void selectModel(entry.providerId, entry.model)}
                           disabled={busy}
@@ -556,14 +571,14 @@ export function AppCommandPalette({
                               <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
                             </>
                           ) : null}
-                        </CommandItem>
+                        </PaletteResultItem>
                       );
                     })
                     .concat(
                       unavailableModelProviders.map((provider) => (
-                        <CommandItem
+                        <PaletteResultItem
                           key={`unavailable-${provider.id}`}
-                          value={`unavailable-provider:${provider.id}`}
+                          identity={`unavailable-provider:${provider.id}`}
                           keywords={[provider.label, ...provider.models, "unavailable setup provider"]}
                           onSelect={() => {
                             if (!allowNavigation()) return;
@@ -582,7 +597,7 @@ export function AppCommandPalette({
                             {provider.models.length > 0 ? "Setup needed" : "No models available"}
                           </ItemDetail>
                           <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                        </CommandItem>
+                        </PaletteResultItem>
                       )),
                     )
                 )
@@ -623,9 +638,9 @@ export function AppCommandPalette({
                     </CommandItem>
                   ) : null}
                   {(providers.data ?? []).map((provider) => (
-                    <CommandItem
+                    <PaletteResultItem
                       key={provider.id}
-                      value={`provider:${provider.id}`}
+                      identity={`provider:${provider.id}`}
                       keywords={[provider.label, provider.id, "manage connection models"]}
                       onSelect={() => {
                         if (!allowNavigation()) return;
@@ -643,7 +658,7 @@ export function AppCommandPalette({
                         {provider.hasKey || !provider.needsKey ? "Connected" : "Setup needed"}
                       </ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
                 </>
               ) : null}

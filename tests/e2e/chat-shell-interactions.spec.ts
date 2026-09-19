@@ -591,6 +591,41 @@ test("command palette selects each chat with identical labels independently", as
   await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(rows.nth(0)).toHaveAttribute("aria-selected", "false");
   await expect(search).toHaveAttribute("aria-activedescendant", await rows.nth(1).getAttribute("id") as string);
+
+  // Background title/activity updates must refresh cmdk's search index while
+  // the palette stays open, including when the current query stops matching.
+  const updatedAt = Date.UTC(2035, 0, 1, 12);
+  await app.evaluate(({ BrowserWindow }, updatedAt) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("chats:metadata-updated", {
+        chatId: "palette-chat-second",
+        title: "Zebra orchard renamed",
+        updatedAt,
+      });
+    }
+  }, updatedAt);
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveText(/Repeated palette title/u);
+  await search.fill("Zebra orchard renamed");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveText(/Zebra orchard renamed/u);
+  await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+  await search.fill(await page.evaluate((time) => new Date(time).toLocaleString(), updatedAt));
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveText(/Zebra orchard renamed/u);
+  await search.fill(await page.evaluate(() => new Date(1_800_000_000_000).toLocaleString()));
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveText(/Repeated palette title/u);
+  await search.fill("palette-chat");
+  await expect(rows).toHaveCount(0);
+  await search.fill("Zebra orchard renamed");
+  await expect(rows).toHaveCount(1);
+  await search.fill("");
+  await search.press("ArrowDown");
+  const renamed = palette.getByRole("option", { name: /Zebra orchard renamed/u });
+  await expect(renamed).toHaveAttribute("aria-selected", "true");
+  await expect(search).toHaveAttribute("aria-activedescendant", await renamed.getAttribute("id") as string);
+  await expect(search).toBeFocused();
   await search.press("Enter");
   await expect(palette).toBeHidden();
   await expect(page.getByText("Opened palette-chat-second", { exact: true })).toBeVisible();
