@@ -652,3 +652,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-19 diagnostics lane
 - Fresh main worktree has no `.memory/` directory; used diagnostics plan/inventory as current architecture evidence and will add a scoped implementation note.
 - Node test `mock.method` does not contextually type async filesystem replacements here; annotate wrappers with `Parameters<typeof original>` so the regression tests pass strict TypeScript.
+### 2026-09-19 — workspace file read investigation
+- Fresh worktree has no `.memory/` directory or dependencies. Read the current Quick View plan and source; installed isolated dependencies with `npm ci` and will create a lane-specific memory note.
+- Android has no system Java registration; focused native tests pass using Android Studio bundled JBR via explicit `JAVA_HOME`.
+- `xcrun devicectl list devices` stalled; stopped only that discovery process and used bounded `xcodebuild -showdestinations`. iOS verification uses isolated unsigned build-for-testing to avoid installing over the user app.
+- Repository ignores `.memory/`; explicitly stage the requested unique lane note with `git add -f`.
