@@ -32,8 +32,8 @@ pass, alongside two controls proving current failures still disable the affected
 task or reject startup and allow retry. Existing core tests are already registered
 in both relevant package scripts.
 
-- `npm run test:scheduled`: 116 passed.
-- `npm run test:assistant-automations`: 151 passed.
+- `npm run test:scheduled`: 120 passed.
+- `npm run test:assistant-automations`: 155 passed.
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
 - `git diff --check`: passed.
@@ -42,3 +42,20 @@ No shared server/transcript/native contracts or UI changed. This fixes lifecycle
 behavior of an existing capability and needs no onboarding or plan-status change.
 No Electron build, rendered UI, or mobile suites run for this pure service change.
 Hosted CI and central Luna/Pullfrog review remain outstanding before campaign signoff.
+
+## Central review follow-up
+
+The first PR head (`359614bb1d76bd207ffd2de12b57ff4cb5e5ca98`) left a
+persistence gap: cancellation after entering failure quarantine but before its
+write committed could still disable the task and overwrite newer runtime fields.
+Three deferred-commit regressions reproduced this for stop/restart, global disable,
+and ordinary startup next-run persistence; all failed on that head.
+
+`updateRuntime` now accepts the existing persistence ownership callback. Startup
+passes its revision guard for both job setup and failure quarantine, so DataStore
+rechecks it before publication. No rollback can overwrite newer owners. Quarantine
+logging follows a successful commit. A real DataStore test also invalidates
+ownership after disk staging, verifies unchanged bytes and cache, and checks that
+later runtime updates survive. All four added regressions pass with the updated
+120 scheduled / 155 automation totals and green type-check, lint, and diff checks.
+Central re-review and exact-head hosted CI remain pending.

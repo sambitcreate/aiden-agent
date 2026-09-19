@@ -187,7 +187,10 @@ export function createScheduleServiceCore(
     await Promise.allSettled(selected.map(([, state]) => state.promise));
   }
 
-  async function schedule(task: ScheduledTask): Promise<void> {
+  async function schedule(
+    task: ScheduledTask,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> {
     stopJob(task.id);
     if (
       !started ||
@@ -222,7 +225,7 @@ export function createScheduleServiceCore(
     );
     jobs.set(task.id, job);
     const nextRunAt = job.nextRun()?.getTime();
-    await store.updateRuntime(task.id, { nextRunAt });
+    await store.updateRuntime(task.id, { nextRunAt }, isCurrent);
     if (jobs.get(task.id) !== job || !started || !globallyEnabled) {
       job.stop();
       return;
@@ -265,23 +268,23 @@ export function createScheduleServiceCore(
             try {
               const current = await store.get(task.id);
               if (!isCurrent() || !current?.enabled) return undefined;
-              await schedule(current);
+              await schedule(current, isCurrent);
               return current;
             } catch (error) {
               if (!isCurrent()) return undefined;
               stopJob(task.id);
               const message =
                 error instanceof Error ? error.message : String(error);
-              dependencies.error(
-                `Could not schedule task ${task.id}; it was disabled.`,
-                error,
-              );
               await store.updateRuntime(task.id, {
                 enabled: false,
                 nextRunAt: undefined,
                 lastResult: "error",
                 lastError: `Needs attention: ${message}`,
-              });
+              }, isCurrent);
+              dependencies.error(
+                `Could not schedule task ${task.id}; it was disabled.`,
+                error,
+              );
               return undefined;
             }
           });

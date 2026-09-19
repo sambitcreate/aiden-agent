@@ -446,6 +446,7 @@ export function createScheduleStore(
         "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
       >
     >,
+    isCurrent: () => boolean = () => true,
   ): Promise<ScheduledTask> {
     return tasks.update((draft) => {
       const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
@@ -459,7 +460,7 @@ export function createScheduleStore(
       };
       draft[index] = task;
       return structuredClone(task);
-    });
+    }, isCurrent);
   }
 
   async function saveWithRollback(
