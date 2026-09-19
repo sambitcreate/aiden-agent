@@ -533,3 +533,26 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+# Upgrade 28 catalog refresh
+
+- Fresh worktree omits ignored `.memory` and dependencies; read canonical project notes and auth-lane note, and reused the matching installed dependency tree for focused checks.
+- Scoped-refresh comment still cites Pi 0.80; pinned 0.84.4 supports provider filters, but its native refresh also resolves/rotates OAuth credentials, unlike Aiden's explicitly non-mutating scoped path.
+
+- Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
+- Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.
+
+- PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.
+
+- PR168 Luna re-review found production full Settings/command refresh still delegated to Pi without account ownership checks; expand the real-wrapper regressions to full refresh, trace startup separately, and preserve native OAuth resolution through a public SDK refresh context.
+- Shared auth-lane dependency directory was removed; installed this worktree lockfile with npm ci --ignore-scripts before revalidation.
+- Unified refresh supersession exposed overlay coalescing that joined an already-aborted request; a deferred fetch regression proves it. Retain the active request signal and only join live work.
+
+- Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
+- Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
+
+- Luna79da0580 review identified destructive retirement after known pre-publication failures. Add actual DataStore size/pre-rename/post-rename controls and carry an explicit publication receipt instead of guessing from a generic rejected promise.
+
+- Pullfrog f62 review found initial credential read errors masked as supersession; test actual Radius full/offline phases against missing-credential controls. A separate custom AuthContext report has no current production caller; verify default env/file resolution before choosing scope.
+
+- Independent review confirmed custom-context helper compatibility (not a production outage). Root authorized an explicit shared AuthContext option; parity tests avoid private SDK state and keep registry defaults unchanged.
