@@ -1119,12 +1119,17 @@ final class AidenChatViewModel {
         isLoading = true
         defer { isLoading = false }
         if draftSession == nil {
+            let restorationGeneration = draftGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard coordinator.isCurrent(context) else { return }
             draftSession = session
             if draft.isEmpty, let savedDraft = await draftStore.load(session: session) {
                 guard coordinator.isCurrent(context), draftSession == session else { return }
-                draft = savedDraft
+                // Disk access yields the main actor while the composer remains
+                // editable. Even typing and then clearing must win over restore.
+                if draftGeneration == restorationGeneration, draft.isEmpty {
+                    draft = savedDraft
+                }
             }
         }
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {

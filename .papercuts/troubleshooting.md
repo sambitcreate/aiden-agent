@@ -722,3 +722,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Lane 33 review: callback counts alone cannot prove which filesystem mutation was observed or whether a suppressed watcher was closed. Correlate observed content, stage outside the watched directory, and assert actual native close plus its close event; validate with omitted-close/missed-edit mutants.
 - Lane checkout had been removed between review turns; recreated the existing branch worktree at its original path before continuing.
 - Pullfrog run-slot finding reproduced for stale arrival and deferred lookup. Reclaiming stale preparation also exposes delayed workspace cancellation by task ID; fence cancellation by the exact state object to protect replacement execution.
+# Lane 34 iOS state
+
+- Worktree has no tracked `.memory/`; read the shared checkout's project context and will add a unique lane note.
+- Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.

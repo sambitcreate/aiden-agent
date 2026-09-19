@@ -221,7 +221,9 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     private func makeProgressLifecycleModel(
-        mode: AidenChatProgressLifecycleURLProtocol.Mode
+        mode: AidenChatProgressLifecycleURLProtocol.Mode,
+        cache: AidenChatCache = .shared,
+        draftStore: AidenChatDraftStore = .shared
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
         let keychain = AidenChatProgressMemoryKeychain()
@@ -266,7 +268,58 @@ final class AidenChatTests: XCTestCase {
                 """.utf8
             )
         )
-        return AidenChatViewModel(coordinator: coordinator, chat: chat)
+        return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore)
+    }
+
+    @MainActor
+    func testDraftRestorationPreservesTypingDuringDiskRead() async throws {
+        try await assertDraftRestoration(edit: "New message", expected: "New message")
+    }
+
+    @MainActor
+    func testDraftRestorationPreservesAnIntentionalClearDuringDiskRead() async throws {
+        try await assertDraftRestoration(edit: "", expected: "")
+    }
+
+    @MainActor
+    func testDraftRestorationStillLoadsAnUntouchedComposer() async throws {
+        try await assertDraftRestoration(edit: nil, expected: "Previously saved draft")
+    }
+
+    @MainActor
+    private func assertDraftRestoration(edit: String?, expected: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "draft-load-\(UUID().uuidString)")
+        let fileManager = AidenHeldDraftReadFileManager()
+        let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"), fileManager: fileManager)
+        defer {
+            fileManager.releaseRead()
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let session = await draftStore.beginSession(
+            instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle"
+        )
+        let saved = try await draftStore.save("Previously saved draft", session: session)
+        XCTAssertTrue(saved)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "chats")),
+            draftStore: draftStore
+        )
+        let readStarted = expectation(description: "Draft read is waiting on disk")
+        fileManager.holdNextRead { readStarted.fulfill() }
+        let load = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [readStarted], timeout: 5)
+        if let edit {
+            model.draft = "Typing while restoration is pending"
+            model.draft = edit
+        }
+        fileManager.releaseRead()
+        await load.value
+        XCTAssertFalse(fileManager.didTimeOut, "The held read must be released by the test")
+        XCTAssertEqual(model.draft, expected)
+        // Cancel the debounce before removing this test's temporary directory.
+        model.setAllowsMutations(false)
     }
 
     @MainActor
@@ -2583,6 +2636,36 @@ final class AidenChatTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 1_787_100_001),
             revision: "revision-1"
         )
+    }
+}
+
+private final class AidenHeldDraftReadFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private let release = DispatchSemaphore(value: 0)
+    private var onRead: (@Sendable () -> Void)?
+    private var timedOut = false
+
+    var didTimeOut: Bool { lock.withLock { timedOut } }
+
+    func holdNextRead(_ onRead: @escaping @Sendable () -> Void) {
+        lock.withLock { self.onRead = onRead }
+    }
+
+    func releaseRead() { release.signal() }
+
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        let callback = lock.withLock {
+            let callback = onRead
+            onRead = nil
+            return callback
+        }
+        if let callback {
+            callback()
+            if release.wait(timeout: .now() + 10) == .timedOut {
+                lock.withLock { timedOut = true }
+            }
+        }
+        return try super.attributesOfItem(atPath: path)
     }
 }
 
