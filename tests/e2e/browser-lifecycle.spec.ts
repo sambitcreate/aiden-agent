@@ -225,3 +225,108 @@ test("replacing a workspace directory revokes its old preview before new file by
     await rename(original, aiden.workspaceDir);
   }
 });
+
+type CrashRecoveryHarness = {
+  crash(): number;
+  unrelatedNavigation(): void;
+  fire(index: number): number;
+  reloads(): number;
+  restore(): void;
+};
+type CrashRecoveryGlobal = typeof globalThis & { __browserCrashRecovery: CrashRecoveryHarness };
+
+async function installCrashRecoveryHarness(aiden: { app: import("@playwright/test").ElectronApplication }, url: string) {
+  await aiden.app.evaluate(({ webContents }, target) => {
+    const guest = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(target));
+    if (!guest) throw new Error("Browser guest missing");
+    const originalReload = guest.reload.bind(guest);
+    const callbacks: Array<() => void> = [];
+    const handles: ReturnType<typeof setTimeout>[] = [];
+    let reloads = 0;
+    guest.reload = () => { reloads += 1; originalReload(); };
+    const harness: CrashRecoveryHarness = {
+      crash() {
+        // Hold only timers registered synchronously by the real crash handler.
+        // Firing even a cleared callback verifies the ownership fence as well.
+        const schedule = globalThis.setTimeout;
+        globalThis.setTimeout = ((callback: () => void, delay: number) => {
+          if (![300, 1000, 2000].includes(delay)) throw new Error(`Unexpected crash timer: ${delay}`);
+          callbacks.push(callback);
+          const handle = schedule(() => {}, 60_000);
+          handles.push(handle);
+          return handle;
+        }) as typeof setTimeout;
+        try { guest.emit("render-process-gone", {}, { reason: "crashed", exitCode: 1 }); }
+        finally { globalThis.setTimeout = schedule; }
+        return callbacks.length;
+      },
+      unrelatedNavigation() {
+        guest.emit("did-start-navigation", {}, guest.getURL(), true, true);
+        guest.emit("did-start-navigation", {}, guest.getURL(), false, false);
+      },
+      fire(index) { callbacks[index](); return reloads; },
+      reloads: () => reloads,
+      restore() {
+        for (const handle of handles) clearTimeout(handle);
+        if (!guest.isDestroyed()) guest.reload = originalReload;
+      },
+    };
+    (globalThis as CrashRecoveryGlobal).__browserCrashRecovery = harness;
+  }, url);
+}
+
+async function restoreCrashRecoveryHarness(aiden: { app: import("@playwright/test").ElectronApplication }) {
+  await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery?.restore());
+}
+
+test("superseded browser crash recovery cannot reload a new page or override user control", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  await writeFile(path.join(aiden.workspaceDir, "recovery.html"), "<!doctype html><title>Recovery fixture</title>");
+  for (const action of ["navigate", "reload", "stop", "close"] as const) {
+    const opened = await command(aiden.page, { action: "open_file", path: "recovery.html" });
+    const tab = opened.state.tabs.find((candidate) => candidate.id === opened.tabId)!;
+    await installCrashRecoveryHarness(aiden, tab.url);
+    try {
+      expect(await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.crash())).toBe(1);
+      const result = await command(aiden.page, action === "navigate"
+        ? { action, tabId: tab.id, url: "about:blank" }
+        : { action, tabId: tab.id });
+      if (action === "stop") {
+        expect(result.state.tabs.find((candidate) => candidate.id === tab.id)).toMatchObject({
+          crashed: true, error: "The page crashed. Reload to recover.",
+        });
+      }
+      const before = await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.reloads());
+      expect(await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.fire(0)), action).toBe(before);
+    } finally {
+      await restoreCrashRecoveryHarness(aiden);
+      if (action !== "close") await command(aiden.page, { action: "close", tabId: tab.id });
+    }
+  }
+});
+
+test("browser crash recovery has one current retry and respects the crash limit", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  await writeFile(path.join(aiden.workspaceDir, "recovery.html"), "<!doctype html><title>Recovery fixture</title>");
+  const opened = await command(aiden.page, { action: "open_file", path: "recovery.html" });
+  const tab = opened.state.tabs.find((candidate) => candidate.id === opened.tabId)!;
+  await installCrashRecoveryHarness(aiden, tab.url);
+  try {
+    const result = await aiden.app.evaluate(() => {
+      const harness = (globalThis as CrashRecoveryGlobal).__browserCrashRecovery;
+      harness.crash();
+      harness.crash();
+      const stale = harness.fire(0);
+      harness.unrelatedNavigation();
+      const current = harness.fire(1);
+      const duplicate = harness.fire(1);
+      harness.crash();
+      const timersAtLimit = harness.crash();
+      const exhausted = harness.fire(2);
+      return { stale, current, duplicate, timersAtLimit, exhausted };
+    });
+    expect(result).toEqual({ stale: 0, current: 1, duplicate: 1, timersAtLimit: 3, exhausted: 1 });
+  } finally {
+    await restoreCrashRecoveryHarness(aiden);
+  }
+});

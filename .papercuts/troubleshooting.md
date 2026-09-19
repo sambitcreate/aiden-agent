@@ -533,3 +533,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-19 — lane 18 browser lifecycle
+- Fresh worktree lacks the gitignored `.memory/` directory; read relevant project history from the primary checkout before creating a lane-specific note.
+- Crash recovery regression needs controlled Electron event/timer delivery: wall-clock sleeps cannot reliably put navigation inside the 300 ms retry window. Tests hold handler-created timers, then deliver stale callbacks deterministically against real guests.
+- Full browser Electron run reached an annotation click timeout: Aiden Live's floating app-icon launcher intercepts `Add to chat` at browser.spec.ts:89. New crash regressions pass; checking the unchanged baseline separately before classifying the broader failure.
+- Confirmed identical annotation interception on unchanged baseline `5cc831a`; screenshot visibly shows the Live launcher over Add to chat. Reported to campaign root and attachment owner; retain this as an explicit suite limitation.
