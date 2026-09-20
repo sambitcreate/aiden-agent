@@ -5598,8 +5598,8 @@ export class GitService {
     }
     return this.enqueueMutation(repo.commonDir, async () => {
       signal?.throwIfAborted();
-      const resolvedTarget = path.resolve(worktreePath);
-      const checkoutIdentity = await fs.lstat(resolvedTarget).catch(() => undefined);
+      const candidate = path.resolve(worktreePath);
+      const checkoutIdentity = await fs.lstat(candidate).catch(() => undefined);
       if (
         checkoutIdentity === undefined ||
         !checkoutIdentity.isDirectory() ||
@@ -5610,6 +5610,9 @@ export class GitService {
           "A partially restored managed worktree could not be verified.",
         );
       }
+      // Git records canonical paths in the gitdir backlink and `worktree list`;
+      // resolve so symlinked ancestors (e.g. /var on macOS) compare equal.
+      const resolvedTarget = await fs.realpath(candidate);
       const gitFileContents = (
         await fs.readFile(path.join(resolvedTarget, ".git"), "utf8")
       ).trim();

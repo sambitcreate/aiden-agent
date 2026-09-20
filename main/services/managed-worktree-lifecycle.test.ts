@@ -653,8 +653,9 @@ test("restore converges after a crash between checkout creation and journal upda
   );
 
   const first = await restoreManagedWorktreeSnapshot(deps, snapshotId);
+  const canonicalPlanned = await fs.realpath(plannedPath);
   assert.equal(first.workspaceId, "workspace-restored");
-  assert.equal(first.worktree.path, plannedPath);
+  assert.equal(first.worktree.path, canonicalPlanned);
   const status = await git(plannedPath, ["status", "--porcelain=v2", "-z"]);
   assert.match(status, /1 \.M [^\0\n]* README\.md/u);
 
@@ -662,7 +663,7 @@ test("restore converges after a crash between checkout creation and journal upda
   // attaching the recorded branch to a fresh random path.
   const again = await restoreManagedWorktreeSnapshot(deps, snapshotId);
   assert.equal(again.workspaceId, "workspace-restored");
-  assert.equal(again.worktree.path, plannedPath);
+  assert.equal(again.worktree.path, canonicalPlanned);
   const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
   assert.equal(worktrees.match(/^worktree /gm)?.length, 2);
 });
