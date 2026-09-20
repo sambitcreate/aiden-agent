@@ -173,12 +173,31 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chat = draft
     ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
     : persistedChat;
-  React.useEffect(() => retainChatDraft(chatId), [chatId]);
+  React.useEffect(() => retainChatDraft(chatId), [chatId, draft]);
   const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
-  const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
+  const {
+    activeId,
+    isLoading: workspacesLoading,
+    workspaces,
+    select: selectWorkspace,
+  } = useActiveWorkspace();
+  // A persisted chat that resolves to null — a discarded draft URL revisited
+  // or a chat deleted under a deep link — reopens as a fresh draft with the
+  // same id instead of dead-ending the composer.
+  const chatMissing =
+    !draft && !persistedChat.isLoading && !persistedChat.isError && persistedChat.data === null;
+  const chatResurrecting = chatMissing && (activeId !== undefined || workspacesLoading);
+  React.useLayoutEffect(() => {
+    if (!chatMissing || !activeId) return;
+    try {
+      createChatDraft(activeId, chatId);
+    } catch {
+      // Another surface already owns this id; leave its draft alone.
+    }
+  }, [chatMissing, activeId, chatId]);
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -270,17 +289,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Checking Computer Use readiness…"
         : computerUseStatusDetail
       : undefined;
-  const chatReadinessMessage = chat.isLoading
-    ? "Loading chat…"
-    : chat.isError
-      ? "This chat could not be loaded. Try again."
-      : !chat.data
-        ? "This chat is no longer available. Start a new agent."
-      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
-        ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining
-          ? "Response continues in the background…"
-          : undefined;
+  const chatReadinessMessage =
+    chat.isLoading || chatResurrecting
+      ? "Loading chat…"
+      : chat.isError
+        ? "This chat could not be loaded. Try again."
+        : !chat.data
+          ? "This chat is no longer available."
+          : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
+            ? "Message save status is unknown. Reload Aiden before sending another message."
+            : undefined;
   const botReadinessMessage = chat.data?.botId
     ? bot.isLoading
       ? "Loading bot…"
@@ -1220,8 +1238,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (computerUseSaving) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
-      if (detachedGenerationDraining) {
-        throw new Error("Wait for the previous response to finish saving before sending again.");
+      if (detachedGenerationDraining && !getChatDraft(chatId)) {
+        // A route-detached generation is still settling in main; parking the
+        // message in this chat's queue delivers it once the drain clears.
+        // Drafts skip the parking path: their queue stays disabled until the
+        // first message commits, so a parked send would never drain.
+        chatMessageQueue(chatId).add({
+          id: createChatTurnId(),
+          text,
+          attachments,
+          skillInvocation,
+          options: options?.visualize ? { visualize: true } : undefined,
+        });
+        return;
       }
       const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
       const generationIntent = ++generationIntentRef.current;

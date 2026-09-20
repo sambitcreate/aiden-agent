@@ -582,7 +582,9 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.doesNotMatch(pane, /Response continues in the background/u);
+  // Detached drain must not gate composer readiness behind a message string.
+  assert.doesNotMatch(pane, /detachedGenerationDraining\s*\?\s*"/u);
   assert.match(
     pane,
     /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
@@ -591,7 +593,11 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(
     pane,
-    /if \(detachedGenerationDraining\) \{\s+throw new Error\("Wait for the previous response to finish saving before sending again\."\)/u,
+    /if \(detachedGenerationDraining && !getChatDraft\(chatId\)\) \{\s+(?:\/\/[^\n]*\n\s+)*chatMessageQueue\(chatId\)\.add\(\{\s+id: createChatTurnId\(\),\s+text,\s+attachments,\s+skillInvocation,/u,
+  );
+  assert.doesNotMatch(
+    pane,
+    /throw new Error\("Wait for the previous response to finish saving before sending again\."\)/u,
   );
 });
 

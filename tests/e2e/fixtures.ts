@@ -70,6 +70,9 @@ const ELECTRON_TEST_BOOTSTRAP = path.join(
   "electron-test-bootstrap.cjs",
 );
 const APP_ENV_PASSTHROUGH = [
+  // Hosts that drive the Electron window need the display variables forwarded.
+  "DISPLAY",
+  "XAUTHORITY",
   "LANG",
   "LC_ALL",
   "LC_CTYPE",
@@ -96,7 +99,15 @@ const PI_AMBIENT_AUTH_ENV_NAMES = new Set([
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
 ]);
-const OS_INJECTED_ENV_NAMES = new Set(["__CF_USER_TEXT_ENCODING"]);
+const OS_INJECTED_ENV_NAMES = new Set([
+  "__CF_USER_TEXT_ENCODING",
+  // Keys Electron injects into its own process on Linux.
+  "CHROME_DESKTOP",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "FC_FONTATIONS",
+  "GDK_BACKEND",
+  "NO_AT_BRIDGE",
+]);
 const CREDENTIAL_ENV_NAME =
   /(?:^|_)(?:API_KEY|ACCESS_KEY(?:_ID)?|TOKEN|CREDENTIALS?|SECRET(?:_ACCESS)?_KEY|PASSWORD)$/u;
 
@@ -145,6 +156,9 @@ export type AidenE2e = {
 type AidenE2eOptions = {
   portableConfigSeed: PortableConfigSeed;
   workspaceSeed: boolean;
+  // Skip onboarding by seeding a completed onboarding state + provider model
+  // cache before launch — needed on hosts without a usable system keychain.
+  onboardingDone: boolean;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -700,7 +714,12 @@ function formatFailure(error: unknown): string {
 export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
-  aiden: async ({ browserName: _browserName, portableConfigSeed, workspaceSeed }, use, testInfo) => {
+  onboardingDone: [false, { option: true }],
+  aiden: async (
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, onboardingDone },
+    use,
+    testInfo,
+  ) => {
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
     let app: ElectronApplication | undefined;
@@ -726,6 +745,22 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         mkdir(testWorkspaceDir, { recursive: true, mode: 0o700 }),
       ]);
       if (workspaceSeed) await seedWorkspace(testUserDataDir, testWorkspaceDir);
+      if (onboardingDone) {
+        await writePrivateJson(path.join(testUserDataDir, "settings.json"), {
+          settings: {
+            profileName: E2E_PROFILE_NAME,
+            onboarding: {
+              version: 2,
+              outcome: "completed",
+              lastSatisfiedStep: "tour",
+              selectedProviderId: LM_STUDIO_PROVIDER_ID,
+            },
+          },
+        });
+        await writePrivateJson(path.join(testUserDataDir, "provider-model-cache.json"), {
+          byProvider: { [LM_STUDIO_PROVIDER_ID]: { models: [E2E_MODEL_ID] } },
+        });
+      }
 
       mock = LIVE_LM_STUDIO_ACCEPTANCE ? undefined : await startMockLmStudio();
       const lmStudio: LmStudioEndpoint = mock ?? {
@@ -769,6 +804,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           // Keep interaction timing deterministic without changing production.
           "--disable-backgrounding-occluded-windows",
           "--disable-gpu",
+          // Hosts without a system keychain still let safeStorage resolve.
+          "--password-store=basic",
           "--disable-renderer-backgrounding",
           "--force-renderer-accessibility",
           "--force-prefers-reduced-motion=reduce",

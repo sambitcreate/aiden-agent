@@ -24,7 +24,7 @@ export function getChatDraft(id: string): ChatDraft | undefined {
 
 export function createChatDraft(
   workspaceId: string,
-  id = crypto.randomUUID(),
+  id: string = crypto.randomUUID(),
   initialText?: string,
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");

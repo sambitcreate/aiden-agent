@@ -10,6 +10,7 @@ Ordinary desktop workspace chats stay transient until the first user message is 
 - Freeze first-send input and settings while saving. Commit a complete nonempty chat through an additive desktop IPC, preserving existing workspace authority, attachment quotas, skill leases, turn admission and durability recovery.
 - Store a private first-message receipt. Matching retries confirm the same message; mismatched identifier reuse fails. Reconciliation prevents a lost or uncertain receipt from duplicating a chat.
 - Promote the draft in place using the same chat/component identity. Publish one sidebar entry and start generation once. Navigation wins over late completion; release a pending turn if its conversation is no longer open.
+- Reopening a chat URL that resolves to nothing — a discarded draft route or a deleted conversation — resurrects a fresh draft under the same id in the active workspace instead of blocking the composer.
 - Preserve existing Bot, Assistant, scheduled, Telegram and runtime child-agent lifecycles. Remote HTTP contracts remain unchanged; inspect native consumers and validate applicable shared contracts.
 
 ## Authorized legacy migration
