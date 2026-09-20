@@ -3345,8 +3345,11 @@ private struct AidenActivityFeed: View {
     private var allowsDisclosure: Bool {
         !compactOnly || timeline.issueCount > 0 || !(progressText ?? "").isEmpty
     }
+    private var showsCollapsedTicker: Bool {
+        isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed
+    }
     private var headline: String {
-        if compactOnly, let last = visibleSteps.last {
+        if compactOnly, !allowsDisclosure, let last = visibleSteps.last {
             return AidenAgentActivityPresentation.line(for: last)
         }
         return AidenAgentActivityPresentation.summary(timeline)
@@ -3357,8 +3360,10 @@ private struct AidenActivityFeed: View {
             header
             if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(visibleSteps) { step in
-                        AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    if !compactOnly || timeline.issueCount > 0 {
+                        ForEach(visibleSteps) { step in
+                            AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                        }
                     }
                     if let progressText, !progressText.isEmpty {
                         Divider()
@@ -3387,11 +3392,28 @@ private struct AidenActivityFeed: View {
 
     @ViewBuilder
     private var header: some View {
-        let alignment: VerticalAlignment =
-            isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed ? .bottom : .center
-        let row = HStack(alignment: alignment, spacing: 8) {
+        if allowsDisclosure {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                headerRow.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(headline)
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+        } else {
+            headerRow
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(headline)
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: showsCollapsedTicker ? .bottom : .center, spacing: 8) {
             Group {
-                if isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed {
+                if showsCollapsedTicker {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(rows) { step in
                             AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
@@ -3424,23 +3446,6 @@ private struct AidenActivityFeed: View {
                     .foregroundStyle(palette.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
-        }
-
-        if allowsDisclosure {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                row.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(headline)
-            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
-        } else {
-            row
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(headline)
         }
     }
 }

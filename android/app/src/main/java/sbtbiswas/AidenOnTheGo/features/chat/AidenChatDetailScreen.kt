@@ -1060,7 +1060,7 @@ private fun AidenTimelineCollapsibleCard(
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
     val allowsDisclosure = !compactOnly || timeline.issueCount > 0
-    val headline = if (compactOnly) {
+    val headline = if (compactOnly && !allowsDisclosure) {
         timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
             ?: AidenAgentActivityPresentation.summary(timeline)
     } else {

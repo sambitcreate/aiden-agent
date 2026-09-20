@@ -220,6 +220,17 @@ test("compaction among other work still expands into the trail", () => {
   assert.match(markup, /Compacted context<\/span><span[^>]*> LLM · 1\.0s · ~100 → 40 tokens/u);
 });
 
+test("a failed compact-only trail stays expandable without repeating the summary line", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [step(0, "compact_context", "failed")])}
+    />,
+  );
+  assert.match(markup, /<details/u);
+  assert.match(markup, /Compacted context/u);
+  assert.equal((markup.match(/compact_context failed/gu) ?? []).length, 1);
+});
+
 test("an empty timeline renders nothing at all", () => {
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={timeline("running", [])} />), "");
   assert.equal(renderToStaticMarkup(<ActivityFeed timeline={null} />), "");

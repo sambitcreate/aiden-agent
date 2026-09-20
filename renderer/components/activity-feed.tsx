@@ -163,7 +163,11 @@ export function ActivityFeed({
             running ? "agent-thinking-shimmer" : ""
           }`}
         >
-          {compactOnly && newest ? <StepLine step={newest} /> : summarizeActivity(visible)}
+          {compactOnly && newest && !disclosure ? (
+            <StepLine step={newest} />
+          ) : (
+            summarizeActivity(visible)
+          )}
         </Text>
       )}
       {issues ? (
