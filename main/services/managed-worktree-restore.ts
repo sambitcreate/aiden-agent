@@ -231,6 +231,9 @@ export async function restoreManagedWorktreeSnapshot(
     journal = {
       ...journal,
       phase: "checkout_created",
+      // Record the checkout's registered (canonical) path so later phases and
+      // retries compare against what git actually registered.
+      worktreePath: worktree.path,
       worktreeGitDir: worktree.worktreeGitDir,
       ownershipToken: worktree.ownershipToken,
       worktreeDevice: worktree.worktreeDevice,
