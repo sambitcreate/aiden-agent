@@ -573,7 +573,9 @@ test("restore converges after a crash between checkout creation and journal upda
   const manifest: ManagedWorktreeSnapshot = {
     id: snapshotId,
     workspaceId: "workspace-source",
-    repositoryPath: created.repositoryPath,
+    // The service stores git's resolved top-level; on macOS tmpdir paths run
+    // through /var → /private/var so the raw path would fail identity checks.
+    repositoryPath: await git(repository, ["rev-parse", "--show-toplevel"]),
     worktreePath: created.path,
     workspaceSubpath: "",
     branch: created.branch,
@@ -608,12 +610,13 @@ test("restore converges after a crash between checkout creation and journal upda
     },
   );
 
+  const repositoryTopLevel = await git(repository, ["rev-parse", "--show-toplevel"]);
   const deps: ManagedWorktreeRestoreDependencies = {
     ensureWorktreeRoot: async () => worktreeRoot,
     snapshotRoot: async () => snapshotRoot,
     repositoryPaths: async () => ({
-      topLevel: repository,
-      commonDir: path.join(repository, ".git"),
+      topLevel: repositoryTopLevel,
+      commonDir: path.join(repositoryTopLevel, ".git"),
     }),
     snapshotCommit: (repo, id) => service.managedWorktreeSnapshotCommit(repo, id),
     restoreCheckout: (repo, r, wt, b, base, sub, signal) =>
