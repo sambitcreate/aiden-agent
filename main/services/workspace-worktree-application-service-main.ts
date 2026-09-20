@@ -3,14 +3,24 @@ import { ipcMain, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import { ensureUserDataDir } from "./data-store.js";
 import {
+  gitApplyManagedWorktreeSnapshot,
+  gitCaptureManagedWorktreeSnapshot,
   gitCreateWorktree,
   gitDeleteManagedWorktree,
   gitFinalizeManagedWorktreeDeletion,
+  gitListFiles,
+  gitManagedWorktreeCheckoutBytes,
   gitManagedWorktreeDeletionPending,
+  gitManagedWorktreeDirtyState,
   gitManagedWorktreeRegistered,
+  gitManagedWorktreeSnapshotCommit,
   gitManagedWorktreeUsable,
+  gitRepositoryPaths,
+  gitRestoreManagedWorktreeCheckout,
   gitRollbackWorktree,
 } from "./git.js";
+import { checkCreateCapacity, checkSnapshotCapacity } from "./managed-worktree-capacity.js";
+import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
 import { llmClient } from "./llm-client.js";
 import { scheduleService } from "./schedule-service.js";
 import { terminalService } from "./terminal.js";
@@ -23,9 +33,10 @@ import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-
 export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplicationService({
   environment: workspaceEnvironmentApplicationService,
   ensureWorktreeRoot: () => ensureUserDataDir("worktrees"),
+  ensureSnapshotRoot: () => ensureUserDataDir("worktree-snapshots"),
   createWorktree: gitCreateWorktree,
   rollbackWorktree: gitRollbackWorktree,
-  deleteManagedWorktree: (managed, signal) => gitDeleteManagedWorktree(
+  deleteManagedWorktree: (managed, signal, lifecycle) => gitDeleteManagedWorktree(
     managed.repositoryPath,
     managed.worktreePath,
     managed.branch,
@@ -35,6 +46,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     managed.ownershipToken,
     managed.worktreeDevice,
     managed.worktreeInode,
+    lifecycle,
   ),
   managedWorktreeDeletionPending: (managed) => gitManagedWorktreeDeletionPending(
     managed.worktreePath,
@@ -62,6 +74,22 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     managed.worktreeGitDir!,
     managed.ownershipToken!,
   ),
+  checkoutBytes: gitManagedWorktreeCheckoutBytes,
+  checkCreateCapacity: async (root, estimatedBytes) => {
+    await checkCreateCapacity(root, estimatedBytes);
+  },
+  checkSnapshotCapacity: async (root, estimatedBytes) => {
+    await checkSnapshotCapacity(root, estimatedBytes);
+  },
+  provisionIncludedFiles: (options) =>
+    provisionWorktreeIncludedFiles({ listFiles: gitListFiles }, options),
+  repositoryPaths: gitRepositoryPaths,
+  dirtyState: gitManagedWorktreeDirtyState,
+  captureWorktreeSnapshot: gitCaptureManagedWorktreeSnapshot,
+  snapshotRefCommit: gitManagedWorktreeSnapshotCommit,
+  restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
+  applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
+    gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {
     try {
       await fs.stat(worktreePath);

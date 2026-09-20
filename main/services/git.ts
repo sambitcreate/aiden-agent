@@ -26,6 +26,7 @@ const DEFAULT_CACHE_TTL_MS = 1_000;
 const DEFAULT_CACHE_ENTRIES = 64;
 const SNAPSHOT_CACHE_ENTRIES = 4_096;
 const KILL_GRACE_MS = 750;
+const MANAGED_STATUS_PATH_LIMIT = 4_096;
 const WORKTREE_OWNER_MARKER = "aiden-owner";
 const WORKTREE_OWNER_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -94,6 +95,10 @@ interface GitRunOptions {
   frozenRemoteAlias?: string;
   frozenRemote?: GitPushTransport;
   prePushProxy?: GitPrePushProxy;
+  /** Per-command config entries applied via GIT_CONFIG_* for this invocation only. */
+  extraConfig?: ReadonlyArray<readonly [string, string]>;
+  /** Point core.hooksPath at the null device so no repository hook can run. */
+  hooksDisabled?: boolean;
   mutation?: boolean;
   nonInteractiveCommit?: boolean;
   signal?: AbortSignal;
@@ -147,6 +152,8 @@ interface ParsedStatus {
   unborn: boolean;
   uncommitted: number;
   ignored: number;
+  /** Ignored worktree-relative paths, capped at MANAGED_STATUS_PATH_LIMIT records. */
+  ignoredPaths: string[];
   upstream?: string;
   ahead: number;
   behind: number;
@@ -190,7 +197,7 @@ interface GitWorktreeAdminIdentity {
 }
 
 interface GitWorktreeRemovalJournal {
-  version: 3;
+  version: 3 | 4;
   phase:
     | "prepared"
     | "quarantined"
@@ -216,6 +223,135 @@ interface GitWorktreeRemovalJournal {
   gitDirQuarantine: string;
   ownershipToken: string;
   repositoryPath: string;
+  /** Version 4: "force" still verifies identity but skips recoverability guards. */
+  deletionMode?: "safe" | "force";
+  /** Version 4: durable snapshot persisted before quarantine begins. */
+  snapshotId?: string | null;
+  snapshotRef?: string | null;
+  snapshotTree?: string | null;
+  /** Version 4: worktree-relative ignored paths Aiden itself provisioned. */
+  provisionedIgnored?: string[];
+}
+
+/** Worktree state visible to the service layer when deciding deletion policy. */
+export interface ManagedWorktreeDirtyState {
+  head: string;
+  uncommitted: number;
+  ignored: number;
+  ignoredPaths: string[];
+}
+
+/** A durable Git-side snapshot of a managed worktree. */
+export interface ManagedWorktreeSnapshotCapture {
+  ref: string;
+  commit: string;
+  tree: string;
+  head: string;
+}
+
+/** Caller-supplied lifecycle context for a managed-worktree deletion. */
+export interface ManagedWorktreeDeletionLifecycle {
+  /** Skip recoverability guards only; ownership and identity checks still apply. */
+  force?: boolean;
+  snapshot?: {
+    id: string;
+    ref: string;
+    commit: string;
+    tree: string;
+  };
+  /** Ignored worktree-relative paths Aiden provisioned and may remove. */
+  provisionedIgnored?: readonly string[];
+}
+
+interface ManagedWorktreeDeletionPolicy {
+  mode: "safe" | "force";
+  snapshotId: string | null;
+  snapshotRef: string | null;
+  snapshotTree: string | null;
+  allowedIgnored: ReadonlySet<string>;
+}
+
+const MANAGED_WORKTREE_SNAPSHOT_REF_PREFIX = "refs/aiden/snapshots/";
+const MANAGED_WORKTREE_SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const GIT_OBJECT_ID = /^[0-9a-f]{40}$/u;
+
+function managedWorktreeSnapshotRef(snapshotId: string): string {
+  if (!MANAGED_WORKTREE_SNAPSHOT_ID.test(snapshotId)) {
+    throw new GitServiceError("invalid_input", "The managed worktree snapshot id is invalid.");
+  }
+  return `${MANAGED_WORKTREE_SNAPSHOT_REF_PREFIX}${snapshotId}`;
+}
+
+function normalizedRelativeWorktreePath(candidate: string): string | undefined {
+  if (
+    candidate.length === 0 ||
+    candidate.length > 512 ||
+    candidate.includes("\\") ||
+    candidate.includes("\u0000") ||
+    candidate.startsWith("/") ||
+    path.isAbsolute(candidate)
+  ) {
+    return undefined;
+  }
+  const normalized = path.posix.normalize(candidate);
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized !== candidate.replace(/\/+$/u, "")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizedDeletionPolicy(
+  lifecycle: ManagedWorktreeDeletionLifecycle | undefined,
+): ManagedWorktreeDeletionPolicy {
+  const snapshot = lifecycle?.snapshot;
+  if (snapshot !== undefined) {
+    if (
+      !MANAGED_WORKTREE_SNAPSHOT_ID.test(snapshot.id) ||
+      snapshot.ref !== managedWorktreeSnapshotRef(snapshot.id) ||
+      !GIT_OBJECT_ID.test(snapshot.commit) ||
+      !GIT_OBJECT_ID.test(snapshot.tree)
+    ) {
+      throw new GitServiceError(
+        "invalid_input",
+        "The managed worktree snapshot reference is invalid.",
+      );
+    }
+  }
+  const allowedIgnored = new Set<string>();
+  for (const entry of lifecycle?.provisionedIgnored ?? []) {
+    const normalized = normalizedRelativeWorktreePath(entry);
+    if (normalized === undefined) {
+      throw new GitServiceError(
+        "invalid_input",
+        "A provisioned ignored path could not be verified.",
+      );
+    }
+    allowedIgnored.add(normalized);
+  }
+  return {
+    mode: lifecycle?.force === true ? "force" : "safe",
+    snapshotId: snapshot?.id ?? null,
+    snapshotRef: snapshot?.ref ?? null,
+    snapshotTree: snapshot?.tree ?? null,
+    allowedIgnored,
+  };
+}
+
+function deletionPolicyFromJournal(
+  journal: GitWorktreeRemovalJournal,
+): ManagedWorktreeDeletionPolicy {
+  return {
+    mode: journal.deletionMode === "force" ? "force" : "safe",
+    snapshotId: journal.snapshotId ?? null,
+    snapshotRef: journal.snapshotRef ?? null,
+    snapshotTree: journal.snapshotTree ?? null,
+    allowedIgnored: new Set(journal.provisionedIgnored ?? []),
+  };
 }
 
 export interface GitCreatedWorktree extends GitWorktree {
@@ -437,7 +573,29 @@ function gitCommandConfigEnvironment(options: GitRunOptions): NodeJS.ProcessEnv 
     }
   }
   if (options.prePushProxy) entries.push(["core.hooksPath", options.prePushProxy.hooksPath]);
+  if (options.hooksDisabled === true) {
+    if (options.prePushProxy) {
+      throw new GitServiceError(
+        "invalid_input",
+        "A Git command cannot combine proxied and disabled hooks.",
+      );
+    }
+    entries.push(["core.hooksPath", os.devNull]);
+  }
+  for (const entry of options.extraConfig ?? []) {
+    if (
+      !/^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+$/u.test(entry[0]) ||
+      entry[1].includes("\u0000") ||
+      entry[1].includes("\n")
+    ) {
+      throw new GitServiceError("invalid_input", "A per-command Git config entry is invalid.");
+    }
+    entries.push([entry[0], entry[1]]);
+  }
   if (entries.length === 0) return {};
+  if (entries.length > 32) {
+    throw new GitServiceError("invalid_input", "Too many per-command Git config entries.");
+  }
   const env: NodeJS.ProcessEnv = { GIT_CONFIG_COUNT: String(entries.length) };
   entries.forEach(([key, value], index) => {
     env[`GIT_CONFIG_KEY_${index}`] = key;
@@ -457,6 +615,7 @@ export function parseGitStatus(raw: string): ParsedStatus {
   let behind = 0;
   let uncommitted = 0;
   let ignored = 0;
+  const ignoredPaths: string[] = [];
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
@@ -491,6 +650,7 @@ export function parseGitStatus(raw: string): ParsedStatus {
     }
     if (record.startsWith("! ")) {
       ignored += 1;
+      if (ignoredPaths.length < MANAGED_STATUS_PATH_LIMIT) ignoredPaths.push(record.slice(2));
       continue;
     }
     if (record.startsWith("2 ")) {
@@ -500,7 +660,17 @@ export function parseGitStatus(raw: string): ParsedStatus {
     }
   }
 
-  return { branch, detached, unborn, uncommitted, ignored, upstream, ahead, behind };
+  return {
+    branch,
+    detached,
+    unborn,
+    uncommitted,
+    ignored,
+    ignoredPaths,
+    upstream,
+    ahead,
+    behind,
+  };
 }
 
 function parseRefList(raw: string): string[] {
@@ -3507,7 +3677,7 @@ export class GitService {
     }
     const journal = value as Partial<GitWorktreeRemovalJournal>;
     const keys = Object.keys(journal).sort();
-    const expectedKeys = [
+    const baseKeys = [
       "adminDevice",
       "adminGitdirContents",
       "adminInode",
@@ -3528,9 +3698,15 @@ export class GitService {
       "repositoryPath",
       "version",
     ].sort();
+    const lifecycleKeys = [...baseKeys, "deletionMode", "provisionedIgnored", "snapshotId", "snapshotRef", "snapshotTree"].sort();
+    const keyShape =
+      JSON.stringify(keys) === JSON.stringify(baseKeys) && journal.version === 3
+        ? 3
+        : JSON.stringify(keys) === JSON.stringify(lifecycleKeys) && journal.version === 4
+          ? 4
+          : 0;
     if (
-      JSON.stringify(keys) !== JSON.stringify(expectedKeys) ||
-      journal.version !== 3 ||
+      keyShape === 0 ||
       (journal.phase !== "prepared" &&
         journal.phase !== "quarantined" &&
         journal.phase !== "checkout_cleanup_started" &&
@@ -3575,6 +3751,33 @@ export class GitService {
         "command_failed",
         "The managed worktree deletion journal could not be verified.",
       );
+    }
+    if (keyShape === 4) {
+      const snapshotConsistent =
+        (journal.snapshotId === null) === (journal.snapshotRef === null) &&
+        (journal.snapshotId === null) === (journal.snapshotTree === null);
+      if (
+        !snapshotConsistent ||
+        (journal.deletionMode !== "safe" && journal.deletionMode !== "force") ||
+        !Array.isArray(journal.provisionedIgnored) ||
+        journal.provisionedIgnored.length > MANAGED_STATUS_PATH_LIMIT ||
+        journal.provisionedIgnored.some(
+          (entry) =>
+            typeof entry !== "string" || normalizedRelativeWorktreePath(entry) !== entry,
+        ) ||
+        (journal.snapshotId !== null &&
+          (typeof journal.snapshotId !== "string" ||
+            !MANAGED_WORKTREE_SNAPSHOT_ID.test(journal.snapshotId) ||
+            typeof journal.snapshotRef !== "string" ||
+            journal.snapshotRef !== managedWorktreeSnapshotRef(journal.snapshotId) ||
+            typeof journal.snapshotTree !== "string" ||
+            !GIT_OBJECT_ID.test(journal.snapshotTree)))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree deletion journal could not be verified.",
+        );
+      }
     }
     this.validatedWorktreeOwnershipToken(journal.ownershipToken);
     return journal as GitWorktreeRemovalJournal;
@@ -3820,6 +4023,83 @@ export class GitService {
   }
 
   /**
+   * Classify a quarantine-boundary status read against the deletion policy.
+   * "strict" keeps legacy behavior: any dirt blocks. A snapshot policy admits
+   * snapshotted dirt but still blocks ignored files Aiden never provisioned;
+   * force skips recoverability guards entirely.
+   */
+  private managedWorktreeDeletionBlocked(
+    policy: ManagedWorktreeDeletionPolicy,
+    status: ParsedStatus,
+  ): "strict_dirty" | "unknown_ignored" | "unsnapshotted_dirty" | undefined {
+    if (policy.mode === "force") return undefined;
+    const unknownIgnored =
+      status.ignored > status.ignoredPaths.length ||
+      status.ignoredPaths.some((entry) => !policy.allowedIgnored.has(entry));
+    if (policy.snapshotTree === null && policy.allowedIgnored.size === 0) {
+      return status.uncommitted > 0 || status.ignored > 0 ? "strict_dirty" : undefined;
+    }
+    if (unknownIgnored) return "unknown_ignored";
+    if (status.uncommitted > 0 && policy.snapshotTree === null) return "unsnapshotted_dirty";
+    return undefined;
+  }
+
+  /**
+   * Rebuild a checkout's complete non-ignored tree through an isolated index so
+   * snapshot verification never reads or writes the worktree's real index.
+   */
+  private async captureWorktreeTreeOid(
+    cwd: string,
+    options: {
+      gitDir?: string;
+      workTree?: string;
+      indexPath: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<string> {
+    const prefix = [
+      ...(options.gitDir ? [`--git-dir=${options.gitDir}`] : []),
+      ...(options.workTree ? [`--work-tree=${options.workTree}`] : []),
+    ];
+    const head = await this.run(cwd, [...prefix, "rev-parse", "--verify", "HEAD"], {
+      allowExitCodes: [1],
+      signal: options.signal,
+    });
+    if (head.exitCode === 0) {
+      await this.run(cwd, [...prefix, "read-tree", head.stdout.trim()], {
+        gitIndexFile: options.indexPath,
+        mutation: true,
+        signal: options.signal,
+      });
+    } else {
+      await this.run(cwd, [...prefix, "read-tree", "--empty"], {
+        gitIndexFile: options.indexPath,
+        mutation: true,
+        signal: options.signal,
+      });
+    }
+    await this.run(cwd, [...prefix, "add", "-A", "--", "."], {
+      gitIndexFile: options.indexPath,
+      mutation: true,
+      signal: options.signal,
+    });
+    const tree = await this.run(cwd, [...prefix, "write-tree"], {
+      gitIndexFile: options.indexPath,
+      signal: options.signal,
+    });
+    return tree.stdout.trim();
+  }
+
+  private async temporaryIndexPath<T>(work: (indexPath: string) => Promise<T>): Promise<T> {
+    const indexPath = path.join(os.tmpdir(), `aiden-wt-index-${randomUUID()}`);
+    try {
+      return await work(indexPath);
+    } finally {
+      await fs.unlink(indexPath).catch(() => undefined);
+    }
+  }
+
+  /**
    * Capture the exact owned checkout before removing it. A path-bearing
    * `git worktree remove` command leaves a check-to-exec window in which an
    * unrelated replacement can be moved into the registered pathname and
@@ -3836,6 +4116,7 @@ export class GitService {
     worktreeInode: number,
     branch: string,
     createdFromHead: string,
+    policy: ManagedWorktreeDeletionPolicy,
     signal: AbortSignal | undefined,
     onDestructiveMutation: () => void,
   ): Promise<GitWorktreeRemovalJournal> {
@@ -3877,6 +4158,10 @@ export class GitService {
     }
     let journal = await this.readWorktreeRemovalJournal(removal.journal);
     const recoveringFromJournal = journal !== undefined;
+    // Once a journal exists it is the authority on why this deletion was
+    // approved; a recovered attempt must not be widened or narrowed by the
+    // caller's fresh arguments.
+    const activePolicy = journal ? deletionPolicyFromJournal(journal) : policy;
     if (journal) {
       const matchesRecord =
         journal.repositoryPath === repo.topLevel &&
@@ -4016,7 +4301,7 @@ export class GitService {
         ownershipToken,
       );
       journal = {
-        version: 3,
+        version: 4,
         phase: "prepared",
         adminDevice: initialAdminIdentity.device,
         adminGitdirContents: initialAdminIdentity.gitdirContents,
@@ -4035,6 +4320,11 @@ export class GitService {
         gitDirQuarantine: removal.gitDir,
         ownershipToken,
         repositoryPath: repo.topLevel,
+        deletionMode: activePolicy.mode,
+        snapshotId: activePolicy.snapshotId,
+        snapshotRef: activePolicy.snapshotRef,
+        snapshotTree: activePolicy.snapshotTree,
+        provisionedIgnored: [...activePolicy.allowedIgnored].sort(),
       };
       await this.persistWorktreeRemovalJournal(removal.journal, journal);
     }
@@ -4197,7 +4487,7 @@ export class GitService {
           ])
         ).stdout,
       );
-      if (status.uncommitted > 0 || status.ignored > 0) {
+      if (this.managedWorktreeDeletionBlocked(activePolicy, status) !== undefined) {
         if (!adminQuarantined && checkoutMovedThisCall) {
           await this.restoreQuarantinedPath(removal.checkout, worktreePath);
         }
@@ -4325,11 +4615,30 @@ export class GitService {
                 ])
               ).stdout,
             );
-            if (status.uncommitted > 0 || status.ignored > 0) {
+            if (this.managedWorktreeDeletionBlocked(activePolicy, status) !== undefined) {
               throw new GitServiceError(
                 "dirty_worktree",
                 "The managed worktree changed after its deletion scan and was preserved for review.",
               );
+            }
+            // The durable snapshot tree is the recoverable-state contract:
+            // recompute the captured checkout and require equality so content
+            // changed after the snapshot can never be silently discarded.
+            if (activePolicy.mode === "safe" && activePolicy.snapshotTree !== null) {
+              await this.temporaryIndexPath(async (indexPath) => {
+                const currentTree = await this.captureWorktreeTreeOid(repo.cwd, {
+                  gitDir: adminRemovalPath!,
+                  workTree: scannedPath,
+                  indexPath,
+                  signal,
+                });
+                if (currentTree !== activePolicy.snapshotTree) {
+                  throw new GitServiceError(
+                    "dirty_worktree",
+                    "The managed worktree changed after its snapshot was captured and was preserved for review.",
+                  );
+                }
+              });
             }
             journal = await this.replaceWorktreeRemovalJournal(
               removal.journal,
@@ -4431,7 +4740,9 @@ export class GitService {
     createdFromHead: string,
     createdByCommand: boolean,
     identity?: GitWorktreeRollbackIdentity,
+    provisionedIgnored?: readonly string[],
   ): Promise<unknown | undefined> {
+    const rollbackPolicy = normalizedDeletionPolicy({ provisionedIgnored });
     let rollbackError: unknown;
     let removalJournal: GitWorktreeRemovalJournal | undefined;
     let worktrees: GitWorktree[];
@@ -4523,7 +4834,10 @@ export class GitService {
           ])
         ).stdout,
       );
-      if (status.uncommitted > 0 || status.ignored > 0) {
+      const unknownIgnored =
+        status.ignored > status.ignoredPaths.length ||
+        status.ignoredPaths.some((entry) => !rollbackPolicy.allowedIgnored.has(entry));
+      if (status.uncommitted > 0 || unknownIgnored) {
         return new GitServiceError(
           "dirty_worktree",
           "The partially created worktree contains uncommitted, untracked, or ignored files and was preserved for inspection.",
@@ -4551,6 +4865,7 @@ export class GitService {
         identity.worktreeInode,
         branch,
         createdFromHead,
+        rollbackPolicy,
         undefined,
         () => undefined,
       );
@@ -4627,6 +4942,7 @@ export class GitService {
     root: string,
     branch: string,
     signal?: AbortSignal,
+    options?: { provisionedIgnored?: readonly string[] },
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
@@ -4656,6 +4972,7 @@ export class GitService {
       let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
       try {
         await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", worktreePath, "HEAD"], {
+          hooksDisabled: true,
           mutation: true,
           signal,
         });
@@ -4719,6 +5036,7 @@ export class GitService {
           createdFromHead,
           createdByCommand,
           rollbackIdentity,
+          options?.provisionedIgnored,
         );
         if (rollbackError) {
           throw new GitServiceError(
@@ -4732,7 +5050,11 @@ export class GitService {
     });
   }
 
-  async rollbackWorktree(cwd: string, created: GitCreatedWorktree): Promise<void> {
+  async rollbackWorktree(
+    cwd: string,
+    created: GitCreatedWorktree,
+    options?: { provisionedIgnored?: readonly string[] },
+  ): Promise<void> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.enqueueMutation(repo.commonDir, async () => {
       const rollbackError = await this.rollbackCreatedWorktree(
@@ -4747,6 +5069,7 @@ export class GitService {
           worktreeDevice: created.worktreeDevice,
           worktreeInode: created.worktreeInode,
         },
+        options?.provisionedIgnored,
       );
       if (rollbackError) {
         throw new GitServiceError(
@@ -4769,7 +5092,9 @@ export class GitService {
     worktreeDevice?: number,
     worktreeInode?: number,
     retainRemovalJournal = false,
+    lifecycle?: ManagedWorktreeDeletionLifecycle,
   ): Promise<GitDeleteWorktreeResult> {
+    const lifecyclePolicy = normalizedDeletionPolicy(lifecycle);
     let destructiveMutationAttempted = false;
     try {
       const repo = this.requireRepository(await this.repository(cwd));
@@ -4844,7 +5169,14 @@ export class GitService {
               ])
             ).stdout,
           );
-          if (status.uncommitted > 0 || status.ignored > 0) {
+          const blocked = this.managedWorktreeDeletionBlocked(lifecyclePolicy, status);
+          if (blocked === "unknown_ignored") {
+            throw new GitServiceError(
+              "dirty_worktree",
+              "This managed worktree contains ignored files Aiden did not provision. Remove them or confirm a force deletion.",
+            );
+          }
+          if (blocked !== undefined) {
             throw new GitServiceError(
               "dirty_worktree",
               "Remove, commit, stash, or discard every uncommitted, untracked, and ignored file before deleting this worktree.",
@@ -4877,6 +5209,7 @@ export class GitService {
           worktreeInode!,
           branch,
           createdFromHead,
+          lifecyclePolicy,
           signal,
           () => {
             destructiveMutationAttempted = true;
@@ -5083,6 +5416,316 @@ export class GitService {
     }
     return true;
   }
+
+  /** Resolve the canonical Git paths the lifecycle layer needs. */
+  async repositoryPaths(cwd: string): Promise<{ topLevel: string; commonDir: string }> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    return { topLevel: repo.topLevel, commonDir: repo.commonDir };
+  }
+
+  /** Raw `git` output for narrow service-layer primitives (e.g. ls-files). */
+  async listFiles(cwd: string, args: readonly string[]): Promise<string> {
+    await this.requireRepository(await this.repository(cwd));
+    return (await this.run(cwd, [...args])).stdout;
+  }
+
+  /** Sum of blob sizes at HEAD — the managed-worktree create estimate. */
+  async managedWorktreeCheckoutBytes(cwd: string): Promise<number> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    const head = await this.requireHead(repo);
+    const result = await this.run(repo.cwd, ["ls-tree", "-rlz", head, "--"]);
+    let bytes = 0;
+    for (const record of result.stdout.split("\u0000")) {
+      const match = /^\d{6} blob [0-9a-f]{40} +(\d+)\t/u.exec(record);
+      if (match) bytes += Number(match[1]);
+    }
+    return bytes;
+  }
+
+  /** Read the worktree's visible state for the service-layer deletion policy. */
+  async managedWorktreeDirtyState(
+    cwd: string,
+    worktreePath: string,
+  ): Promise<ManagedWorktreeDirtyState> {
+    await this.requireRepository(await this.repository(cwd));
+    const [head, status] = await Promise.all([
+      this.run(worktreePath, ["rev-parse", "--verify", "HEAD"]),
+      this.run(worktreePath, [
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+      ]),
+    ]);
+    const parsed = parseGitStatus(status.stdout);
+    return {
+      head: head.stdout.trim(),
+      uncommitted: parsed.uncommitted,
+      ignored: parsed.ignored,
+      ignoredPaths: parsed.ignoredPaths,
+    };
+  }
+
+  /** Resolve a branch's commit, or undefined when the branch does not exist. */
+  async managedWorktreeBranchHead(cwd: string, branch: string): Promise<string | undefined> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    const result = await this.run(
+      repo.cwd,
+      ["for-each-ref", "--count=1", "--format=%(objectname)", `refs/heads/${branch}`],
+    );
+    const head = result.stdout.trim();
+    return GIT_OBJECT_ID.test(head) ? head : undefined;
+  }
+
+  /**
+   * Publish the worktree's complete non-ignored state as a synthetic commit at
+   * refs/aiden/snapshots/<id>. The commit parents the worktree HEAD so every
+   * local commit stays reachable, but it is never placed on a user branch.
+   * The capture index is isolated, so a crashed write cannot corrupt the
+   * worktree's real index.
+   */
+  async captureManagedWorktreeSnapshot(
+    cwd: string,
+    worktreePath: string,
+    snapshotId: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedWorktreeSnapshotCapture> {
+    const ref = managedWorktreeSnapshotRef(snapshotId);
+    const repo = this.requireRepository(await this.repository(cwd));
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const head = (
+        await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
+      ).stdout.trim();
+      const tree = await this.temporaryIndexPath((indexPath) =>
+        this.captureWorktreeTreeOid(worktreePath, { indexPath, signal }),
+      );
+      const commit = (
+        await this.run(
+          repo.cwd,
+          ["commit-tree", tree, "-p", head, "-m", `aiden snapshot ${snapshotId}`],
+          {
+            mutation: true,
+            signal,
+            extraConfig: [
+              ["user.name", "Aiden"],
+              ["user.email", "aiden@localhost.invalid"],
+            ],
+          },
+        )
+      ).stdout.trim();
+      // CAS against the zero object id so a snapshot ref is created exactly once.
+      await this.run(repo.cwd, ["update-ref", ref, commit, "0".repeat(40)], {
+        mutation: true,
+        signal,
+      });
+      return { ref, commit, tree, head };
+    });
+  }
+
+  /** Verify a snapshot ref exists and return its commit, else undefined. */
+  async managedWorktreeSnapshotCommit(
+    cwd: string,
+    snapshotId: string,
+  ): Promise<string | undefined> {
+    const ref = managedWorktreeSnapshotRef(snapshotId);
+    const repo = this.requireRepository(await this.repository(cwd));
+    const result = await this.run(repo.cwd, [
+      "for-each-ref",
+      "--count=1",
+      "--format=%(objectname)",
+      ref,
+    ]);
+    const commit = result.stdout.trim();
+    return GIT_OBJECT_ID.test(commit) ? commit : undefined;
+  }
+
+  /** CAS-delete a snapshot ref; a mismatched commit fails closed. */
+  async deleteManagedWorktreeSnapshotRef(
+    cwd: string,
+    snapshotId: string,
+    expectedCommit: string,
+  ): Promise<boolean> {
+    const ref = managedWorktreeSnapshotRef(snapshotId);
+    const repo = this.requireRepository(await this.repository(cwd));
+    return this.enqueueMutation(repo.commonDir, async () => {
+      try {
+        await this.run(repo.cwd, ["update-ref", "-d", ref, expectedCommit], {
+          mutation: true,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /**
+   * Recreate a managed worktree for a restore: attach the recorded branch when
+   * it still points at the snapshot's base commit, otherwise recreate it at the
+   * base commit. Fails closed on any existing destination or branch conflict.
+   */
+  async restoreManagedWorktreeCheckout(
+    cwd: string,
+    root: string,
+    worktreePath: string,
+    branch: string,
+    baseCommit: string,
+    workspaceSubpath: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    if (!GIT_OBJECT_ID.test(baseCommit)) {
+      throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
+    }
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const managedRoot = await fs.realpath(root);
+      const resolvedTarget = path.resolve(worktreePath);
+      const relativeTarget = path.relative(managedRoot, resolvedTarget);
+      if (
+        relativeTarget.length === 0 ||
+        relativeTarget.startsWith("..") ||
+        path.isAbsolute(relativeTarget)
+      ) {
+        throw new GitServiceError(
+          "invalid_input",
+          "The managed worktree restore path must stay inside Aiden's worktree root.",
+        );
+      }
+      if (await this.pathExists(resolvedTarget)) {
+        throw new GitServiceError(
+          "command_failed",
+          "A file already exists at the managed worktree restore path.",
+        );
+      }
+      const parent = path.dirname(resolvedTarget);
+      const [parentStat, canonicalParent] = await Promise.all([
+        fs.lstat(parent),
+        fs.realpath(parent),
+      ]);
+      if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || canonicalParent !== parent) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree restore path's parent could not be verified.",
+        );
+      }
+      const existingHead = await this.managedWorktreeBranchHead(repo.cwd, branch);
+      let createdByCommand = false;
+      try {
+        if (existingHead !== undefined) {
+          if (existingHead !== baseCommit) {
+            throw new GitServiceError(
+              "invalid_ref",
+              `Branch "${branch}" exists at a different commit and cannot be reused for restore.`,
+            );
+          }
+          await this.run(repo.cwd, ["worktree", "add", "--", resolvedTarget, branch], {
+            hooksDisabled: true,
+            mutation: true,
+            signal,
+          });
+        } else {
+          await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", resolvedTarget, baseCommit], {
+            hooksDisabled: true,
+            mutation: true,
+            signal,
+          });
+        }
+        createdByCommand = true;
+        const registered = (await this.inspectWorktrees(repo, resolvedTarget)).find(
+          (worktree) =>
+            worktree.branch === branch && path.resolve(worktree.path) === resolvedTarget,
+        );
+        if (!registered || registered.head !== baseCommit) {
+          throw new GitServiceError(
+            "command_failed",
+            "The restored managed worktree could not be verified.",
+          );
+        }
+        const gitDirResult = await this.run(registered.path, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-dir",
+        ]);
+        const worktreeGitDir = this.validatedWorktreeGitDir(
+          repo,
+          await fs.realpath(gitDirResult.stdout.trim()),
+        );
+        const ownershipToken = randomUUID();
+        await this.persistWorktreeOwnership(worktreeGitDir, ownershipToken);
+        const checkoutIdentity = await fs.lstat(registered.path);
+        if (!checkoutIdentity.isDirectory() || checkoutIdentity.isSymbolicLink()) {
+          throw new GitServiceError(
+            "command_failed",
+            "The restored managed worktree checkout identity could not be verified.",
+          );
+        }
+        return {
+          ...registered,
+          branch,
+          workspacePath: path.join(registered.path, workspaceSubpath),
+          repositoryPath: repo.topLevel,
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice: checkoutIdentity.dev,
+          worktreeInode: checkoutIdentity.ino,
+          createdFromHead: baseCommit,
+        };
+      } catch (error) {
+        const rollbackError = await this.rollbackCreatedWorktree(
+          repo,
+          resolvedTarget,
+          branch,
+          baseCommit,
+          createdByCommand,
+        );
+        if (rollbackError) {
+          throw new GitServiceError(
+            "command_failed",
+            "Managed worktree restore failed, and Aiden could not fully roll it back.",
+            { operationError: error, rollbackError },
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Apply a snapshot commit to a restored worktree: the working tree gains the
+   * snapshot contents while HEAD and index stay at the base commit, so the
+   * delta reports as ordinary unstaged/untracked dirt and the synthetic commit
+   * never enters branch history.
+   */
+  async applyManagedWorktreeSnapshot(
+    cwd: string,
+    worktreePath: string,
+    snapshotCommit: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.requireRepository(await this.repository(cwd));
+    if (!GIT_OBJECT_ID.test(snapshotCommit)) {
+      throw new GitServiceError("invalid_input", "The managed worktree snapshot commit is invalid.");
+    }
+    await this.run(
+      worktreePath,
+      ["read-tree", "--reset", "-u", snapshotCommit],
+      { mutation: true, signal },
+    );
+    const head = (
+      await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
+    ).stdout.trim();
+    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal });
+  }
 }
 
 const gitService = new GitService();
@@ -5166,14 +5809,65 @@ export const gitManagedWorktreeDeletionPending = (
   worktreeGitDir: string,
   ownershipToken: string,
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
+export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
+  gitService.managedWorktreeDirtyState(folderPath, worktreePath);
+export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
+  gitService.managedWorktreeBranchHead(folderPath, branch);
+export const gitCaptureManagedWorktreeSnapshot = (
+  folderPath: string,
+  worktreePath: string,
+  snapshotId: string,
+  signal?: AbortSignal,
+) => gitService.captureManagedWorktreeSnapshot(folderPath, worktreePath, snapshotId, signal);
+export const gitManagedWorktreeSnapshotCommit = (folderPath: string, snapshotId: string) =>
+  gitService.managedWorktreeSnapshotCommit(folderPath, snapshotId);
+export const gitDeleteManagedWorktreeSnapshotRef = (
+  folderPath: string,
+  snapshotId: string,
+  expectedCommit: string,
+) => gitService.deleteManagedWorktreeSnapshotRef(folderPath, snapshotId, expectedCommit);
+export const gitRestoreManagedWorktreeCheckout = (
+  folderPath: string,
+  root: string,
+  worktreePath: string,
+  branch: string,
+  baseCommit: string,
+  workspaceSubpath: string,
+  signal?: AbortSignal,
+) =>
+  gitService.restoreManagedWorktreeCheckout(
+    folderPath,
+    root,
+    worktreePath,
+    branch,
+    baseCommit,
+    workspaceSubpath,
+    signal,
+  );
+export const gitApplyManagedWorktreeSnapshot = (
+  folderPath: string,
+  worktreePath: string,
+  snapshotCommit: string,
+  signal?: AbortSignal,
+) => gitService.applyManagedWorktreeSnapshot(folderPath, worktreePath, snapshotCommit, signal);
+export const gitRepositoryPaths = (folderPath: string) =>
+  gitService.repositoryPaths(folderPath);
+export const gitListFiles = (folderPath: string, args: readonly string[]) =>
+  gitService.listFiles(folderPath, args);
+export const gitManagedWorktreeCheckoutBytes = (folderPath: string) =>
+  gitService.managedWorktreeCheckoutBytes(folderPath);
 export const gitCreateWorktree = (
   folderPath: string,
   root: string,
   branch: string,
   signal?: AbortSignal,
-) => gitService.createWorktree(folderPath, root, branch, signal);
-export const gitRollbackWorktree = (folderPath: string, created: GitCreatedWorktree) =>
-  gitService.rollbackWorktree(folderPath, created);
+  options?: { provisionedIgnored?: readonly string[] },
+) => gitService.createWorktree(folderPath, root, branch, signal, options);
+export const gitRollbackWorktree = (
+  folderPath: string,
+  created: GitCreatedWorktree,
+  options?: { provisionedIgnored?: readonly string[] },
+) => gitService.rollbackWorktree(folderPath, created, options);
 export const gitDeleteManagedWorktree = (
   folderPath: string,
   worktreePath: string,
@@ -5184,6 +5878,7 @@ export const gitDeleteManagedWorktree = (
   ownershipToken?: string,
   worktreeDevice?: number,
   worktreeInode?: number,
+  lifecycle?: ManagedWorktreeDeletionLifecycle,
 ) =>
   gitService.deleteManagedWorktree(
     folderPath,
@@ -5196,4 +5891,5 @@ export const gitDeleteManagedWorktree = (
     worktreeDevice,
     worktreeInode,
     true,
+    lifecycle,
   );

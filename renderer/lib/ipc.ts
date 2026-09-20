@@ -756,8 +756,10 @@ export const gitApi = {
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
