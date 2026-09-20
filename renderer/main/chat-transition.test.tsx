@@ -367,3 +367,36 @@ test("ordinary sends retain their generation-intent guard while draft promotion 
   assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
   assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
 });
+
+test("a missing persisted chat resurrects as a retained draft instead of blocking the composer", () => {
+  const pane = source("./chat-pane.tsx");
+  // Only a confirmed-absent chat (loaded, not errored, null payload) qualifies.
+  assert.match(
+    pane,
+    /chatMissing =\s+!draft && !persistedChat\.isLoading && !persistedChat\.isError && persistedChat\.data === null/u,
+  );
+  // The resurrect runs before paint so the dead-end message never flashes.
+  const resurrect = between(
+    pane,
+    "React.useLayoutEffect(() => {",
+    "}, [chatMissing, activeId, chatId]);",
+  );
+  assert.match(resurrect, /if \(!chatMissing \|\| !activeId\) return/u);
+  assert.match(resurrect, /createChatDraft\(activeId, chatId\)/u);
+  // The pane retains whichever draft exists for the route — including one it
+  // resurrected after mount — so it cannot be swept while on screen.
+  assert.match(pane, /React\.useEffect\(\(\) => retainChatDraft\(chatId\), \[chatId, draft\]\)/u);
+  // Sends from a resurrected draft promote through the ordinary draft path:
+  // createWithFirstMessage commits under the same chat id (same URL).
+  const send = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+  assert.match(
+    send,
+    /const firstDraft = getChatDraft\(chatId\) \? beginChatDraftSend\(chatId\) : undefined/u,
+  );
+  // The composer is never told to abandon the chat it is sitting on.
+  assert.doesNotMatch(pane, /Start a new agent/u);
+});
