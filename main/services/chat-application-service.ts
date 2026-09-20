@@ -69,6 +69,8 @@ export interface ChatApplicationDependencies {
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
+  /** Release ambient per-chat caches (context-pressure projections). */
+  releaseChatContext?: (chatId: string) => void;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -312,6 +314,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
+        deps.releaseChatContext?.(chatId);
         if (releaseAdmission) finishDeletion();
       }
     },

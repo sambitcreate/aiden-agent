@@ -16,6 +16,7 @@ import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { buildAgentTools } from "./tools.js";
+import { draftUserPiMessage } from "./generation-messages.js";
 
 /**
  * The exact GenerationContextOptions the last generation for a chat resolved
@@ -52,8 +53,37 @@ const journalSnapshots = new Map<string, JournalSnapshot>();
 /** Freshness window for draft-typing recomputes; explicit triggers bypass via draftText=undefined callers passing force. */
 const JOURNAL_SNAPSHOT_TTL_MS = 1_500;
 
-function draftUserMessage(text: string): AgentMessage {
-  return { role: "user", content: text, timestamp: Date.now() } as AgentMessage;
+interface DraftContextPressureSelection {
+  providerId?: string;
+  modelId?: string;
+  attachments?: {
+    id: string;
+    name: string;
+    kind: "image" | "text";
+    mimeType: string;
+    textLength?: number;
+  }[];
+}
+
+/**
+ * Rebuild a draft attachment descriptor into the shape `draftUserPiMessage`
+ * consumes. The estimator prices each image part flat and each text
+ * attachment by character count, so only the payload lengths need to match —
+ * never the bytes themselves.
+ */
+function draftAttachmentsForProjection(
+  attachments: DraftContextPressureSelection["attachments"],
+): Parameters<typeof draftUserPiMessage>[1] {
+  return attachments?.map((attachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    kind: attachment.kind,
+    size: attachment.textLength ?? 0,
+    ...(attachment.kind === "image"
+      ? { data: "x" }
+      : { text: "x".repeat(attachment.textLength ?? 0) }),
+  }));
 }
 
 /**
@@ -149,24 +179,55 @@ export function invalidateChatContextJournal(chatId: string): void {
  */
 export async function chatContextPressure(
   chatId: string,
-  draftText?: string,
+  draft?: { draftText?: string } & DraftContextPressureSelection,
 ): Promise<ChatContextPressureV1 | null> {
   const chat = await chatStore.get(chatId);
-  if (!chat?.providerId || !chat.model) return null;
+  if (!chat) return null;
+  // The composer selection leads the persisted chat pair — a model the user
+  // just picked in the picker must price the next request before it commits.
+  const providerId = draft?.providerId ?? chat.providerId;
+  const modelId = draft?.modelId ?? chat.model;
+  if (!providerId || !modelId) return null;
   let model;
   try {
-    model = await resolveCompactionModelMetadata(chat.providerId, chat.model, chatId);
+    model = await resolveCompactionModelMetadata(providerId, modelId, chatId);
   } catch {
     return null;
   }
   const messages = await journalMessages(chatId, chat.createdAt);
   if (!messages) return null;
   const supportsImages = model.input.includes("image");
-  const options =
-    generationProfiles.get(chatId) ??
-    (await ambientContextOptions(chatId, model.contextWindow, supportsImages));
-  if (!options) return null;
-  const projected =
-    draftText && draftText.trim() ? [...messages, draftUserMessage(draftText)] : messages;
+  const remembered = generationProfiles.get(chatId);
+  const base =
+    remembered &&
+    remembered.providerId === providerId &&
+    remembered.modelId === modelId &&
+    remembered.contextWindow === model.contextWindow &&
+    remembered.supportsImages === supportsImages
+      ? remembered
+      : await ambientContextOptions(chatId, model.contextWindow, supportsImages);
+  if (!base) return null;
+  // Keep the generation-accurate static context (tools + system prompt) while
+  // overriding only the fields a live model/provider change rewrites.
+  const options: GenerationContextOptions = {
+    ...base,
+    contextWindow: model.contextWindow,
+    supportsImages,
+    providerId,
+    modelId,
+  };
+  const hasDraft =
+    (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
+    (draft?.attachments?.length ?? 0) > 0;
+  const projected = hasDraft
+    ? [
+        ...messages,
+        draftUserPiMessage(
+          draft?.draftText ?? "",
+          draftAttachmentsForProjection(draft?.attachments),
+          supportsImages,
+        ),
+      ]
+    : messages;
   return projectChatContextPressure(projected, options);
 }

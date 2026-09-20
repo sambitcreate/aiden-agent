@@ -71,4 +71,45 @@ test("context pressure requests accept a bounded optional draft", () => {
       draftText: "x".repeat(65_537),
     }),
   );
+  // A live composer selection + pending attachments ride along so the
+  // projection prices what the next send will actually carry.
+  assert.deepEqual(
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      draftText: "sum this",
+      providerId: "openai",
+      modelId: "gpt-5",
+      attachments: [
+        { id: "a1", name: "notes.txt", kind: "text", mimeType: "text/plain", textLength: 120 },
+        { id: "a2", name: "shot.png", kind: "image", mimeType: "image/png" },
+      ],
+    }),
+    {
+      chatId: "chat-1",
+      draftText: "sum this",
+      providerId: "openai",
+      modelId: "gpt-5",
+      attachments: [
+        { id: "a1", name: "notes.txt", kind: "text", mimeType: "text/plain", textLength: 120 },
+        { id: "a2", name: "shot.png", kind: "image", mimeType: "image/png" },
+      ],
+    },
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }),
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [{ id: "a1", name: "x", kind: "file", mimeType: "text/plain" }],
+    }),
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [
+        { id: "a1", name: "x", kind: "text", mimeType: "text/plain", textLength: -1 },
+      ],
+    }),
+  );
 });

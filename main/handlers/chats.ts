@@ -180,7 +180,12 @@ export function registerChatHistoryHandlers(): void {
     );
     const parsed = parseChatContextPressureRequest(input);
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    return chatContextPressure(parsed.chatId, parsed.draftText);
+    return chatContextPressure(parsed.chatId, {
+      draftText: parsed.draftText,
+      providerId: parsed.providerId,
+      modelId: parsed.modelId,
+      attachments: parsed.attachments,
+    });
   });
 
   ipcMain.handle("chats:compact", async (event, id: unknown, engine: unknown) => {

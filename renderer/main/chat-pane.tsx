@@ -318,20 +318,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const contextDraftTimerRef = React.useRef<number | null>(null);
   const contextCompactedTimerRef = React.useRef<number | null>(null);
   const refreshContextPressure = React.useCallback(
-    async (draftText?: string) => {
+    async (visibleDraft?: { draftText?: string; attachments?: Attachment[] }) => {
       if (draft) {
         setContextPressure(null);
         return;
       }
       const request = ++contextPressureRequestRef.current;
       try {
-        const pressure = await chatsApi.contextPressure(chatId, draftText);
+        const pressure = await chatsApi.contextPressure(chatId, {
+          ...visibleDraft,
+          providerId,
+          modelId: model,
+        });
         if (request === contextPressureRequestRef.current) setContextPressure(pressure);
       } catch {
         // The ambient projection is best-effort; keep the last good reading.
       }
     },
-    [chatId, draft],
+    [chatId, draft, providerId, model],
   );
   React.useEffect(() => {
     void refreshContextPressure();
@@ -353,11 +357,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [],
   );
   const onDraftContextChange = React.useCallback(
-    (value: string) => {
+    (value: string, draftAttachments: Attachment[]) => {
       if (contextDraftTimerRef.current !== null) window.clearTimeout(contextDraftTimerRef.current);
       contextDraftTimerRef.current = window.setTimeout(() => {
         contextDraftTimerRef.current = null;
-        void refreshContextPressure(value.trim() ? value : undefined);
+        const draftText = value.trim() ? value : undefined;
+        const attachments = draftAttachments.length ? draftAttachments : undefined;
+        void refreshContextPressure(
+          draftText || attachments ? { draftText, attachments } : undefined,
+        );
       }, 500);
     },
     [refreshContextPressure],

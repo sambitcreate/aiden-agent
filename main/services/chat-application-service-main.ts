@@ -11,6 +11,7 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createChatApplicationService } from "./chat-application-service.js";
 import { memoryStore } from "./memory-store-main.js";
+import { forgetChatContextProfile } from "./context-pressure.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -24,5 +25,6 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   memoryStore,
+  releaseChatContext: forgetChatContextProfile,
   logError: (area, message, error) => logger.error(area, message, error),
 });

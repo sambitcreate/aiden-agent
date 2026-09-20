@@ -4930,7 +4930,7 @@
           "reasoningStart": {
             "type": "integer",
             "minimum": 0,
-            "description": "UTF-16 start offset into the assistant message reasoning buffer for this thinking segment. Present only alongside reasoningEnd; clients without the reasoning buffer safely ignore it."
+            "description": "UTF-16 start offset into the assistant message reasoning buffer for this thinking segment. reasoningEnd is omitted while the segment is still open (live stream); settled steps carry both. Clients without the reasoning buffer safely ignore it."
           },
           "reasoningEnd": {
             "type": "integer",

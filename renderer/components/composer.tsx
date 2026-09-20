@@ -173,7 +173,7 @@ interface ComposerProps {
   /** Next-request context-pressure indicator, rendered next to the model picker. */
   contextMeter?: React.ReactNode;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
-  onDraftChange?: (text: string) => void;
+  onDraftChange?: (text: string, attachments: Attachment[]) => void;
   /** Global-beta readiness plus this chat's local Computer Use opt-in. */
   computerUse?: {
     enabled: boolean;
@@ -388,8 +388,8 @@ export function Composer({
     onDraftChangeRef.current = onDraftChange;
   }, [onDraftChange]);
   React.useEffect(() => {
-    onDraftChangeRef.current?.(text);
-  }, [text, attachments.length]);
+    onDraftChangeRef.current?.(text, attachments);
+  }, [text, attachments]);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,

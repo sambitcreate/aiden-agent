@@ -817,12 +817,30 @@ export const chatsApi = {
     >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
   // Next-request context projection for the composer meter. Pass the visible
-  // draft so the projection matches what would actually be sent.
+  // draft, pending attachments, and the current model selection so the
+  // projection matches what would actually be sent.
   contextPressure: async (
     chatId: string,
-    draftText?: string,
+    draft?: {
+      draftText?: string;
+      attachments?: Attachment[];
+      providerId?: string;
+      modelId?: string;
+    },
   ): Promise<ChatContextPressureV1 | null> => {
-    const value = await invoke<unknown>("chats:contextPressure", { chatId, draftText });
+    const value = await invoke<unknown>("chats:contextPressure", {
+      chatId,
+      draftText: draft?.draftText,
+      providerId: draft?.providerId,
+      modelId: draft?.modelId,
+      attachments: draft?.attachments?.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        kind: attachment.kind,
+        mimeType: attachment.mimeType,
+        textLength: attachment.kind === "text" ? attachment.text?.length : undefined,
+      })),
+    });
     if (value === null) return null;
     const pressure = parseChatContextPressure(value);
     if (!pressure) throw new Error("The context pressure response was invalid.");
