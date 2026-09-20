@@ -4,7 +4,7 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
-import { constants as fsConstants } from "fs";
+import { constants as fsConstants, type Stats } from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -5589,7 +5589,31 @@ export class GitService {
     }
     return this.enqueueMutation(repo.commonDir, async () => {
       const managedRoot = await fs.realpath(root);
-      const resolvedTarget = path.resolve(worktreePath);
+      // The target does not exist yet, so canonicalize its parent: ancestors
+      // may legitimately traverse platform symlinks (e.g. /var on macOS).
+      const requestedTarget = path.resolve(worktreePath);
+      const parent = path.dirname(requestedTarget);
+      let parentStat: Stats;
+      let canonicalParent: string;
+      try {
+        [parentStat, canonicalParent] = await Promise.all([
+          fs.lstat(parent),
+          fs.realpath(parent),
+        ]);
+      } catch (cause) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree restore path's parent could not be verified.",
+          cause,
+        );
+      }
+      if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree restore path's parent could not be verified.",
+        );
+      }
+      const resolvedTarget = path.join(canonicalParent, path.basename(requestedTarget));
       const relativeTarget = path.relative(managedRoot, resolvedTarget);
       if (
         relativeTarget.length === 0 ||
@@ -5605,17 +5629,6 @@ export class GitService {
         throw new GitServiceError(
           "command_failed",
           "A file already exists at the managed worktree restore path.",
-        );
-      }
-      const parent = path.dirname(resolvedTarget);
-      const [parentStat, canonicalParent] = await Promise.all([
-        fs.lstat(parent),
-        fs.realpath(parent),
-      ]);
-      if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || canonicalParent !== parent) {
-        throw new GitServiceError(
-          "command_failed",
-          "The managed worktree restore path's parent could not be verified.",
         );
       }
       const existingHead = await this.managedWorktreeBranchHead(repo.cwd, branch);

@@ -424,7 +424,9 @@ export async function restoreProvisionedFiles(
   const canonicalWorktree = await fs.realpath(worktreePath);
   await verifyProvisionedFileBlobs(snapshotDirPath, provisionedFiles);
   for (const file of provisionedFiles) {
-    const destination = path.join(worktreePath, file.relativePath);
+    // Join under the canonical worktree: the requested path may traverse
+    // platform symlinked ancestors (e.g. /var on macOS).
+    const destination = path.join(canonicalWorktree, file.relativePath);
     const resolved = path.resolve(destination);
     if (
       path.relative(canonicalWorktree, resolved).startsWith("..") ||

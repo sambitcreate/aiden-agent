@@ -495,13 +495,13 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     "dependencies.beginWorkspaceMutation(workspaceId)",
   );
   const destructiveDelete = worktreeApplicationService.indexOf(
-    "dependencies.deleteManagedWorktree(managed, signal)",
+    "dependencies.deleteManagedWorktree(managed, signal, lifecycle)",
     beginMutation,
   );
   assert.ok(deleteHandler >= 0);
   assert.match(
     workspaces.slice(deleteHandler),
-    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
+    /workspaceWorktreeApplicationService\.remove\(owner, id, undefined, \{ force \}\)/u,
   );
   assert.ok(beginMutation >= 0);
   assert.ok(destructiveDelete > beginMutation);
@@ -817,7 +817,7 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   const managedDelete = ipcHandlerStart(workspaces, "git:deleteManagedWorktree");
   assert.match(
     workspaces.slice(managedDelete),
-    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
+    /workspaceWorktreeApplicationService\.remove\(owner, id, undefined, \{ force \}\)/u,
   );
   const managedRemove = worktreeApplicationService.indexOf("const remove = async (");
   const managedTerminalClose = worktreeApplicationService.indexOf(
