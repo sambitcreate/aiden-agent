@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { GitCreatedWorktree, GitDeleteWorktreeResult } from "./git.js";
+import type { GitCreatedWorktree, GitDeleteWorktreeResult, GitRestoredWorktree } from "./git.js";
 import { GitManagedWorktreeDeleteError } from "./git.js";
 import {
   commitManagedWorktreeCreation,
@@ -22,6 +22,12 @@ export interface WorkspaceWorktreeApplicationDependencies {
     options?: { allowSetupScript?: boolean },
   ): Promise<GitCreatedWorktree>;
   rollbackWorktree(folderPath: string, created: GitCreatedWorktree): Promise<void>;
+  restoreManagedWorktree(
+    folderPath: string,
+    root: string,
+    snapshotId: string,
+    signal?: AbortSignal,
+  ): Promise<GitRestoredWorktree>;
   deleteManagedWorktree(
     managed: ManagedWorktree,
     signal: AbortSignal,
@@ -188,7 +194,78 @@ export function createWorkspaceWorktreeApplicationService(
       }
     });
 
-  return { create, remove };
+  const restore = async (
+    owner: WorkspaceOperationDocumentOwner,
+    sourceWorkspaceId: string,
+    snapshotId: string,
+    requestedName?: string,
+  ): Promise<Workspace> =>
+    dependencies.environment.run(owner, sourceWorkspaceId, async (resolved, signal) => {
+      const worktree = await dependencies.restoreManagedWorktree(
+        resolved.folderPath,
+        await dependencies.ensureWorktreeRoot(),
+        snapshotId,
+        signal,
+      );
+      const now = dependencies.now();
+      const workspace: Workspace = {
+        id: dependencies.createWorkspaceId(),
+        name: displayName(resolved.workspace, worktree.branch, requestedName),
+        folderPath: worktree.workspacePath,
+        permission: resolved.workspace.permission,
+        managedWorktree: {
+          repositoryPath: worktree.repositoryPath,
+          worktreePath: worktree.path,
+          branch: worktree.branch,
+          worktreeGitDir: worktree.worktreeGitDir,
+          ownershipToken: worktree.ownershipToken,
+          worktreeDevice: worktree.worktreeDevice,
+          worktreeInode: worktree.worktreeInode,
+          createdFromHead: worktree.createdFromHead,
+          ...(worktree.owner ? { owner: worktree.owner } : {}),
+          ...(worktree.provisionedFiles?.length
+            ? { provisionedFiles: worktree.provisionedFiles }
+            : {}),
+        },
+        createdAt: now,
+        updatedAt: now,
+      };
+      try {
+        const saved = await commitManagedWorktreeCreation({
+          validateBeforeSave: async () => {
+            const latest = await dependencies.environment.resolve(sourceWorkspaceId, true);
+            if (
+              !latest ||
+              signal.aborted ||
+              latest.folderPath !== resolved.folderPath ||
+              latest.workspace.permission !== resolved.workspace.permission
+            ) {
+              throw new Error(
+                "The source workspace changed while Aiden was restoring the worktree.",
+              );
+            }
+          },
+          saveWorkspace: () => dependencies.saveWorkspace(workspace),
+          validateAfterSave: () => {
+            if (signal.aborted || dependencies.workspaceIsChanging(sourceWorkspaceId)) {
+              throw new Error("The source workspace changed while Aiden was saving the worktree.");
+            }
+          },
+          removeWorkspaceRecord: (savedWorkspace) =>
+            dependencies.removeWorkspace(savedWorkspace.id),
+          rollbackWorktree: () => dependencies.rollbackWorktree(resolved.folderPath, worktree),
+        });
+        dependencies.notifyChanged();
+        return saved;
+      } catch (error) {
+        if (error instanceof ManagedWorktreeCreationError) {
+          dependencies.logError("git", error.logMessage, error.errors);
+        }
+        throw error;
+      }
+    });
+
+  return { create, remove, restore };
 }
 
 export type WorkspaceWorktreeApplicationService = ReturnType<

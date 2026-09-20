@@ -56,6 +56,26 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
       };
     },
     rollbackWorktree: async () => { events.push("rollback"); },
+    restoreManagedWorktree: async (folderPath, root, snapshotId) => {
+      events.push(`restore:${folderPath}:${root}:${snapshotId}`);
+      return {
+        path: "/aiden/worktrees/restored",
+        workspacePath: "/aiden/worktrees/restored",
+        repositoryPath: "/canonical/source",
+        worktreeGitDir: "/canonical/source/.git/worktrees/restored",
+        ownershipToken: "c".repeat(64),
+        worktreeDevice: 3,
+        worktreeInode: 4,
+        createdFromHead: "b".repeat(40),
+        head: "b".repeat(40),
+        branch: "feature/restored",
+        bare: false,
+        detached: false,
+        current: false,
+        restoredFromSnapshot: snapshotId,
+        owner: "manual" as const,
+      };
+    },
     deleteManagedWorktree: async () => {
       events.push("delete-git");
       return { branchDeleted: true };
@@ -96,6 +116,19 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   assert.equal(created.permission, source.permission);
   assert.deepEqual(events, [
     "create:/canonical/source:/aiden/worktrees:feature/mobile",
+    "save",
+    "notify",
+  ]);
+
+  events.length = 0;
+  const restored = await service.restore(owner, source.id, "snap-1", "Restored Workspace");
+  assert.equal(restored.id, "workspace-managed");
+  assert.equal(restored.name, "Restored Workspace");
+  assert.equal(restored.managedWorktree?.branch, "feature/restored");
+  assert.equal(restored.managedWorktree?.owner, "manual");
+  assert.equal(restored.managedWorktree?.createdFromHead, "b".repeat(40));
+  assert.deepEqual(events, [
+    "restore:/canonical/source:/aiden/worktrees:snap-1",
     "save",
     "notify",
   ]);

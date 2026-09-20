@@ -3280,6 +3280,190 @@ test("GitService aborts deletion when snapshot persistence fails", async (t) => 
   );
 });
 
+test("GitService restores a snapshotted worktree's dirty state", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  await fs.writeFile(path.join(repository, ".gitignore"), ".env.local\n", "utf8");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env.local\n", "utf8");
+  await fs.writeFile(path.join(repository, "deleted.txt"), "will be deleted\n", "utf8");
+  await git(repository, ["add", ".gitignore", ".worktreeinclude", "deleted.txt"]);
+  await git(repository, ["commit", "-m", "Fixture files"]);
+  await fs.writeFile(path.join(repository, ".env.local"), "TOKEN=from-source\n", {
+    encoding: "utf8",
+    mode: 0o640,
+  });
+
+  const created = await service.createWorktree(repository, root, "codex/restore-me");
+  await fs.writeFile(path.join(created.path, "README.md"), "modified contents\n", "utf8");
+  await fs.rm(path.join(created.path, "deleted.txt"));
+  await fs.writeFile(path.join(created.path, "untracked.txt"), "new work\n", "utf8");
+  await fs.writeFile(path.join(created.path, ".env.local"), "TOKEN=edited\n", "utf8");
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    false,
+    { provisionedFiles: created.provisionedFiles ?? [] },
+  );
+  const snapshotId = deleted.snapshot?.id;
+  assert.ok(snapshotId);
+
+  const restored = await service.restoreManagedWorktree(repository, root, snapshotId);
+  assert.equal(restored.restoredFromSnapshot, snapshotId);
+  assert.equal(restored.branch, created.branch);
+  assert.equal(restored.createdFromHead, created.createdFromHead);
+  assert.notEqual(path.resolve(restored.path), path.resolve(created.path));
+  assert.equal(
+    await fs
+      .readFile(path.join(restored.worktreeGitDir, "aiden-owner"), "utf8")
+      .then((v) => v.trim()),
+    restored.ownershipToken,
+  );
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      restored.path,
+      restored.branch,
+      restored.worktreeGitDir,
+      restored.ownershipToken,
+      restored.worktreeDevice,
+      restored.worktreeInode,
+    ),
+    true,
+  );
+
+  // Branch tip is the original base commit — the synthetic snapshot commit
+  // never enters branch history.
+  assert.equal(
+    (await git(repository, ["rev-parse", `refs/heads/${created.branch}`])).trim(),
+    created.createdFromHead,
+  );
+  await assert.rejects(
+    git(repository, [
+      "merge-base",
+      "--is-ancestor",
+      (await snapshots.get(snapshotId))!.snapshotCommit,
+      `refs/heads/${created.branch}`,
+    ]),
+  );
+
+  // Every change restores as working-tree state only — nothing is staged.
+  // (porcelain v2: `.M`/`.D` = unstaged tracked changes, `?`/`!` = untracked/ignored)
+  assert.equal(await git(restored.path, ["diff", "--cached", "--quiet"]), "");
+  const porcelain = await git(restored.path, ["status", "--porcelain=v2", "--ignored=matching"]);
+  assert.match(porcelain, /^1 \.M .*README\.md$/mu);
+  assert.match(porcelain, /^1 \.D .*deleted\.txt$/mu);
+  assert.match(porcelain, /^\? untracked\.txt$/mu);
+  assert.match(porcelain, /^! \.env\.local$/mu);
+  assert.equal(
+    await fs.readFile(path.join(restored.path, "README.md"), "utf8"),
+    "modified contents\n",
+  );
+  await assert.rejects(fs.access(path.join(restored.path, "deleted.txt")));
+  assert.equal(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8"), "new work\n");
+  // Provisioned payloads come back from the private store with their modes.
+  const restoredEnv = await fs.stat(path.join(restored.path, ".env.local"));
+  assert.equal(restoredEnv.mode & 0o777, 0o640);
+  assert.equal(await fs.readFile(path.join(restored.path, ".env.local"), "utf8"), "TOKEN=edited\n");
+});
+
+test("GitService refuses to restore over an existing branch", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  const created = await service.createWorktree(repository, root, "codex/restore-conflict");
+  await fs.writeFile(path.join(created.path, "dirty.txt"), "dirty\n", "utf8");
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+  const snapshotId = deleted.snapshot!.id;
+
+  // A caller recreated the branch name — restore must refuse rather than
+  // overwrite it.
+  await git(repository, ["branch", created.branch, created.createdFromHead]);
+  await assert.rejects(
+    service.restoreManagedWorktree(repository, root, snapshotId),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "conflicted" &&
+      /already exists/u.test(error.message),
+  );
+  await git(repository, ["update-ref", "-d", `refs/heads/${created.branch}`]);
+
+  // A snapshot whose ref is gone is not restorable.
+  const record = await snapshots.get(snapshotId);
+  await git(repository, ["update-ref", "-d", record!.snapshotRef]);
+  await assert.rejects(
+    service.restoreManagedWorktree(repository, root, snapshotId),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "invalid_ref" &&
+      /no longer available/u.test(error.message),
+  );
+});
+
+test("GitService refuses snapshots that are unknown or belong elsewhere", async (t) => {
+  const repository = await createRepository(t);
+  const otherRepository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+
+  await assert.rejects(
+    service.restoreManagedWorktree(repository, root, "not-a-snapshot-id"),
+    (error) => error instanceof GitServiceError && error.code === "invalid_ref",
+  );
+  await assert.rejects(
+    service.restoreManagedWorktree(repository, root, "00000000-0000-4000-8000-000000000000"),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "invalid_ref" &&
+      /unknown, expired/u.test(error.message),
+  );
+
+  const created = await service.createWorktree(repository, root, "codex/other-repo");
+  await fs.writeFile(path.join(created.path, "dirty.txt"), "dirty\n", "utf8");
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+  await assert.rejects(
+    service.restoreManagedWorktree(otherRepository, root, deleted.snapshot!.id),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "conflicted" &&
+      /different repository/u.test(error.message),
+  );
+});
+
 test("GitService creates, lists, and removes managed worktrees", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

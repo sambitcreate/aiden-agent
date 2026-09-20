@@ -38,6 +38,7 @@ import {
   WorktreeSetupError,
 } from "./worktree-setup-core.js";
 import {
+  isWorktreeSnapshotId,
   WORKTREE_SNAPSHOT_RETENTION_MS,
   worktreeSnapshotRef,
 } from "./worktree-snapshot-store-core.js";
@@ -284,6 +285,13 @@ export interface GitCreatedWorktree extends GitWorktree {
   createdFromHead: string;
   /** Ignored files Aiden provisioned from .worktreeinclude — the durable manifest. */
   provisionedFiles?: ProvisionedFileEntry[];
+}
+
+export interface GitRestoredWorktree extends GitCreatedWorktree {
+  /** The snapshot this worktree was rebuilt from. */
+  restoredFromSnapshot: string;
+  /** The lifecycle ownership class recorded on the deleted worktree. */
+  owner?: "manual" | "session";
 }
 
 export interface GitCreateWorktreeOptions {
@@ -4802,16 +4810,7 @@ export class GitService {
         provisionedBytes: 0,
       });
 
-      const repositoryId = createHash("sha256").update(repo.commonDir).digest("hex").slice(0, 12);
-      const repositoryName =
-        path.basename(repo.topLevel).replace(/[^a-zA-Z0-9._-]+/g, "-") || "repository";
-      const branchSlug =
-        branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
-      await fs.mkdir(root, { recursive: true, mode: 0o700 });
-      const managedRoot = await fs.realpath(root);
-      const repositoryRoot = path.join(managedRoot, `${repositoryName}-${repositoryId}`);
-      await fs.mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
-      const worktreePath = path.join(repositoryRoot, `${branchSlug}-${randomUUID().slice(0, 8)}`);
+      const worktreePath = await this.managedWorktreeCheckoutPath(root, repo, branch);
       let createdByCommand = false;
       let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
       try {
@@ -4905,6 +4904,27 @@ export class GitService {
         throw error;
       }
     });
+  }
+
+  /**
+   * The managed checkout naming shared by creation and snapshot restore:
+   * `<root>/<repo>-<repoId>/<branchSlug>-<suffix>` under the caller-provided
+   * managed-worktree root.
+   */
+  private async managedWorktreeCheckoutPath(
+    root: string,
+    repo: GitRepository,
+    branch: string,
+  ): Promise<string> {
+    const repositoryId = createHash("sha256").update(repo.commonDir).digest("hex").slice(0, 12);
+    const repositoryName =
+      path.basename(repo.topLevel).replace(/[^a-zA-Z0-9._-]+/g, "-") || "repository";
+    const branchSlug = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
+    await fs.mkdir(root, { recursive: true, mode: 0o700 });
+    const managedRoot = await fs.realpath(root);
+    const repositoryRoot = path.join(managedRoot, `${repositoryName}-${repositoryId}`);
+    await fs.mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
+    return path.join(repositoryRoot, `${branchSlug}-${randomUUID().slice(0, 8)}`);
   }
 
   private async assertManagedWorktreeDisk(
@@ -5133,6 +5153,192 @@ export class GitService {
     } finally {
       await fs.rm(indexDir, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * Recreate a managed worktree from a published snapshot. The branch is
+   * rebuilt at the recorded base commit, the snapshot's dirty state is
+   * materialized into the working tree only (the real index keeps the base
+   * commit, so modifications and deletions restore unstaged and snapshot-only
+   * files restore untracked), provisioned payloads come back from the private
+   * store, and fresh ownership/identity markers are persisted. The synthetic
+   * snapshot commit never enters branch history. Conflicting branches or
+   * missing/tampered snapshots refuse with an actionable error.
+   */
+  async restoreManagedWorktree(
+    cwd: string,
+    root: string,
+    snapshotId: string,
+    signal?: AbortSignal,
+  ): Promise<GitRestoredWorktree> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const runOptions = { disableRepositoryAutomation: true, signal } as const;
+      if (!isWorktreeSnapshotId(snapshotId)) {
+        throw new GitServiceError("invalid_ref", "The worktree snapshot identifier is invalid.");
+      }
+      await this.worktreeSnapshots.initialize();
+      const record = await this.worktreeSnapshots.get(snapshotId);
+      if (!record) {
+        throw new GitServiceError(
+          "invalid_ref",
+          "This worktree snapshot is unknown, expired, or already removed.",
+        );
+      }
+      if (path.resolve(record.repositoryCommonDir) !== path.resolve(repo.commonDir)) {
+        throw new GitServiceError(
+          "conflicted",
+          "This worktree snapshot belongs to a different repository.",
+        );
+      }
+      // The published ref must still resolve to the recorded commit — anything
+      // else means the snapshot expired, was tampered with, or was removed.
+      const published = await this.run(repo.cwd, ["rev-parse", "--verify", record.snapshotRef], {
+        ...runOptions,
+        allowExitCodes: [0, 128],
+      });
+      if (published.exitCode !== 0 || published.stdout.trim() !== record.snapshotCommit) {
+        throw new GitServiceError(
+          "invalid_ref",
+          "This worktree snapshot is no longer available in the repository.",
+        );
+      }
+      await this.run(
+        repo.cwd,
+        ["rev-parse", "--verify", `${record.baseCommit}^{commit}`],
+        runOptions,
+      );
+      const branchExists = await this.run(
+        repo.cwd,
+        ["show-ref", "--verify", "--quiet", `refs/heads/${record.branch}`],
+        { ...runOptions, allowExitCodes: [0, 1] },
+      );
+      if (branchExists.exitCode === 0) {
+        throw new GitServiceError(
+          "conflicted",
+          `A branch named ${record.branch} already exists. Move or remove it before restoring this snapshot.`,
+        );
+      }
+      const worktreePath = await this.managedWorktreeCheckoutPath(root, repo, record.branch);
+      const checkoutBytes = await estimateTrackedCheckoutBytes(
+        (
+          await this.run(repo.topLevel, ["ls-files", "-z"], {
+            disableRepositoryAutomation: true,
+            signal,
+          })
+        ).stdout,
+        repo.topLevel,
+      );
+      await this.assertManagedWorktreeDisk(root, {
+        checkoutBytes,
+        provisionedBytes: 0,
+      });
+      let createdByCommand = false;
+      let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
+      try {
+        await this.run(
+          repo.cwd,
+          ["worktree", "add", "-b", record.branch, "--", worktreePath, record.baseCommit],
+          { ...runOptions, mutation: true },
+        );
+        createdByCommand = true;
+        const created = (await this.inspectWorktrees(repo, worktreePath)).find(
+          (worktree) => worktree.branch === record.branch,
+        );
+        if (!created)
+          throw new GitServiceError(
+            "command_failed",
+            "Git created the worktree but Aiden could not inspect it.",
+          );
+        const gitDirResult = await this.run(
+          created.path,
+          ["rev-parse", "--path-format=absolute", "--git-dir"],
+          runOptions,
+        );
+        const worktreeGitDir = this.validatedWorktreeGitDir(
+          repo,
+          await fs.realpath(gitDirResult.stdout.trim()),
+        );
+        const ownershipToken = randomUUID();
+        await this.persistWorktreeOwnership(worktreeGitDir, ownershipToken);
+        const checkoutIdentity = await fs.lstat(created.path);
+        if (!checkoutIdentity.isDirectory() || checkoutIdentity.isSymbolicLink()) {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed worktree checkout identity could not be verified.",
+          );
+        }
+        rollbackIdentity = {
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice: checkoutIdentity.dev,
+          worktreeInode: checkoutIdentity.ino,
+        };
+        // Materialize the snapshot's working state: a temporary index seeded
+        // at the base commit and reset to the snapshot tree applies
+        // additions/modifications/deletions to the checkout while the real
+        // index stays at the base — every restored change lands unstaged and
+        // snapshot-only files land untracked.
+        const indexDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-restore-index-"));
+        try {
+          const indexed = { ...runOptions, gitIndexFile: path.join(indexDir, "index") };
+          await this.run(created.path, ["read-tree", record.baseCommit], indexed);
+          await this.run(
+            created.path,
+            ["read-tree", "-u", "--reset", record.snapshotCommit],
+            indexed,
+          );
+        } finally {
+          await fs.rm(indexDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+        await this.worktreeSnapshots.restoreProvisionedFiles(record, created.path);
+        const workspacePath = path.join(created.path, record.workspaceSubdir ?? "");
+        if (!(await fs.stat(workspacePath)).isDirectory()) {
+          throw new GitServiceError(
+            "command_failed",
+            "The workspace subfolder is not present in the restored state, so Aiden did not widen access to the repository root.",
+          );
+        }
+        return {
+          ...created,
+          branch: record.branch,
+          workspacePath,
+          repositoryPath: repo.topLevel,
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice: checkoutIdentity.dev,
+          worktreeInode: checkoutIdentity.ino,
+          createdFromHead: record.baseCommit,
+          ...(record.provisionedFiles.length
+            ? {
+                provisionedFiles: record.provisionedFiles.map((entry) => ({
+                  relativePath: entry.relativePath,
+                  mode: entry.mode,
+                })),
+              }
+            : {}),
+          restoredFromSnapshot: snapshotId,
+          owner: record.owner,
+        };
+      } catch (error) {
+        const rollbackError = await this.rollbackCreatedWorktree(
+          repo,
+          worktreePath,
+          record.branch,
+          record.baseCommit,
+          createdByCommand,
+          rollbackIdentity,
+        );
+        if (rollbackError) {
+          throw new GitServiceError(
+            "command_failed",
+            "Restoring the managed worktree failed, and Aiden could not fully roll it back. Inspect `git worktree list` before retrying.",
+            { operationError: error, rollbackError },
+          );
+        }
+        throw error;
+      }
+    });
   }
 
   async deleteManagedWorktree(
@@ -5600,6 +5806,12 @@ export const gitCreateWorktree = (
 ) => gitService.createWorktree(folderPath, root, branch, signal, options);
 export const gitRollbackWorktree = (folderPath: string, created: GitCreatedWorktree) =>
   gitService.rollbackWorktree(folderPath, created);
+export const gitRestoreManagedWorktree = (
+  folderPath: string,
+  root: string,
+  snapshotId: string,
+  signal?: AbortSignal,
+) => gitService.restoreManagedWorktree(folderPath, root, snapshotId, signal);
 export const gitDeleteManagedWorktree = (
   folderPath: string,
   worktreePath: string,

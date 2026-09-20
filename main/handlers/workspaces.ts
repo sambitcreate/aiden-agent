@@ -333,6 +333,19 @@ export function registerWorkspaceHandlers(): void {
     return workspaceWorktreeApplicationService.remove(owner, id);
   });
 
+  ipcMain.handle(
+    "git:restoreManagedWorktree",
+    async (event, workspaceId: unknown, snapshotId: unknown) =>
+      workspaceWorktreeApplicationService.restore(
+        rendererDocumentOwner(
+          event,
+          () => new Error("Workspace access requires the active renderer document."),
+        ),
+        asString(workspaceId, "workspaceId"),
+        asString(snapshotId, "snapshotId"),
+      ),
+  );
+
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
   ipcMain.handle("workspaces:openFolder", async (event, workspaceId: unknown) =>
     withWorkspaceOperation(event, workspaceId, async (resolved) => {

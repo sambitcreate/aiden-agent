@@ -85,6 +85,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
   };
   let createWorktreeCount = 0;
   let deleteWorktreeCount = 0;
+  let restoreWorktreeCount = 0;
   const service = new AidenRemoteGitService({
     application,
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
@@ -114,6 +115,13 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
         validate?.(managedWorkspace);
         deleteWorktreeCount += 1;
         return { branchDeleted: true };
+      },
+      restore: async (_owner, id, snapshotId, name) => {
+        assert.equal(id, workspace.id);
+        assert.equal(snapshotId, "snap-abcdef");
+        assert.equal(name, "Restored Worktree");
+        restoreWorktreeCount += 1;
+        return managedWorkspace;
       },
     },
     listWorkspaces: async () => [workspace],
@@ -273,6 +281,35 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     );
     assert.equal(deleted.result?.kind, "mutation");
     assert.equal(deleteWorktreeCount, 1);
+
+    await assert.rejects(
+      () => service.restoreManagedWorktree("device-1", workspace.id, "restore-key-0001", {
+        snapshotId: "snap-abcdef",
+        name: "Restored Worktree",
+        confirmedForeground: false,
+      }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "permission_confirmation_required",
+    );
+    const restored = await service.restoreManagedWorktree(
+      "device-1",
+      workspace.id,
+      "restore-key-0002",
+      {
+        snapshotId: "snap-abcdef",
+        name: "Restored Worktree",
+        confirmedForeground: true,
+      },
+    );
+    assert.equal(restored.status, "succeeded");
+    assert.equal(restoreWorktreeCount, 1);
+    await assert.rejects(
+      () => service.restoreManagedWorktree("device-1", workspace.id, "restore-key-0003", {
+        snapshotId: "snap-abcdef",
+        unexpected: true,
+        confirmedForeground: true,
+      }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+    );
 
     const worktrees = await service.worktrees("device-1", workspace.id);
     assert.equal(worktrees.result?.kind, "worktrees");

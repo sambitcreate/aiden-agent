@@ -9,6 +9,7 @@ import {
   gitManagedWorktreeDeletionPending,
   gitManagedWorktreeRegistered,
   gitManagedWorktreeUsable,
+  gitRestoreManagedWorktree,
   gitRollbackWorktree,
 } from "./git.js";
 import { llmClient } from "./llm-client.js";
@@ -25,6 +26,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   ensureWorktreeRoot: () => ensureUserDataDir("worktrees"),
   createWorktree: gitCreateWorktree,
   rollbackWorktree: gitRollbackWorktree,
+  restoreManagedWorktree: gitRestoreManagedWorktree,
   deleteManagedWorktree: (managed, signal, options) =>
     gitDeleteManagedWorktree(
       managed.repositoryPath,

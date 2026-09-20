@@ -1060,6 +1060,20 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     }
   };
 
+  const restoreWorktree = React.useCallback(
+    async (sourceWorkspaceId: string, snapshotId: string) => {
+      try {
+        const restored = await gitApi.restoreManagedWorktree(sourceWorkspaceId, snapshotId);
+        await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+        toast.success(`Restored “${restored.name}” with your uncommitted changes.`);
+        await enterWorkspace(restored.id, true);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Couldn't restore that worktree.");
+      }
+    },
+    [enterWorkspace, qc],
+  );
+
   const commitDeleteWorktree = async () => {
     const target = deletingWorktree;
     if (!target || deletingWorktreeBusy) return;
@@ -1086,10 +1100,27 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       const result = await gitApi.deleteManagedWorktree(target.id);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       setDeletingWorktree(null);
+      const snapshotId = result.snapshot?.id;
+      const sourceWorkspaceId = snapshotId
+        ? workspaces.find(
+            (workspace) =>
+              workspace.managedWorktree === undefined &&
+              workspace.folderPath === target.managedWorktree?.repositoryPath,
+          )?.id
+        : undefined;
       toast.success(
         result.branchDeleted
           ? "Worktree and unchanged branch deleted."
           : "Worktree deleted; branch kept.",
+        snapshotId && sourceWorkspaceId
+          ? {
+              duration: 30_000,
+              action: {
+                label: "Restore",
+                onClick: () => void restoreWorktree(sourceWorkspaceId, snapshotId),
+              },
+            }
+          : undefined,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't delete that worktree.");

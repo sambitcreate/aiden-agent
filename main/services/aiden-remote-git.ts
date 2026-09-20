@@ -259,7 +259,7 @@ export class AidenRemoteGitService {
       application: Pick<WorkspaceEnvironmentApplicationService, "resolve" | "run">;
       owners: Pick<AidenRemoteWorkspaceOwnerRegistry, "owner">;
       git: GitDependencies;
-      worktrees?: Pick<WorkspaceWorktreeApplicationService, "create" | "remove">;
+      worktrees?: Pick<WorkspaceWorktreeApplicationService, "create" | "remove" | "restore">;
       listWorkspaces(): Promise<Workspace[]>;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -1050,6 +1050,62 @@ export class AidenRemoteGitService {
                     },
                   }
                 : {}),
+            },
+          };
+        } catch (error) {
+          mapGitError(error);
+        }
+      },
+    );
+  }
+
+  async restoreManagedWorktree(
+    deviceId: string,
+    workspaceId: string,
+    key: string,
+    value: unknown,
+  ): Promise<AidenRemoteGitResult> {
+    const record = ownRecord(value);
+    if (
+      !record ||
+      !recordKeysWithin(record, ["snapshotId", "name", "confirmedForeground"]) ||
+      !boundedString(record.snapshotId, 64) ||
+      (record.name !== undefined && !boundedString(record.name, 120))
+    ) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The managed-worktree restore request is invalid.",
+        400,
+      );
+    }
+    requireConfirmation(record);
+    if (!this.options.worktrees) {
+      throw new AidenRemoteServiceError("not_found", "Managed worktrees are unavailable.", 404);
+    }
+    return this.executeIdempotent(
+      {
+        deviceId,
+        route: "POST /git/managed-worktree-restore",
+        resourceId: workspaceId,
+        key,
+      },
+      record,
+      async () => {
+        try {
+          const workspace = await this.options.worktrees!.restore(
+            this.options.owners.owner(deviceId),
+            workspaceId,
+            record.snapshotId as string,
+            typeof record.name === "string" ? record.name : undefined,
+          );
+          return {
+            operationId: operationId(),
+            status: "succeeded" as const,
+            result: {
+              kind: "mutation" as const,
+              message: "Restored managed worktree.",
+              branch: safeString(workspace.managedWorktree?.branch ?? "", 500),
+              workspaceId: workspace.id,
             },
           };
         } catch (error) {
