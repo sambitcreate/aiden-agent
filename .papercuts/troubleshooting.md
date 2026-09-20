@@ -533,3 +533,13 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+## 2026-09-20 — Managed worktree lifecycle (Linux VM)
+
+- The native managed-worktree remover is macOS-only; on Linux, 12 git.test.ts cases fail with `ManagedWorktreeRemoverError` `io_failed` (expected baseline). Inject JS stubs (`worktreeDirectoryRemover`/`worktreeRemovalManifestFinalizer`/`worktreeRemovalManifestInspector`) for deletion-path tests, and never run `npm test` concurrently with `npm run build`.
+- `GitRunOptions` has no generic env passthrough: `gitIndexFile` is the only way to set `GIT_INDEX_FILE`, and `commit-tree` identity must come from inline `-c user.name/-c user.email` args because `run()` spawns the git binary verbatim.
+- `update-ref <ref> <new> ""` is a create-if-absent compare-and-swap (empty old value); `read-tree -u --reset <tree>` materializes a tree into the working tree (`-m -u` refuses without staged-merge state). Both verified on git 2.55 from ppa:git-core.
+- The `git()` test helper trims whole-stdout, which eats the leading space of the first `status --porcelain` line (` M` → `M`); assert porcelain v2 fields (`.M`, `.D`, `?`, `!`) instead of v1 columns.
+- Running `npx oxfmt --write` on a touched file reflows long pre-existing call sites far beyond the edit; prefer reverting unrelated hunks (or re-applying the edit after `git checkout HEAD --`) to keep stacked-PR diffs narrow.
+- `tsx` treats a script outside the project as CJS — top-level await fails; use `.mts` extension and absolute imports of repo sources for scratch repro scripts.
+- `WorktreeSnapshotStore` requires `initialize()` before `list`/`get`/`record`; calling them cold throws `WorktreeSnapshotStoreError("io","not initialized")`.
