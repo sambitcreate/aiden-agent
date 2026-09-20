@@ -113,3 +113,27 @@ test("renderer-facing export failures never reveal the main-owned save path", as
       !error.message.includes(target),
   );
 });
+
+test("suggested export filenames stay visible for dotfile and normalized-dot titles", () => {
+  for (const [title, expected] of [
+    [".env setup", "env setup.aiden-chat.json"],
+    ["  .. .gitignore review  ", "gitignore review.aiden-chat.json"],
+    ["\uff0eenv setup", "env setup.aiden-chat.json"],
+    ["...", "Aiden chat.aiden-chat.json"],
+    [" . . ", "Aiden chat.aiden-chat.json"],
+    ["\u2026", "Aiden chat.aiden-chat.json"],
+    ["Review .env and v1.2", "Review .env and v1.2.aiden-chat.json"],
+  ]) {
+    assert.equal(safeExportFileName(title), expected);
+  }
+});
+
+test("a dotfile-titled chat exports under a visible name without changing its title", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-visible-export-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const titledChat = { ...chat, title: ".env setup" };
+  const target = path.join(directory, safeExportFileName(titledChat.title));
+  await writeAidenChatExport(target, titledChat);
+  assert.deepEqual(await fs.readdir(directory), ["env setup.aiden-chat.json"]);
+  assert.equal(JSON.parse(await fs.readFile(target, "utf8")).chat.title, titledChat.title);
+});

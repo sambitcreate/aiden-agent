@@ -109,6 +109,10 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
     openChat: async (id) => {
       await requestAppPath(`/chat/${encodeURIComponent(id)}`);
     },
+    onError: (stage) => {
+      // Native errors can include notification content; retain only the phase.
+      logger.warn("schedule", `Scheduled notification ${stage} failed.`);
+    },
   });
 }
 

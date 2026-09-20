@@ -20,6 +20,7 @@ import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import { telegramChatId } from "./telegram-turn.js";
+import { TelegramApiError } from "./telegram-bot-api.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -89,6 +90,7 @@ interface SentMessage {
   text: string;
   parseMode?: "HTML" | "MarkdownV2";
   disablePreview?: boolean;
+  replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
 }
 
 function createMockApi(opts: MockApiOptions) {
@@ -96,6 +98,7 @@ function createMockApi(opts: MockApiOptions) {
   const sentMessages: SentMessage[] = [];
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
+  const editedMessages: Array<Parameters<TelegramBotApi["editMessageText"]>[0]> = [];
   const calls: string[] = [];
   const commandRegistrations: Array<readonly { command: string; description: string }[]> = [];
   let getMeCalls = 0;
@@ -105,6 +108,7 @@ function createMockApi(opts: MockApiOptions) {
 
   const api = {
     sentMessages,
+    editedMessages,
     commandRegistrations,
     async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
@@ -145,6 +149,7 @@ function createMockApi(opts: MockApiOptions) {
       text: string;
       parseMode?: "HTML" | "MarkdownV2";
       disablePreview?: boolean;
+      replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
     }): Promise<TelegramMessage> {
       sentMessages.push({
         chatId: p.chatId,
@@ -152,6 +157,7 @@ function createMockApi(opts: MockApiOptions) {
         text: p.text,
         parseMode: p.parseMode,
         disablePreview: p.disablePreview,
+        ...(p.replyMarkup ? { replyMarkup: p.replyMarkup } : {}),
       });
       return {
         message_id: sentMessages.length,
@@ -190,7 +196,9 @@ function createMockApi(opts: MockApiOptions) {
         bytes: new Uint8Array([1, 2, 3]),
       };
     },
-    async editMessageText(): Promise<void> {},
+    async editMessageText(params: Parameters<TelegramBotApi["editMessageText"]>[0]): Promise<void> {
+      editedMessages.push(params);
+    },
     async answerCallbackQuery(): Promise<void> {
       answerCallbackQueryCalls += 1;
     },
@@ -207,6 +215,7 @@ interface MockConfigState {
   hasToken: boolean;
   allowedUserId?: number;
   telegramWorkspaceId?: string;
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
@@ -226,6 +235,7 @@ function createMockConfig(state: MockConfigState) {
     // Preserve the legacy delivery assertions in this compatibility fixture.
     // Native rich delivery has dedicated coverage below.
     telegramRendering: state.telegramRendering ?? "html",
+    telegramDraftPreviews: state.telegramDraftPreviews,
     telegramVoiceMode: state.telegramVoiceMode,
     telegramThreadedMode: state.telegramThreadedMode,
   });
@@ -283,6 +293,7 @@ function createMockConfig(state: MockConfigState) {
 // ---------------------------------------------------------------------------
 
 interface MockTurnOptions {
+  draft?: string;
   reply?: string;
   /** Never resolve llmClient.start so the turn stays "active". */
   pending?: boolean;
@@ -358,6 +369,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         owner.send("chat:error", { streamId, message: opts.failMessage });
         return true;
       }
+      if (opts.draft) owner.send("chat:delta", { streamId, delta: opts.draft });
       owner.send("chat:done", { streamId, content: opts.reply ?? "Mock reply" });
       return true;
     },
@@ -492,6 +504,7 @@ interface HarnessOptions {
   me?: TelegramUser;
   batches?: TelegramUpdate[][];
   autoStop?: boolean;
+  draft?: string;
   reply?: string;
   pendingTurn?: boolean;
   busyTurn?: boolean;
@@ -500,6 +513,7 @@ interface HarnessOptions {
   workspaces?: Array<{ id: string; name: string; folderPath: string }>;
   telegramWorkspaceId?: string;
   workspaceResolver?: MockTurnOptions["workspaceResolver"];
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
@@ -530,10 +544,12 @@ function harness(o: HarnessOptions = {}) {
     allowedUserId: o.allowedUserId,
     telegramWorkspaceId: o.telegramWorkspaceId,
     telegramRendering: o.telegramRendering,
+    telegramDraftPreviews: o.telegramDraftPreviews,
     telegramVoiceMode: o.telegramVoiceMode,
     telegramThreadedMode: o.telegramThreadedMode,
   });
   const turnMock = createMockTurn({
+    draft: o.draft,
     reply: o.reply,
     pending: o.pendingTurn,
     busy: o.busyTurn,
@@ -1794,3 +1810,97 @@ test("a skill queued before global disable is rejected at dispatch and command r
   assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
   h.service.stop();
 });
+
+
+test("unchanged final HTML draft still delivers remaining chunks and voice actions once", async () => {
+  const reply = "a".repeat(5_000);
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramDraftPreviews: true,
+    draft: reply,
+    reply: `${reply}\n<!-- telegram_voice {"text":"Done"} -->`,
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+  });
+  h.api.editMessageText = async (params) => {
+    h.api.editedMessages.push(params);
+    assert.equal(params.text, h.api.sentMessages[0]?.text, "final edit matches the persisted preview");
+    throw new TelegramApiError("Bad Request: message is not modified: specified new message content is exactly the same", 400);
+  };
+  try {
+    await h.service.start();
+    await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+    assert.deepEqual(h.logs.errors, []);
+    assert.equal(h.api.editedMessages.length, 1);
+    assert.equal(h.api.sentMessages.length, 2, "preview and remaining chunk without a duplicate first chunk");
+    assert.equal(h.api.sentMessages.map(({ text }) => text).join(""), reply);
+    assert.equal(h.api.voiceMessages.length, 1, "final delivery continues to outbound actions");
+  } finally {
+    h.service.stop();
+  }
+});
+
+for (const description of ["message to edit not found", "message can't be edited"]) {
+  test(`final HTML reply replaces an unavailable preview: ${description}`, async () => {
+    const inbound = { ...makeMessage(10, person(42), "hello", 123), message_thread_id: 17 };
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: 'Final answer\n<!-- telegram_button {"label":"Next","prompt":"Continue"} -->',
+      batches: [[makeUpdate(1, inbound)]],
+    });
+    h.api.editMessageText = async (params) => {
+      h.api.editedMessages.push(params);
+      throw new TelegramApiError(`Bad Request: ${description}`, 400);
+    };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.deepEqual(h.logs.errors, []);
+      assert.equal(h.api.editedMessages.length, 1);
+      assert.equal(h.api.sentMessages.length, 2, "one replacement for the unavailable preview");
+      const replacement = h.api.sentMessages[1]!;
+      assert.equal(replacement.text, "Final answer");
+      assert.equal(replacement.chatId, 123);
+      assert.equal(replacement.threadId, 17);
+      assert.equal(replacement.parseMode, "HTML");
+      assert.equal(replacement.disablePreview, true);
+      assert.deepEqual(replacement.replyMarkup, h.api.editedMessages[0]?.replyMarkup);
+      assert.equal(replacement.replyMarkup?.inline_keyboard[0]?.[0]?.text, "Next");
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+for (const failure of [
+  new TelegramApiError("Too Many Requests: retry after 10", 429, 10),
+  new TelegramApiError("Bad Request: can't parse entities", 400),
+  new TelegramApiError("Internal Server Error", 500),
+  new TelegramApiError("message is not modified", 403),
+  new Error("message to edit not found"),
+]) {
+  test(`final HTML edit does not mask or resend on ${failure.message} (${failure instanceof TelegramApiError ? failure.code : "transport"})`, async () => {
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: "Final answer",
+      batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    });
+    h.api.editMessageText = async () => { throw failure; };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.equal(h.logs.errors.length, 1);
+      assert.equal(h.logs.errors[0]?.cause, failure);
+      assert.equal(h.api.sentMessages.filter(({ text }) => text === "Final answer").length, 1, "no speculative resend after uncertain edit failure");
+    } finally {
+      h.service.stop();
+    }
+  });
+}

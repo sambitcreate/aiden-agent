@@ -481,24 +481,38 @@ export class PiCompactionCoordinator {
         throw new PiCompactionSessionError();
       }
       const checkpointId = uuidv7();
-      await sessionOperation(() =>
-        this.options.session.appendCompaction({
-          id: checkpointId,
-          summary: result.summary,
-          retainedTail: result.retainedTail,
-          tokensBefore: result.tokensBefore,
-          ...(result.details === undefined ? {} : { details: result.details }),
-          ...(result.usage === undefined ? {} : { usage: result.usage }),
-        }),
-      );
-      const context = await sessionOperation(() => this.options.session.buildContext());
-      if (abortController.signal.aborted) {
+      const restorePriorLeaf = async () => {
         await sessionOperation(async () => {
-          if ((await this.options.session.getLeafId()) !== checkpointId) {
-            throw new Error("The cancelled compaction checkpoint is no longer the journal leaf.");
+          const leafId = await this.options.session.getLeafId();
+          // A rejected append may have failed before or after publication.
+          if (leafId === priorLeafId) return;
+          if (leafId !== checkpointId) {
+            throw new Error("The failed compaction checkpoint is no longer the journal leaf.");
           }
           await this.options.session.moveTo(priorLeafId);
         });
+      };
+      let context;
+      try {
+        await sessionOperation(() =>
+          this.options.session.appendCompaction({
+            id: checkpointId,
+            summary: result.summary,
+            retainedTail: result.retainedTail,
+            tokensBefore: result.tokensBefore,
+            ...(result.details === undefined ? {} : { details: result.details }),
+            ...(result.usage === undefined ? {} : { usage: result.usage }),
+          }),
+        );
+        context = await sessionOperation(() => this.options.session.buildContext());
+      } catch (error) {
+        // Publication is not successful until its context can be installed.
+        // Keep failed checkpoints as history, but restore the active branch.
+        await restorePriorLeaf();
+        throw error;
+      }
+      if (abortController.signal.aborted) {
+        await restorePriorLeaf();
         this.options.onEvent?.({
           type: "end",
           reason,

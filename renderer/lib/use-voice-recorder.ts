@@ -179,15 +179,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
             return;
           }
           if (!text) {
-            const batchDeadline = new DictationDeadline(transcriptionBudgetMs(selected.provider));
-            text = await batchDeadline.run(
-              transcribeBlob(blob, {
-                ...selected,
-                operationId,
-                signal: transcriptionController.signal,
-              }),
-              () => cancelTranscription(selected.provider, operationId),
-            );
+            text = await transcribeBlob(blob, {
+              ...selected,
+              operationId,
+              signal: transcriptionController.signal,
+            });
           }
           if (!operationGate.isCurrent(token)) return;
           if (text) onTranscript(text);

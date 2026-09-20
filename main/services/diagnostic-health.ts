@@ -297,9 +297,15 @@ export async function deleteDiagnosticHealth(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
   dirty = false;
-  await queue;
+  // Establish the history boundary before yielding: later events and flushes
+  // must never capture counts the user has asked to delete.
   database = { version: DIAGNOSTIC_HEALTH_VERSION, days: [] };
-  if (targetPath) {
-    await fs.rm(targetPath, { force: true });
-  }
+  const target = targetPath;
+  const deletion = queue.then(async () => {
+    if (target) await fs.rm(target, { force: true });
+  });
+  // Reserve deletion's place in the same queue as snapshot publication. Keep
+  // the queue usable on failure, but report the rejection to the delete caller.
+  queue = deletion.catch(() => { persistenceFailed = true; });
+  await deletion;
 }

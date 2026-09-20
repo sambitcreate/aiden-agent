@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { readRegularFile } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
 const MAX_INDEX_DEPTH = 20;
@@ -292,7 +293,14 @@ export async function readWorkspaceFile(
   if (stats.size > MAX_EDITOR_BYTES) {
     throw new Error(`${relativePath} is too large to edit in Aiden (${Math.ceil(stats.size / 1_000_000)} MB).`);
   }
-  const buffer = await fs.readFile(fullPath);
+  // A pathname stat is only a snapshot: another app can grow or replace the
+  // file before it is read. Enforce the byte limit on the opened descriptor.
+  const buffer = await readRegularFile(fullPath, MAX_EDITOR_BYTES).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "EFBIG") {
+      throw new Error(`${relativePath} is too large to edit in Aiden.`);
+    }
+    throw error;
+  });
   throwIfAborted(signal);
   return {
     path: relativePath,
