@@ -176,6 +176,9 @@ function mapGitError(error: unknown): never {
   if (error.code === "aborted") {
     throw new AidenRemoteServiceError("operation_stale", "The Git operation was cancelled.", 409, true);
   }
+  if (error.code === "insufficient_disk") {
+    throw new AidenRemoteServiceError("invalid_request", error.message, 400);
+  }
   throw new AidenRemoteServiceError(
     "git_capability_denied",
     error.code === "not_repo"

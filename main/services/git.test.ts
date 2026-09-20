@@ -422,6 +422,38 @@ process.exit(result.status ?? 1);
   return wrapper;
 }
 
+async function writeGitConfigEnvObserver(
+  directory: string,
+  invocationRecord: string,
+): Promise<string> {
+  const wrapper = path.join(directory, `git-env-observer-${Date.now().toString(36)}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const record = { args, config: {} };
+for (const [key, value] of Object.entries(process.env)) {
+  if (/^GIT_CONFIG_(KEY|VALUE|COUNT)/.test(key)) record.config[key] = value;
+}
+appendFileSync(${JSON.stringify(invocationRecord)}, JSON.stringify(record) + "\\n");
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
 test("parseGitStatus handles NUL-delimited paths and rename pairs", () => {
   const raw = [
     "# branch.oid 1234567890abcdef",
@@ -2595,6 +2627,131 @@ test("GitService serializes mutations by common directory", async (t) => {
   await assert.rejects(service.createBranch(repository, "feature/first"));
   await service.createBranch(repository, "feature/after-failure");
   assert.equal(await git(repository, ["branch", "--show-current"]), "feature/after-failure");
+});
+
+test("GitService never executes repository hooks when creating a managed worktree", async (t) => {
+  const repository = await createRepository(t);
+  const sentinel = path.join(repository, "post-checkout-ran");
+  const hooksDir = path.join(repository, ".git", "hooks");
+  await fs.writeFile(
+    path.join(hooksDir, "post-checkout"),
+    `#!/bin/sh\nprintf ran > ${JSON.stringify(sentinel)}\n`,
+    { encoding: "utf8", mode: 0o755 },
+  );
+
+  // The hook really does fire on an unmanaged `git worktree add`.
+  const foreign = await temporaryDirectory(t);
+  await git(repository, [
+    "worktree",
+    "add",
+    "-b",
+    "codex/foreign",
+    "--",
+    path.join(foreign, "checkout"),
+    "HEAD",
+  ]);
+  assert.equal(await fs.readFile(sentinel, "utf8"), "ran");
+  await fs.rm(sentinel);
+
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/managed-no-hooks");
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  await assert.rejects(fs.access(sentinel));
+});
+
+test("GitService disables repository automation during managed worktree creation", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const record = path.join(root, "git-env.jsonl");
+  const wrapper = await writeGitConfigEnvObserver(root, record);
+  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+
+  await service.createWorktree(repository, root, "codex/automation-off");
+
+  const invocations = (await fs.readFile(record, "utf8"))
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as { args: string[]; config: Record<string, string> });
+  const add = invocations.find(
+    (entry) => entry.args[0] === "worktree" && entry.args[1] === "add",
+  );
+  assert.ok(add, "git worktree add was not invoked");
+  const pairs = Object.keys(add.config)
+    .filter((key) => /^GIT_CONFIG_KEY_\d+$/u.test(key))
+    .map((key) => [
+      add.config[key],
+      add.config[`GIT_CONFIG_VALUE_${key.slice("GIT_CONFIG_KEY_".length)}`],
+    ]);
+  assert.ok(
+    pairs.some(([key, value]) => key === "core.hooksPath" && value === ""),
+    "worktree add did not disable repository hooks",
+  );
+  assert.ok(
+    pairs.some(([key, value]) => key === "core.fsmonitor" && value === "false"),
+    "worktree add did not disable fsmonitor",
+  );
+});
+
+test("GitService admits and refuses managed worktree creation by free disk space", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+
+  // The real statfs probe runs against the managed root's filesystem.
+  const created = await service.createWorktree(repository, root, "codex/disk-ok");
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+
+  // Every subsequent creation on the same root still passes — regression guard
+  // for the admission path staying a no-op when space is abundant.
+  const second = await service.createWorktree(repository, root, "codex/disk-ok-2");
+  assert.equal((await fs.stat(second.path)).isDirectory(), true);
+});
+
+test("GitService refuses managed worktree creation when disk space is insufficient", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    // A filesystem with 100 GiB capacity needs a 10 GiB reserve plus twice the
+    // checkout estimate — 9 GiB free is never enough.
+    worktreeDiskProbe: async () => ({ freeBytes: 9 * 1024 ** 3, capacityBytes: 100 * 1024 ** 3 }),
+  });
+
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/no-disk"),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "insufficient_disk" &&
+      /needs approximately .*available/u.test(error.message),
+  );
+  // Nothing was created: no branch, no worktree registration, no checkout dir.
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/no-disk"]),
+  );
+  assert.deepEqual(await fs.readdir(root), []);
+});
+
+test("GitService fails creation closed when free space cannot be determined", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDiskProbe: async () => {
+      throw Object.assign(new Error("statfs failed"), { code: "EIO" });
+    },
+  });
+
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/no-statfs"),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not determine free disk space/u.test(error.message),
+  );
+  assert.equal((await service.worktrees(repository)).length, 1);
+  assert.deepEqual(await fs.readdir(root), []);
 });
 
 test("GitService creates, lists, and removes managed worktrees", async (t) => {

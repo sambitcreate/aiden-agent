@@ -16,6 +16,12 @@ import {
   removeManagedWorktreeDirectory,
   type ManagedWorktreeDirectoryIdentity,
 } from "./managed-worktree-remover.js";
+import {
+  assertWorktreeDiskAdmission,
+  estimateTrackedCheckoutBytes,
+  WorktreeDiskAdmissionError,
+  type StatfsProbe,
+} from "./worktree-disk-admission.js";
 
 const DEFAULT_READ_TIMEOUT_MS = 4_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 20_000;
@@ -44,6 +50,7 @@ export type GitErrorCode =
   | "command_failed"
   | "conflicted"
   | "dirty_worktree"
+  | "insufficient_disk"
   | "invalid_input"
   | "invalid_ref"
   | "not_repo"
@@ -96,6 +103,13 @@ interface GitRunOptions {
   prePushProxy?: GitPrePushProxy;
   mutation?: boolean;
   nonInteractiveCommit?: boolean;
+  /**
+   * Managed-worktree lifecycle operations must never run repository hooks or
+   * trust fsmonitor state. Sets `core.hooksPath` to an empty directory marker
+   * and `core.fsmonitor` to false for this invocation only — repository config
+   * files are never touched.
+   */
+  disableRepositoryAutomation?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -137,6 +151,7 @@ export interface GitServiceOptions {
   readTimeoutMs?: number;
   snapshotMaxBytes?: number;
   worktreeDirectoryRemover?: (identity: ManagedWorktreeDirectoryIdentity) => Promise<void>;
+  worktreeDiskProbe?: StatfsProbe;
   worktreeRemovalManifestFinalizer?: (targetPath: string, expectedDigest: string) => Promise<void>;
   worktreeRemovalManifestInspector?: (targetPath: string) => Promise<boolean>;
 }
@@ -446,6 +461,11 @@ function gitCommandConfigEnvironment(options: GitRunOptions): NodeJS.ProcessEnv 
     }
   }
   if (options.prePushProxy) entries.push(["core.hooksPath", options.prePushProxy.hooksPath]);
+  if (options.disableRepositoryAutomation) {
+    // Empty hooksPath disables every hook; fsmonitor off keeps lifecycle
+    // reads deterministic. Placed last so it wins over any earlier entry.
+    entries.push(["core.hooksPath", ""], ["core.fsmonitor", "false"]);
+  }
   if (entries.length === 0) return {};
   const env: NodeJS.ProcessEnv = { GIT_CONFIG_COUNT: String(entries.length) };
   entries.forEach(([key, value], index) => {
@@ -792,6 +812,7 @@ export class GitService {
   private readonly worktreeDirectoryRemover: (
     identity: ManagedWorktreeDirectoryIdentity,
   ) => Promise<void>;
+  private readonly worktreeDiskProbe: StatfsProbe | undefined;
   private readonly worktreeRemovalManifestFinalizer: (
     targetPath: string,
     expectedDigest: string,
@@ -814,6 +835,7 @@ export class GitService {
     this.cacheEntries = options.cacheEntries ?? DEFAULT_CACHE_ENTRIES;
     this.worktreeDirectoryRemover =
       options.worktreeDirectoryRemover ?? removeManagedWorktreeDirectory;
+    this.worktreeDiskProbe = options.worktreeDiskProbe;
     this.worktreeRemovalManifestFinalizer =
       options.worktreeRemovalManifestFinalizer ?? finalizeManagedWorktreeRemovalManifest;
     this.worktreeRemovalManifestInspector =
@@ -4212,7 +4234,9 @@ export class GitService {
             "-z",
             "--untracked-files=all",
             "--ignored=matching",
-          ])
+          ], {
+            disableRepositoryAutomation: true,
+          })
         ).stdout,
       );
       if (status.uncommitted > 0 || status.ignored > 0) {
@@ -4340,7 +4364,9 @@ export class GitService {
                   "-z",
                   "--untracked-files=all",
                   "--ignored=matching",
-                ])
+                ], {
+                  disableRepositoryAutomation: true,
+                })
               ).stdout,
             );
             if (status.uncommitted > 0 || status.ignored > 0) {
@@ -4531,14 +4557,20 @@ export class GitService {
     try {
       const status = parseGitStatus(
         (
-          await this.run(worktreePath, [
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-          ])
+          await this.run(
+            worktreePath,
+            [
+              "status",
+              "--porcelain=v2",
+              "--branch",
+              "-z",
+              "--untracked-files=all",
+              "--ignored=matching",
+            ],
+            {
+              disableRepositoryAutomation: true,
+            },
+          )
         ).stdout,
       );
       if (status.uncommitted > 0 || status.ignored > 0) {
@@ -4620,6 +4652,7 @@ export class GitService {
       // A preceding show-ref cannot provide this authority because an external
       // Git process may advance or recreate the branch before deletion.
       await this.run(repo.cwd, ["update-ref", "-d", refName, expectedHead], {
+        disableRepositoryAutomation: true,
         mutation: true,
         signal,
       });
@@ -4633,6 +4666,7 @@ export class GitService {
       }
       const current = await this.run(repo.cwd, ["show-ref", "--verify", "--hash", refName], {
         allowExitCodes: [1],
+        disableRepositoryAutomation: true,
         signal,
       });
       if (current.exitCode !== 0 || current.stdout.trim() !== expectedHead) return false;
@@ -4655,10 +4689,43 @@ export class GitService {
         ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
         {
           allowExitCodes: [1],
+          disableRepositoryAutomation: true,
         },
       );
       if (exists.exitCode === 0)
         throw new GitServiceError("invalid_ref", `Branch “${branch}” already exists.`);
+
+      // Admit only when the destination filesystem can hold roughly double
+      // the tracked checkout plus a reserve. Fails closed when free space
+      // cannot be determined.
+      const checkoutBytes = await estimateTrackedCheckoutBytes(
+        (
+          await this.run(repo.topLevel, ["ls-files", "-z"], {
+            disableRepositoryAutomation: true,
+            signal,
+          })
+        ).stdout,
+        repo.topLevel,
+      );
+      try {
+        await assertWorktreeDiskAdmission(
+          root,
+          {
+            checkoutBytes,
+            provisionedBytes: 0,
+          },
+          this.worktreeDiskProbe,
+        );
+      } catch (error) {
+        if (error instanceof WorktreeDiskAdmissionError) {
+          throw new GitServiceError(
+            error.failure === "insufficient" ? "insufficient_disk" : "command_failed",
+            error.message,
+            error,
+          );
+        }
+        throw error;
+      }
 
       const repositoryId = createHash("sha256").update(repo.commonDir).digest("hex").slice(0, 12);
       const repositoryName =
@@ -4674,6 +4741,7 @@ export class GitService {
       let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
       try {
         await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", worktreePath, "HEAD"], {
+          disableRepositoryAutomation: true,
           mutation: true,
           signal,
         });
@@ -4686,11 +4754,13 @@ export class GitService {
             "command_failed",
             "Git created the worktree but Aiden could not inspect it.",
           );
-        const gitDirResult = await this.run(created.path, [
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-dir",
-        ]);
+        const gitDirResult = await this.run(
+          created.path,
+          ["rev-parse", "--path-format=absolute", "--git-dir"],
+          {
+            disableRepositoryAutomation: true,
+          },
+        );
         const worktreeGitDir = this.validatedWorktreeGitDir(
           repo,
           await fs.realpath(gitDirResult.stdout.trim()),
@@ -4852,14 +4922,20 @@ export class GitService {
           }
           const status = parseGitStatus(
             (
-              await this.run(worktreePath, [
-                "status",
-                "--porcelain=v2",
-                "--branch",
-                "-z",
-                "--untracked-files=all",
-                "--ignored=matching",
-              ])
+              await this.run(
+                worktreePath,
+                [
+                  "status",
+                  "--porcelain=v2",
+                  "--branch",
+                  "-z",
+                  "--untracked-files=all",
+                  "--ignored=matching",
+                ],
+                {
+                  disableRepositoryAutomation: true,
+                },
+              )
             ).stdout,
           );
           if (status.uncommitted > 0 || status.ignored > 0) {
