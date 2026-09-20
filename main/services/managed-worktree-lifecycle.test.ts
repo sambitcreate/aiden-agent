@@ -23,8 +23,14 @@ import {
   readWorktreeInclude,
 } from "./managed-worktree-provisioner.js";
 import {
+  restoreManagedWorktreeSnapshot,
+  type ManagedWorktreeRestoreDependencies,
+} from "./managed-worktree-restore.js";
+import {
   captureProvisionedFile,
+  createManagedWorktreeRestoreJournal,
   ManagedWorktreeSnapshotError,
+  type ManagedWorktreeRestoreJournal,
   persistManagedWorktreeSnapshot,
   readManagedWorktreeSnapshot,
   requireReadyManagedWorktreeSnapshot,
@@ -245,6 +251,104 @@ test("an unknown ignored file blocks safe deletion even with a snapshot", async 
   );
 });
 
+test("a provisioned file inside an ignored directory does not block safe deletion", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: removeAfterAuthorize,
+  });
+  const created = await service.createWorktree(repository, root, "codex/ignored-dir");
+  // `generated/` collapses to a directory record under --ignored=matching while
+  // the allowlist names the file inside it.
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\ngenerated/\n");
+  await fs.mkdir(path.join(created.path, "generated"));
+  await fs.writeFile(path.join(created.path, "generated", "fixture.bin"), "fixture\n");
+
+  const snapshotId = randomUUID();
+  const capture = await service.captureManagedWorktreeSnapshot(
+    repository,
+    created.path,
+    snapshotId,
+  );
+  await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    false,
+    {
+      snapshot: {
+        id: snapshotId,
+        ref: capture.ref,
+        commit: capture.commit,
+        tree: capture.tree,
+      },
+      provisionedIgnored: ["generated/fixture.bin"],
+    },
+  );
+  await assert.rejects(fs.lstat(created.path), { code: "ENOENT" });
+});
+
+test("an ignored directory holding unprovisioned files still blocks safe deletion", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: removeAfterAuthorize,
+  });
+  const created = await service.createWorktree(repository, root, "codex/mixed-ignored");
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\ngenerated/\n");
+  await fs.mkdir(path.join(created.path, "generated"));
+  await fs.writeFile(path.join(created.path, "generated", "fixture.bin"), "fixture\n");
+  await fs.writeFile(path.join(created.path, "generated", "extra.bin"), "user file\n");
+
+  const snapshotId = randomUUID();
+  const capture = await service.captureManagedWorktreeSnapshot(
+    repository,
+    created.path,
+    snapshotId,
+  );
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      false,
+      {
+        snapshot: {
+          id: snapshotId,
+          ref: capture.ref,
+          commit: capture.commit,
+          tree: capture.tree,
+        },
+        provisionedIgnored: ["generated/fixture.bin"],
+      },
+    ),
+    (error: unknown) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.cause instanceof GitServiceError &&
+      error.cause.code === "dirty_worktree" &&
+      error.destructiveMutationAttempted === false,
+  );
+  assert.ok((await fs.lstat(created.path)).isDirectory());
+  assert.equal(
+    await fs.readFile(path.join(created.path, "generated", "extra.bin"), "utf8"),
+    "user file\n",
+  );
+});
+
 test("force deletion bypasses recoverability checks but not identity checks", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
@@ -445,6 +549,119 @@ test("restore recreates dirty state without putting the synthetic commit on the 
   const log = await git(restored.path, ["log", "--format=%s"]);
   assert.ok(!log.includes(`aiden snapshot ${snapshotId}`));
   assert.equal(await git(restored.path, ["rev-parse", "HEAD"]), capture.head);
+});
+
+test("restore converges after a crash between checkout creation and journal update", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotRoot = await temporaryDirectory(t);
+  const worktreeRoot = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: removeAfterAuthorize,
+  });
+  const created = await service.createWorktree(repository, root, "codex/resume");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n");
+  const snapshotId = randomUUID();
+  const snapshotDir = path.join(snapshotRoot, snapshotId);
+  await fs.mkdir(path.join(snapshotDir, "files"), { recursive: true });
+  const capture = await service.captureManagedWorktreeSnapshot(
+    repository,
+    created.path,
+    snapshotId,
+  );
+  const manifest: ManagedWorktreeSnapshot = {
+    id: snapshotId,
+    workspaceId: "workspace-source",
+    repositoryPath: created.repositoryPath,
+    worktreePath: created.path,
+    workspaceSubpath: "",
+    branch: created.branch,
+    originalHead: capture.head,
+    snapshotRef: capture.ref,
+    snapshotCommit: capture.commit,
+    snapshotTree: capture.tree,
+    createdAt: Date.now(),
+    provisionedFiles: [],
+    state: "ready",
+  };
+  await persistManagedWorktreeSnapshot(snapshotRoot, manifest);
+  await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    false,
+    {
+      snapshot: {
+        id: snapshotId,
+        ref: capture.ref,
+        commit: capture.commit,
+        tree: capture.tree,
+      },
+      provisionedIgnored: [],
+    },
+  );
+
+  const deps: ManagedWorktreeRestoreDependencies = {
+    ensureWorktreeRoot: async () => worktreeRoot,
+    snapshotRoot: async () => snapshotRoot,
+    repositoryPaths: async () => ({
+      topLevel: repository,
+      commonDir: path.join(repository, ".git"),
+    }),
+    snapshotCommit: (repo, id) => service.managedWorktreeSnapshotCommit(repo, id),
+    restoreCheckout: (repo, r, wt, b, base, sub, signal) =>
+      service.restoreManagedWorktreeCheckout(repo, r, wt, b, base, sub, signal),
+    resumeCheckout: (repo, wt, b, base, sub, signal) =>
+      service.resumeManagedWorktreeCheckout(repo, wt, b, base, sub, signal),
+    applySnapshot: (wt, commit, signal) =>
+      service.applyManagedWorktreeSnapshot(repository, wt, commit, signal),
+    managedWorktreeUsable: (repo, wt, b, gitDir, token, dev, ino) =>
+      service.managedWorktreeUsable(repo, wt, b, gitDir, token, dev, ino),
+    createWorkspaceId: () => "workspace-restored",
+  };
+
+  // Simulate the crash window: the journal recorded the planned path and the
+  // checkout was created, but the checkout identity was never journaled.
+  const plannedParent = path.join(worktreeRoot, "repository-planned");
+  await fs.mkdir(plannedParent, { recursive: true });
+  const plannedPath = path.join(plannedParent, "restored");
+  const planned: ManagedWorktreeRestoreJournal = {
+    version: 1,
+    phase: "checkout_planned",
+    snapshotId,
+    workspaceId: "workspace-restored",
+    worktreePath: plannedPath,
+  };
+  await createManagedWorktreeRestoreJournal(snapshotRoot, planned);
+  await service.restoreManagedWorktreeCheckout(
+    repository,
+    plannedParent,
+    plannedPath,
+    created.branch,
+    capture.head,
+    "",
+  );
+
+  const first = await restoreManagedWorktreeSnapshot(deps, snapshotId);
+  assert.equal(first.workspaceId, "workspace-restored");
+  assert.equal(first.worktree.path, plannedPath);
+  const status = await git(plannedPath, ["status", "--porcelain=v2", "-z"]);
+  assert.match(status, /1 \.M [^\0\n]* README\.md/u);
+
+  // A retry after completion converges to the saved result instead of
+  // attaching the recorded branch to a fresh random path.
+  const again = await restoreManagedWorktreeSnapshot(deps, snapshotId);
+  assert.equal(again.workspaceId, "workspace-restored");
+  assert.equal(again.worktree.path, plannedPath);
+  const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
+  assert.equal(worktrees.match(/^worktree /gm)?.length, 2);
 });
 
 test("restore fails closed on branch conflicts and existing destinations", async (t) => {
