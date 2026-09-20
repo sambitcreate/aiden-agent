@@ -485,12 +485,12 @@ class AidenChatTest {
             reasoningEnd = end
         )
 
-        assertEquals("Inspecting repo...", step(0, 17).reasoningText(reasoning))
-        assertEquals("Found the issue.", step(17, 32).reasoningText(reasoning))
+        assertEquals("Inspecting repo...", step(0, 18).reasoningText(reasoning))
+        assertEquals("Found the issue.", step(18, 34).reasoningText(reasoning))
         // A still-running segment covers the buffer tail.
-        assertEquals("Found the issue.", step(17, null, finishedAt = null).reasoningText(reasoning))
+        assertEquals("Found the issue.", step(18, null, finishedAt = null).reasoningText(reasoning))
         // Start-only on a settled step has no defined tail.
-        assertNull(step(17, null).reasoningText(reasoning))
+        assertNull(step(18, null).reasoningText(reasoning))
         assertNull(step(null, null).reasoningText(reasoning))
         assertNull(step(-1, 5).reasoningText(reasoning))
         assertNull(step(5, 0).reasoningText(reasoning))

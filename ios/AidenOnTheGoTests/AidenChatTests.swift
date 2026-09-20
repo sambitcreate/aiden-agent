@@ -3604,7 +3604,7 @@ final class AidenAppearanceTests: XCTestCase {
         let chat = try decoder.decode(
             AidenChat.self,
             from: Data(
-                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Segments","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"reasoningStart":0,"reasoningEnd":17,"durationMs":500},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"target":"README.md"},{"id":"think-2","order":2,"kind":"thinking","startedAt":2000,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"reasoningStart":17,"reasoningEnd":32,"durationMs":1000}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Segments","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"reasoningStart":0,"reasoningEnd":18,"durationMs":500},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"target":"README.md"},{"id":"think-2","order":2,"kind":"thinking","startedAt":2000,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"reasoningStart":18,"reasoningEnd":34,"durationMs":1000}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
             )
         )
 
@@ -3627,7 +3627,7 @@ final class AidenAppearanceTests: XCTestCase {
             updatedAt: 3_200,
             finishedAt: nil,
             contentOffset: 0,
-            reasoningStart: 17,
+            reasoningStart: 18,
             reasoningEnd: nil,
             durationMs: nil,
             target: nil,
@@ -3671,7 +3671,7 @@ final class AidenAppearanceTests: XCTestCase {
             updatedAt: 3_400,
             finishedAt: 3_400,
             contentOffset: 0,
-            reasoningStart: 17,
+            reasoningStart: 18,
             reasoningEnd: nil,
             durationMs: nil,
             target: nil,
