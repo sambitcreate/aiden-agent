@@ -12,6 +12,7 @@ import {
   type ManagedWorktreeRestoreJournal,
   type ManagedWorktreeSnapshot,
   ManagedWorktreeSnapshotError,
+  createManagedWorktreeRestoreJournal,
   readManagedWorktreeRestoreJournal,
   requireReadyManagedWorktreeSnapshot,
   restoreProvisionedFiles,
@@ -19,6 +20,13 @@ import {
   verifyProvisionedFileBlobs,
   writeManagedWorktreeRestoreJournal,
 } from "./managed-worktree-snapshot.js";
+
+async function pathExists(target: string): Promise<boolean> {
+  return fs.lstat(target).then(
+    () => true,
+    () => false,
+  );
+}
 
 export interface ManagedWorktreeRestoreDependencies {
   ensureWorktreeRoot(): Promise<string>;
@@ -28,6 +36,14 @@ export interface ManagedWorktreeRestoreDependencies {
   restoreCheckout(
     repositoryPath: string,
     root: string,
+    worktreePath: string,
+    branch: string,
+    baseCommit: string,
+    workspaceSubpath: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree>;
+  resumeCheckout(
+    repositoryPath: string,
     worktreePath: string,
     branch: string,
     baseCommit: string,
@@ -154,6 +170,10 @@ export async function restoreManagedWorktreeSnapshot(
   await updateManagedWorktreeSnapshotState(snapshotRoot, snapshot, "restoring");
 
   if (journal === undefined) {
+    // Journal the planned checkout path before creating it so a crash between
+    // `worktree add` and the journal write cannot orphan a registered worktree
+    // on an unreachable branch. The exclusive create also converges two
+    // concurrent restores of the same snapshot onto one plan.
     const worktreeRoot = await dependencies.ensureWorktreeRoot();
     const { repositoryRoot, worktreePath } = restoredWorktreePath(
       worktreeRoot,
@@ -162,21 +182,55 @@ export async function restoreManagedWorktreeSnapshot(
       snapshot.branch,
     );
     await fs.mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
-    const worktree = await dependencies.restoreCheckout(
-      snapshot.repositoryPath,
-      repositoryRoot,
-      worktreePath,
-      snapshot.branch,
-      snapshot.originalHead,
-      snapshot.workspaceSubpath,
-      signal,
-    );
-    journal = {
+    const planned: ManagedWorktreeRestoreJournal = {
       version: 1,
-      phase: "checkout_created",
+      phase: "checkout_planned",
       snapshotId,
       workspaceId: dependencies.createWorkspaceId(),
-      worktreePath: worktree.path,
+      worktreePath,
+    };
+    try {
+      await createManagedWorktreeRestoreJournal(snapshotRoot, planned);
+      journal = planned;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") throw error;
+      journal = await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId);
+      if (journal === undefined) {
+        throw new ManagedWorktreeSnapshotError(
+          "snapshot_invalid",
+          "The managed worktree restore journal could not be verified.",
+        );
+      }
+    }
+  }
+
+  if (journal.phase === "checkout_planned") {
+    let worktree: GitCreatedWorktree;
+    if (await pathExists(journal.worktreePath)) {
+      // A crash after `worktree add` left the checkout here; adopt it only when
+      // every identity check verifies it as the one Aiden created.
+      worktree = await dependencies.resumeCheckout(
+        snapshot.repositoryPath,
+        journal.worktreePath,
+        snapshot.branch,
+        snapshot.originalHead,
+        snapshot.workspaceSubpath,
+        signal,
+      );
+    } else {
+      worktree = await dependencies.restoreCheckout(
+        snapshot.repositoryPath,
+        path.dirname(journal.worktreePath),
+        journal.worktreePath,
+        snapshot.branch,
+        snapshot.originalHead,
+        snapshot.workspaceSubpath,
+        signal,
+      );
+    }
+    journal = {
+      ...journal,
+      phase: "checkout_created",
       worktreeGitDir: worktree.worktreeGitDir,
       ownershipToken: worktree.ownershipToken,
       worktreeDevice: worktree.worktreeDevice,

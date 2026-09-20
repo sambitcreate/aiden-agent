@@ -11,13 +11,16 @@ import {
   gitListFiles,
   gitManagedWorktreeCheckoutBytes,
   gitManagedWorktreeDeletionPending,
+  gitManagedWorktreeDirtyBytes,
   gitManagedWorktreeDirtyState,
   gitManagedWorktreeRegistered,
   gitManagedWorktreeSnapshotCommit,
   gitManagedWorktreeUsable,
   gitRepositoryPaths,
   gitRestoreManagedWorktreeCheckout,
+  gitResumeManagedWorktreeCheckout,
   gitRollbackWorktree,
+  gitExpandManagedWorktreeIgnored,
 } from "./git.js";
 import { checkCreateCapacity, checkSnapshotCapacity } from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
@@ -85,9 +88,12 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     provisionWorktreeIncludedFiles({ listFiles: gitListFiles }, options),
   repositoryPaths: gitRepositoryPaths,
   dirtyState: gitManagedWorktreeDirtyState,
+  expandIgnoredPaths: gitExpandManagedWorktreeIgnored,
+  snapshotContentBytes: gitManagedWorktreeDirtyBytes,
   captureWorktreeSnapshot: gitCaptureManagedWorktreeSnapshot,
   snapshotRefCommit: gitManagedWorktreeSnapshotCommit,
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
+  resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
     gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {

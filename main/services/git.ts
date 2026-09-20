@@ -4023,19 +4023,58 @@ export class GitService {
   }
 
   /**
+   * Expand ignored status entries to file granularity. `--ignored=matching`
+   * collapses an ignored directory to its `dir/` record, while the provisioned
+   * allowlist names files — coverage is decided by enumerating ignored files
+   * under each directory record. Returns undefined when the expansion exceeds
+   * the status cap (treated as unknown).
+   */
+  private async expandIgnoredStatusPaths(
+    scan: { cwd: string; args?: string[] },
+    ignoredPaths: readonly string[],
+  ): Promise<string[] | undefined> {
+    const expanded: string[] = [];
+    for (const entry of ignoredPaths) {
+      if (!entry.endsWith("/")) {
+        expanded.push(entry);
+        continue;
+      }
+      const result = await this.run(scan.cwd, [
+        ...(scan.args ?? []),
+        "ls-files",
+        "-z",
+        "-o",
+        "-i",
+        "--exclude-standard",
+        "--",
+        entry,
+      ]);
+      const files = result.stdout.split("\u0000").filter((file) => file.length > 0);
+      if (files.length + expanded.length > MANAGED_STATUS_PATH_LIMIT) return undefined;
+      expanded.push(...files);
+    }
+    return expanded;
+  }
+
+  /**
    * Classify a quarantine-boundary status read against the deletion policy.
    * "strict" keeps legacy behavior: any dirt blocks. A snapshot policy admits
    * snapshotted dirt but still blocks ignored files Aiden never provisioned;
    * force skips recoverability guards entirely.
    */
-  private managedWorktreeDeletionBlocked(
+  private async managedWorktreeDeletionBlocked(
     policy: ManagedWorktreeDeletionPolicy,
     status: ParsedStatus,
-  ): "strict_dirty" | "unknown_ignored" | "unsnapshotted_dirty" | undefined {
+    scan: { cwd: string; args?: string[] },
+  ): Promise<"strict_dirty" | "unknown_ignored" | "unsnapshotted_dirty" | undefined> {
     if (policy.mode === "force") return undefined;
-    const unknownIgnored =
-      status.ignored > status.ignoredPaths.length ||
-      status.ignoredPaths.some((entry) => !policy.allowedIgnored.has(entry));
+    let unknownIgnored = status.ignored > status.ignoredPaths.length;
+    if (!unknownIgnored) {
+      const expanded = await this.expandIgnoredStatusPaths(scan, status.ignoredPaths);
+      unknownIgnored =
+        expanded === undefined ||
+        expanded.some((entry) => !policy.allowedIgnored.has(entry));
+    }
     if (policy.snapshotTree === null && policy.allowedIgnored.size === 0) {
       return status.uncommitted > 0 || status.ignored > 0 ? "strict_dirty" : undefined;
     }
@@ -4487,7 +4526,12 @@ export class GitService {
           ])
         ).stdout,
       );
-      if (this.managedWorktreeDeletionBlocked(activePolicy, status) !== undefined) {
+      if (
+        (await this.managedWorktreeDeletionBlocked(activePolicy, status, {
+          cwd: repo.cwd,
+          args: [`--git-dir=${activeGitDir}`, `--work-tree=${checkoutRemovalPath!}`],
+        })) !== undefined
+      ) {
         if (!adminQuarantined && checkoutMovedThisCall) {
           await this.restoreQuarantinedPath(removal.checkout, worktreePath);
         }
@@ -4615,7 +4659,12 @@ export class GitService {
                 ])
               ).stdout,
             );
-            if (this.managedWorktreeDeletionBlocked(activePolicy, status) !== undefined) {
+            if (
+              (await this.managedWorktreeDeletionBlocked(activePolicy, status, {
+                cwd: repo.cwd,
+                args: [`--git-dir=${adminRemovalPath!}`, `--work-tree=${scannedPath}`],
+              })) !== undefined
+            ) {
               throw new GitServiceError(
                 "dirty_worktree",
                 "The managed worktree changed after its deletion scan and was preserved for review.",
@@ -4834,9 +4883,16 @@ export class GitService {
           ])
         ).stdout,
       );
-      const unknownIgnored =
-        status.ignored > status.ignoredPaths.length ||
-        status.ignoredPaths.some((entry) => !rollbackPolicy.allowedIgnored.has(entry));
+      let unknownIgnored = status.ignored > status.ignoredPaths.length;
+      if (!unknownIgnored) {
+        const expanded = await this.expandIgnoredStatusPaths(
+          { cwd: worktreePath },
+          status.ignoredPaths,
+        );
+        unknownIgnored =
+          expanded === undefined ||
+          expanded.some((entry) => !rollbackPolicy.allowedIgnored.has(entry));
+      }
       if (status.uncommitted > 0 || unknownIgnored) {
         return new GitServiceError(
           "dirty_worktree",
@@ -5172,7 +5228,11 @@ export class GitService {
               ])
             ).stdout,
           );
-          const blocked = this.managedWorktreeDeletionBlocked(lifecyclePolicy, status);
+          const blocked = await this.managedWorktreeDeletionBlocked(
+            lifecyclePolicy,
+            status,
+            { cwd: worktreePath },
+          );
           if (blocked === "unknown_ignored") {
             throw new GitServiceError(
               "dirty_worktree",
@@ -5469,6 +5529,151 @@ export class GitService {
       ignored: parsed.ignored,
       ignoredPaths: parsed.ignoredPaths,
     };
+  }
+
+  /**
+   * Expand `--ignored=matching` status records to file granularity for the
+   * service layer's advisory deletion-policy check. Returns undefined when the
+   * expansion exceeds the status path cap.
+   */
+  async expandManagedWorktreeIgnored(
+    cwd: string,
+    worktreePath: string,
+    ignoredPaths: readonly string[],
+  ): Promise<string[] | undefined> {
+    await this.requireRepository(await this.repository(cwd));
+    return this.expandIgnoredStatusPaths({ cwd: worktreePath }, ignoredPaths);
+  }
+
+  /**
+   * Approximate bytes a snapshot adds to the object database: the content of
+   * modified and non-ignored untracked files (staged blobs already exist, and
+   * the object store dedupes identical content).
+   */
+  async managedWorktreeDirtyBytes(cwd: string, worktreePath: string): Promise<number> {
+    await this.requireRepository(await this.repository(cwd));
+    const result = await this.run(worktreePath, [
+      "ls-files",
+      "-z",
+      "-m",
+      "-o",
+      "--exclude-standard",
+    ]);
+    let bytes = 0;
+    for (const entry of result.stdout.split("\u0000")) {
+      if (entry.length === 0) continue;
+      try {
+        const stat = await fs.lstat(path.join(worktreePath, entry));
+        if (stat.isFile() && !stat.isSymbolicLink()) bytes += stat.size;
+      } catch {
+        // Content vanishing mid-estimate is fine; the boundary re-scans anyway.
+      }
+    }
+    return bytes;
+  }
+
+  /**
+   * Adopt a checkout a previous restore attempt created before it could journal
+   * the result. Reads the persisted ownership marker rather than trusting the
+   * caller and fails closed when any identity check does not match.
+   */
+  async resumeManagedWorktreeCheckout(
+    cwd: string,
+    worktreePath: string,
+    branch: string,
+    baseCommit: string,
+    workspaceSubpath: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    if (!GIT_OBJECT_ID.test(baseCommit)) {
+      throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
+    }
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return this.enqueueMutation(repo.commonDir, async () => {
+      signal?.throwIfAborted();
+      const resolvedTarget = path.resolve(worktreePath);
+      const checkoutIdentity = await fs.lstat(resolvedTarget).catch(() => undefined);
+      if (
+        checkoutIdentity === undefined ||
+        !checkoutIdentity.isDirectory() ||
+        checkoutIdentity.isSymbolicLink()
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "A partially restored managed worktree could not be verified.",
+        );
+      }
+      const gitFileContents = (
+        await fs.readFile(path.join(resolvedTarget, ".git"), "utf8")
+      ).trim();
+      const gitdirMatch = /^gitdir:\s+(.+)$/u.exec(gitFileContents);
+      if (gitdirMatch === null) {
+        throw new GitServiceError(
+          "command_failed",
+          "A partially restored managed worktree could not be verified.",
+        );
+      }
+      const worktreeGitDir = this.validatedWorktreeGitDir(
+        repo,
+        await fs.realpath(
+          path.isAbsolute(gitdirMatch[1])
+            ? gitdirMatch[1]
+            : path.resolve(resolvedTarget, gitdirMatch[1]),
+        ),
+      );
+      const ownershipToken = this.validatedWorktreeOwnershipToken(
+        (
+          await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8")
+        ).trim(),
+      );
+      const registeredGitFile = (
+        await fs.readFile(path.join(worktreeGitDir, "gitdir"), "utf8")
+      ).trim();
+      if (
+        path.basename(registeredGitFile) !== ".git" ||
+        path.resolve(
+          path.isAbsolute(registeredGitFile)
+            ? path.dirname(registeredGitFile)
+            : path.dirname(path.resolve(worktreeGitDir, registeredGitFile)),
+        ) !== resolvedTarget
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "A partially restored managed worktree could not be verified.",
+        );
+      }
+      const registration = (await this.inspectWorktrees(repo, resolvedTarget)).find(
+        (worktree) => path.resolve(worktree.path) === resolvedTarget,
+      );
+      if (
+        registration === undefined ||
+        registration.branch !== branch ||
+        registration.head !== baseCommit
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "A partially restored managed worktree could not be verified.",
+        );
+      }
+      return {
+        ...registration,
+        branch,
+        workspacePath: path.join(resolvedTarget, workspaceSubpath),
+        repositoryPath: repo.topLevel,
+        worktreeGitDir,
+        ownershipToken,
+        worktreeDevice: checkoutIdentity.dev,
+        worktreeInode: checkoutIdentity.ino,
+        createdFromHead: baseCommit,
+      };
+    });
   }
 
   /** Resolve a branch's commit, or undefined when the branch does not exist. */
@@ -5866,6 +6071,29 @@ export const gitApplyManagedWorktreeSnapshot = (
   snapshotCommit: string,
   signal?: AbortSignal,
 ) => gitService.applyManagedWorktreeSnapshot(folderPath, worktreePath, snapshotCommit, signal);
+export const gitResumeManagedWorktreeCheckout = (
+  folderPath: string,
+  worktreePath: string,
+  branch: string,
+  baseCommit: string,
+  workspaceSubpath: string,
+  signal?: AbortSignal,
+) =>
+  gitService.resumeManagedWorktreeCheckout(
+    folderPath,
+    worktreePath,
+    branch,
+    baseCommit,
+    workspaceSubpath,
+    signal,
+  );
+export const gitExpandManagedWorktreeIgnored = (
+  folderPath: string,
+  worktreePath: string,
+  ignoredPaths: readonly string[],
+) => gitService.expandManagedWorktreeIgnored(folderPath, worktreePath, ignoredPaths);
+export const gitManagedWorktreeDirtyBytes = (folderPath: string, worktreePath: string) =>
+  gitService.managedWorktreeDirtyBytes(folderPath, worktreePath);
 export const gitRepositoryPaths = (folderPath: string) =>
   gitService.repositoryPaths(folderPath);
 export const gitListFiles = (folderPath: string, args: readonly string[]) =>

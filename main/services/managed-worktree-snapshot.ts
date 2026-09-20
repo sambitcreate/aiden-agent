@@ -470,7 +470,11 @@ export async function restoreProvisionedFiles(
   }
 }
 
-export type ManagedWorktreeRestorePhase = "checkout_created" | "snapshot_applied" | "complete";
+export type ManagedWorktreeRestorePhase =
+  | "checkout_planned"
+  | "checkout_created"
+  | "snapshot_applied"
+  | "complete";
 
 export interface ManagedWorktreeRestoreJournal {
   version: 1;
@@ -498,7 +502,8 @@ export async function readManagedWorktreeRestoreJournal(
     typeof journal !== "object" ||
     journal === null ||
     journal.version !== 1 ||
-    (journal.phase !== "checkout_created" &&
+    (journal.phase !== "checkout_planned" &&
+      journal.phase !== "checkout_created" &&
       journal.phase !== "snapshot_applied" &&
       journal.phase !== "complete") ||
     journal.snapshotId !== snapshotId ||
@@ -528,6 +533,27 @@ export async function writeManagedWorktreeRestoreJournal(
     ...journal,
     version: 1,
   });
+}
+
+/**
+ * Publish the first restore journal atomically: fails with EEXIST when a
+ * journal already exists so two concurrent restores cannot plan divergent
+ * checkouts for the same snapshot.
+ */
+export async function createManagedWorktreeRestoreJournal(
+  root: string,
+  journal: ManagedWorktreeRestoreJournal,
+): Promise<void> {
+  const dir = snapshotDir(root, journal.snapshotId);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const handle = await fs.open(restoreJournalPath(dir), "wx", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify({ ...journal, version: 1 }), "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(dir);
 }
 
 /** Remove a completed restore journal; absent journals are already clean. */

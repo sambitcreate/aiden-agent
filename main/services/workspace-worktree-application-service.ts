@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import type {
   GitCreatedWorktree,
@@ -17,7 +18,6 @@ import { removeManagedWorkspace } from "./managed-worktree-removal-core.js";
 import { restoreManagedWorktreeSnapshot } from "./managed-worktree-restore.js";
 import {
   captureProvisionedFile,
-  clearManagedWorktreeRestoreJournal,
   persistManagedWorktreeSnapshot,
   type ProvisionedFileSnapshot,
   requireReadyManagedWorktreeSnapshot,
@@ -64,6 +64,12 @@ export interface WorkspaceWorktreeApplicationDependencies {
   }): Promise<string[]>;
   repositoryPaths(folderPath: string): Promise<{ topLevel: string; commonDir: string }>;
   dirtyState(repositoryPath: string, worktreePath: string): Promise<ManagedWorktreeDirtyState>;
+  expandIgnoredPaths(
+    repositoryPath: string,
+    worktreePath: string,
+    ignoredPaths: readonly string[],
+  ): Promise<string[] | undefined>;
+  snapshotContentBytes(repositoryPath: string, worktreePath: string): Promise<number>;
   captureWorktreeSnapshot(
     repositoryPath: string,
     worktreePath: string,
@@ -85,6 +91,14 @@ export interface WorkspaceWorktreeApplicationDependencies {
     snapshotCommit: string,
     signal?: AbortSignal,
   ): Promise<void>;
+  resumeManagedCheckout(
+    repositoryPath: string,
+    worktreePath: string,
+    branch: string,
+    baseCommit: string,
+    workspaceSubpath: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree>;
   saveWorkspace(workspace: Workspace): Promise<Workspace>;
   removeWorkspace(workspaceId: string): Promise<void>;
   beginWorkspaceMutation(workspaceId: string): () => void;
@@ -265,9 +279,19 @@ export function createWorkspaceWorktreeApplicationService(
               managed.repositoryPath,
               managed.worktreePath,
             );
-            const unknownIgnored =
-              dirty.ignored > dirty.ignoredPaths.length ||
-              dirty.ignoredPaths.some((entry) => !provisionedSet.has(entry));
+            // Status collapses ignored directories to `dir/` records while the
+            // allowlist names provisioned files — expand to file granularity.
+            let unknownIgnored = dirty.ignored > dirty.ignoredPaths.length;
+            if (!unknownIgnored) {
+              const expanded = await dependencies.expandIgnoredPaths(
+                managed.repositoryPath,
+                managed.worktreePath,
+                dirty.ignoredPaths,
+              );
+              unknownIgnored =
+                expanded === undefined ||
+                expanded.some((entry) => !provisionedSet.has(entry));
+            }
             const needsSnapshot = dirty.uncommitted > 0 || dirty.ignored > 0;
 
             const snapshotWorktree = async () => {
@@ -275,17 +299,40 @@ export function createWorkspaceWorktreeApplicationService(
               const snapshotId = randomUUID();
               const snapshotDir = path.join(snapshotRoot, snapshotId);
               const provisioned: ProvisionedFileSnapshot[] = [];
-              let estimatedBytes = 64 * 1024;
+              let blobBytes = 64 * 1024;
               for (const relativePath of provisionedIgnored) {
                 try {
-                  estimatedBytes += (await fs.lstat(
+                  blobBytes += (await fs.lstat(
                     path.join(managed.worktreePath, relativePath),
                   )).size;
                 } catch {
                   // A provisioned file the user already removed needs no blob.
                 }
               }
-              await dependencies.checkSnapshotCapacity(snapshotRoot, estimatedBytes);
+              // The snapshot writes to three filesystems: content-addressed
+              // blobs in the snapshot dir, loose objects in the repository's
+              // Git dir, and an isolated index in the OS temp dir. Admit only
+              // when each volume can hold its share.
+              const [objectBytes, indexBytes] = await Promise.all([
+                dependencies.snapshotContentBytes(
+                  managed.repositoryPath,
+                  managed.worktreePath,
+                ),
+                managed.worktreeGitDir === undefined
+                  ? Promise.resolve(64 * 1024)
+                  : fs
+                      .lstat(path.join(managed.worktreeGitDir, "index"))
+                      .then((stat) => stat.size)
+                      .catch(() => 64 * 1024),
+              ]);
+              await Promise.all([
+                dependencies.checkSnapshotCapacity(snapshotRoot, blobBytes),
+                dependencies.checkSnapshotCapacity(managed.repositoryPath, objectBytes),
+                dependencies.checkSnapshotCapacity(
+                  os.tmpdir(),
+                  indexBytes + 64 * 1024,
+                ),
+              ]);
               await fs.mkdir(path.join(snapshotDir, "files"), {
                 recursive: true,
                 mode: 0o700,
@@ -399,12 +446,18 @@ export function createWorkspaceWorktreeApplicationService(
     snapshotId: string,
     requestedName?: string,
   ): Promise<Workspace> => {
-    const pending = restoreLocks.get(snapshotId);
-    if (pending) return pending;
     const operation = dependencies.environment.run(
       owner,
       sourceWorkspaceId,
       async (resolved, signal) => {
+        // Every caller completes ownership and workspace admission before any
+        // shared state is consulted. A concurrent restore of the same snapshot
+        // is serialized, not shared: this caller waits for the in-flight
+        // attempt, then runs its own journal-convergent restore.
+        const pending = restoreLocks.get(snapshotId);
+        if (pending !== undefined) {
+          await pending.catch(() => undefined);
+        }
         const snapshotRoot = await dependencies.ensureSnapshotRoot();
         const snapshot = await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId);
         const [initiator, target] = await Promise.all([
@@ -423,6 +476,7 @@ export function createWorkspaceWorktreeApplicationService(
             repositoryPaths: dependencies.repositoryPaths,
             snapshotCommit: dependencies.snapshotRefCommit,
             restoreCheckout: dependencies.restoreManagedCheckout,
+            resumeCheckout: dependencies.resumeManagedCheckout,
             applySnapshot: dependencies.applyWorktreeSnapshot,
             managedWorktreeUsable: (repositoryPath, worktreePath, branch, gitDir, token, device, inode) =>
               dependencies.managedWorktreeUsable({
@@ -464,7 +518,9 @@ export function createWorkspaceWorktreeApplicationService(
         // journal's stable workspaceId, so a retried restore never duplicates.
         const saved = await dependencies.saveWorkspace(workspace);
         await updateManagedWorktreeSnapshotState(snapshotRoot, result.snapshot, "ready");
-        await clearManagedWorktreeRestoreJournal(snapshotRoot, snapshotId);
+        // The journal stays at "complete" — it is the convergence marker a
+        // retried restore needs to return the already-saved workspace instead
+        // of attaching the recorded branch to a new path.
         dependencies.notifyChanged();
         return saved;
       },
@@ -473,7 +529,9 @@ export function createWorkspaceWorktreeApplicationService(
     try {
       return await operation;
     } finally {
-      restoreLocks.delete(snapshotId);
+      if (restoreLocks.get(snapshotId) === operation) {
+        restoreLocks.delete(snapshotId);
+      }
     }
   };
 

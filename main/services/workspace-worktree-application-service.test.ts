@@ -52,12 +52,17 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
       ignored: 0,
       ignoredPaths: [],
     }),
+    expandIgnoredPaths: async (_repo, _worktree, ignoredPaths) => ignoredPaths.slice(),
+    snapshotContentBytes: async () => 0,
     captureWorktreeSnapshot: async () => {
       throw new Error("unexpected snapshot");
     },
     snapshotRefCommit: async () => undefined,
     restoreManagedCheckout: async () => {
       throw new Error("unexpected restore");
+    },
+    resumeManagedCheckout: async () => {
+      throw new Error("unexpected resume");
     },
     applyWorktreeSnapshot: async () => undefined,
     createWorktree: async (folderPath, root, branch) => {
@@ -203,6 +208,8 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
       commonDir: `${folderPath}/.git`,
     }),
     dirtyState: async () => dirty,
+    expandIgnoredPaths: async (_repo, _worktree, ignoredPaths) => ignoredPaths.slice(),
+    snapshotContentBytes: async () => 0,
     captureWorktreeSnapshot: async (_repo, _wt, snapshotId) => {
       events.push("capture");
       return {
@@ -215,6 +222,9 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
     snapshotRefCommit: async () => undefined,
     restoreManagedCheckout: async () => {
       throw new Error("unexpected restore");
+    },
+    resumeManagedCheckout: async () => {
+      throw new Error("unexpected resume");
     },
     applyWorktreeSnapshot: async () => undefined,
     createWorktree: async () => {
