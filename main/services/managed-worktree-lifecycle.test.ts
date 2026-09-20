@@ -830,6 +830,14 @@ test("provisioned blob storage captures bytes, verifies digests, and restores id
   assert.equal((await fs.lstat(path.join(restored, ".env"))).mode & 0o777, 0o600);
   // Resume-safe: identical bytes at the destination are a no-op.
   await restoreProvisionedFiles(snapshotDir, [entry], restored);
+  // A leftover inflight temp from a crashed write is discarded, not wedged.
+  await fs.writeFile(path.join(restored, ".env.aiden-restore-inflight"), "partial\n");
+  await restoreProvisionedFiles(snapshotDir, [entry], restored);
+  await assert.rejects(
+    fs.lstat(path.join(restored, ".env.aiden-restore-inflight")),
+    { code: "ENOENT" },
+  );
+  assert.equal(await fs.readFile(path.join(restored, ".env"), "utf8"), "CAPTURED=1\n");
   // Conflicting content fails closed.
   await fs.writeFile(path.join(restored, ".env"), "OTHER=0\n");
   await assert.rejects(

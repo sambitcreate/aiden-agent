@@ -438,6 +438,10 @@ export async function restoreProvisionedFiles(
       );
     }
     const bytes = await fs.readFile(path.join(snapshotDirPath, file.blobPath));
+    // A crash may have left our own inflight temp or, on older runs, a partial
+    // destination; discard the temp so retries converge.
+    const inflight = `${destination}.aiden-restore-inflight`;
+    await fs.rm(inflight, { force: true });
     if (await pathExists(destination)) {
       const existing = await fs.lstat(destination);
       const matches =
@@ -465,8 +469,12 @@ export async function restoreProvisionedFiles(
         "A provisioned-file destination escapes the restored worktree.",
       );
     }
-    await fs.writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
-    await fs.chmod(destination, file.mode & 0o777).catch(() => undefined);
+    // Write to a sibling temp and rename so a crash mid-write leaves either
+    // the inflight file (discarded above) or a complete destination — never a
+    // truncated file wedged behind the destination_exists check.
+    await fs.writeFile(inflight, bytes, { mode: 0o600 });
+    await fs.chmod(inflight, file.mode & 0o777).catch(() => undefined);
+    await fs.rename(inflight, destination);
   }
 }
 
