@@ -461,3 +461,49 @@ test("deleteChat removes the link file and never calls GitHub", async (t) => {
   assert.deepEqual(await readdir(directory), []);
   assert.deepEqual(calls, callsBefore);
 });
+
+test("detectAfterPush treats an unreadable head SHA as unverifiable, not absent", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service } = fakeService(directory, {
+    findForBranch: async () =>
+      ready({
+        pullRequests: [summary(41, { headSha: undefined })],
+      }) as GitHubPullRequestListStatus,
+  });
+  const detected = await service.detectAfterPush(CHAT, {
+    workspaceId: "workspace-1",
+    headBranch: "feature/x",
+    expectedHeadSha: "a".repeat(40),
+  });
+  // The unreadable PR could be the pushed result: no "No pull request exists"
+  // ready state and no Create affordance may be offered.
+  assert.equal(detected.availability, "error");
+  assert.equal(detected.matches.length, 0);
+  assert.match(detected.message ?? "", /head commit could not be read/);
+});
+
+test("an unknown create reconciles against the normalized intent SHA", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service } = fakeService(directory, {
+    createPullRequest: async () =>
+      ({ kind: "unknown", message: "killed" }) as GitHubPullRequestCreateResult,
+    findForBranch: async () =>
+      ready({
+        pullRequests: [summary(88, { headSha: "a".repeat(40) })],
+      }) as GitHubPullRequestListStatus,
+  });
+  const result = await service.create(CHAT, {
+    workspaceId: "workspace-1",
+    title: "New work",
+    baseBranch: "main",
+    headBranch: "feature/x",
+    // Renderer supplied the SHA uppercase; the persisted intent lowercases it,
+    // and reconciliation must compare that canonical copy.
+    expectedHeadSha: "A".repeat(40),
+  });
+  assert.equal(result.kind, "created");
+  if (result.kind === "created") assert.equal(result.pullRequest.number, 88);
+  assert.equal((await service.pendingCreates(CHAT)).length, 0);
+});

@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import {
   canonicalGitHubPullRequestUrl,
   isSafeChatPullRequestChatId,
+  normalizeSha,
   parseGitHubPullRequestUrl,
   pullRequestRefKey,
   type ChatPullRequestCreateIntent,
@@ -398,12 +399,17 @@ export class ChatPullRequestService {
     const links = await this.deps.store.list(chatId);
     const matches: ChatPullRequestView[] = [];
     const refreshed: ChatPullRequestView[] = [];
-    const expectedSha = input.expectedHeadSha?.toLowerCase();
+    const expectedSha = normalizeSha(input.expectedHeadSha);
+    const unverifiable: GitHubPullRequestSummary[] = [];
     for (const summary of found.pullRequests) {
       if (summary.state !== "open") continue;
       // `gh pr list --head` matches the branch name, not the commit: only a PR
       // whose head still points at the pushed SHA can be offered as this push's
       // result — a same-named PR from another source stays unoffered.
+      if (expectedSha && summary.headSha === undefined) {
+        unverifiable.push(summary);
+        continue;
+      }
       if (expectedSha && summary.headSha !== expectedSha) continue;
       const identity = pullRequestIdentityFromSummary(summary);
       if (!identity) continue;
@@ -428,6 +434,18 @@ export class ChatPullRequestService {
       }
     }
     if (refreshed.length > 0) this.notify(chatId);
+    // A same-branch PR whose head SHA could not be read may itself be the
+    // pushed result: surfacing an explicit error keeps "Create pull request"
+    // off the table instead of inviting a duplicate create.
+    if (unverifiable.length > 0 && matches.length === 0 && refreshed.length === 0) {
+      return {
+        availability: "error",
+        message:
+          "GitHub lists a pull request for this branch, but its head commit could not be read. Refresh or check GitHub before creating another.",
+        matches: [],
+        refreshed: [],
+      };
+    }
     return { availability: "ready", matches, refreshed };
   }
 
@@ -471,8 +489,9 @@ export class ChatPullRequestService {
       title: input.title,
       requestedAt: Date.now(),
     };
+    let recordedIntent: ChatPullRequestCreateIntent;
     try {
-      await this.deps.store.recordCreateIntent(chatId, intent);
+      recordedIntent = await this.deps.store.recordCreateIntent(chatId, intent);
     } catch (error) {
       return {
         kind: "failed",
@@ -490,17 +509,17 @@ export class ChatPullRequestService {
       draft: input.draft,
     });
     if (result.kind === "created") {
-      await this.deps.store.clearCreateIntent(chatId, intent.operationId);
+      await this.deps.store.clearCreateIntent(chatId, recordedIntent.operationId);
       const linked = await this.linkSummary(chatId, result.pullRequest, "created");
       return linked.ok
         ? { kind: "created", pullRequest: linked.pullRequest }
         : { kind: "failed", message: linked.message };
     }
     if (result.kind === "failed") {
-      await this.deps.store.clearCreateIntent(chatId, intent.operationId);
+      await this.deps.store.clearCreateIntent(chatId, recordedIntent.operationId);
       return { kind: "failed", message: result.message };
     }
-    return this.reconcileIntent(chatId, folderPath, intent, result.message);
+    return this.reconcileIntent(chatId, folderPath, recordedIntent, result.message);
   }
 
   /** Reconcile one pending intent; returns the same vocabulary as `create`. */

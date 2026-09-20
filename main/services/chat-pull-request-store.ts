@@ -157,8 +157,15 @@ export class ChatPullRequestStore {
     });
   }
 
-  /** Persist create intent before `gh pr create` runs; survives a crash. */
-  async recordCreateIntent(chatId: string, intent: ChatPullRequestCreateIntent): Promise<void> {
+  /**
+   * Persist create intent before `gh pr create` runs; survives a crash.
+   * Returns the canonical intent — reconciliation must compare against this
+   * normalized copy, not the caller's raw input.
+   */
+  async recordCreateIntent(
+    chatId: string,
+    intent: ChatPullRequestCreateIntent,
+  ): Promise<ChatPullRequestCreateIntent> {
     const normalized = normalizeChatPullRequestCreateIntent(intent);
     if (!normalized) throw new Error("The pull request creation intent is invalid.");
     await this.store(chatId).update((file) => {
@@ -175,6 +182,7 @@ export class ChatPullRequestStore {
       file.pendingCreates.push(normalized);
       return undefined;
     });
+    return structuredClone(normalized);
   }
 
   async listCreateIntents(chatId: string): Promise<ChatPullRequestCreateIntent[]> {

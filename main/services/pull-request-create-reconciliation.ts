@@ -98,31 +98,23 @@ export async function reconcilePullRequestCreate(options: {
     intentIdentityMatches(intent, summary),
   );
   const verified = onBranch.filter((summary) => matchesCreateIntent(intent, summary));
-  // A closed/merged match on the branch is still adoption-worthy — the create
-  // may have landed and the PR changed state meanwhile.
-  if (verified.length === 1) return { kind: "adopted", pullRequest: verified[0] };
-  if (verified.length > 1) {
-    return {
-      kind: "multiple",
-      candidates: verified
-        .map(toCandidate)
-        .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined),
-    };
-  }
   // Same-branch/base PRs whose head SHA we could not read are unverifiable,
-  // not absent: handing them to the user beats clearing the intent into a
-  // retry that could duplicate a create GitHub actually applied.
-  if (intent.expectedHeadSha) {
-    const unverifiable = onBranch.filter((summary) => summary.headSha === undefined);
-    if (unverifiable.length > 0) {
-      return {
-        kind: "multiple",
-        candidates: unverifiable
-          .map(toCandidate)
-          .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined),
-      };
-    }
+  // not absent: any of them could be the create GitHub actually applied.
+  const unverifiable = intent.expectedHeadSha
+    ? onBranch.filter((summary) => summary.headSha === undefined)
+    : [];
+  // A closed/merged match on the branch is still adoption-worthy — the create
+  // may have landed and the PR changed state meanwhile — but only when no
+  // same-identity PR stayed unreadable and could be that create instead.
+  if (verified.length === 1 && unverifiable.length === 0) {
+    return { kind: "adopted", pullRequest: verified[0] };
   }
+  const candidates = [...verified, ...unverifiable]
+    .map(toCandidate)
+    .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined);
+  // Handing candidates to the user beats clearing the intent into a retry —
+  // or auto-adopting one — when the create may already have landed.
+  if (candidates.length > 0) return { kind: "multiple", candidates };
   return { kind: "none" };
 }
 

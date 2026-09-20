@@ -123,6 +123,25 @@ test("a candidate whose head SHA cannot be read stays unresolved for the user", 
   }
 });
 
+test("a verified match is not adopted while a sibling's head SHA is unreadable", async () => {
+  const outcome = await reconcilePullRequestCreate({
+    github: github({
+      availability: "ready",
+      pullRequests: [summary(1), summary(9, { headSha: undefined })],
+    }),
+    cwd: "/work",
+    intent: INTENT,
+  });
+  // The unreadable PR could itself be the timed-out create — the user picks.
+  assert.equal(outcome.kind, "multiple");
+  if (outcome.kind === "multiple") {
+    assert.deepEqual(
+      outcome.candidates.map((candidate) => candidate.ref.number),
+      [1, 9],
+    );
+  }
+});
+
 test("PRs on the same branch name in another repository do not match", async () => {
   const outcome = await reconcilePullRequestCreate({
     github: github({

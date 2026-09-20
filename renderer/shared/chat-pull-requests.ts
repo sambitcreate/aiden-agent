@@ -200,7 +200,7 @@ function normalizeBranch(value: unknown): string | undefined {
   return text && BRANCH_PATTERN.test(text) ? text : undefined;
 }
 
-function normalizeSha(value: unknown): string | undefined {
+export function normalizeSha(value: unknown): string | undefined {
   const text = boundedText(value, 64);
   return text && SHA_PATTERN.test(text) ? text.toLowerCase() : undefined;
 }

@@ -288,9 +288,15 @@ function PendingCreateRow({
                   setBusy(true);
                   void pullRequestsApi
                     .adopt(chatId, pending.intent.operationId, candidate.ref)
-                    .then(() => {
-                      toast.success(`Linked pull request #${candidate.ref.number}.`);
-                      onChanged();
+                    .then((result) => {
+                      if (result.ok) {
+                        toast.success(`Linked pull request #${candidate.ref.number}.`);
+                        onChanged();
+                        return;
+                      }
+                      toast.error(
+                        result.message ?? "That pull request could not be adopted.",
+                      );
                     })
                     .catch((error: unknown) =>
                       toast.error(
