@@ -2754,6 +2754,168 @@ test("GitService fails creation closed when free space cannot be determined", as
   assert.deepEqual(await fs.readdir(root), []);
 });
 
+test("GitService provisions .worktreeinclude files into a managed worktree", async (t) => {
+  const repository = await createRepository(t);
+  await fs.writeFile(
+    path.join(repository, ".gitignore"),
+    ".env*\nfixtures/generated/\nignored.bin\n",
+  );
+  await fs.writeFile(
+    path.join(repository, ".worktreeinclude"),
+    ".env.local\nfixtures/generated/**\n!fixtures/generated/skip.bin\n",
+  );
+  await git(repository, ["add", ".gitignore", ".worktreeinclude"]);
+  await git(repository, ["commit", "-m", "Add provisioning rules"]);
+
+  // Eligible: untracked AND ignored AND matched by .worktreeinclude.
+  await fs.writeFile(path.join(repository, ".env.local"), "KEY=dev\n", { mode: 0o600 });
+  await fs.mkdir(path.join(repository, "fixtures", "generated"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(repository, "fixtures", "generated", "data.bin"),
+    "payload\n",
+  );
+  await fs.writeFile(
+    path.join(repository, "fixtures", "generated", "skip.bin"),
+    "excluded\n",
+  );
+  // Ignored but not in the include file — must not be provisioned.
+  await fs.writeFile(path.join(repository, "ignored.bin"), "nope\n");
+  // Untracked but not ignored — must not be provisioned.
+  await fs.writeFile(path.join(repository, "visible.txt"), "plain\n");
+
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/provisioned");
+
+  assert.equal(
+    await fs.readFile(path.join(created.path, ".env.local"), "utf8"),
+    "KEY=dev\n",
+  );
+  assert.equal(
+    (await fs.stat(path.join(created.path, ".env.local"))).mode & 0o777,
+    0o600,
+  );
+  assert.equal(
+    await fs.readFile(path.join(created.path, "fixtures", "generated", "data.bin"), "utf8"),
+    "payload\n",
+  );
+  await assert.rejects(
+    fs.stat(path.join(created.path, "fixtures", "generated", "skip.bin")),
+  );
+  await assert.rejects(fs.stat(path.join(created.path, "ignored.bin")));
+  await assert.rejects(fs.stat(path.join(created.path, "visible.txt")));
+  assert.deepEqual(
+    created.provisionedFiles?.map((entry) => entry.relativePath),
+    [".env.local", "fixtures/generated/data.bin"],
+  );
+});
+
+test("GitService rolls creation back when provisioning fails", async (t) => {
+  const repository = await createRepository(t);
+  // An oversized include file fails provisioning validation outright.
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), `${".env\n".repeat(70_000)}`);
+
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    // The native descriptor-bound remover is macOS-only; a plain recursive
+    // removal stands in so the rollback transaction is exercised on Linux.
+    worktreeDirectoryRemover: async (identity) => {
+      await fs.rm(identity.path, { recursive: true, force: true });
+    },
+    worktreeRemovalManifestFinalizer: async () => {},
+    worktreeRemovalManifestInspector: async () => false,
+  });
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/provision-fails"),
+    (error) => error instanceof GitServiceError && error.code === "command_failed",
+  );
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/provision-fails"]),
+  );
+});
+
+test("GitService runs the setup script only for authorized local creation", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, ".aiden"));
+  await fs.writeFile(
+    path.join(repository, ".aiden", "worktree-setup.sh"),
+    [
+      "#!/bin/sh",
+      'printf "%s" "$AIDEN_WORKTREE_PATH" > "$PWD/setup.ran"',
+      'printf "%s" "${AIDEN_TEST_SETUP_SENTINEL:-missing}" > "$PWD/setup.secret"',
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  await git(repository, ["add", ".aiden/worktree-setup.sh"]);
+  await git(repository, ["commit", "-m", "Add worktree setup script"]);
+
+  process.env.AIDEN_TEST_SETUP_SENTINEL = "do-not-leak";
+  t.after(() => {
+    delete process.env.AIDEN_TEST_SETUP_SENTINEL;
+  });
+
+  const service = new GitService({ cacheTtlMs: 0 });
+
+  // The remote-style path never executes repository setup.
+  const remoteRoot = await temporaryDirectory(t);
+  const remoteCreated = await service.createWorktree(
+    repository,
+    remoteRoot,
+    "codex/no-setup",
+  );
+  await assert.rejects(fs.stat(path.join(remoteCreated.path, "setup.ran")));
+
+  // The authorized local path runs it with the minimal environment.
+  const root = await temporaryDirectory(t);
+  const created = await service.createWorktree(repository, root, "codex/with-setup", undefined, {
+    allowSetupScript: true,
+  });
+  assert.equal(
+    await fs.readFile(path.join(created.path, "setup.ran"), "utf8"),
+    created.path,
+  );
+  assert.equal(
+    await fs.readFile(path.join(created.path, "setup.secret"), "utf8"),
+    "missing",
+  );
+});
+
+test("GitService rolls creation back when the setup script fails", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, ".aiden"));
+  await fs.writeFile(
+    path.join(repository, ".aiden", "worktree-setup.sh"),
+    "#!/bin/sh\nexit 4\n",
+    { mode: 0o755 },
+  );
+  await git(repository, ["add", ".aiden/worktree-setup.sh"]);
+  await git(repository, ["commit", "-m", "Add failing setup script"]);
+
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async (identity) => {
+      await fs.rm(identity.path, { recursive: true, force: true });
+    },
+    worktreeRemovalManifestFinalizer: async () => {},
+    worktreeRemovalManifestInspector: async () => false,
+  });
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/setup-fails", undefined, {
+      allowSetupScript: true,
+    }),
+    (error) => error instanceof GitServiceError && error.code === "command_failed",
+  );
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/setup-fails"]),
+  );
+});
+
 test("GitService creates, lists, and removes managed worktrees", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

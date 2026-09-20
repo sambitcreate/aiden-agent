@@ -22,6 +22,21 @@ import {
   WorktreeDiskAdmissionError,
   type StatfsProbe,
 } from "./worktree-disk-admission.js";
+import {
+  copyProvisionedFiles,
+  estimateProvisionedBytes,
+  parseLsFilesZero,
+  removeProvisionedFiles,
+  resolveWorktreeInclude,
+  selectProvisionedFiles,
+  WorktreeProvisionError,
+  type ProvisionedFileEntry,
+} from "./worktree-provision-core.js";
+import {
+  resolveWorktreeSetupScript,
+  runWorktreeSetupScript,
+  WorktreeSetupError,
+} from "./worktree-setup-core.js";
 
 const DEFAULT_READ_TIMEOUT_MS = 4_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 20_000;
@@ -252,6 +267,17 @@ export interface GitCreatedWorktree extends GitWorktree {
   worktreeDevice: number;
   worktreeInode: number;
   createdFromHead: string;
+  /** Ignored files Aiden provisioned from .worktreeinclude — the durable manifest. */
+  provisionedFiles?: ProvisionedFileEntry[];
+}
+
+export interface GitCreateWorktreeOptions {
+  /**
+   * Runs `.aiden/worktree-setup.sh` when the repo ships an executable one.
+   * Only the attended local desktop path sets this — Remote creation never
+   * executes repository scripts.
+   */
+  allowSetupScript?: boolean;
 }
 
 type GitWorktreeRollbackIdentity = Pick<
@@ -4679,6 +4705,7 @@ export class GitService {
     root: string,
     branch: string,
     signal?: AbortSignal,
+    options?: GitCreateWorktreeOptions,
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
@@ -4707,25 +4734,10 @@ export class GitService {
         ).stdout,
         repo.topLevel,
       );
-      try {
-        await assertWorktreeDiskAdmission(
-          root,
-          {
-            checkoutBytes,
-            provisionedBytes: 0,
-          },
-          this.worktreeDiskProbe,
-        );
-      } catch (error) {
-        if (error instanceof WorktreeDiskAdmissionError) {
-          throw new GitServiceError(
-            error.failure === "insufficient" ? "insufficient_disk" : "command_failed",
-            error.message,
-            error,
-          );
-        }
-        throw error;
-      }
+      await this.assertManagedWorktreeDisk(root, {
+        checkoutBytes,
+        provisionedBytes: 0,
+      });
 
       const repositoryId = createHash("sha256").update(repo.commonDir).digest("hex").slice(0, 12);
       const repositoryName =
@@ -4788,6 +4800,21 @@ export class GitService {
             "The workspace subfolder is not present in HEAD, so Aiden did not widen access to the repository root.",
           );
         }
+        const provisionedFiles = await this.provisionManagedWorktree(
+          repo,
+          created.path,
+          signal,
+        );
+        if (options?.allowSetupScript) {
+          try {
+            await this.setupManagedWorktree(repo, created.path, signal);
+          } catch (error) {
+            if (provisionedFiles?.length) {
+              await removeProvisionedFiles(created.path, provisionedFiles);
+            }
+            throw error;
+          }
+        }
         return {
           ...created,
           branch,
@@ -4798,6 +4825,7 @@ export class GitService {
           worktreeDevice: checkoutIdentity.dev,
           worktreeInode: checkoutIdentity.ino,
           createdFromHead,
+          ...(provisionedFiles?.length ? { provisionedFiles } : {}),
         };
       } catch (error) {
         const rollbackError = await this.rollbackCreatedWorktree(
@@ -4818,6 +4846,89 @@ export class GitService {
         throw error;
       }
     });
+  }
+
+  private async assertManagedWorktreeDisk(
+    targetPath: string,
+    estimate: { checkoutBytes: number; provisionedBytes: number },
+  ): Promise<void> {
+    try {
+      await assertWorktreeDiskAdmission(targetPath, estimate, this.worktreeDiskProbe);
+    } catch (error) {
+      if (error instanceof WorktreeDiskAdmissionError) {
+        throw new GitServiceError(
+          error.failure === "insufficient" ? "insufficient_disk" : "command_failed",
+          error.message,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Copy `.worktreeinclude`-selected ignored files into the fresh checkout.
+   * Runs inside the serialized creation mutation; any failure propagates to
+   * the shared rollback path.
+   */
+  private async provisionManagedWorktree(
+    repo: GitRepository,
+    worktreePath: string,
+    signal?: AbortSignal,
+  ): Promise<ProvisionedFileEntry[] | undefined> {
+    const runOptions = { disableRepositoryAutomation: true, signal } as const;
+    try {
+      const include = await resolveWorktreeInclude(repo.topLevel);
+      if (!include) return undefined;
+      const [all, includeVisible, ignored] = [
+        await this.run(repo.cwd, ["ls-files", "-z", "--others"], runOptions),
+        await this.run(
+          repo.cwd,
+          ["ls-files", "-z", "--others", `--exclude-from=${include}`],
+          runOptions,
+        ),
+        await this.run(
+          repo.cwd,
+          ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+          runOptions,
+        ),
+      ];
+      const selected = selectProvisionedFiles(
+        parseLsFilesZero(all.stdout),
+        parseLsFilesZero(includeVisible.stdout),
+        parseLsFilesZero(ignored.stdout),
+      );
+      if (selected.length === 0) return [];
+      // Disk is re-checked before provisioning — free space may have changed
+      // since admission ran before `git worktree add`.
+      await this.assertManagedWorktreeDisk(worktreePath, {
+        checkoutBytes: 0,
+        provisionedBytes: await estimateProvisionedBytes(repo.topLevel, selected),
+      });
+      return await copyProvisionedFiles(repo.topLevel, worktreePath, selected);
+    } catch (error) {
+      if (error instanceof WorktreeProvisionError) {
+        throw new GitServiceError("command_failed", error.message, error);
+      }
+      throw error;
+    }
+  }
+
+  private async setupManagedWorktree(
+    repo: GitRepository,
+    worktreePath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const script = await resolveWorktreeSetupScript(worktreePath);
+    if (!script) return;
+    try {
+      await runWorktreeSetupScript(script, worktreePath, repo.topLevel, signal);
+    } catch (error) {
+      if (error instanceof WorktreeSetupError) {
+        throw new GitServiceError("command_failed", error.message, error);
+      }
+      throw error;
+    }
   }
 
   async rollbackWorktree(cwd: string, created: GitCreatedWorktree): Promise<void> {
@@ -5265,7 +5376,8 @@ export const gitCreateWorktree = (
   root: string,
   branch: string,
   signal?: AbortSignal,
-) => gitService.createWorktree(folderPath, root, branch, signal);
+  options?: GitCreateWorktreeOptions,
+) => gitService.createWorktree(folderPath, root, branch, signal, options);
 export const gitRollbackWorktree = (folderPath: string, created: GitCreatedWorktree) =>
   gitService.rollbackWorktree(folderPath, created);
 export const gitDeleteManagedWorktree = (

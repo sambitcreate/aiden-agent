@@ -19,6 +19,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
     root: string,
     branch: string,
     signal?: AbortSignal,
+    options?: { allowSetupScript?: boolean },
   ): Promise<GitCreatedWorktree>;
   rollbackWorktree(folderPath: string, created: GitCreatedWorktree): Promise<void>;
   deleteManagedWorktree(managed: ManagedWorktree, signal: AbortSignal): Promise<GitDeleteWorktreeResult>;
@@ -61,6 +62,7 @@ export function createWorkspaceWorktreeApplicationService(
     sourceWorkspaceId: string,
     branch: string,
     requestedName?: string,
+    options?: { allowSetupScript?: boolean },
   ): Promise<Workspace> => dependencies.environment.run(
     owner,
     sourceWorkspaceId,
@@ -70,6 +72,7 @@ export function createWorkspaceWorktreeApplicationService(
         await dependencies.ensureWorktreeRoot(),
         branch,
         signal,
+        options,
       );
       const now = dependencies.now();
       const workspace: Workspace = {
@@ -86,6 +89,9 @@ export function createWorkspaceWorktreeApplicationService(
           worktreeDevice: worktree.worktreeDevice,
           worktreeInode: worktree.worktreeInode,
           createdFromHead: worktree.createdFromHead,
+          ...(worktree.provisionedFiles?.length
+            ? { provisionedFiles: worktree.provisionedFiles }
+            : {}),
         },
         createdAt: now,
         updatedAt: now,

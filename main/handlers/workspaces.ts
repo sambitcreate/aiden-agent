@@ -310,7 +310,9 @@ export function registerWorkspaceHandlers(): void {
       event,
       () => new Error("Workspace access requires the active renderer document."),
     );
-    return workspaceWorktreeApplicationService.create(owner, sourceWorkspaceId, branch);
+    return workspaceWorktreeApplicationService.create(owner, sourceWorkspaceId, branch, undefined, {
+      allowSetupScript: true,
+    });
   });
 
   ipcMain.handle("git:deleteManagedWorktree", async (event, workspaceId: unknown) => {
