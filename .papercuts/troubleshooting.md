@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
+
 - 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
 - 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.
 - 2026-09-17 Live motion: do not key canvas layers by caption/action state; remounting restarts the animation and causes jumps. Kept stable duplex layers and separated visual activity from microphone activity so mic-off sessions retain Stop. Production macOS package must be rebuilt separately from the HTML review bundle.

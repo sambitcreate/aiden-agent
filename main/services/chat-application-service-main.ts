@@ -11,6 +11,7 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createChatApplicationService } from "./chat-application-service.js";
 import { memoryStore } from "./memory-store-main.js";
+import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -23,6 +24,7 @@ export const chatApplicationService = createChatApplicationService({
   subagentRunStore,
   piRuntimeEffectStore,
   piCompactionSessionStore,
+  chatPullRequestStore,
   memoryStore,
   logError: (area, message, error) => logger.error(area, message, error),
 });

@@ -251,7 +251,8 @@ const featureBentos: FeatureBento[] = [
     id: "gitWorkflows",
     group: "create",
     title: "Git Workflows",
-    description: "Switch branches, create reviewed commits, and push with stale-state guards.",
+    description:
+      "Switch branches, create reviewed commits, push with stale-state guards, and link or open pull requests right from the chat.",
     icon: GitBranch,
     imageUrl: FEATURE_ILLUSTRATIONS.gitWorkflows,
     size: "wide",

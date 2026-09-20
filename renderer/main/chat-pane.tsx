@@ -791,6 +791,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
 
+  // The PR rail/push dialog read the presented chat even without subagents.
+  React.useLayoutEffect(() => {
+    environmentPanel.setActiveChat(chatId, effectiveWorkspaceId ?? null);
+    return () => environmentPanel.setActiveChat(null, null);
+  }, [chatId, effectiveWorkspaceId, environmentPanel.setActiveChat]);
+
   React.useLayoutEffect(() => {
     if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
     environmentPanel.syncSubagents(
