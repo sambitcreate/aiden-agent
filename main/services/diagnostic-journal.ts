@@ -341,7 +341,7 @@ async function pruneExpired(target: string): Promise<void> {
   }
 }
 
-async function pruneRetentionAt(target: string, currentMs: number): Promise<void> {
+async function pruneGeneralRetentionAt(target: string, currentMs: number): Promise<void> {
   const cutoff = currentMs - MAX_DIAGNOSTIC_LOG_AGE_MS;
   const removeExpiredStructured = async (candidate: string, maximumBytes: number): Promise<boolean> => {
     try {
@@ -376,7 +376,6 @@ async function pruneRetentionAt(target: string, currentMs: number): Promise<void
   for (let index = 1; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
     await removeExpiredStructured(rotatedPath(target, index), MAX_DIAGNOSTIC_LOG_BYTES);
   }
-  pruneFatalRetentionSync(target, currentMs);
   if (path.basename(target) === "aiden-dev.log") {
     for (const name of ["aiden-dev.legacy.log", "aiden-dev.legacy.prev.log"]) {
       const candidate = path.join(path.dirname(target), name);
@@ -423,7 +422,15 @@ function pruneFatalRetentionSync(target: string, currentMs: number): void {
 export function pruneDiagnosticJournalRetention(at = new Date()): Promise<void> {
   if (!targetPath) return Promise.resolve();
   const target = targetPath;
-  const sweep = queue.then(() => pruneRetentionAt(target, at.getTime()));
+  // Fatal operations share a synchronous admission order with fatal writes and
+  // deletion; queued general maintenance must not revisit fatal records accepted later.
+  try {
+    pruneFatalRetentionSync(target, at.getTime());
+  } catch (error) {
+    writeFailed = true;
+    return Promise.reject(error);
+  }
+  const sweep = queue.then(() => pruneGeneralRetentionAt(target, at.getTime()));
   queue = sweep.catch(() => { writeFailed = true; });
   return sweep;
 }
@@ -743,19 +750,48 @@ export async function listDiagnosticJournalFiles(): Promise<string[]> {
   return files;
 }
 
+async function writeSnapshot(destination: string, contents: Buffer): Promise<void> {
+  const handle = await fs.open(destination, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(contents);
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
+}
+
+function readFatalSnapshotSync(target: string, currentMs: number): Buffer | null {
+  pruneFatalRetentionSync(target, currentMs);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(fatalPath(target), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.nlink !== 1 || metadata.size > MAX_DIAGNOSTIC_FATAL_BYTES) {
+      throw new Error("Invalid fatal diagnostic source.");
+    }
+    const contents = Buffer.alloc(metadata.size);
+    let offset = 0;
+    while (offset < contents.length) {
+      const count = readSync(descriptor, contents, offset, contents.length - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    return contents.subarray(0, offset);
+  } catch (error) {
+    if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 async function copyNoFollow(source: string, destination: string): Promise<boolean> {
   let sourceHandle: fs.FileHandle | undefined;
   try {
     sourceHandle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     const metadata = await sourceHandle.stat();
     if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid diagnostic source.");
-    const destinationHandle = await fs.open(destination, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
-    try {
-      await destinationHandle.writeFile(await sourceHandle.readFile());
-      await destinationHandle.chmod(0o600);
-    } finally {
-      await destinationHandle.close();
-    }
+    await writeSnapshot(destination, await sourceHandle.readFile());
     return true;
   } catch (error) {
     if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
@@ -767,15 +803,29 @@ async function copyNoFollow(source: string, destination: string): Promise<boolea
 
 export async function snapshotDiagnosticJournalFiles(destinationDirectory: string, at = new Date()): Promise<string[]> {
   if (!targetPath) return [];
-  await pruneDiagnosticJournalRetention(at);
   const target = targetPath;
+  // Copy the bounded fatal bytes before yielding: a later synchronous deletion
+  // or write must not change the evidence admitted to this snapshot.
+  let fatalContents: Buffer | null;
+  try {
+    fatalContents = readFatalSnapshotSync(target, at.getTime());
+  } catch (error) {
+    writeFailed = true;
+    throw error;
+  }
   const snapshot = queue.then(async () => {
+    await pruneGeneralRetentionAt(target, at.getTime());
     await fs.mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
-    const sources = [target, ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) => rotatedPath(target, index + 1)), fatalPath(target)];
+    const sources = [target, ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) => rotatedPath(target, index + 1))];
     const copied: string[] = [];
     for (const source of sources) {
       const destination = path.join(destinationDirectory, path.basename(source));
       if (await copyNoFollow(source, destination)) copied.push(destination);
+    }
+    if (fatalContents !== null) {
+      const destination = path.join(destinationDirectory, path.basename(fatalPath(target)));
+      await writeSnapshot(destination, fatalContents);
+      copied.push(destination);
     }
     return copied;
   });
@@ -785,12 +835,30 @@ export async function snapshotDiagnosticJournalFiles(destinationDirectory: strin
 
 export async function deleteDiagnosticJournalFiles(): Promise<void> {
   if (!targetPath) return;
-  await flushDiagnosticJournal();
-  for (let index = 0; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
-    const candidate = index === 0 ? targetPath : rotatedPath(targetPath, index);
-    await fs.rm(candidate, { force: true });
+  const target = targetPath;
+  let fatalResetFailure: { error: unknown } | undefined;
+  // Reserve deletion before yielding so later appends, rotations, retention and
+  // exports cannot run against the files being removed.
+  const deletion = queue.then(async () => {
+    if (fatalResetFailure) throw fatalResetFailure.error;
+    for (let index = 0; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
+      const candidate = index === 0 ? target : rotatedPath(target, index);
+      await fs.rm(candidate, { force: true });
+    }
+    ensureJournalFile(target);
+    activeSegmentStartedAtMs = now().getTime();
+  });
+  queue = deletion.catch(() => { writeFailed = true; });
+
+  // Fatal writes bypass the queue. Reset their file synchronously at admission
+  // so a crash recorded while general deletion drains is preserved.
+  try {
+    const fatal = fatalPath(target);
+    rmSync(fatal, { force: true });
+    ensureJournalFile(fatal);
+    fatalSegmentStartedAtMs = now().getTime();
+  } catch (error) {
+    fatalResetFailure = { error };
   }
-  await fs.rm(fatalPath(targetPath), { force: true });
-  ensureJournalFile(targetPath);
-  ensureJournalFile(fatalPath(targetPath));
+  return deletion;
 }

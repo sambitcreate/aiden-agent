@@ -533,3 +533,268 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
+
+- 2026-09-19 provider-streams: fresh worktree omits ignored `.memory`; read canonical checkout project context and will add a lane-specific note. Installed private node_modules with scripts disabled to avoid concurrent native/Electron builds.
+- 2026-09-19 provider-streams: explicit `git add` reported ignored `.papercuts` even while staging its tracked file; used explicit force-add for required lane artifacts.
+## 2026-09-19 — upgrade compaction checkpoint recovery
+
+- Worktree has no `.memory/` or dependencies; used checked-in plans and installed isolated dependencies with scripts disabled.
+- `.papercuts/` is ignored but its troubleshooting file is tracked. Restored its full existing contents after detecting an accidental replacement during diff review; appended only this entry.
+## 2026-09-19 — upgrade 03-subagents
+- Fresh worktree omits ignored `.memory`; read relevant project history from the primary checkout and create a lane-specific memory note locally.
+- `aiden-plugins` is a collection rather than a Git root; pin the nested `pi-subagents` repository.
+- No worktree dependencies; install a private node_modules with lifecycle scripts disabled for focused TypeScript tests (no Electron packaging needed).
+- Explicit staging of `.papercuts/troubleshooting.md` hit the ignored parent-directory rule; force-stage only the authorized lane feedback and memory files.
+## Upgrade 04 MCP
+
+- Fresh worktree omits ignored `.memory`; consulted main checkout PROJECT-CONTEXT and DIAGNOSTICS-CAUSES, and will write a lane-specific note locally.
+- Dependencies absent in isolated worktree; installing locally with Electron payload download skipped because tests need only SDK/TypeScript.
+## Upgrade campaign: Web access
+
+- Fresh worktree has no `.memory` (gitignored); consulted primary checkout project notes and web-access plan.
+- `aiden-plugins` is a collection, not a Git repo; use the nested `pi-web-access` repository for baseline hashes.
+- Dependencies are absent; install locally without Electron lifecycle downloads for focused service tests.
+
+- Restored existing troubleshooting history after detecting an overwrite in diff review; lane notes are appended.
+## 2026-09-19 — upgrade-06-skills
+- Fresh worktree has no ignored `.memory/`; read canonical project context/history and the completed skill plan, then create a lane-specific memory note locally.
+- Broad service searches hit a large generated browser source string; restrict searches to skill files to keep inspection usable.
+- Dependencies installed locally with lifecycle scripts disabled; this service-only lane needs no Electron/native build.
+- YAML AST map `get()` generic inference narrowed scalar text to `never`; treat the retrieved node as `unknown` and narrow through `isScalar` plus a string check before reading metadata.
+## Upgrade git worktrees — 2026-09-19
+
+- Fresh worktree has no ignored `.memory/` or dependencies. Read relevant canonical project memory; install isolated dependencies with `npm ci --ignore-scripts` and explicitly build only the native worktree-remover needed by Git tests.
+- Git service and its tests are large; use targeted function/range reads to avoid truncated investigation output.
+- Explicit `git add` rejected the ignored `.papercuts/` parent even though the log is tracked; stage the tracked log with `git add -u -- .papercuts/troubleshooting.md`.
+## 2026-09-19 terminal startup upgrade
+
+- Fresh worktree has no `.memory/` because the folder is ignored; read canonical checkout terminal history and create a lane-specific local note.
+- Fresh worktree has no dependencies; installed lockfile dependencies locally without building or packaging Electron.
+- Initial papercut write replaced the existing tracked log; diff review caught it and restored all baseline entries before appending this section.
+## Upgrade 09 attachments
+- Fresh worktree omits ignored `.memory/`; read main checkout project context/history and create a unique lane note.
+- Initial broad source reads were truncated; use targeted ranges for attachment investigation.
+- TypeScript targets a pre-ES2022 library: regression fixtures must use indexed access instead of `Array.at`.
+## 2026-09-19 — upgrade-10-schedules
+- This fresh worktree has no `.memory/` directory or installed dependencies. Read the current scheduler recovery plan and prior scheduler notes; create the lane memory file and install private worktree dependencies.
+- Whole-file `oxfmt` rewrote unrelated existing scheduler formatting; restored untouched lines to keep the PR focused. New tests use current formatter output.
+- Explicit `git add` rejects the tracked troubleshooting path because its parent is ignored; use `git add -u -- .papercuts/troubleshooting.md` and force-add only the requested new lane memory.
+## 2026-09-19 — Upgrade 11: memory expiry
+
+- Fresh worktree omits ignored `.memory/` and dependencies. Read main-checkout memory and checked-in plans; installed dependencies locally with lifecycle scripts disabled for scoped tests.
+- `aiden-plugins` is a container directory; use the nested `context-mode` Git SHA for reference evidence.
+- Diff review caught a troubleshooting-file overwrite; restored the existing entries and appended this lane instead.
+- GitHub refused the full #121 diff because it exceeds 20,000 lines; the paginated PR-files API supplied the memory-store patch for overlap review.
+## Upgrade 12 desktop UI — 2026-09-19
+- Fresh worktrees omit ignored `.memory` context; read the canonical project's command-system history and create a lane-specific note here.
+- No local dependencies are present; install this worktree's dependencies before renderer regression validation.
+- `npm ci` omitted Electron's executable; restored with its install script. Renderer/main-only bundles then exited before first window, so focused UI validation needs the normal native helper build prerequisites too.
+- Command-system aggregate has a pre-existing stale source assertion in `main/services/renderer-readiness-core.test.ts`: it expects a no-argument crash callback immediately resetting readiness, while main now records crash diagnostics first. Reported to campaign coordinator; preserve renderer-only scope.
+- Palette regression assertions must inspect loaded chat content because the desktop router uses memory history; the file URL does not change on chat navigation.
+## 2026-09-19 — Android upgrade lane
+- Fresh origin/main has no `.memory/` directory; read the mobile plan and create the required lane-specific memory note.
+- OkHttp `responseBodyStart` fires after its first underlying read; use a tracked source to coordinate cancellation before a deliberately stalled read in the regression test.
+## Upgrade 15 Linux
+
+- Fresh worktree has no ignored `.memory/`; read canonical project context, then create the lane-specific note locally.
+- `gh pr view --json files` truncates PR #71 at 100 files; use paginated REST files to check overlap against its full change list.
+- Troubleshooting log is tracked despite its ignore rule; preserved baseline entries and appended lane notes.
+- This checkout does not include Prettier; matched existing formatting manually and used repository ESLint.
+## 2026-09-19 — Android SSE EOF regression
+
+- Fresh worktree has no `.memory/`; read main checkout context and create a lane-specific memory note.
+- Three existing RemoteClient tests used `trimIndent()` SSE fixtures without a final blank line, silently relying on the EOF flush bug; terminate those fixtures explicitly.
+
+## 2026-09-19 — Campaign integration validation
+- Fresh validation worktree omits ignored project memory and dependencies; read canonical project context and install a private dependency tree.
+- Independent lane appends conflict in the tracked troubleshooting file; preserve both three-way append histories. Package test registrations and yaml dependency merged cleanly without lock regeneration.
+- Avoid full troubleshooting/toolchain dumps in tool output; retain exact logs and print bounded summaries.
+## Lane 17 readiness regression
+
+- 2026-09-19: Fresh worktree has no ignored `.memory/` or dependencies. Read relevant project memory from the saved project and install isolated dependencies with scripts skipped; this test-only lane requires no Electron/native builds.
+- Baseline crash-handler assertions still require pre-diagnostics callback parameters and pre-backoff reload shape; scope matching to the crash callback while retaining recovery checks.
+- Lint requires `{2}` for the callback-closing indentation in source-contract regex (`no-regex-spaces`). Corrected and reran lint.
+- npm ci completed without Electron executable; ran node_modules/electron/install.js explicitly before Electron E2E.
+## 2026-09-19 iOS upgrade
+
+- This isolated checkout has no `.memory/`; read the source checkout project context and create a lane-specific memory note.
+- `xcrun devicectl list devices` hangs without output; use bounded device discovery and retain physical acceptance as an explicit gate if unavailable.
+- Stable Xcode stalls in `xcodebuild -runFirstLaunch`; per-command `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` builds successfully. The available physical iPhone remains in Xcode device-symbol preparation, blocking focused XCTest launch.
+- Physical XCTest retry also reported missing compatible DeviceSupport symbols and remained preparing beyond its destination timeout; stopped it and recorded hardware execution as outstanding. A temporary macOS probe reproduced the baseline framing bug and verified the fixed production parser/decoder/byte loop.
+- Central review found that startup ownership was checked before, but not inside, runtime persistence. Added a deferred commit fixture to reproduce stale failure quarantine and next-run writes; carry authority into the existing DataStore commit guard.
+- Full combined npm test passed with one environment skip: legacy endpoint port 65535 is occupied on this host. Preserve that skip instead of stopping another process or claiming complete port coverage.
+
+- SDK 1.30 remote transports report failures through `onerror`, not `onclose`; the EventSource onerror property callback runs before dispatch, so its event target is still null. Its pinned terminal response errors carry a numeric HTTP code, whereas reconnectable EOF/network errors do not. HTTP reconnect callbacks can schedule a timer after error notification, requiring teardown after those callbacks settle.
+- Pullfrog identified a separate stale Cron error callback path. Reproduced deferred lookup, run-history publication, and runtime publication; bind failure recording to current job ownership and carry the guard through both stores.
+- Reproducing the shared-store renewal race needs deterministic interleaving: a test-local SQLite exec hook lets a second real connection commit immediately before lock acquisition without sleeps or production hooks.
+- Test coverage inventory must recurse npm lifecycle and nested scripts: memory-store runs through pretest/test:compaction, and scheduler core runs directly in test:assistant-automations. A direct-string scan of only pretest/test falsely labels those scopes omitted.
+- Pullfrog follow-up: `yaml@2.9.0` `uniqueKeys` checks scalar equality but admits alias-equivalent duplicate mapping keys. Validate root key node types before extraction; retain unrelated alias values without expansion.
+- Pullfrog caught callback-slot starvation: OkHttp 4.12 releases its per-host async slot only after `onResponse` returns. Validate concurrent stalled responses as well as individual cancellation.
+- HTTP GET-stream retry exhaustion is not whole-session failure: reproduce a subsequent `tools/list` POST before recommending eviction. The pinned SDK successfully serves POST discovery on the retained session after both optional GET retries fail.
+- Pullfrog caught a missing established-chat boundary: attachment intake must check the synchronous pending-send ref before optimistic-clear recovery can restore its payload. Mounted regression reproduced 23 restored attachments from a 20-attachment draft.
+- Mounted Composer fixture must explicitly externalize React in esbuild; repository TypeScript wildcard paths can otherwise bundle a second hook runtime despite packages=external.
+- Pullfrog found cmdk 1.1.1 retains keyword aliases while item `value` stays unchanged. Dynamic rows need a value including identity plus current metadata, not merely new `keywords` props.
+- A separate cmdk automatic-selection active-descendant gap reproduces on the unchanged initial PR head before metadata updates; reported centrally. The focused regression preserves explicit arrow-navigation accessibility checks.
+- Follow-up catch-up audit found two missed-run advances: job setup and dispatch claim. Guarding only the claim would still lose due state. Preserve overdue nextRunAt through setup, require authority on every automatic dispatch, and settle a cancelled predecessor before restart admission.
+- Lock-wait expiry regressions can stay deterministic: advance the injected clock while the competing SQLite connection owns its transaction, then admit the store without wall-clock sleeps.
+## 2026-09-19 — lane 18 browser lifecycle
+- Fresh worktree lacks the gitignored `.memory/` directory; read relevant project history from the primary checkout before creating a lane-specific note.
+- Crash recovery regression needs controlled Electron event/timer delivery: wall-clock sleeps cannot reliably put navigation inside the 300 ms retry window. Tests hold handler-created timers, then deliver stale callbacks deterministically against real guests.
+- Full browser Electron run reached an annotation click timeout: Aiden Live's floating app-icon launcher intercepts `Add to chat` at browser.spec.ts:89. New crash regressions pass; checking the unchanged baseline separately before classifying the broader failure.
+- Confirmed identical annotation interception on unchanged baseline `5cc831a`; screenshot visibly shows the Live launcher over Add to chat. Reported to campaign root and attachment owner; retain this as an explicit suite limitation.
+## 2026-09-19 voice upgrade
+- This fresh main worktree has no `.memory/` directory; inspected the completed dictation plan and current source, and will add a scoped implementation note.
+- Renderer build passes with pre-existing Ghostty mixed static/dynamic import and large-chunk warnings; no voice build failure. Repository `.memory/` is ignored, so the scoped delivery note requires explicit force-add.
+- 2026-09-19 auth lane: fresh worktree has no ignored .memory directory; read canonical project context and create a lane-specific note. Installed isolated dependencies with npm ci.
+- 2026-09-19 lane 21: Fresh worktree has no .memory or dependencies; consulted canonical project memory and installed isolated dependencies with lifecycle scripts disabled for server-only tests.
+- 2026-09-19 lane 21: Repository ignore rules cover .papercuts and .memory; explicitly force-staged only the requested lane memory and troubleshooting file.
+- 2026-09-19 (22-telegram): Fresh worktree omits ignored .memory and dependencies; read relevant project memory from primary checkout and install isolated dependencies. Hermes Telegram adapter moved from gateway/platforms to plugins/platforms/telegram/adapter.py.
+## 2026-09-19 diagnostics lane
+- Fresh main worktree has no `.memory/` directory; used diagnostics plan/inventory as current architecture evidence and will add a scoped implementation note.
+- Node test `mock.method` does not contextually type async filesystem replacements here; annotate wrappers with `Parameters<typeof original>` so the regression tests pass strict TypeScript.
+### 2026-09-19 — workspace file read investigation
+- Fresh worktree has no `.memory/` directory or dependencies. Read the current Quick View plan and source; installed isolated dependencies with `npm ci` and will create a lane-specific memory note.
+- Android has no system Java registration; focused native tests pass using Android Studio bundled JBR via explicit `JAVA_HOME`.
+- `xcrun devicectl list devices` stalled; stopped only that discovery process and used bounded `xcodebuild -showdestinations`. iOS verification uses isolated unsigned build-for-testing to avoid installing over the user app.
+- Repository ignores `.memory/`; explicitly stage the requested unique lane note with `git add -f`.
+## 2026-09-19 — updater lane 25
+- Fresh worktree has no .memory directory or dependencies; read canonical project history and install isolated dependencies with scripts disabled for simulated updater tests.
+- Hosted queue-image E2E raced send settlement: Stop generating appeared before attachment admission reopened; synthetic paste was intentionally rejected. The test must await the production Attach button enabled state.
+- In-progress workflow logs require the direct jobs/logs API; gh run view refuses them and gh api needs --allow-escape-sequences when writing colored logs to a local file. Hosted artifacts intentionally contain only sanitized receipts.
+- SDK 1.30 legacy SSE reauthentication has no public settled callback; failed refresh/redirect can strand a CLOSED receive stream while HTTP POST remains usable. Isolated the pinned `_authThenStart`/`_eventSource` compatibility hook, rejected unknown shapes, and tested actual auth failure versus successful and transient recovery. Recheck this seam on SDK/EventSource upgrades.
+
+## 2026-09-19 — Integration wave 2
+- Batch expansion requires archiving the frozen original receipt and using a separate log namespace; never carry the original 17-head test counts into a 25-head validation claim.
+- Keep PR discovery capped at the authorized batch while new lanes are dispatched; optional later lanes need an explicit scope update before local integration.
+- Second Pullfrog regression: metadata-sensitive values refreshed search but cleared selection on the highlighted record. Reproduced zero selected rows for live selected-chat title, timestamp, and model-provider label updates. Use controlled selection reconciled through the stable record ID and require Enter activation without recovery arrows.
+- Pullfrog exposed a timer-only deadline blind spot: synchronous encoding prevents timeout callbacks from running. Added monotonic pre-dispatch expiry checks and deterministic tests that advance elapsed time without running timers.
+- 2026-09-19 lane26: Fresh worktree omits ignored `.memory` and dependencies; read canonical project memory, installed lockfile dependencies. Electron postinstall omitted macOS payload; restoring with its install script before isolated E2E.
+- 2026-09-19 lane26: Minimum-width Electron resize correctly collapses the sidebar persistently; restore it through Show sidebar before continuing the existing browser scenario into Settings. Initial extended run passed new overlap checks but failed that later navigation.
+## 2026-09-19 — Upgrade lane 27 journal
+
+- Fresh worktree has no dependencies or ignored `.memory` notes; installing locked dependencies locally and reading lane 23 diagnostics context from its existing worktree before editing.
+# Upgrade 28 catalog refresh
+
+- Fresh worktree omits ignored `.memory` and dependencies; read canonical project notes and auth-lane note, and reused the matching installed dependency tree for focused checks.
+- Scoped-refresh comment still cites Pi 0.80; pinned 0.84.4 supports provider filters, but its native refresh also resolves/rotates OAuth credentials, unlike Aiden's explicitly non-mutating scoped path.
+
+- Initial local note creation replaced tracked troubleshooting history; diff review caught it immediately and restored the original history before appending this lane.
+- Node runtime supports Promise.withResolvers, but repository TypeScript target does not; synthetic gates use a compatible deferred helper.
+## 2026-09-19 — Telegram HTML chunks (lane 29)
+- Fresh worktree has no dependencies or local `.memory`; read canonical project Telegram history, install lockfile dependencies with lifecycle scripts disabled for pure service tests.
+- Repository ignore rules reject staging the required campaign memory/papercut notes; add only the two explicit documentation paths with `git add -f`.
+- Review follow-up: raw code-point safety still splits combining/ZWJ graphemes; segment only the bounded decoded chunk plus one code point, with explicit oversized-grapheme progress coverage. Reviewer task is a multi-agent subagent, so app-server direct messages are rejected; route updates through the campaign root.
+- Clock-ordering expiry regressions advance the injected clock in a second-connection transaction that commits before the target BEGIN. This tests post-admission timestamp sampling, not an actually blocked SQLite lock wait.
+
+## 2026-09-19 — Integration wave 3 palette failure
+- Strict combined Electron validation exposed an intermittent model-provider filter result: 0 rows instead of 2. Three unchanged isolated repeats produced two passes and one failure; retain the failed status instead of treating retries as a clean result.
+- Playwright clears its output directory on a new invocation. Copy screenshots, traces and error context into the batch log directory before reproducing a failure.
+- Pullfrog follow-up: Electron 43 posts native crash notifications asynchronously and omits document identity. Added a real renderer-crash probe that holds notification delivery across pending/committed replacement navigation, instead of relying solely on synthetic crash events.
+- 2026-09-19 lane 21 review: Terminal subscribers remain registered until drain; aggregate eviction must account for pending delivery, not just terminal generation state. Added cross-stream pressure/drain/deadline regressions.
+
+- Integration review found `deleteAllDiagnosticData` repeats live journal removal after its queue barrier; add support-level coverage and leave active journal cleanup with its owner while retaining inactive/legacy allowlist cleanup.
+- Lane 30 export investigation: fresh worktree omits ignored `.memory` and dependencies. Read the canonical checkout's relevant project context and reuse its installed dependencies through a worktree-local symlink for scoped checks.
+- Lane 30: artifact-descriptor budget omission is bounded in normal operation by the upstream 40-artifact/chat limit; rejected the artificial large-metadata candidate. Linux filename probe over the configured bitcreate.cloud SSH host could not authenticate; no credentials or settings changed.
+- Lane 30: reusing canonical dependencies exposed `thinking-orbs` 0.1.1 against this worktree's locked 0.3.1, yielding three unrelated orb-state type errors on both baseline and patched source. Replaced only this worktree's dependency symlink with a lockfile-local installation; canonical dependencies remain untouched.
+
+- Integration wave4 status schema: lane31 represented its PR as an integer, unlike prior URL entries. Normalize both forms in the validation helper; exact fetched-head verification remains required.
+
+- Review exposed fatal reset bypassing an earlier queued snapshot. Fatal writes, reset, retention and bounded snapshot reads must all finish synchronously at admission; queue only general-file work and immutable fatal snapshot publication.
+## 2026-09-19 — Lane 31 tool approval
+- Fresh worktree omits ignored `.memory` and dependencies; consulted primary checkout project memory and will reuse matching installed dependencies for scoped verification.
+- Initial broad search used a nonexistent `main/ipc*` glob; switched to actual `main/handlers` paths.
+- Extended broker checks initially lacked the native file-mutator helper; built it with the repository script, then all 45 checks passed.
+- Reusing primary checkout dependencies exposed thinking-orbs 0.1.1 versus locked 0.3.1 and unrelated OrbState type failures; installing this worktree lockfile independently.
+### 2026-09-19 — Upgrade lane 32 notifications
+- Fresh detached worktree omits ignored `.memory` and `node_modules`; read canonical project memory and linked the existing matching dependency installation without changing it.
+- No execution test seam existed for scheduled notification failures. The existing registered notification suite now bundles the real execution module with synthetic service ports, avoiding Electron, scripts, network and user data.
+- Shared checkout dependencies were stale (`thinking-orbs` 0.1.1 vs locked 0.3.1), causing unrelated OrbState type errors. Replaced only this worktree's dependency symlink with an isolated `npm ci --ignore-scripts`; shared installation remains untouched.
+# Upgrade lane 33
+
+- Fresh worktree omits ignored `.memory/`; read canonical checkout project context and keep a unique lane note here. Dependencies also absent; installing lockfile dependencies before real watcher regressions.
+- Real fs baseline reproduced two disposal failures; pre-existing warm-cache immediate-write test also timed out once. Stabilize its setup boundary so queued creation events cannot masquerade as the edit under test. Directory replacement already works on this macOS host; do not generalize inode-watcher assumptions into speculative code.
+- Git rejects staging the ignored `.papercuts` path with ordinary add in this worktree; force-add the explicit note path together with the required unique `.memory` note.
+- Third Pullfrog regression: an unmatched static root selection survived direct submode entry. Render and reconcile all selectable static and dynamic rows from complete mode inventories, including disabled and force-mounted retry controls.
+- Integration palette flake reproduced deterministically: providers resolved before settings, but the model memo omitted settings readiness and stayed empty when hidden-model preferences remained undefined. Include settings data in the memo dependencies and gate settings delivery in an Electron regression.
+
+- PR168 review proved admitted obsolete durable writes can return through Radius offline startup hydration; reproduce with real DataStore restart and pinned Radius before replacing the documented limitation with serialized retirement.
+- 2026-09-19 lane 21 follow-up: Byte-budget trimming can leave the stream registry full after delivery ends; deferred eviction must release count capacity at subscriber settlement without waiting for another append.
+- Lane 33 review: callback counts alone cannot prove which filesystem mutation was observed or whether a suppressed watcher was closed. Correlate observed content, stage outside the watched directory, and assert actual native close plus its close event; validate with omitted-close/missed-edit mutants.
+- Lane checkout had been removed between review turns; recreated the existing branch worktree at its original path before continuing.
+- Pullfrog run-slot finding reproduced for stale arrival and deferred lookup. Reclaiming stale preparation also exposes delayed workspace cancellation by task ID; fence cancellation by the exact state object to protect replacement execution.
+# Lane 34 iOS state
+
+- Worktree has no tracked `.memory/`; read the shared checkout's project context and will add a unique lane note.
+- Physical-device XCTest would install the app, which this campaign prohibits; use unsigned generic build-for-testing plus a host Swift probe, and report execution limits explicitly.
+## 2026-09-19 — Android draft recovery lane 35
+- Fresh isolated checkout has no tracked `.memory/` directory or Android-specific AGENTS.md; read canonical project memory and root/native guidance, then add a unique lane note.
+- Failed-send restoration bypasses `updateDraft`, so visible recovery never reaches the draft file. Use real ViewModel/HTTP regression and reopen the store to distinguish memory from persistence.
+- Regression harness initially used `sendMessage`; Android exposes the action as `send`. Corrected the test entry point before collecting baseline behavior.
+- `.memory/` and `.papercuts/` are ignored by default; explicit force-add is needed for the authorized lane note and troubleshooting update.
+- 2026-09-19 lane 21 replay review: Socket teardown does not establish terminal delivery; reserve capacity reclamation for response finish. Abort/timeout must preserve replay despite renewed pressure, with count/byte/retention bounds.
+- Lane 33 causal review: fs.watch offers no operation identity; even callback-time content plus a quiet interval can misattribute delayed events. Use controlled delivery of the real listener for causal assertions and limit native-filesystem tests to smoke/continuity claims.
+- Independent review found expected automatic/manual overlap is still classified as failure. Reproduced real Cron error publication and startup rejection; distinguish a typed automatic skip from genuine executor errors, including identical error text.
+- Base ESLint no-redeclare rejects TypeScript overload declarations; dispatch now returns an explicit admission outcome with a separate completion promise, avoiding overloads and error-string classification.
+
+- PR168 Luna re-review found production full Settings/command refresh still delegated to Pi without account ownership checks; expand the real-wrapper regressions to full refresh, trace startup separately, and preserve native OAuth resolution through a public SDK refresh context.
+- Shared auth-lane dependency directory was removed; installed this worktree lockfile with npm ci --ignore-scripts before revalidation.
+- Unified refresh supersession exposed overlay coalescing that joined an already-aborted request; a deferred fetch regression proves it. Retain the active request signal and only join live work.
+- Luna follow-up reproduced a current-renderer crash during the initial held main-frame response: native loading stays true after process death. Subsequent navigation supplies a complementary recovery control. Replaced the broad loading guard with native crash state captured when navigation begins; active main-frame recreation/commit reset that ownership marker.
+- Initial-before-commit renderer crashes reject Playwright's guest-target initialization even when driven from Electron's main process. Kept zero-history native coverage in a standalone Electron child, discovered by the ordinary E2E script. Its ESM entry must schedule `app.whenReady().then(...)`, not top-level-await readiness (which blocks Electron startup).
+- The native probe bundle needs Electron explicitly external and no inherited wildcard TS paths. Generate its temporary module under ignored `build/` and remove it afterward, so lint never scans generated test artifacts.
+- Forced retry rows bypass cmdk registration/filtering; treating forceMount as an unconditional match retained a retry after the query changed to Refresh. Audit ordinary-match precedence separately from fallback visibility, including error, loading, and disabled controls.
+- Actual error-state reproduction: a simple Retry-to-Refresh query edit self-corrected through cmdk scheduling, but after a failed in-flight refresh became enabled again with the same query, retry stayed selected indefinitely. Regression requires ordinary selection and Enter activation after re-enable; ordinary matches must outrank forced fallbacks on state changes too.
+- Loading-state Electron fixtures cannot await the composer while holding initial chat/provider IPC reads; the composer depends on them. Wait for the shell Settings control before opening the palette during a pending read.
+- Initial provider loading gates the whole shell (unlike pending chats). Model retry tests must let the provider query reach its error state before opening the palette; loading exclusion is exercised through chats and the shared contract matrix.
+- ASCII no-match sentinels can fuzzily match the concatenated model inventory of an unavailable provider. Error-recovery tests use an emoji absent from fixture metadata to guarantee no ordinary search match.
+
+- Fresh PR168 review found write rejection after rename skips retirement. Reproduce commit-then-reject, deletion failure, fallback durability rejection, and queued publisher/restart outcomes; preserve original failure evidence.
+- Repository TypeScript lib predates AggregateError/Error.cause; retain original plus cleanup failures in a small compatible CatalogPublicationError rather than widening compiler targets.
+
+- Lane 34 review exposed a text-only restoration fence gap: attachment admission/removal/send can leave text unchanged. Expanded the existing held-read fixture to hold upload/turn responses and cover these actual view-model actions without physical installation.
+### 2026-09-19 — lane36 startup deadline fixture
+- Isolated worktree omits ignored `.memory`; read canonical project context/history without editing that checkout and keep lane notes locally.
+- Baseline startup deadline test depends on a child-owned log that may never initialize before termination; replace cleanup evidence with parent-observed real children and control the deadline phase.
+- Explicit `git add` of the tracked troubleshooting file is rejected because its parent directory is ignored; stage its tracked update with `git add -u`.
+- Lane 37: isolated checkout omits ignored `.memory/` and dependencies; read project memory from the saved repository and install this checkout with `npm ci` before validation.
+
+- Integration lane37: test and coverage registration shared long-line conflicts. Preserved all existing script tokens and dependency fields, adding only the new profile-share test once per affected script; merged independent troubleshooting histories.
+- 2026-09-19 lane38: isolated checkout lacks `.memory` and dependencies; read canonical checkout memory and installed this worktree with `npm ci`. Type-check targets pre-ES2022 libs, so test helpers must avoid `Array.at` / `Object.hasOwn` even though the host Node supports them. Linux regression fixtures must assert discovery before launching, otherwise the unfixed macOS service can open an actual installed Mac editor.
+- Luna79da0580 review identified destructive retirement after known pre-publication failures. Add actual DataStore size/pre-rename/post-rename controls and carry an explicit publication receipt instead of guessing from a generic rejected promise.
+
+- Pullfrog f62 review found initial credential read errors masked as supersession; test actual Radius full/offline phases against missing-credential controls. A separate custom AuthContext report has no current production caller; verify default env/file resolution before choosing scope.
+# Lane 39
+- Fresh worktree has no ignored `.memory/`; read primary project context for persistence/lifecycle before changes.
+- Fresh worktree has no dependencies; install own lockfile dependencies for isolated validation.
+- esbuild stdin requires explicit TypeScript loader even with a .ts sourcefile; corrected native harness builder after initial parse failure.
+- Native harness cleanup raced Chromium Session Storage teardown; moved temporary-directory cleanup to the parent after Electron exits.
+- Initial papercut write replaced a tracked history file; restored original contents before appending this lane.
+
+- Lane 34 picker follow-up: view-local photo/file conversion happened before model upload ownership. Moved the shared preparation lifetime to the model and expanded proof to the actual picker callback plus held transfer, including cancellation ownership and Send blocking.
+
+- Independent review confirmed custom-context helper compatibility (not a production outage). Root authorized an explicit shared AuthContext option; parity tests avoid private SDK state and keep registry defaults unchanged.
+- Failed-navigation probe: HTTP 204 ends navigation through native `did-stop-loading` without `did-fail-load`; a connection reset instead commits a live error page and emits `did-fail-load`. Observe both terminal paths and native renderer state before assigning crash ownership. The first 204 failure-event assertion was invalid and is not product regression evidence.
+- A native current crash during a held subsequent response emits `did-stop-loading` before `isCrashed()` reflects death. Clearing the target synchronously regresses recovery to the old page. The pinned native process handle is cleared before observer delivery, so require a nonzero `getOSProcessId()` synchronously instead of relying on a deferred callback; keep held-response and zero-history cases as controls.
+
+- Integration browser validation recorded a6.7h runtime gap: Electron launched in1s, firstWindowwait lasted24,131,892ms despite30s timeout, failing fixture setup before assertions. Original15pass/1fail trace retained; one unchanged fresh strict16-case run passed in1.7m. No timeout or product edit; exact gap cause unproven.
+
+- 2026-09-19 lane38 review: Zed's documented Linux binary can be `zeditor`; resolve aliases inside each PATH directory so aliases do not override user PATH precedence. Cursor's agent installation docs do not define desktop editor routing, and vendor support reports both version-dependent `--classic` support and Linux AppImage launchers ignoring it; keep Cursor outside this new Linux support instead of guessing flags/version thresholds.
+- 2026-09-19 closeout: macOS native fullscreen minimize emitted no minimize event within the probe deadline. Retained timeout evidence; separate event-model regression and passing ordinary native lifecycle coverage instead of claiming native reproduction.
+## Lane 40 Environment focus
+
+- Fresh isolated worktree omits ignored `.memory/` and dependencies; read canonical project memory and install worktree-local dependencies without touching primary checkout.
+- Held Git IPC test must dismiss the modal branch picker before querying Quick View controls, and release the gate in `finally` to avoid teardown shutdown timeouts.
+- Radix close autofocus runs after a timeout: checking destination availability after canceling autofocus loses fallback focus. A still-connected but inert Quick View trigger is also unusable; preserve newer focus or use the app root when abandoning the handoff.
+- 2026-09-19 lane41: Fresh baseline worktree has no .memory directory or node_modules; read primary-checkout project notes and install isolated dependencies before Electron validation.
+
+- 2026-09-19 lane41: Sidebar state assertions must locate Settings navigation with includeHidden:true; ordinary role queries intentionally stop matching after aria-hidden collapse. Initial strict repeats failed at this locator and were not accepted as product regressions.
+- Closeout review: a healthy WebContents-wide loading stop still lacks main-frame navigation ownership. Electron43 does not emit a provisional failure for HTTP204; a native probe observes ERR_FAILED loadURL rejection and later request completion. Use request-id-scoped no-document headers/errors and navigation generation rather than another loading-state or timer heuristic; preserve the existing session header-auth callback.
+- Final local-abort coverage must await the guest's committed URL before looking up its WebContents: browser `create` returns while the initial navigation is still pending. The first probe failed at guest lookup, before exercising either abort; corrected the fixture's readiness boundary.
+- Exact-be7 local-abort control: timeout case demonstrably reloads the abandoned URL. The expired-preview control instead lost its Electron application, so that run is retained as inconclusive rather than counted as product regression evidence; the corrected two-case run passes.
+
+- 2026-09-19 PR167 closeout: original637b worktree was absent and no longer registered (cause unknown); recovered existing branch at exacta4c9447f into `/tmp/aiden-pr167-closeout`, preserving all other worktrees. Used existing locked dependencies read-only for focused validation; no install or dependency mutation. Prior parsed-text-only stress checks missed Telegram's separate32KiB raw UTF-8 input cap; primaryserver source and converter regression now cover it.
+
+- PR167 final hosted review found first-grapheme byte seams and formatted bare-link equality were missing from the earlier stress matrix; exactc37 red cases now cover both, including a formatted grapheme exactly at the byte cap and equivalent numeric/named entities.
+- Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
+- Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
+- Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.

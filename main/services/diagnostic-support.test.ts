@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 
-import { initDiagnosticJournal, writeDiagnosticEvent, writeDiagnosticEventSync, flushDiagnosticJournal } from "./diagnostic-journal.js";
+import { initDiagnosticJournal, writeDiagnosticEvent, writeDiagnosticEventSync, flushDiagnosticJournal, MAX_DIAGNOSTIC_LOG_BYTES } from "./diagnostic-journal.js";
 import { initDiagnosticHealth } from "./diagnostic-health.js";
 import {
   flushSubagentRuntimeDiagnostics,
@@ -435,4 +437,96 @@ test("diagnostic mode is explicit, idempotent, and disables on restart", () => {
   });
   assert.equal(starts, 1);
   assert.deepEqual(enabled, { enabled: true, expiresAt: null, disablesOnRestart: true });
+});
+
+
+for (const profile of ["production", "development"] as const) {
+  test(`support deletion preserves new ${profile} journal records through its final sweep`, async (context) => {
+    await fixture(async (_root, logs, dumps) => {
+      const target = path.join(logs, profile === "production" ? "aiden.log" : "aiden-dev.log");
+      const inactive = path.join(logs, profile === "production" ? "aiden-dev.log" : "aiden.log");
+      const fatal = path.join(logs, "aiden-fatal.log");
+      const subagent = path.join(logs, "subagent-runtime.log");
+      initSubagentRuntimeDiagnostics(subagent);
+      initDiagnosticJournal({ targetPath: target, profile });
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+      await flushDiagnosticJournal();
+      const stale = [inactive, `${inactive}.1`, path.join(logs, "aiden-dev.legacy.log"), path.join(dumps, "old.dmp")];
+      for (const file of stale) await fs.writeFile(file, "old", { mode: 0o600 });
+      const neighbor = path.join(logs, "settings.json");
+      await fs.writeFile(neighbor, "keep", { mode: 0o600 });
+
+      // Subagent cleanup follows the journal's barrier but precedes the final
+      // allowlist sweep. Hold it while new live journal records are persisted.
+      const remove = fsPromises.rm;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let started!: () => void;
+      const reached = new Promise<void>((resolve) => { started = resolve; });
+      const removal = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
+        if (args[0] === subagent) { started(); await held; }
+        return remove(...args);
+      });
+      syncBuiltinESMExports();
+      const deletion = deleteAllDiagnosticData({ logsPath: logs, crashDumpsPath: dumps });
+      try {
+        await reached;
+        writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+        writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+        await flushDiagnosticJournal();
+        const currentBytes = (await fs.stat(target)).size;
+        await fs.appendFile(target, " ".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 64));
+        writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: 3 } });
+        await flushDiagnosticJournal();
+      } finally {
+        release();
+        await deletion;
+        removal.mock.restore();
+        syncBuiltinESMExports();
+      }
+      assert.match(await fs.readFile(target, "utf8"), /"sequence":3/u);
+      assert.match(await fs.readFile(`${target}.1`, "utf8"), /"sequence":2/u);
+      assert.match(await fs.readFile(fatal, "utf8"), /"sequence":2/u);
+      for (const file of [target, `${target}.1`, fatal]) {
+        assert.doesNotMatch(await fs.readFile(file, "utf8"), /"sequence":1/u);
+        assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+      }
+      for (const file of stale) await assert.rejects(fs.stat(file), { code: "ENOENT" });
+      assert.equal(await fs.readFile(neighbor, "utf8"), "keep");
+    });
+  });
+}
+
+test("support deletion still clears journal files when the live journal is disabled", async () => {
+  await fixture(async (_root, logs, dumps) => {
+    const blocker = path.join(logs, "settings.json");
+    await fs.writeFile(blocker, "keep");
+    initDiagnosticJournal({ targetPath: path.join(blocker, "aiden.log"), profile: "production" });
+    const names = ["aiden.log", "aiden.log.1", "aiden-dev.log", "aiden-dev.log.1", "aiden-fatal.log"];
+    for (const name of names) await fs.writeFile(path.join(logs, name), "old");
+    await deleteAllDiagnosticData({ logsPath: logs, crashDumpsPath: dumps });
+    for (const name of names) await assert.rejects(fs.stat(path.join(logs, name)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(blocker, "utf8"), "keep");
+  });
+});
+
+test("support deletion still reports inactive journal cleanup failures", async (context) => {
+  await fixture(async (_root, logs, dumps) => {
+    initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production" });
+    await flushDiagnosticJournal();
+    const inactive = path.join(logs, "aiden-dev.log");
+    const remove = fsPromises.rm;
+    const removal = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
+      if (args[0] === inactive) throw Object.assign(new Error("Synthetic inactive journal removal failure"), { code: "EACCES" });
+      return remove(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(deleteAllDiagnosticData({ logsPath: logs, crashDumpsPath: dumps }), { code: "EACCES" });
+    } finally {
+      removal.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
 });

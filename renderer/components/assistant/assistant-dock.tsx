@@ -124,8 +124,8 @@ export function AssistantDockPresentation({
 
   return (
     <div
-      className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
-      style={{ right: `calc(1rem + ${Math.max(0, rightInset)}px)` }}
+      className="aiden-live-dock pointer-events-none absolute z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
+      style={{ right: `calc(var(--aiden-live-edge-inset) + ${Math.max(0, rightInset)}px)` }}
     >
       {(live.active || live.error) && (hudOpen || live.screenActive) ? (
         <AssistantLiveHud live={live} orbState={orbState}>

@@ -304,9 +304,33 @@ test("queue keeps image attachments, pauses on Stop, and resumes FIFO exactly on
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
+  await aiden.app.evaluate(({ ipcMain }) => {
+    // Hold only the start receipt: generation can expose Stop before send settles.
+    const handlers = (ipcMain as unknown as {
+      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
+    })._invokeHandlers;
+    const original = handlers.get("chat:start")!;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt = release;
+    handlers.set("chat:start", async (event, ...args) => {
+      const receipt = await original(event, ...args);
+      await gate;
+      return receipt;
+    });
+  });
   const composer = page.locator("textarea");
   await composer.fill("First response for stop and resume.");
   await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+  const attach = page.getByRole("button", { name: "Attach files or images", exact: true });
+  await expect(attach).toBeDisabled();
+  await aiden.app.evaluate(() => {
+    (globalThis as unknown as { releaseQueueStartReceipt: () => void }).releaseQueueStartReceipt();
+  });
+  // Stop is visible before the send receipt settles. Paste is admitted only
+  // after the composer reopens attachment intake, while generation continues.
+  await expect(attach).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const image = (
     await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
