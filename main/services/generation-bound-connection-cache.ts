@@ -27,7 +27,11 @@ export class GenerationBoundConnectionCache<T> {
   async getOrConnect(
     id: string,
     create: () => T,
-    connect: (value: T, isCurrent: () => boolean) => Promise<void>,
+    connect: (
+      value: T,
+      isCurrent: () => boolean,
+      onClosed: () => void,
+    ) => Promise<void>,
     close: (value: T) => Promise<void>,
     expectedGeneration: number = this.generation(id),
   ): Promise<T> {
@@ -67,6 +71,14 @@ export class GenerationBoundConnectionCache<T> {
       !cancelled &&
       (this.generations.get(id) ?? 0) === generation &&
       (this.pending.get(id) === attempt || this.connected.get(id) === connectedRecord);
+    const onClosed = () => {
+      // Transport loss expires this client's lease, not its configuration.
+      // SDK close callbacks must not recursively close the transport, and a
+      // delayed callback from an old client must not evict its replacement.
+      cancelled = true;
+      if (this.pending.get(id) === attempt) this.pending.delete(id);
+      if (this.connected.get(id) === connectedRecord) this.connected.delete(id);
+    };
     let begin!: () => void;
     const admitted = new Promise<void>((resolve) => {
       begin = resolve;
@@ -75,7 +87,7 @@ export class GenerationBoundConnectionCache<T> {
       await admitted;
       try {
         try {
-          await connect(value, isCurrent);
+          await connect(value, isCurrent, onClosed);
         } catch (error) {
           await closeOnce();
           throw error;

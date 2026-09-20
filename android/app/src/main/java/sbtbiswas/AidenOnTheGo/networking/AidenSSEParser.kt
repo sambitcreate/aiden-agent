@@ -138,9 +138,9 @@ class AidenSSEParser {
     }
 
     fun finish(): AidenRemoteStreamEvent? {
-        if (frameBytes > 0) {
-            return finishFrame()
-        }
+        // EOF is not a frame delimiter. Discard pending fields so a truncated
+        // transport frame cannot apply state or advance the replay cursor.
+        reset()
         return null
     }
 

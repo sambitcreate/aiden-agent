@@ -2658,11 +2658,24 @@ textarea {
 
 /* Aiden Live replaces the previous Assistant panel with one persistent,
    stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
+:root {
+  --aiden-live-trigger-size: 3.5rem;
+  --aiden-live-edge-inset: 1rem;
+}
+.aiden-live-dock {
+  bottom: var(--aiden-live-edge-inset);
+}
+/* Floating tools cannot move the launcher sideways at the minimum window
+   width. Leave its existing hit target and the panel's usual 3-spacing gap
+   below the panel instead. Inline tools already inset the dock horizontally. */
+[data-app-focus-root]:has(> .aiden-live-dock) .environment-panel[data-surface-mode="tools-floating"] {
+  bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
+}
 .aiden-live-trigger {
   position: relative;
   display: grid;
-  width: 3.5rem;
-  height: 3.5rem;
+  width: var(--aiden-live-trigger-size);
+  height: var(--aiden-live-trigger-size);
   place-items: center;
   overflow: visible;
   border: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent);
