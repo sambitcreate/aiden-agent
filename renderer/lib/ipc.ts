@@ -158,6 +158,11 @@ import {
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import {
+  parseChatContextPressure,
+  parseChatContextPressureNotification,
+  type ChatContextPressureV1,
+} from "../shared/context-pressure";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
@@ -811,6 +816,27 @@ export const chatsApi = {
         }
     >("chats:compact", id, engine),
   cancelCompact: (id: string) => invoke<boolean>("chats:cancelCompact", id),
+  // Next-request context projection for the composer meter. Pass the visible
+  // draft so the projection matches what would actually be sent.
+  contextPressure: async (
+    chatId: string,
+    draftText?: string,
+  ): Promise<ChatContextPressureV1 | null> => {
+    const value = await invoke<unknown>("chats:contextPressure", { chatId, draftText });
+    if (value === null) return null;
+    const pressure = parseChatContextPressure(value);
+    if (!pressure) throw new Error("The context pressure response was invalid.");
+    return pressure;
+  },
+  // Pushed when the runtime's own projection changes mid-turn or after a
+  // compaction that did not come through this renderer's stream.
+  onContextPressure: (
+    handler: (chatId: string, pressure: ChatContextPressureV1 | null) => void,
+  ): (() => void) =>
+    onNotification<unknown>("chat:context-pressure", (payload) => {
+      const event = parseChatContextPressureNotification(payload);
+      if (event) handler(event.chatId, event.pressure);
+    }),
   todoSnapshot: async (id: string): Promise<TodoSnapshotViewV1 | null> => {
     const value = await invoke<unknown>("chats:todoSnapshot", id);
     if (value === null) return null;
@@ -1102,6 +1128,7 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 
 export function createChatTurnId(): string {
@@ -1157,6 +1184,14 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatStatus>("chat:status", (p) => {
       if (p.streamId === streamId) callbacks.onStatus?.(p.phase);
+    }),
+  );
+  unsubs.push(
+    onNotification<unknown>("chat:context-pressure", (p) => {
+      const event = parseChatContextPressureNotification(p);
+      if (event && event.streamId === streamId) {
+        callbacks.onContextPressure?.(event.pressure);
+      }
     }),
   );
   unsubs.push(

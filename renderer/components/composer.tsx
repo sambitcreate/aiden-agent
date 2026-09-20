@@ -166,6 +166,10 @@ interface ComposerProps {
   modelPicker?: React.ReactNode;
   /** Native model reasoning effort control, rendered only for supported models. */
   thinkingControl?: React.ReactNode;
+  /** Next-request context-pressure indicator, rendered next to the model picker. */
+  contextMeter?: React.ReactNode;
+  /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
+  onDraftChange?: (text: string) => void;
   /** Global-beta readiness plus this chat's local Computer Use opt-in. */
   computerUse?: {
     enabled: boolean;
@@ -312,6 +316,8 @@ export function Composer({
   onChangeComputerUse,
   modelPicker,
   thinkingControl,
+  contextMeter,
+  onDraftChange,
   currentChatTitle,
   latestAssistantResponse,
   slashNavigationBlockedReason,
@@ -372,6 +378,14 @@ export function Composer({
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  // Ambient projections (context pressure) follow the draft on a quiet cadence.
+  const onDraftChangeRef = React.useRef(onDraftChange);
+  React.useLayoutEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+  }, [onDraftChange]);
+  React.useEffect(() => {
+    onDraftChangeRef.current?.(text);
+  }, [text, attachments.length]);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
@@ -2011,6 +2025,7 @@ export function Composer({
                     <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
                   </span>
                 ) : null}
+                {contextMeter}
                 {thinkingControl}
                 {modelPicker}
                 <Button

@@ -539,7 +539,11 @@ export function createChatStore(
           : undefined,
         providerFailure,
         timeline: assistant
-          ? parseGenerationTimeline(message.timeline, message.content.length)
+          ? parseGenerationTimeline(
+              message.timeline,
+              message.content.length,
+              message.reasoning?.length ?? 0,
+            )
           : undefined,
         subagents: assistant
           ? parseSubagentMessageReferenceV1(message.subagents)
@@ -1165,7 +1169,11 @@ export function createChatStore(
               : undefined,
           timeline:
             message.role === "assistant"
-              ? parseGenerationTimeline(message.timeline, message.content.length)
+              ? parseGenerationTimeline(
+                  message.timeline,
+                  message.content.length,
+                  message.reasoning?.length ?? 0,
+                )
               : undefined,
           subagents:
             message.role === "assistant"

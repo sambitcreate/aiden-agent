@@ -54,6 +54,7 @@ import {
   type GenerationContextTransform,
   type GenerationEmergencyProjection,
   type GenerationContextOptions,
+  type NextContextUsageProjection,
 } from "./generation-context.js";
 
 export type PiHarnessFaultSource =
@@ -131,6 +132,15 @@ export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolEx
   identity?: PiRuntimeIdentity;
   onFault?: (fault: PiHarnessFault) => void;
   durability?: PiRuntimeSessionBinding;
+  /**
+   * Advisory snapshot of the next-request projection, emitted at the same
+   * moments the runtime consults it (preflight, each prepared turn, and again
+   * after a compaction changed the message set). Powers the composer meter.
+   */
+  onContextProjection?: (
+    projection: NextContextUsageProjection,
+    options: GenerationContextOptions,
+  ) => void;
 }
 
 function compactionHostFault(
@@ -798,6 +808,7 @@ export class PiAgentRuntimeHarness {
   private operationSettlement: Promise<void> | undefined;
   private disposed = false;
   private readonly contextProjectionOptions?: GenerationContextOptions;
+  private readonly onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
   private pendingEmergencyCheckpoint = false;
   private lastEmergencyProjection: GenerationEmergencyProjection = { kind: "none" };
 
@@ -810,8 +821,10 @@ export class PiAgentRuntimeHarness {
       models,
       resources: requestedResources = {},
       identity,
+      onContextProjection,
       ...agentOptions
     } = options;
+    this.onContextProjection = onContextProjection;
     if (contributions && requestedExtensions.length > 0) {
       throw new Error(
         "Pi runtime extensions must be supplied directly or as one contribution snapshot.",
@@ -1372,6 +1385,7 @@ export class PiAgentRuntimeHarness {
           const projection = this.contextProjectionOptions
             ? projectNextContextUsage(projectedMessages, this.contextProjectionOptions)
             : undefined;
+          if (projection) this.emitContextProjection(projection);
           const operation = coordinator.checkContextPressure(projection);
           const managedSignal = this.managedAbortController?.signal;
           const result = managedSignal
@@ -1405,7 +1419,14 @@ export class PiAgentRuntimeHarness {
           }
           if (!result.messages) return hostPrepared;
           this.agent.state.messages = [...result.messages];
-          if (result.compacted) this.pendingEmergencyCheckpoint = false;
+          if (result.compacted) {
+            this.pendingEmergencyCheckpoint = false;
+            if (this.contextProjectionOptions) {
+              this.emitContextProjection(
+                projectNextContextUsage(result.messages, this.contextProjectionOptions),
+              );
+            }
+          }
           return {
             ...hostPrepared,
             context: { ...context, messages: [...result.messages] },
@@ -1795,6 +1816,7 @@ export class PiAgentRuntimeHarness {
             this.agent.state.messages,
             this.contextProjectionOptions,
           );
+          this.emitContextProjection(projection);
           const preflightOperation = coordinator.checkContextPressure(projection);
           const preflight = await waitForManagedPromise(
             preflightOperation,
@@ -1817,6 +1839,14 @@ export class PiAgentRuntimeHarness {
           }
           if (preflight.value.messages) {
             this.agent.state.messages = [...preflight.value.messages];
+            if (this.contextProjectionOptions) {
+              this.emitContextProjection(
+                projectNextContextUsage(
+                  preflight.value.messages,
+                  this.contextProjectionOptions,
+                ),
+              );
+            }
           }
         } catch (error) {
           this.reportFault({ source: "compaction", error: toError(error) });
@@ -2534,6 +2564,16 @@ export class PiAgentRuntimeHarness {
       return { accepted: false, reason: "capacity" };
     }
     return undefined;
+  }
+
+  /** Advisory meter update; observers can never fault the run. */
+  private emitContextProjection(projection: NextContextUsageProjection): void {
+    if (!this.contextProjectionOptions || !this.onContextProjection) return;
+    try {
+      this.onContextProjection(projection, this.contextProjectionOptions);
+    } catch {
+      // Presentation state must not alter runtime behavior.
+    }
   }
 
   private reportFault(fault: PiHarnessFault): void {

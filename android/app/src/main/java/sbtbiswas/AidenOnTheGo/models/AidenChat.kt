@@ -206,6 +206,8 @@ data class AidenAgentStep(
     val updatedAt: Double,
     val finishedAt: Double? = null,
     val contentOffset: Int? = null,
+    val reasoningStart: Int? = null,
+    val reasoningEnd: Int? = null,
     val durationMs: Double? = null,
     val target: String? = null,
     val detail: String? = null,
@@ -219,6 +221,21 @@ data class AidenAgentStep(
 
     val isActive: Boolean
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
+
+    /**
+     * UTF-16-bounded slice of the streamed reasoning buffer for this thinking
+     * segment. Fails closed — null for missing, inverted, or out-of-range
+     * bounds — so a malformed segment can never mis-attribute reasoning text.
+     * An open segment (start only, step still active) covers the buffer tail.
+     */
+    fun reasoningText(reasoning: String): String? {
+        if (kind != Kind.THINKING) return null
+        val start = reasoningStart ?: return null
+        if (start < 0 || start > reasoning.length) return null
+        val end = reasoningEnd ?: if (finishedAt == null) reasoning.length else return null
+        if (end < start || end > reasoning.length) return null
+        return reasoning.substring(start, end)
+    }
 }
 
 @Serializable

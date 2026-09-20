@@ -5,18 +5,27 @@
 import * as React from "react";
 import { ChevronRight, CircleAlert } from "lucide-react";
 import { Text } from "./ui";
+import { ThoughtDisclosure } from "./thought-disclosure";
 import {
   activityIssueCount,
   activityLine,
   activityLineText,
   summarizeActivity,
+  workGroupSummary,
   type ActivityLine,
 } from "../lib/agent-steps";
-import { isToolStep, type AgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import { reasoningSegmentText } from "../lib/assistant-message-presentation";
+import {
+  isToolStep,
+  type AgentStep,
+  type AgentThinkingStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
 
 const EXIT_MS = 180;
 /** Rows kept in the collapsed ticker. The topmost sits under the fade mask. */
 const TICKER_ROWS = 3;
+const LIVE_THOUGHT_TAIL_CHARS = 80;
 
 function toneClass(tone: ActivityLine["tone"]): string {
   if (tone === "error") return "text-red";
@@ -59,13 +68,22 @@ function StepLine({ step }: { step: AgentStep }) {
   );
 }
 
+/** Live tail of an in-flight thought, normalized to one ticker line. */
+function liveThoughtTail(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const flat = text.replace(/\s+/gu, " ").trim();
+  if (!flat) return undefined;
+  return flat.length > LIVE_THOUGHT_TAIL_CHARS ? `…${flat.slice(-LIVE_THOUGHT_TAIL_CHARS)}` : flat;
+}
+
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
-function TickerRow({ step }: { step: AgentStep }) {
+function TickerRow({ step, liveThoughtText }: { step: AgentStep; liveThoughtText?: string }) {
   // A pending tool step is the model still writing the call's arguments, so
   // it shimmers like any other work in progress. Approval waits do not.
   const active = !isToolStep(step)
     ? step.finishedAt === undefined
     : step.status === "pending" || step.status === "running";
+  const thinkingPreview = liveThoughtText !== undefined;
   return (
     <div className="activity-feed-row flex h-6 min-w-0 items-center">
       <span
@@ -73,13 +91,37 @@ function TickerRow({ step }: { step: AgentStep }) {
           active ? "agent-thinking-shimmer" : ""
         }`}
       >
-        <StepLine step={step} />
+        {thinkingPreview ? (
+          <>
+            <span className="font-medium">Thinking</span>
+            <span className="font-normal text-tertiary"> · {liveThoughtText}</span>
+          </>
+        ) : (
+          <StepLine step={step} />
+        )}
       </span>
     </div>
   );
 }
 
-function TrailRow({ step }: { step: AgentStep }) {
+function TrailRow({
+  step,
+  reasoning,
+  streaming,
+}: {
+  step: AgentStep;
+  reasoning?: string | null;
+  streaming?: boolean;
+}) {
+  if (!isToolStep(step)) {
+    const text = reasoningSegmentText(reasoning, step as AgentThinkingStep);
+    // Segments with no exposed text keep the plain thinking milestone row.
+    if (text?.trim()) {
+      return (
+        <ThoughtDisclosure step={step as AgentThinkingStep} text={text} streaming={streaming} />
+      );
+    }
+  }
   return (
     <div className="flex min-h-5 min-w-0 items-start py-px" role="listitem">
       <span className="activity-feed-detail-label min-w-0 break-words text-mini text-secondary">
@@ -91,10 +133,16 @@ function TrailRow({ step }: { step: AgentStep }) {
 
 export function ActivityFeed({
   timeline,
+  reasoning,
   animate = true,
+  streaming = false,
 }: {
   timeline: GenerationTimeline | null;
+  /** Canonical reasoning buffer; only sliced when the group has thinking steps. */
+  reasoning?: string | null;
   animate?: boolean;
+  /** The owning turn is still streaming, so live thoughts may preview. */
+  streaming?: boolean;
 }) {
   const [visible, setVisible] = React.useState(timeline);
   const [exiting, setExiting] = React.useState(false);
@@ -135,83 +183,116 @@ export function ActivityFeed({
   const rows = visible.steps.slice(-TICKER_ROWS);
   const newest = visible.steps[visible.steps.length - 1];
   const issues = activityIssueCount(visible);
+  const hasThoughts = visible.steps.some((step) => !isToolStep(step));
+  const openThought =
+    running && newest !== undefined && !isToolStep(newest) && newest.finishedAt === undefined
+      ? newest
+      : undefined;
+  const openThoughtText = openThought
+    ? reasoningSegmentText(reasoning, openThought)?.trim()
+    : undefined;
+  const newestIsOpenThought = newest !== undefined && openThought === newest;
+  const summaryLabel = hasThoughts ? workGroupSummary(visible) : summarizeActivity(visible);
 
   return (
-    <details
-      className="activity-feed group/activity min-w-0"
-      data-presence={exiting ? "exiting" : "visible"}
-      data-animate={animate ? "true" : "false"}
-      data-state={open ? "open" : "closed"}
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary
-        className={`-mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none ${
-          showTicker ? "items-end" : "items-center"
-        }`}
+    <>
+      <details
+        className="activity-feed group/activity min-w-0"
+        data-presence={exiting ? "exiting" : "visible"}
+        data-animate={animate ? "true" : "false"}
+        data-state={open ? "open" : "closed"}
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
       >
-        {showTicker && newest ? (
-          <div
-            className="activity-feed-window min-w-0 flex-1 overflow-hidden"
-            data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
-            role="status"
-            aria-live="polite"
-            aria-label={activityLineText(newest)}
-          >
-            <div className="activity-feed-stack flex flex-col">
-              {rows.map((step) => (
-                <TickerRow key={step.id} step={step} />
-              ))}
+        <summary
+          className={`-mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none ${
+            showTicker ? "items-end" : "items-center"
+          }`}
+        >
+          {showTicker ? (
+            <div
+              className="activity-feed-window min-w-0 flex-1 overflow-hidden"
+              data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
+              role="status"
+              aria-live="polite"
+              aria-label={activityLineText(newest ?? visible.steps[0]!)}
+            >
+              <div className="activity-feed-stack flex flex-col">
+                {rows.map((step) => (
+                  <TickerRow
+                    key={step.id}
+                    step={step}
+                    liveThoughtText={
+                      newestIsOpenThought && step === newest
+                        ? liveThoughtTail(openThoughtText)
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
             </div>
+          ) : (
+            <Text
+              variant="small-strong"
+              color="secondary"
+              className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
+                running ? "agent-thinking-shimmer" : ""
+              }`}
+            >
+              {summaryLabel}
+            </Text>
+          )}
+          {issues ? (
+            <Text variant="small-strong" className="shrink-0 text-support-warning">
+              {issues === 1 ? "1 issue" : `${issues} issues`}
+            </Text>
+          ) : null}
+          <ChevronRight
+            className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="mt-0.5 flex flex-col">
+          <div className="flex flex-col" role="list">
+            {visible.steps.map((step) => (
+              <TrailRow
+                key={step.id}
+                step={step}
+                reasoning={reasoning}
+                streaming={streaming && running}
+              />
+            ))}
           </div>
-        ) : (
-          <Text
-            variant="small-strong"
-            color="secondary"
-            className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
-              running ? "agent-thinking-shimmer" : ""
-            }`}
-          >
-            {summarizeActivity(visible)}
-          </Text>
-        )}
-        {issues ? (
-          <Text variant="small-strong" className="shrink-0 text-support-warning">
-            {issues === 1 ? "1 issue" : `${issues} issues`}
-          </Text>
-        ) : null}
-        <ChevronRight
-          className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
-          aria-hidden="true"
-        />
-      </summary>
-      <div className="mt-0.5 flex flex-col">
-        <div className="flex flex-col" role="list">
-          {visible.steps.map((step) => (
-            <TrailRow key={step.id} step={step} />
-          ))}
+          {visible.claimCheck ? (
+            <div
+              className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
+              role={animate ? "alert" : "note"}
+            >
+              <CircleAlert
+                className="mt-0.5 size-3.5 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
+              <span className="min-w-0">
+                <Text as="span" variant="small-strong" className="block text-status-warning">
+                  Success not verified
+                </Text>
+                <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+                  A required action or check did not complete. Review the issues above before
+                  relying on this response.
+                </Text>
+              </span>
+            </div>
+          ) : null}
         </div>
-        {visible.claimCheck ? (
-          <div
-            className="mt-1.5 flex items-start gap-2 rounded-control bg-status-warning-surface px-2.5 py-2"
-            role={animate ? "alert" : "note"}
-          >
-            <CircleAlert
-              className="mt-0.5 size-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            <span className="min-w-0">
-              <Text as="span" variant="small-strong" className="block text-status-warning">
-                Success not verified
-              </Text>
-              <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                A required action or check did not complete. Review the issues above before relying
-                on this response.
-              </Text>
-            </span>
-          </div>
-        ) : null}
-      </div>
-    </details>
+      </details>
+      {openThoughtText && !open ? (
+        <div
+          className="scroll-edge-mask mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-card bg-well px-3 py-2 text-mini leading-relaxed text-secondary outline-none"
+          aria-label="Thinking"
+        >
+          {openThoughtText}
+        </div>
+      ) : null}
+    </>
   );
 }

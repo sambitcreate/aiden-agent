@@ -158,6 +158,40 @@ const TALLIED_TOOLS = [
 ];
 
 /**
+ * Compact work-group summary for activity fragments that contain thinking
+ * segments: "Worked for 23s · 4 tools · 3 thoughts", or "Working · 3 tools ·
+ * thinking" while live. Duration is wall-clock span the host timeline already
+ * records — never a per-thought timer.
+ */
+export function workGroupSummary(timeline: GenerationTimeline): string {
+  const { steps } = timeline;
+  const tools = steps.filter(isToolStep).length;
+  const thoughts = steps.length - tools;
+  const activeThought = steps.some((step) => !isToolStep(step) && step.finishedAt === undefined);
+  // Fragments settle themselves: a "running" timeline here implies its group
+  // is the live one.
+  const live = timeline.status === "running";
+
+  const counts: string[] = [];
+  if (tools) counts.push(plural(tools, "tool"));
+  if (!live && thoughts) counts.push(plural(thoughts, "thought"));
+
+  if (live) {
+    if (activeThought) counts.push("thinking");
+    else if (thoughts) counts.push(plural(thoughts, "thought"));
+    return ["Working", ...counts].join(" · ");
+  }
+
+  const first = steps[0];
+  const last = steps[steps.length - 1];
+  const end = timeline.finishedAt ?? last?.finishedAt ?? last?.updatedAt ?? first?.startedAt ?? 0;
+  const durationMs = first === undefined ? undefined : Math.max(0, end - first.startedAt);
+  const duration = formatThinkingDuration(durationMs);
+  if (!tools && thoughts === 1) return `Thought ${duration}`;
+  return [`Worked ${duration}`, ...counts].join(" · ");
+}
+
+/**
  * A deterministic account of the turn, derived only from recorded steps — no
  * model summary. Reads as one sentence: "Explored 8 files, 4 searches, ran 1
  * command".

@@ -4926,6 +4926,16 @@
           "durationMs": {
             "type": "number",
             "minimum": 0
+          },
+          "reasoningStart": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "UTF-16 start offset into the assistant message reasoning buffer for this thinking segment. Present only alongside reasoningEnd; clients without the reasoning buffer safely ignore it."
+          },
+          "reasoningEnd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "UTF-16 end offset (exclusive) into the assistant message reasoning buffer for this thinking segment."
           }
         },
         "additionalProperties": false

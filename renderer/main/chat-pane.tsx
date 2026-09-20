@@ -24,6 +24,8 @@ import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { ContextMeter } from "../components/context-meter";
+import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
   SubagentWorkspaceWriteApproval,
@@ -88,6 +90,7 @@ import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
   hasActiveToolStep,
+  isToolStep,
   latestActiveAgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
@@ -304,6 +307,61 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   const modelInfo = useModelInfo(providerId, providerModels, selectedProvider);
   const visionSupported = model ? modelInfo.data?.[model]?.vision : undefined;
+
+  // Composer context meter: the runtime's next-request projection, refreshed
+  // on the ambient triggers (open, model change, settle, draft typing) and
+  // pushed live during a generation via chat:context-pressure.
+  const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
+  const [contextCompactPending, setContextCompactPending] = React.useState(false);
+  const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
+  const contextPressureRequestRef = React.useRef(0);
+  const contextDraftTimerRef = React.useRef<number | null>(null);
+  const contextCompactedTimerRef = React.useRef<number | null>(null);
+  const refreshContextPressure = React.useCallback(
+    async (draftText?: string) => {
+      if (draft) {
+        setContextPressure(null);
+        return;
+      }
+      const request = ++contextPressureRequestRef.current;
+      try {
+        const pressure = await chatsApi.contextPressure(chatId, draftText);
+        if (request === contextPressureRequestRef.current) setContextPressure(pressure);
+      } catch {
+        // The ambient projection is best-effort; keep the last good reading.
+      }
+    },
+    [chatId, draft],
+  );
+  React.useEffect(() => {
+    void refreshContextPressure();
+  }, [refreshContextPressure, providerId, model, chat.data?.updatedAt]);
+  React.useEffect(
+    () =>
+      chatsApi.onContextPressure((eventChatId, pressure) => {
+        if (eventChatId === chatId) setContextPressure(pressure);
+      }),
+    [chatId],
+  );
+  React.useEffect(
+    () => () => {
+      if (contextDraftTimerRef.current !== null) window.clearTimeout(contextDraftTimerRef.current);
+      if (contextCompactedTimerRef.current !== null) {
+        window.clearTimeout(contextCompactedTimerRef.current);
+      }
+    },
+    [],
+  );
+  const onDraftContextChange = React.useCallback(
+    (value: string) => {
+      if (contextDraftTimerRef.current !== null) window.clearTimeout(contextDraftTimerRef.current);
+      contextDraftTimerRef.current = window.setTimeout(() => {
+        contextDraftTimerRef.current = null;
+        void refreshContextPressure(value.trim() ? value : undefined);
+      }, 500);
+    },
+    [refreshContextPressure],
+  );
   const googleThinkingSupported =
     providerId === GOOGLE_PROVIDER_ID &&
     Boolean(model) &&
@@ -970,6 +1028,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
+          },
+          onContextPressure: (pressure) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              setContextPressure(pressure);
+            }
           },
           ...(environmentPanel.subagentsEnabled
             ? {
@@ -2182,7 +2245,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onCloneChat={() => copyChat()}
             onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
             onExportChat={exportChat}
-            onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
+            onCompactChat={
+            draft
+              ? undefined
+              : async (engine) => {
+                  setContextCompactPending(true);
+                  try {
+                    const result = await chatsApi.compact(chatId, engine);
+                    if (result.compacted) {
+                      setContextCompactedFlash(true);
+                      if (contextCompactedTimerRef.current !== null) {
+                        window.clearTimeout(contextCompactedTimerRef.current);
+                      }
+                      contextCompactedTimerRef.current = window.setTimeout(() => {
+                        contextCompactedTimerRef.current = null;
+                        setContextCompactedFlash(false);
+                      }, 6_000);
+                    }
+                    return result;
+                  } finally {
+                    setContextCompactPending(false);
+                  }
+                }
+          }
             onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
             onLogoutProvider={logoutProvider}
             thinkingControl={
@@ -2228,6 +2313,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : undefined
             }
+            contextMeter={
+              draft ? undefined : (
+                <ContextMeter
+                  pressure={contextPressure}
+                  compacting={
+                    contextCompactPending ||
+                    (displayedGenerationTimeline?.steps.some(
+                      (step) =>
+                        isToolStep(step) &&
+                        step.toolName === "compact_context" &&
+                        (step.status === "pending" || step.status === "running"),
+                    ) ?? false)
+                  }
+                  recentlyCompacted={contextCompactedFlash}
+                />
+              )
+            }
+            onDraftChange={onDraftContextChange}
             modelPicker={
               <ModelPicker
                 providers={settings.data ? (providers.data ?? []) : []}

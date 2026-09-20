@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CHAT_SESSION_ID_LIMITS,
+  parseChatContextPressureRequest,
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
@@ -50,4 +51,24 @@ test("copied chat metadata uses the renderer notification contract", () => {
   assert.match(broadcast, /chatId: copied\.id/u);
   assert.match(broadcast, /title: copied\.title/u);
   assert.doesNotMatch(broadcast, /\bid: copied\.id/u);
+});
+
+test("context pressure requests accept a bounded optional draft", () => {
+  assert.deepEqual(parseChatContextPressureRequest({ chatId: "chat-1" }), {
+    chatId: "chat-1",
+    draftText: undefined,
+  });
+  assert.deepEqual(parseChatContextPressureRequest({ chatId: "chat-1", draftText: "hello" }), {
+    chatId: "chat-1",
+    draftText: "hello",
+  });
+  assert.throws(() => parseChatContextPressureRequest({}));
+  assert.throws(() => parseChatContextPressureRequest({ chatId: "chat-1", extra: 1 }));
+  assert.throws(() => parseChatContextPressureRequest({ chatId: "chat-1", draftText: 42 }));
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      draftText: "x".repeat(65_537),
+    }),
+  );
 });

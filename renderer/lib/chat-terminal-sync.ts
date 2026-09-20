@@ -283,8 +283,9 @@ export function rememberDetachedLifecycleStream(
   detachedLifecycleStreams.delete(owner.streamId);
   detachedLifecycleStreams.set(owner.streamId, owner);
   const content = (seed?.content ?? "").slice(0, MAX_DETACHED_CONTENT_CHARS);
+  const reasoning = (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS);
   const timeline = seed?.timeline
-    ? parseGenerationTimeline(seed.timeline, content.length)
+    ? parseGenerationTimeline(seed.timeline, content.length, reasoning.length)
     : undefined;
   detachedLifecycleProjections.set(owner.streamId, {
     ...owner,
@@ -293,7 +294,7 @@ export function rememberDetachedLifecycleStream(
       typeof seed?.lastTextDeltaAt === "number" && Number.isFinite(seed.lastTextDeltaAt)
         ? seed.lastTextDeltaAt
         : null,
-    reasoning: (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS),
+    reasoning,
     timeline: timeline?.generationId === owner.streamId ? timeline : null,
     artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
     subagents: mergeSubagentSnapshots([], seed?.subagents ?? [], owner),

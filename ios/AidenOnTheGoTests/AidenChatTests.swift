@@ -3597,4 +3597,98 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["keep"])
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["other-installation"])
     }
+
+    func testReasoningSegmentsDecodeAndSliceTheReasoningBuffer() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Segments","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"reasoningStart":0,"reasoningEnd":17,"durationMs":500},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"target":"README.md"},{"id":"think-2","order":2,"kind":"thinking","startedAt":2000,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"reasoningStart":17,"reasoningEnd":32,"durationMs":1000}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        // Reasoning text reaches iOS only as live deltas; segment bounds are
+        // validated against whatever buffer the client actually holds.
+        let reasoning = "Inspecting repo...Found the issue."
+        let steps = try XCTUnwrap(chat.messages.first?.timeline?.steps)
+        XCTAssertEqual(steps[0].reasoningText(in: reasoning), "Inspecting repo...")
+        XCTAssertNil(steps[1].reasoningText(in: reasoning))
+        XCTAssertEqual(steps[2].reasoningText(in: reasoning), "Found the issue.")
+
+        let open = AidenAgentStep(
+            id: "think-3",
+            order: 3,
+            kind: .thinking,
+            toolName: nil,
+            label: nil,
+            status: nil,
+            startedAt: 3_000,
+            updatedAt: 3_200,
+            finishedAt: nil,
+            contentOffset: 0,
+            reasoningStart: 17,
+            reasoningEnd: nil,
+            durationMs: nil,
+            target: nil,
+            detail: nil,
+            lineChanges: nil
+        )
+        XCTAssertEqual(open.reasoningText(in: reasoning), "Found the issue.")
+
+        for (start, end) in [(-1, 5), (1, 0), (0, 99), (40, 60)] {
+            let malformed = AidenAgentStep(
+                id: "bad-\(start)-\(end)",
+                order: 9,
+                kind: .thinking,
+                toolName: nil,
+                label: nil,
+                status: nil,
+                startedAt: 0,
+                updatedAt: 0,
+                finishedAt: 1,
+                contentOffset: 0,
+                reasoningStart: start,
+                reasoningEnd: end,
+                durationMs: nil,
+                target: nil,
+                detail: nil,
+                lineChanges: nil
+            )
+            XCTAssertNil(malformed.reasoningText(in: reasoning))
+        }
+
+        // A start-only bound on a settled step has no defined tail and fails
+        // closed instead of guessing one.
+        let orphaned = AidenAgentStep(
+            id: "think-open-settled",
+            order: 4,
+            kind: .thinking,
+            toolName: nil,
+            label: nil,
+            status: nil,
+            startedAt: 3_200,
+            updatedAt: 3_400,
+            finishedAt: 3_400,
+            contentOffset: 0,
+            reasoningStart: 17,
+            reasoningEnd: nil,
+            durationMs: nil,
+            target: nil,
+            detail: nil,
+            lineChanges: nil
+        )
+        XCTAssertNil(orphaned.reasoningText(in: reasoning))
+
+        let legacy = try XCTUnwrap(
+            try decoder.decode(
+                AidenChat.self,
+                from: Data(
+                    #"{"id":"chat-2","workspaceId":"workspace-1","title":"Legacy","messages":[{"id":"m-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"durationMs":500}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+                )
+            ).messages.first?.timeline?.steps.first
+        )
+        XCTAssertNil(legacy.reasoningStart)
+        XCTAssertNil(legacy.reasoningText(in: reasoning))
+    }
 }

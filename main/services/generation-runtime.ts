@@ -344,13 +344,12 @@ export function assistantTurnTextSeparator(
   );
 }
 
-/** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
-export function terminalAssistantReasoning(message: {
+/** Non-redacted thinking parts of a terminal assistant message, in Pi's canonical order. */
+export function terminalAssistantReasoningParts(message: {
   role?: string;
   content?: unknown;
-}): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content))
-    return "";
+}): string[] {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
   return message.content
     .filter(
       (
@@ -362,8 +361,14 @@ export function terminalAssistantReasoning(message: {
         typeof (part as { thinking?: unknown }).thinking === "string" &&
         (part as { redacted?: unknown }).redacted !== true,
     )
-    .map((part) => part.thinking)
-    .join("\n\n");
+    .map((part) => part.thinking);
+}
+
+export function terminalAssistantReasoning(message: {
+  role?: string;
+  content?: unknown;
+}): string {
+  return terminalAssistantReasoningParts(message).join("\n\n");
 }
 
 /** Add terminal reasoning only when this assistant turn did not already stream it. */

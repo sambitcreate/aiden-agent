@@ -170,6 +170,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let updatedAt: Double
     let finishedAt: Double?
     let contentOffset: Int?
+    let reasoningStart: Int?
+    let reasoningEnd: Int?
     let durationMs: Double?
     let target: String?
     let detail: String?
@@ -187,6 +189,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Double,
         finishedAt: Double?,
         contentOffset: Int?,
+        reasoningStart: Int? = nil,
+        reasoningEnd: Int? = nil,
         durationMs: Double?,
         target: String?,
         detail: String?,
@@ -203,6 +207,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.finishedAt = finishedAt
         self.contentOffset = contentOffset
+        self.reasoningStart = reasoningStart
+        self.reasoningEnd = reasoningEnd
         self.durationMs = durationMs
         self.target = target
         self.detail = detail
@@ -230,6 +236,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt = try values.decode(Double.self, forKey: .updatedAt)
         finishedAt = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .finishedAt)
         contentOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .contentOffset)
+        reasoningStart = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .reasoningStart)
+        reasoningEnd = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .reasoningEnd)
         durationMs = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .durationMs)
         target = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .target)
         detail = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .detail)
@@ -242,11 +250,30 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
-        case finishedAt, contentOffset, durationMs, target, detail, lineChanges
+        case finishedAt, contentOffset, reasoningStart, reasoningEnd
+        case durationMs, target, detail, lineChanges
     }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
+    }
+
+    /// UTF-16-bounded slice of the streamed reasoning buffer for this thinking
+    /// segment. Fails closed — nil for missing, inverted, or out-of-range
+    /// bounds — so a malformed segment can never mis-attribute reasoning text.
+    /// An open segment (start only, step still active) covers the buffer tail.
+    func reasoningText(in reasoning: String) -> String? {
+        guard kind == .thinking,
+              let start = reasoningStart,
+              start >= 0,
+              start <= reasoning.utf16.count else { return nil }
+        let utf16 = reasoning.utf16
+        let end = reasoningEnd ?? (finishedAt == nil ? utf16.count : nil)
+        guard let end, end >= start, end <= utf16.count else { return nil }
+        return String(decoding: utf16[
+            utf16.index(utf16.startIndex, offsetBy: start)
+                ..< utf16.index(utf16.startIndex, offsetBy: end)
+        ], as: UTF16.self)
     }
 }
 

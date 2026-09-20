@@ -91,7 +91,7 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
       callbacks(),
       "turn-1",
     );
-    assert.equal(listenerCount(bridge), 9);
+    assert.equal(listenerCount(bridge), 10);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
     for (const listener of bridge.listeners.get("chat:delta") ?? []) {
       listener({ streamId: handle.streamId, delta: "Visible before navigation" });
@@ -221,7 +221,7 @@ test("user Stop retains terminal delivery before releasing subscriptions", () =>
     );
 
     handle.cancel("user_stop");
-    assert.equal(listenerCount(bridge), 9);
+    assert.equal(listenerCount(bridge), 10);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
     for (const handler of bridge.listeners.get("chat:error") ?? []) {
       handler({ streamId: handle.streamId, message: "Stopped" });

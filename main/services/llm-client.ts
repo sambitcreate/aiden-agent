@@ -22,7 +22,6 @@ import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
-  BROWSER_AGENT_GUIDANCE,
   BROWSER_MUTATION_TOOL_NAMES,
   browserToolApprovalSummary,
   browserLocalFileRequest,
@@ -84,7 +83,8 @@ import {
 } from "./bot-tool-authority.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
-import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
+import { type SkillRegistrySnapshot } from "./skill-registry.js";
+import { buildSystemPrompt } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   assistantTurnTextSeparator,
@@ -94,6 +94,7 @@ import {
   runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeReasoning,
+  terminalAssistantReasoningParts,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
@@ -146,7 +147,6 @@ import {
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { chatMessageToPiMessage, chatUserTextWithAttachments } from "./generation-messages.js";
 import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
-import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import {
   beginPiVisibleTurnLease,
   piCompactionSessionStore,
@@ -168,8 +168,13 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  chatContextPressureFromProjection,
   createGenerationContextTransform,
 } from "./generation-context.js";
+import {
+  invalidateChatContextJournal,
+  rememberChatContextProfile,
+} from "./context-pressure.js";
 import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
@@ -223,7 +228,6 @@ import {
   subagentChildWebEnabled,
 } from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
-import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./subagents/role-catalog.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
@@ -591,53 +595,6 @@ function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): v
   } catch (error) {
     logger.warn("pi", `Could not eagerly reset stream ${streamId}.`, error);
   }
-}
-
-async function buildSystemPrompt(
-  folderPath: string | undefined,
-  branch: string | undefined,
-  permission: GenerationPermission,
-  subagentsAvailable: boolean,
-  skillsAvailable = true,
-  skillSnapshot?: SkillRegistrySnapshot,
-  availableToolNames?: ReadonlySet<string>,
-): Promise<string> {
-  const base = PI_CHAT_SYSTEM_PROMPT;
-  const skillsText =
-    skillsAvailable && skillSnapshot
-      ? formatAvailableSkills(skillSnapshot, availableToolNames)
-      : undefined;
-  const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
-  const browserSuffix = availableToolNames?.has("browser_open") ? `\n\n${BROWSER_AGENT_GUIDANCE}` : "";
-  if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
-  }
-  const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
-  const capability =
-    permission === "read-only"
-      ? "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
-      : "You have tools to read, search, list, and edit files and to run shell commands in this folder. ";
-  const workflow =
-    permission === "read-only"
-      ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
-      : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
-  const delegation = subagentsAvailable
-    ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
-    : "";
-  return (
-    `${base}\n\n` +
-    `You are working inside the folder: ${folderPath}.${git} ` +
-    capability +
-    workflow +
-    (permission === "ask"
-      ? "The user must approve each file write and shell command before it runs."
-      : permission === "full"
-        ? "You may make changes and run commands directly."
-        : "") +
-    delegation +
-    skillsSuffix +
-    browserSuffix
-  );
 }
 
 async function prepareGeneration(
@@ -2097,6 +2054,7 @@ export const llmClient = {
         contextWindow: model.contextWindow, systemPrompt, tools: runtimeTools,
         supportsImages, providerId: model.provider, modelId: model.id,
       };
+      rememberChatContextProfile(params.chatId, generationContextOptions);
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -2247,6 +2205,13 @@ export const llmClient = {
             `Pi runtime fault (${source}${extensionId ? `:${extensionId}` : ""}) for stream ${streamId}.`,
           );
         },
+        onContextProjection: (projection, projectionOptions) => {
+          sendGeneration(streamId, "chat:context-pressure", {
+            streamId,
+            chatId: params.chatId,
+            pressure: chatContextPressureFromProjection(projection, projectionOptions),
+          });
+        },
         ...buildAgentRuntimeOptions(params.chatId, runtime),
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
@@ -2338,7 +2303,7 @@ export const llmClient = {
         },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
-          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
+          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args, reasoning.length);
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
@@ -2658,9 +2623,9 @@ export const llmClient = {
             // provider's reasoning text stays hidden, since only the elapsed
             // time is shown.
             if (e.type === "thinking_start") {
-              timeline.thinkingStarted();
+              timeline.thinkingStarted(reasoning.length);
               noteModelBecameReady();
-            } else if (e.type === "thinking_end") timeline.thinkingEnded();
+            } else if (e.type === "thinking_end") timeline.thinkingEnded(reasoning.length);
             if (e.type === "toolcall_start") {
               // Tool-call arguments can stream for a long while (a full HTML
               // artifact for render_artifact) before execution begins. Open the
@@ -2675,7 +2640,7 @@ export const llmClient = {
                 block.id &&
                 typeof block.name === "string"
               ) {
-                timeline.toolStarted(block.id, block.name, {});
+                timeline.toolStarted(block.id, block.name, {}, reasoning.length);
               }
             }
             if (e.type === "text_delta") {
@@ -2692,6 +2657,9 @@ export const llmClient = {
                 delta,
               });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
+              // Exposed reasoning must always belong to a thinking segment, so
+              // a provider that skips thinking_start still gets bounded offsets.
+              timeline.thinkingStarted(reasoning.length);
               const separator =
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
@@ -2756,10 +2724,17 @@ export const llmClient = {
               }
             }
             timeline.reconcileContentOffset(currentAssistantTurnStart.full, full.length);
+            if (event.message.role === "assistant") {
+              timeline.reconcileReasoningOffsets(
+                currentAssistantTurnStart.reasoning,
+                terminalAssistantReasoningParts(event.message),
+                reasoning,
+              );
+            }
             break;
           }
           case "tool_execution_start":
-            timeline.toolStarted(event.toolCallId, event.toolName, event.args);
+            timeline.toolStarted(event.toolCallId, event.toolName, event.args, reasoning.length);
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: "call",
@@ -3098,6 +3073,7 @@ export const llmClient = {
               full = full.slice(0, fullLengthBeforeAttempt);
               reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
               timeline.rewindContentOffset(full.length);
+              timeline.rewindReasoningOffset(reasoning.length);
               sendGeneration(streamId, "chat:delta", {
                 streamId,
                 delta: "",
@@ -3150,7 +3126,7 @@ export const llmClient = {
               ? "The local agent runtime could not complete this response safely."
               : null);
         if (finalError) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
           const persisted = await persistAssistant(
             full,
             reasoning,
@@ -3176,7 +3152,7 @@ export const llmClient = {
           ) &&
           !wasCancelled
         ) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
@@ -3194,6 +3170,7 @@ export const llmClient = {
             timeline.finish(
               wasCancelled ? "cancelled" : "completed",
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
+              reasoning.length,
             ),
             full,
           );
@@ -3220,7 +3197,7 @@ export const llmClient = {
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
-        const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+        const finalTimeline = attachClaimCheck(timeline.finish("failed", undefined, reasoning.length), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
         sendGeneration(streamId, "chat:error", {
@@ -3239,6 +3216,7 @@ export const llmClient = {
           resetGenerationAgent(agent, streamId);
           await computerUse?.close().catch(() => {});
         } finally {
+          invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
           active.delete(streamId);

@@ -1,7 +1,9 @@
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
+const MAX_DRAFT_TEXT_CHARS = 65_536;
 const COPY_KEYS = new Set(["chatId", "throughMessageId"]);
 const CHAT_ONLY_KEYS = new Set(["chatId"]);
+const CONTEXT_PRESSURE_KEYS = new Set(["chatId", "draftText"]);
 
 function exactRecord(
   value: unknown,
@@ -54,6 +56,26 @@ export function parseChatCopyRequest(value: unknown): ParsedChatCopyRequest {
 export function parseChatOnlyRequest(value: unknown): { chatId: string } {
   const record = exactRecord(value, CHAT_ONLY_KEYS, "chat request");
   return { chatId: boundedId(record.chatId, "chat id") };
+}
+
+export interface ParsedChatContextPressureRequest {
+  chatId: string;
+  /** Optional draft text folded into the next-request projection. */
+  draftText?: string;
+}
+
+export function parseChatContextPressureRequest(value: unknown): ParsedChatContextPressureRequest {
+  const record = exactRecord(value, CONTEXT_PRESSURE_KEYS, "context pressure request");
+  if (
+    record.draftText !== undefined &&
+    (typeof record.draftText !== "string" || record.draftText.length > MAX_DRAFT_TEXT_CHARS)
+  ) {
+    throw new Error("Invalid draft text.");
+  }
+  return {
+    chatId: boundedId(record.chatId, "chat id"),
+    draftText: record.draftText as string | undefined,
+  };
 }
 
 // Keep workspace-bound identifiers on the same explicit budget as the rest

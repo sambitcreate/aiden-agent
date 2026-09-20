@@ -8,10 +8,12 @@ import type {
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
+  chatContextPressureFromProjection,
   compactGenerationContext,
   createGenerationContextTransform,
   limitComputerUseImages,
   limitBrowserSnapshotImages,
+  projectChatContextPressure,
   projectNextContextUsage,
   projectMessagesForModel,
 } from "./generation-context.js";
@@ -634,4 +636,86 @@ test("never rejects when compaction inputs or observers fail", async () => {
   assert.equal(transformed[0]?.role, "user");
   assert.match(JSON.stringify(transformed), /larger-context model/u);
   assert.equal(observerCalls, 2);
+});
+
+test("the composer DTO mirrors the runtime projection and limits", () => {
+  const anchored = assistant("anchored");
+  anchored.usage.input = 50_000;
+  anchored.usage.totalTokens = 60_000;
+  const messages = [user("old"), anchored, user("current")];
+  const pressure = projectChatContextPressure(messages, options);
+  const projection = projectNextContextUsage(messages, options);
+  // The DTO helper and the projection-first builder agree.
+  assert.deepEqual(
+    { ...chatContextPressureFromProjection(projection, options, pressure.computedAt) },
+    pressure,
+  );
+
+  assert.equal(pressure.contextTokens, projection.contextTokens);
+  assert.equal(pressure.messageTokens, projection.messageTokens);
+  assert.equal(pressure.staticTokens, projection.staticTokens);
+  assert.equal(pressure.shouldCompact, projection.shouldCompact);
+  assert.equal(pressure.contextWindow, options.contextWindow);
+  // Usable-input pressure is what matches the compaction threshold.
+  assert.ok(pressure.inputBudgetTokens < pressure.contextWindow);
+  assert.equal(
+    pressure.inputBudgetTokens + pressure.reservedTokens,
+    pressure.contextWindow,
+  );
+  assert.ok(pressure.percentOfUsableInput > pressure.percentOfWindow);
+  assert.equal(pressure.source, "provider-anchored");
+  assert.equal(pressure.providerUsageTokens, projection.providerUsageTokens);
+  assert.equal(
+    pressure.addedAfterUsageAnchorTokens,
+    projection.addedAfterUsageAnchorTokens,
+  );
+  assert.equal(
+    pressure.compressibleHistoryMessages,
+    projection.compressibleHistoryMessages,
+  );
+});
+
+test("unanchored projections read as estimates and still trip compaction", () => {
+  const pressure = projectChatContextPressure([user("x".repeat(200_000))], {
+    contextWindow: 4_096,
+    systemPrompt: "system",
+    tools: [],
+  });
+  assert.equal(pressure.source, "estimated");
+  assert.equal(pressure.providerUsageTokens, undefined);
+  assert.equal(pressure.addedAfterUsageAnchorTokens, undefined);
+  assert.equal(pressure.shouldCompact, true);
+  // Over-budget requests report honest >100% pressure — never clamped.
+  assert.ok(pressure.percentOfUsableInput > 100);
+});
+
+test("a projection after compaction reports the post-compaction truth", () => {
+  const big = [
+    user("old ".repeat(8_000)),
+    assistant("old-call"),
+    toolResult("old-call", "y".repeat(40_000)),
+    user("current"),
+  ];
+  const before = projectChatContextPressure(big, { ...options, contextWindow: 8_000 });
+  assert.equal(before.shouldCompact, true);
+
+  const compacted = compactGenerationContext(big, { ...options, contextWindow: 8_000 });
+  const after = projectChatContextPressure(compacted.messages, {
+    ...options,
+    contextWindow: 8_000,
+  });
+  assert.ok(after.contextTokens < before.contextTokens);
+  assert.ok(after.percentOfUsableInput < before.percentOfUsableInput);
+});
+
+test("model changes rescale capacity without touching the conversation", () => {
+  const messages = [user("hello"), assistant("answer", "chat")];
+  const small = projectChatContextPressure(messages, {
+    ...options,
+    contextWindow: 4_096,
+  });
+  const large = projectChatContextPressure(messages, options);
+  assert.equal(small.contextTokens, large.contextTokens);
+  assert.ok(small.percentOfUsableInput > large.percentOfUsableInput);
+  assert.ok(large.reservedTokens > small.reservedTokens);
 });

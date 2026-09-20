@@ -12,6 +12,7 @@ import { SubagentChips } from "./subagent-chips";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  hasValidReasoningSegments,
 } from "../lib/assistant-message-presentation";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
@@ -99,7 +100,7 @@ function AssistantResponse({
   streamComplete,
   onStreamHandoffComplete,
 }: AssistantResponseProps) {
-  const rows = assistantPresentationRows(content, timeline);
+  const rows = assistantPresentationRows(content, reasoning, timeline);
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   // The one reasoning disclosure owns both the live and settled thought state.
   // Other live phases continue in the activity row below the transcript.
@@ -112,7 +113,10 @@ function AssistantResponse({
   // surface when the turn already contains thought text.
   const visualizing = useMinimumPresence(visualizingLive, MINIMUM_VISUALIZING_MS);
   const reasoningLabel = visualizing ? "Visualizing" : reasoningActivityLabel(timeline, active);
-  const showReasoning = Boolean(reasoning) || visualizing;
+  // Segmented timelines render each thought inside its work group instead of
+  // the single reasoning disclosure; the block stays for everything else.
+  const segmented = rows !== null && hasValidReasoningSegments(timeline, reasoning);
+  const showReasoning = (Boolean(reasoning) || visualizing) && !segmented;
   if (!rows || !timeline) {
     const activityTimeline = timeline
       ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
@@ -172,6 +176,8 @@ function AssistantResponse({
             <React.Fragment key={row.key}>
               <ActivityFeed
                 timeline={activityTimelineFragment(timeline, row.steps)}
+                reasoning={reasoning}
+                streaming={streaming && !streamComplete}
                 animate={streaming}
               />
               {subagentActivityKey === row.key ? subagentChips : null}

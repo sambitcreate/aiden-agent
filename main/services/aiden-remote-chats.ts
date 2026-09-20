@@ -269,7 +269,11 @@ function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeP
       retryExhausted: failure.retryExhausted,
     };
   }
-  const timeline = parseGenerationTimeline(message.timeline, message.content.length);
+  const timeline = parseGenerationTimeline(
+    message.timeline,
+    message.content.length,
+    message.reasoning?.length ?? 0,
+  );
   if (timeline?.status === "failed" || timeline?.status === "cancelled") {
     return { status: timeline.status };
   }
@@ -278,7 +282,11 @@ function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeP
 
 function projectMessageTimeline(message: ChatMessage): GenerationTimeline | undefined {
   if (message.role !== "assistant") return undefined;
-  return parseGenerationTimeline(message.timeline, message.content.length);
+  return parseGenerationTimeline(
+    message.timeline,
+    message.content.length,
+    message.reasoning?.length ?? 0,
+  );
 }
 
 function chatRevision(chat: Chat): string {

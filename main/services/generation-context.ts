@@ -7,6 +7,7 @@ import {
   type AgentMessage,
   type AgentTool,
 } from "@earendil-works/pi-agent-core";
+import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
 const RECENT_TOOL_OUTPUT_BUDGET_TOKENS = 40_000;
@@ -302,6 +303,59 @@ export function projectNextContextUsage(
       ...DEFAULT_COMPACTION_SETTINGS,
       reserveTokens: limits.reserveTokens,
     }),
+  };
+}
+
+/**
+ * Renderer-safe view of {@link projectNextContextUsage} plus the limits the
+ * compaction threshold actually uses. `percentOfUsableInput` is the headline
+ * pressure: it is 100 at the exact point `shouldCompact` trips.
+ */
+export function projectChatContextPressure(
+  messages: readonly AgentMessage[],
+  options: GenerationContextOptions,
+  computedAt = Date.now(),
+): ChatContextPressureV1 {
+  return chatContextPressureFromProjection(
+    projectNextContextUsage(messages, options),
+    options,
+    computedAt,
+  );
+}
+
+/** DTO for a projection the caller already computed (e.g. the runtime harness). */
+export function chatContextPressureFromProjection(
+  projection: NextContextUsageProjection,
+  options: GenerationContextOptions,
+  computedAt = Date.now(),
+): ChatContextPressureV1 {
+  const limits = contextLimits(options);
+  const anchored = projection.usageAnchorIndex !== null;
+  return {
+    contextTokens: projection.contextTokens,
+    contextWindow: limits.contextWindow,
+    inputBudgetTokens: limits.inputBudgetTokens,
+    reservedTokens: limits.reserveTokens,
+    percentOfWindow:
+      limits.contextWindow > 0
+        ? (projection.contextTokens / limits.contextWindow) * 100
+        : 0,
+    percentOfUsableInput:
+      limits.inputBudgetTokens > 0
+        ? (projection.contextTokens / limits.inputBudgetTokens) * 100
+        : projection.contextTokens > 0
+          ? 100
+          : 0,
+    shouldCompact: projection.shouldCompact,
+    messageTokens: projection.messageTokens,
+    staticTokens: projection.staticTokens,
+    compressibleHistoryMessages: projection.compressibleHistoryMessages,
+    source: anchored ? "provider-anchored" : "estimated",
+    computedAt,
+    ...(anchored ? { providerUsageTokens: projection.providerUsageTokens } : {}),
+    ...(anchored
+      ? { addedAfterUsageAnchorTokens: projection.addedAfterUsageAnchorTokens }
+      : {}),
   };
 }
 

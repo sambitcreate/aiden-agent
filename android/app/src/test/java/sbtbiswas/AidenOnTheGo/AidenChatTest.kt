@@ -470,6 +470,39 @@ class AidenChatTest {
     }
 
     @Test
+    fun testReasoningSegmentBoundsSliceTheReasoningBuffer() {
+        val reasoning = "Inspecting repo...Found the issue."
+
+        fun step(start: Int?, end: Int?, finishedAt: Double? = 2_000.0) = AidenAgentStep(
+            id = "think-x",
+            order = 0,
+            kind = AidenAgentStep.Kind.THINKING,
+            startedAt = 1_000.0,
+            updatedAt = finishedAt ?: 1_500.0,
+            finishedAt = finishedAt,
+            contentOffset = 0,
+            reasoningStart = start,
+            reasoningEnd = end
+        )
+
+        assertEquals("Inspecting repo...", step(0, 17).reasoningText(reasoning))
+        assertEquals("Found the issue.", step(17, 32).reasoningText(reasoning))
+        // A still-running segment covers the buffer tail.
+        assertEquals("Found the issue.", step(17, null, finishedAt = null).reasoningText(reasoning))
+        // Start-only on a settled step has no defined tail.
+        assertNull(step(17, null).reasoningText(reasoning))
+        assertNull(step(null, null).reasoningText(reasoning))
+        assertNull(step(-1, 5).reasoningText(reasoning))
+        assertNull(step(5, 0).reasoningText(reasoning))
+        assertNull(step(0, 99).reasoningText(reasoning))
+        assertNull(step(40, 60).reasoningText(reasoning))
+        // Tool steps never slice reasoning.
+        assertNull(
+            step(0, 5).copy(kind = AidenAgentStep.Kind.TOOL).reasoningText(reasoning)
+        )
+    }
+
+    @Test
     fun testProviderArtworkPNGHeaderValidation() {
         val valid1x1PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         val artwork = AidenProviderArtwork(mimeType = "image/png", dataBase64 = valid1x1PNG)

@@ -242,6 +242,35 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
   }
 }
 
+/**
+ * Locate the terminal thinking parts verbatim in the final reasoning buffer.
+ * The parts are appended as one `parts.join("\n\n")` tail after the prior
+ * turns' prefix, so a single containment check anchors every part at a
+ * deterministic offset. Returns null when the terminal projection does not
+ * appear verbatim — offsets are then dropped rather than guessed.
+ */
+function terminalReasoningSpans(
+  parts: readonly string[],
+  reasoning: string,
+  turnStart: number,
+): Array<readonly [number, number]> | null {
+  if (parts.length === 0) return null;
+  const joined = parts.join("\n\n");
+  if (!joined) return null;
+  const tailStart = reasoning.endsWith(joined)
+    ? reasoning.length - joined.length
+    : reasoning.lastIndexOf(joined);
+  if (tailStart < turnStart) return null;
+  const spans: Array<readonly [number, number]> = [];
+  let cursor = tailStart;
+  for (const [index, part] of parts.entries()) {
+    if (!part || !reasoning.startsWith(part, cursor)) return null;
+    spans.push([cursor, cursor + part.length]);
+    cursor += part.length + (index === parts.length - 1 ? 0 : 2);
+  }
+  return spans;
+}
+
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
@@ -265,8 +294,16 @@ export class GenerationTimelineProjector {
     };
   }
 
-  toolStarted(toolCallId: string, toolName: string, args: unknown): void {
+  toolStarted(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    reasoningOffset?: number,
+  ): void {
     if (this.timeline.status !== "running") return;
+    // A tool boundary ends any open reasoning stretch even if thinking_end
+    // never arrived, so a stale open step cannot swallow later segments.
+    this.settleThinking(this.now(), reasoningOffset);
     const existingIndex = this.stepIndex.get(toolCallId);
     if (existingIndex !== undefined) {
       // An early pending step (opened at toolcall_start, before arguments
@@ -313,14 +350,16 @@ export class GenerationTimelineProjector {
    * merged into the single stretch of thinking the user actually perceives and
    * timed against the host clock.
    */
-  thinkingStarted(): void {
+  thinkingStarted(reasoningOffset?: number): void {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
     if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
       // The stretch reopened on the merged thinking step: mark it open again so
-      // the live timeline reflects reasoning in progress.
+      // the live timeline reflects reasoning in progress. Its reasoningStart
+      // still anchors the merged segment; the end re-opens with it.
       delete last.finishedAt;
+      delete last.reasoningEnd;
       last.updatedAt = timestamp;
       this.openThinking = {
         index: this.timeline.steps.length - 1,
@@ -338,6 +377,9 @@ export class GenerationTimelineProjector {
       updatedAt: timestamp,
       durationMs: 0,
       contentOffset: this.contentOffset,
+      ...(Number.isSafeInteger(reasoningOffset) && (reasoningOffset as number) >= 0
+        ? { reasoningStart: reasoningOffset }
+        : {}),
     };
     this.openThinking = {
       index: this.timeline.steps.length,
@@ -347,10 +389,100 @@ export class GenerationTimelineProjector {
     this.emit();
   }
 
-  thinkingEnded(): void {
+  thinkingEnded(reasoningOffset?: number): void {
     if (this.timeline.status !== "running" || !this.openThinking) return;
-    this.settleThinking(this.now());
+    this.settleThinking(this.now(), reasoningOffset);
     this.emit();
+  }
+
+  /**
+   * Terminal assistant content can rewrite the reasoning buffer (canonical Pi
+   * block order beats streamed delta order). Re-anchor this turn's thinking
+   * segments by locating the terminal thinking parts verbatim in the final
+   * buffer; any disagreement drops the turn's offsets so the message fails
+   * closed to the single ReasoningBlock instead of mis-slicing.
+   */
+  reconcileReasoningOffsets(
+    turnStart: number,
+    parts: readonly string[],
+    reasoning: string,
+  ): void {
+    if (
+      !Number.isSafeInteger(turnStart) ||
+      turnStart < 0 ||
+      turnStart > reasoning.length
+    ) {
+      return;
+    }
+    const affected: AgentThinkingStep[] = [];
+    for (const step of this.timeline.steps) {
+      if (
+        !isToolStep(step) &&
+        step.reasoningStart !== undefined &&
+        step.reasoningStart >= turnStart
+      ) {
+        affected.push(step);
+      }
+    }
+    if (affected.length === 0) return;
+    const spans = terminalReasoningSpans(parts, reasoning, turnStart);
+    // A reasoning-free milestone (provider opened and closed thinking without
+    // exposed text) keeps its own zero-width offsets and needs no part.
+    const nonEmpty = affected.filter(
+      (step) =>
+        step.reasoningEnd !== undefined && step.reasoningEnd > step.reasoningStart!,
+    );
+    const open = affected.filter((step) => step.reasoningEnd === undefined);
+    if (spans) {
+      if (nonEmpty.length === spans.length) {
+        for (const [index, step] of nonEmpty.entries()) {
+          step.reasoningStart = spans[index]![0];
+          step.reasoningEnd = spans[index]![1];
+        }
+        for (const step of open) step.reasoningEnd = step.reasoningStart!;
+        this.emit();
+        return;
+      }
+      if (nonEmpty.length <= 1) {
+        // Adjacent provider blocks merged into one perceived stretch: the step
+        // owns the whole contiguous terminal span.
+        if (nonEmpty.length === 1) {
+          nonEmpty[0]!.reasoningStart = spans[0]![0];
+          nonEmpty[0]!.reasoningEnd = spans[spans.length - 1]![1];
+        }
+        for (const step of open) step.reasoningEnd = step.reasoningStart!;
+        this.emit();
+        return;
+      }
+    }
+    for (const step of affected) {
+      delete step.reasoningStart;
+      delete step.reasoningEnd;
+    }
+    this.emit();
+  }
+
+  /**
+   * Reasoning is truncated on retry alongside visible text. Segments beyond
+   * the rewind point lose their bounds; a partially retained open stretch
+   * ends at the boundary.
+   */
+  rewindReasoningOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    this.settleThinking(this.now(), offset);
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (isToolStep(step) || step.reasoningStart === undefined) continue;
+      if (step.reasoningStart >= offset) {
+        delete step.reasoningStart;
+        delete step.reasoningEnd;
+        changed = true;
+      } else if (step.reasoningEnd !== undefined && step.reasoningEnd > offset) {
+        step.reasoningEnd = offset;
+        changed = true;
+      }
+    }
+    if (changed) this.emit();
   }
 
   compactionStarted(): string {
@@ -467,10 +599,11 @@ export class GenerationTimelineProjector {
   finish(
     status: Exclude<GenerationTimelineStatus, "running">,
     cancellationOrigin?: GenerationCancellationOrigin,
+    reasoningLength?: number,
   ): GenerationTimeline {
     if (this.timeline.status === "running") {
       const timestamp = this.now();
-      this.settleThinking(timestamp);
+      this.settleThinking(timestamp, reasoningLength);
       this.timeline.status = status;
       if (status === "cancelled" && cancellationOrigin) {
         this.timeline.cancellationOrigin = cancellationOrigin;
@@ -500,7 +633,7 @@ export class GenerationTimelineProjector {
     };
   }
 
-  private settleThinking(timestamp: number): void {
+  private settleThinking(timestamp: number, reasoningEnd?: number): void {
     const open = this.openThinking;
     if (!open) return;
     this.openThinking = null;
@@ -509,6 +642,17 @@ export class GenerationTimelineProjector {
     step.durationMs = (step.durationMs ?? 0) + Math.max(0, timestamp - open.startedAt);
     step.updatedAt = timestamp;
     step.finishedAt = timestamp;
+    if (step.reasoningStart !== undefined) {
+      if (
+        Number.isSafeInteger(reasoningEnd) &&
+        (reasoningEnd as number) >= step.reasoningStart
+      ) {
+        step.reasoningEnd = reasoningEnd;
+      } else {
+        // A segment with no trustworthy end must not absorb later reasoning.
+        delete step.reasoningStart;
+      }
+    }
   }
 
   private updateTool(

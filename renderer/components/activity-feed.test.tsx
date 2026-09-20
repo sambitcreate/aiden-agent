@@ -207,3 +207,76 @@ test("the ticker preserves rows and only fades new content", () => {
   assert.match(css, /:root\[data-reduce-motion="false"\] \.activity-feed-stack/u);
   assert.doesNotMatch(css, /aiden-agent-step-label-(?:in|out)/u);
 });
+
+function thinking(
+  order: number,
+  contentOffset: number,
+  reasoningStart: number,
+  reasoningEnd?: number,
+  extra: Record<string, unknown> = {},
+): AgentStep {
+  return {
+    id: `think-${order + 1}`,
+    order,
+    kind: "thinking",
+    startedAt: order,
+    updatedAt: order,
+    durationMs: 1_000,
+    contentOffset,
+    reasoningStart,
+    ...(reasoningEnd === undefined ? {} : { reasoningEnd }),
+    ...extra,
+  } as AgentStep;
+}
+
+test("a segmented turn collapses to one work-group summary, thoughts stay closed", () => {
+  const reasoning = "Inspecting the repo now.\n\nChecking the implementation next.";
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        thinking(0, 0, 0, 24),
+        step(1, "read_file", "completed", { contentOffset: 0, target: "a.ts" }),
+        thinking(2, 0, 26, reasoning.length),
+      ])}
+      reasoning={reasoning}
+    />,
+  );
+  assert.match(markup, />Worked briefly · 1 tool · 2 thoughts</u);
+  // Expanding the group does not expand the thoughts inside it.
+  assert.equal(markup.match(/aria-expanded="false"/gu)?.length, 2);
+  assert.equal(markup.match(/aria-label="Thought, collapsed"/gu)?.length, 2);
+  // Collapsed previews slice their own segment, not the whole buffer.
+  assert.match(markup, /Inspecting the repo now\./u);
+  assert.match(markup, /Checking the implementation next\./u);
+  // No full body leaks into the collapsed markup (preview is flat ≤80 chars).
+  assert.equal(markup.includes('role="region"'), false);
+});
+
+test("a live open thought previews the streamed tail in the ticker", () => {
+  const reasoning = "Still forming the answer…";
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("running", [
+        step(0, "read_file", "completed", { contentOffset: 0, target: "a.ts" }),
+        thinking(1, 0, 0, undefined, { durationMs: 0 }),
+      ])}
+      reasoning={reasoning}
+      streaming
+    />,
+  );
+  assert.match(markup, />Thinking</u);
+  assert.match(markup, /Still forming the answer/u);
+  assert.match(markup, /aria-label="Thinking"/u);
+});
+
+test("legacy tool-only groups keep the prose summary", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "read_file", "completed", { contentOffset: 0 }),
+        step(1, "edit_file", "completed", { contentOffset: 0 }),
+      ])}
+    />,
+  );
+  assert.match(markup, />Explored 1 file, edited 1 file</u);
+});
