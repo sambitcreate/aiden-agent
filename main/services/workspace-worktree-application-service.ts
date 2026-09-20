@@ -22,7 +22,11 @@ export interface WorkspaceWorktreeApplicationDependencies {
     options?: { allowSetupScript?: boolean },
   ): Promise<GitCreatedWorktree>;
   rollbackWorktree(folderPath: string, created: GitCreatedWorktree): Promise<void>;
-  deleteManagedWorktree(managed: ManagedWorktree, signal: AbortSignal): Promise<GitDeleteWorktreeResult>;
+  deleteManagedWorktree(
+    managed: ManagedWorktree,
+    signal: AbortSignal,
+    options?: { force?: boolean },
+  ): Promise<GitDeleteWorktreeResult>;
   managedWorktreeDeletionPending(managed: ManagedWorktree): Promise<boolean>;
   managedWorktreeRegistered(managed: ManagedWorktree): Promise<boolean>;
   managedWorktreeUsable(managed: ManagedWorktree): Promise<boolean>;
@@ -63,10 +67,8 @@ export function createWorkspaceWorktreeApplicationService(
     branch: string,
     requestedName?: string,
     options?: { allowSetupScript?: boolean },
-  ): Promise<Workspace> => dependencies.environment.run(
-    owner,
-    sourceWorkspaceId,
-    async (resolved, signal) => {
+  ): Promise<Workspace> =>
+    dependencies.environment.run(owner, sourceWorkspaceId, async (resolved, signal) => {
       const worktree = await dependencies.createWorktree(
         resolved.folderPath,
         await dependencies.ensureWorktreeRoot(),
@@ -106,7 +108,9 @@ export function createWorkspaceWorktreeApplicationService(
               latest.folderPath !== resolved.folderPath ||
               latest.workspace.permission !== resolved.workspace.permission
             ) {
-              throw new Error("The source workspace changed while Aiden was creating the worktree.");
+              throw new Error(
+                "The source workspace changed while Aiden was creating the worktree.",
+              );
             }
           },
           saveWorkspace: () => dependencies.saveWorkspace(workspace),
@@ -115,7 +119,8 @@ export function createWorkspaceWorktreeApplicationService(
               throw new Error("The source workspace changed while Aiden was saving the worktree.");
             }
           },
-          removeWorkspaceRecord: (savedWorkspace) => dependencies.removeWorkspace(savedWorkspace.id),
+          removeWorkspaceRecord: (savedWorkspace) =>
+            dependencies.removeWorkspace(savedWorkspace.id),
           rollbackWorktree: () => dependencies.rollbackWorktree(resolved.folderPath, worktree),
         });
         dependencies.notifyChanged();
@@ -126,17 +131,15 @@ export function createWorkspaceWorktreeApplicationService(
         }
         throw error;
       }
-    },
-  );
+    });
 
   const remove = async (
     owner: WorkspaceOperationDocumentOwner,
     workspaceId: string,
     validateWorkspace: (workspace: Workspace) => void = () => undefined,
-  ): Promise<GitDeleteWorktreeResult> => dependencies.environment.runRecord(
-    owner,
-    workspaceId,
-    async (workspace, signal) => {
+    options?: { force?: boolean },
+  ): Promise<GitDeleteWorktreeResult> =>
+    dependencies.environment.runRecord(owner, workspaceId, async (workspace, signal) => {
       validateWorkspace(workspace);
       const managed = workspace.managedWorktree;
       if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
@@ -147,18 +150,19 @@ export function createWorkspaceWorktreeApplicationService(
           {
             restoreOnExit: workspace.permission !== "none",
             resume: () => dependencies.resumeWorkspaceSchedules(workspaceId),
-            onResumeError: (error) => dependencies.logError(
-              "schedule",
-              "Could not restore scheduled tasks after managed worktree deletion failed.",
-              error,
-            ),
+            onResumeError: (error) =>
+              dependencies.logError(
+                "schedule",
+                "Could not restore scheduled tasks after managed worktree deletion failed.",
+                error,
+              ),
           },
           async ({ keepPaused }) => {
             dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
             const deletion = await removeManagedWorkspace({
-              deleteWorktree: () => dependencies.deleteManagedWorktree(managed, signal),
+              deleteWorktree: () => dependencies.deleteManagedWorktree(managed, signal, options),
               destructiveMutationAttempted: (error) =>
                 error instanceof GitManagedWorktreeDeleteError
                   ? error.destructiveMutationAttempted
@@ -182,8 +186,7 @@ export function createWorkspaceWorktreeApplicationService(
       } finally {
         finishMutation();
       }
-    },
-  );
+    });
 
   return { create, remove };
 }

@@ -21,6 +21,7 @@ import {
   removeManagedWorktreeDirectory,
 } from "./managed-worktree-remover.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./managed-worktree-deletion-recovery.js";
+import { WorktreeSnapshotStore, WorktreeSnapshotStoreError } from "./worktree-snapshot-store.js";
 import type { Workspace } from "./types.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
 
@@ -2673,9 +2674,7 @@ test("GitService disables repository automation during managed worktree creation
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as { args: string[]; config: Record<string, string> });
-  const add = invocations.find(
-    (entry) => entry.args[0] === "worktree" && entry.args[1] === "add",
-  );
+  const add = invocations.find((entry) => entry.args[0] === "worktree" && entry.args[1] === "add");
   assert.ok(add, "git worktree add was not invoked");
   const pairs = Object.keys(add.config)
     .filter((key) => /^GIT_CONFIG_KEY_\d+$/u.test(key))
@@ -2772,14 +2771,8 @@ test("GitService provisions .worktreeinclude files into a managed worktree", asy
   await fs.mkdir(path.join(repository, "fixtures", "generated"), {
     recursive: true,
   });
-  await fs.writeFile(
-    path.join(repository, "fixtures", "generated", "data.bin"),
-    "payload\n",
-  );
-  await fs.writeFile(
-    path.join(repository, "fixtures", "generated", "skip.bin"),
-    "excluded\n",
-  );
+  await fs.writeFile(path.join(repository, "fixtures", "generated", "data.bin"), "payload\n");
+  await fs.writeFile(path.join(repository, "fixtures", "generated", "skip.bin"), "excluded\n");
   // Ignored but not in the include file — must not be provisioned.
   await fs.writeFile(path.join(repository, "ignored.bin"), "nope\n");
   // Untracked but not ignored — must not be provisioned.
@@ -2789,21 +2782,13 @@ test("GitService provisions .worktreeinclude files into a managed worktree", asy
   const service = new GitService({ cacheTtlMs: 0 });
   const created = await service.createWorktree(repository, root, "codex/provisioned");
 
-  assert.equal(
-    await fs.readFile(path.join(created.path, ".env.local"), "utf8"),
-    "KEY=dev\n",
-  );
-  assert.equal(
-    (await fs.stat(path.join(created.path, ".env.local"))).mode & 0o777,
-    0o600,
-  );
+  assert.equal(await fs.readFile(path.join(created.path, ".env.local"), "utf8"), "KEY=dev\n");
+  assert.equal((await fs.stat(path.join(created.path, ".env.local"))).mode & 0o777, 0o600);
   assert.equal(
     await fs.readFile(path.join(created.path, "fixtures", "generated", "data.bin"), "utf8"),
     "payload\n",
   );
-  await assert.rejects(
-    fs.stat(path.join(created.path, "fixtures", "generated", "skip.bin")),
-  );
+  await assert.rejects(fs.stat(path.join(created.path, "fixtures", "generated", "skip.bin")));
   await assert.rejects(fs.stat(path.join(created.path, "ignored.bin")));
   await assert.rejects(fs.stat(path.join(created.path, "visible.txt")));
   assert.deepEqual(
@@ -2862,11 +2847,7 @@ test("GitService runs the setup script only for authorized local creation", asyn
 
   // The remote-style path never executes repository setup.
   const remoteRoot = await temporaryDirectory(t);
-  const remoteCreated = await service.createWorktree(
-    repository,
-    remoteRoot,
-    "codex/no-setup",
-  );
+  const remoteCreated = await service.createWorktree(repository, remoteRoot, "codex/no-setup");
   await assert.rejects(fs.stat(path.join(remoteCreated.path, "setup.ran")));
 
   // The authorized local path runs it with the minimal environment.
@@ -2874,24 +2855,16 @@ test("GitService runs the setup script only for authorized local creation", asyn
   const created = await service.createWorktree(repository, root, "codex/with-setup", undefined, {
     allowSetupScript: true,
   });
-  assert.equal(
-    await fs.readFile(path.join(created.path, "setup.ran"), "utf8"),
-    created.path,
-  );
-  assert.equal(
-    await fs.readFile(path.join(created.path, "setup.secret"), "utf8"),
-    "missing",
-  );
+  assert.equal(await fs.readFile(path.join(created.path, "setup.ran"), "utf8"), created.path);
+  assert.equal(await fs.readFile(path.join(created.path, "setup.secret"), "utf8"), "missing");
 });
 
 test("GitService rolls creation back when the setup script fails", async (t) => {
   const repository = await createRepository(t);
   await fs.mkdir(path.join(repository, ".aiden"));
-  await fs.writeFile(
-    path.join(repository, ".aiden", "worktree-setup.sh"),
-    "#!/bin/sh\nexit 4\n",
-    { mode: 0o755 },
-  );
+  await fs.writeFile(path.join(repository, ".aiden", "worktree-setup.sh"), "#!/bin/sh\nexit 4\n", {
+    mode: 0o755,
+  });
   await git(repository, ["add", ".aiden/worktree-setup.sh"]);
   await git(repository, ["commit", "-m", "Add failing setup script"]);
 
@@ -2913,6 +2886,397 @@ test("GitService rolls creation back when the setup script fails", async (t) => 
   assert.equal((await service.worktrees(repository)).length, 1);
   await assert.rejects(
     git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/setup-fails"]),
+  );
+});
+
+async function writeSnapshotRaceWrapper(
+  directory: string,
+  mode: "move-head" | "late-file",
+): Promise<string> {
+  const wrapper = path.join(directory, `git-snapshot-race-${Date.now().toString(36)}-${mode}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const realGit = "/usr/bin/git";
+const args = process.argv.slice(2);
+const env = { ...process.env };
+delete env.GIT_INDEX_FILE;
+for (const key of Object.keys(env)) {
+  if (/^GIT_CONFIG_(KEY|VALUE|COUNT)/.test(key)) delete env[key];
+}
+
+if (
+  ${JSON.stringify(mode === "move-head")} &&
+  args[0] === "write-tree" &&
+  process.env.GIT_INDEX_FILE
+) {
+  // Move the worktree HEAD while the snapshot index is being built.
+  spawnSync(
+    realGit,
+    ["-C", process.cwd(), "commit", "--allow-empty", "-m", "racing commit"],
+    { env, encoding: "utf8" },
+  );
+}
+if (
+  ${JSON.stringify(mode === "late-file")} &&
+  args[0] === "update-ref" &&
+  args.some((arg) => arg.includes("refs/aiden/snapshots/"))
+) {
+  // Materialize a file after the snapshot is published but before quarantine.
+  const listed = spawnSync(
+    realGit,
+    ["-C", process.cwd(), "worktree", "list", "--porcelain"],
+    { env, encoding: "utf8" },
+  );
+  const target = String(listed.stdout ?? "")
+    .split("\\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length))
+    .find((entry) => entry !== process.cwd());
+  if (target) {
+    writeFileSync(join(target, "late-untracked.txt"), "created after the snapshot\\n");
+  }
+}
+
+const result = spawnSync(realGit, args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
+const snapshotDeleteOptions = (snapshots: WorktreeSnapshotStore) => ({
+  cacheTtlMs: 0,
+  worktreeSnapshots: snapshots,
+  worktreeDirectoryRemover: async (identity: { path: string }) =>
+    fs.rm(identity.path, { recursive: true, force: true }),
+  worktreeRemovalManifestFinalizer: async () => undefined,
+  worktreeRemovalManifestInspector: async () => false,
+});
+
+test("GitService snapshots dirty managed worktrees before removing them", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  const created = await service.createWorktree(repository, root, "codex/snapshot-delete");
+
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty modification\n", "utf8");
+  await fs.writeFile(path.join(created.path, "untracked.txt"), "new untracked work\n", "utf8");
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\nlocal.db\n");
+  await fs.writeFile(path.join(created.path, "local.db"), "never enters Git\n", "utf8");
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+  assert.equal(deleted.branchDeleted, true);
+  const snapshotId = deleted.snapshot?.id;
+  assert.ok(snapshotId);
+  assert.ok(deleted.snapshot?.expiresAt);
+  await assert.rejects(fs.access(created.path));
+
+  const snapshotRef = `refs/aiden/snapshots/${snapshotId}`;
+  const snapshotCommit = (await git(repository, ["rev-parse", "--verify", snapshotRef])).trim();
+  assert.match(snapshotCommit, /^[0-9a-f]{40}$/u);
+  assert.equal(
+    (await git(repository, ["show", "-s", "--format=%P", snapshotCommit])).trim(),
+    created.createdFromHead,
+  );
+
+  const treePaths = (await git(repository, ["ls-tree", "-r", "--name-only", snapshotCommit]))
+    .split("\n")
+    .filter(Boolean);
+  assert.ok(treePaths.includes("README.md"));
+  assert.ok(treePaths.includes("untracked.txt"));
+  assert.equal(treePaths.includes("local.db"), false);
+  assert.equal(
+    (await git(repository, ["show", `${snapshotCommit}:README.md`])).trim(),
+    "dirty modification",
+  );
+  assert.equal(
+    (await git(repository, ["show", `${snapshotCommit}:untracked.txt`])).trim(),
+    "new untracked work",
+  );
+
+  const record = await snapshots.get(snapshotId);
+  assert.equal(record?.snapshotRef, snapshotRef);
+  assert.equal(record?.snapshotCommit, snapshotCommit);
+  assert.equal(record?.baseCommit, created.createdFromHead);
+  assert.equal(record?.branch, created.branch);
+  assert.equal(record?.originalWorktreePath, path.resolve(created.path));
+  assert.deepEqual(record?.provisionedFiles, []);
+
+  // The branch was unchanged at the base commit, so it is deleted outright and
+  // the synthetic snapshot commit never enters normal branch history.
+  await assert.rejects(git(repository, ["rev-parse", "--verify", `refs/heads/${created.branch}`]));
+});
+
+test("GitService backs up provisioned files without committing them on dirty delete", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  await fs.writeFile(path.join(repository, ".gitignore"), ".env.local\n", "utf8");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env.local\n", "utf8");
+  await git(repository, ["add", ".gitignore", ".worktreeinclude"]);
+  await git(repository, ["commit", "-m", "Add provisioning contract"]);
+  await fs.writeFile(path.join(repository, ".env.local"), "TOKEN=from-source\n", {
+    encoding: "utf8",
+    mode: 0o640,
+  });
+
+  const created = await service.createWorktree(repository, root, "codex/provisioned-delete");
+  await fs.writeFile(path.join(created.path, ".env.local"), "TOKEN=edited\n", "utf8");
+  await fs.writeFile(path.join(created.path, "scratch.txt"), "dirty\n", "utf8");
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    false,
+    { provisionedFiles: created.provisionedFiles ?? [] },
+  );
+  const snapshotId = deleted.snapshot?.id;
+  assert.ok(snapshotId);
+  const record = await snapshots.get(snapshotId);
+  assert.deepEqual(
+    record?.provisionedFiles.map((entry) => entry.relativePath),
+    [".env.local"],
+  );
+  assert.equal(
+    (await fs.stat(path.join(record!.provisionedFiles[0]!.storedPath))).mode & 0o777,
+    0o600,
+  );
+  assert.equal(
+    await fs.readFile(record!.provisionedFiles[0]!.storedPath, "utf8"),
+    "TOKEN=edited\n",
+  );
+  // Ignored provisioned files stay out of the Git object snapshot.
+  const treePaths = (
+    await git(repository, ["ls-tree", "-r", "--name-only", record!.snapshotCommit])
+  )
+    .split("\n")
+    .filter(Boolean);
+  assert.equal(treePaths.includes(".env.local"), false);
+  assert.ok(treePaths.includes("scratch.txt"));
+});
+
+test("GitService aborts deletion when HEAD moves mid-snapshot", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, "codex/head-race");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n", "utf8");
+
+  const wrapper = await writeSnapshotRaceWrapper(root, "move-head");
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService({ ...snapshotDeleteOptions(snapshots), gitBinary: wrapper });
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /HEAD changed/u.test(error.message),
+  );
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "dirty\n");
+  assert.equal(
+    await git(repository, ["for-each-ref", "--format=%(refname)", "refs/aiden/snapshots"]),
+    "",
+  );
+  assert.equal(
+    await service.managedWorktreeDeletionPending(
+      created.path,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    false,
+  );
+});
+
+test("GitService aborts a dirty delete changed after snapshot, then reconciles on retry", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, "codex/late-dirty");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n", "utf8");
+
+  const wrapper = await writeSnapshotRaceWrapper(root, "late-file");
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService({ ...snapshotDeleteOptions(snapshots), gitBinary: wrapper });
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "dirty_worktree" &&
+      /changed after its snapshot/u.test(error.message),
+  );
+  // The checkout was restored in place and nothing was lost.
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "dirty\n");
+  assert.equal(
+    await fs.readFile(path.join(created.path, "late-untracked.txt"), "utf8"),
+    "created after the snapshot\n",
+  );
+  assert.equal(
+    await service.managedWorktreeDeletionPending(
+      created.path,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    true,
+  );
+  const snapshotIds = await snapshots.list();
+  assert.equal(snapshotIds.length, 1);
+  assert.ok(snapshotIds[0]!.snapshotRef.startsWith("refs/aiden/snapshots/"));
+
+  // Once the racing file is gone, the journaled snapshot lets the retry finish.
+  await fs.rm(path.join(created.path, "late-untracked.txt"));
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+  assert.equal(deleted.branchDeleted, true);
+  assert.equal(deleted.snapshot?.id, snapshotIds[0]!.id);
+  await assert.rejects(fs.access(created.path));
+});
+
+test("GitService force deletion skips the snapshot but not removal safety", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  const snapshots = new WorktreeSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  const created = await service.createWorktree(repository, root, "codex/force-delete");
+  await fs.writeFile(path.join(created.path, "README.md"), "unsaved\n", "utf8");
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    false,
+    { force: true },
+  );
+  assert.equal(deleted.branchDeleted, true);
+  assert.equal(deleted.snapshot, undefined);
+  await assert.rejects(fs.access(created.path));
+  await snapshots.initialize();
+  assert.deepEqual(await snapshots.list(), []);
+  assert.equal(
+    await git(repository, ["for-each-ref", "--format=%(refname)", "refs/aiden/snapshots"]),
+    "",
+  );
+});
+
+test("GitService aborts deletion when snapshot persistence fails", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const snapshotsRoot = await temporaryDirectory(t);
+  class FailingSnapshotStore extends WorktreeSnapshotStore {
+    override async record(): Promise<never> {
+      throw new WorktreeSnapshotStoreError("io", "registry write failed");
+    }
+  }
+  const snapshots = new FailingSnapshotStore({ root: () => snapshotsRoot });
+  const service = new GitService(snapshotDeleteOptions(snapshots));
+  const created = await service.createWorktree(repository, root, "codex/registry-fail");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n", "utf8");
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not snapshot/u.test(error.message),
+  );
+  // Snapshot failure never destroys the worktree, and the published ref is
+  // rolled back.
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "dirty\n");
+  assert.equal(
+    await git(repository, ["for-each-ref", "--format=%(refname)", "refs/aiden/snapshots"]),
+    "",
+  );
+  assert.equal(
+    await service.managedWorktreeDeletionPending(
+      created.path,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    false,
   );
 });
 
@@ -2956,96 +3320,9 @@ test("GitService creates, lists, and removes managed worktrees", async (t) => {
   );
 
   await fs.writeFile(path.join(created.path, "dirty.txt"), "dirty\n", "utf8");
-  await assert.rejects(
-    service.deleteManagedWorktree(
-      repository,
-      created.path,
-      created.branch,
-      created.createdFromHead,
-      undefined,
-      created.worktreeGitDir,
-      created.ownershipToken,
-      created.worktreeDevice,
-      created.worktreeInode,
-    ),
-    (error) => error instanceof GitServiceError && error.code === "dirty_worktree",
-  );
-  await fs.rm(path.join(created.path, "dirty.txt"));
-
-  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\nlocal-aiden.db\n");
-  const ignoredData = path.join(created.path, "local-aiden.db");
-  await fs.writeFile(ignoredData, "private local state\n", "utf8");
-  await assert.rejects(
-    service.deleteManagedWorktree(
-      repository,
-      created.path,
-      created.branch,
-      created.createdFromHead,
-      undefined,
-      created.worktreeGitDir,
-      created.ownershipToken,
-      created.worktreeDevice,
-      created.worktreeInode,
-    ),
-    (error) =>
-      error instanceof GitServiceError &&
-      error.code === "dirty_worktree" &&
-      /ignored file/u.test(error.message),
-  );
-  assert.equal(await fs.readFile(ignoredData, "utf8"), "private local state\n");
-  await fs.rm(ignoredData);
-
-  await git(created.path, ["switch", "--detach"]);
-  assert.equal(
-    await service.managedWorktreeUsable(
-      repository,
-      created.path,
-      created.branch,
-      created.worktreeGitDir,
-      created.ownershipToken,
-      created.worktreeDevice,
-      created.worktreeInode,
-    ),
-    false,
-  );
-  await assert.rejects(
-    service.deleteManagedWorktree(
-      repository,
-      created.path,
-      created.branch,
-      created.createdFromHead,
-      undefined,
-      created.worktreeGitDir,
-      created.ownershipToken,
-      created.worktreeDevice,
-      created.worktreeInode,
-    ),
-    (error) =>
-      error instanceof GitServiceError &&
-      /changed branches or became detached/u.test(error.message),
-  );
-  assert.equal((await fs.stat(created.path)).isDirectory(), true);
-  assert.equal(
-    (await service.worktrees(repository)).some(
-      (worktree) => path.resolve(worktree.path) === path.resolve(created.path),
-    ),
-    true,
-  );
-  await git(created.path, ["switch", created.branch]);
-  assert.equal(
-    await service.managedWorktreeUsable(
-      repository,
-      created.path,
-      created.branch,
-      created.worktreeGitDir,
-      created.ownershipToken,
-      created.worktreeDevice,
-      created.worktreeInode,
-    ),
-    true,
-  );
-
-  const deleted = await service.deleteManagedWorktree(
+  // Dirty worktrees no longer refuse deletion — their uncommitted state is
+  // snapshotted first, then removal proceeds.
+  const dirtyDelete = await service.deleteManagedWorktree(
     repository,
     created.path,
     created.branch,
@@ -3055,6 +3332,72 @@ test("GitService creates, lists, and removes managed worktrees", async (t) => {
     created.ownershipToken,
     created.worktreeDevice,
     created.worktreeInode,
+  );
+  assert.equal(dirtyDelete.branchDeleted, true);
+  assert.match(dirtyDelete.snapshot?.id ?? "", /^[0-9a-f-]{36}$/u);
+  await assert.rejects(fs.access(created.path));
+
+  const recreated = await service.createWorktree(repository, root, "codex/isolated-again");
+  await git(recreated.path, ["switch", "--detach"]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      recreated.path,
+      recreated.branch,
+      recreated.worktreeGitDir,
+      recreated.ownershipToken,
+      recreated.worktreeDevice,
+      recreated.worktreeInode,
+    ),
+    false,
+  );
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      recreated.path,
+      recreated.branch,
+      recreated.createdFromHead,
+      undefined,
+      recreated.worktreeGitDir,
+      recreated.ownershipToken,
+      recreated.worktreeDevice,
+      recreated.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /changed branches or became detached/u.test(error.message),
+  );
+  assert.equal((await fs.stat(recreated.path)).isDirectory(), true);
+  assert.equal(
+    (await service.worktrees(repository)).some(
+      (worktree) => path.resolve(worktree.path) === path.resolve(recreated.path),
+    ),
+    true,
+  );
+  await git(recreated.path, ["switch", recreated.branch]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      recreated.path,
+      recreated.branch,
+      recreated.worktreeGitDir,
+      recreated.ownershipToken,
+      recreated.worktreeDevice,
+      recreated.worktreeInode,
+    ),
+    true,
+  );
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    recreated.path,
+    recreated.branch,
+    recreated.createdFromHead,
+    undefined,
+    recreated.worktreeGitDir,
+    recreated.ownershipToken,
+    recreated.worktreeDevice,
+    recreated.worktreeInode,
   );
   assert.equal(deleted.branchDeleted, true);
   await assert.rejects(fs.access(created.path));
@@ -4775,25 +5118,48 @@ test("GitService preserves an unregistered target directory when worktree creati
   );
 });
 
-test("GitService rollback preserves files created by a post-checkout hook", async (t) => {
+test("GitService rollback preserves files created inside a fresh worktree", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
   const nested = path.join(repository, "nested-not-in-head");
-  const hooks = path.join(root, "hooks");
   const targetRecord = path.join(root, "hook-target.txt");
   await fs.mkdir(nested);
-  await fs.mkdir(hooks);
+  // Repository hooks never run during managed lifecycle operations, so the
+  // file a hook would have created is injected by the Git wrapper instead —
+  // rollback must preserve it exactly the same.
+  const wrapper = path.join(root, "git-add-writer.mjs");
   await fs.writeFile(
-    path.join(hooks, "post-checkout"),
-    `#!/bin/sh
-checkout=$(/usr/bin/git rev-parse --show-toplevel) || exit $?
-printf '%s' "$checkout" > '${targetRecord}'
-printf 'hook data must survive\\n' > "$checkout/hook-sentinel.txt"
+    wrapper,
+    `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+if (result.status === 0 && args[0] === "worktree" && args[1] === "add") {
+  const separator = args.indexOf("--");
+  const target = separator >= 0 ? args[separator + 1] : undefined;
+  if (target) {
+    writeFileSync(${JSON.stringify(targetRecord)}, target);
+    writeFileSync(join(target, "hook-sentinel.txt"), "hook data must survive\\n");
+  }
+}
+process.exit(result.status ?? 1);
 `,
     { encoding: "utf8", mode: 0o700 },
   );
-  await git(repository, ["config", "core.hooksPath", hooks]);
-  const service = new GitService({ cacheTtlMs: 0 });
+  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
 
   await assert.rejects(
     service.createWorktree(nested, root, "codex/hook-sentinel"),

@@ -125,7 +125,10 @@ async function withWorkspaceOperation<T>(
 async function withOptionalWorkspaceOperation<T>(
   event: IpcMainInvokeEvent,
   workspaceIdValue: unknown,
-  operation: (resolved: WorkspaceEnvironmentDirectory | undefined, signal: AbortSignal) => Promise<T>,
+  operation: (
+    resolved: WorkspaceEnvironmentDirectory | undefined,
+    signal: AbortSignal,
+  ) => Promise<T>,
 ): Promise<T> {
   const owner = rendererDocumentOwner(
     event,
@@ -141,9 +144,8 @@ async function withOptionalWorkspaceOperation<T>(
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:list", async () => workspaceApplicationService.list());
 
-  ipcMain.handle(
-    "workspaces:get",
-    async (_event, id: unknown) => workspaceApplicationService.get(asString(id, "id")),
+  ipcMain.handle("workspaces:get", async (_event, id: unknown) =>
+    workspaceApplicationService.get(asString(id, "id")),
   );
 
   ipcMain.handle("workspaces:create", async (_event, input: unknown) =>
@@ -180,13 +182,23 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
-      if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
+      if (!resolved)
+        return {
+          availability: "not-repo" as const,
+          message: "This workspace has no accessible folder.",
+        };
       const info = await gitInfo(resolved.folderPath, signal);
       if (!info.isRepo) {
-        return { availability: "not-repo" as const, message: "This workspace is not a Git repository." };
+        return {
+          availability: "not-repo" as const,
+          message: "This workspace is not a Git repository.",
+        };
       }
       if (!info.hasRemote) {
-        return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
+        return {
+          availability: "no-pull-request" as const,
+          message: "This repository has no remote to inspect for pull requests.",
+        };
       }
       return githubCurrentPullRequest(resolved.folderPath, signal);
     }),
@@ -302,10 +314,7 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("git:createWorktree", async (event, workspaceId: unknown, name: unknown) => {
-    const { workspaceId: sourceWorkspaceId, branch } = parseWorktreeCreateParams(
-      workspaceId,
-      name,
-    );
+    const { workspaceId: sourceWorkspaceId, branch } = parseWorktreeCreateParams(workspaceId, name);
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Workspace access requires the active renderer document."),

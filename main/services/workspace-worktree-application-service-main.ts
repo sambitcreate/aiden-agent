@@ -25,43 +25,53 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   ensureWorktreeRoot: () => ensureUserDataDir("worktrees"),
   createWorktree: gitCreateWorktree,
   rollbackWorktree: gitRollbackWorktree,
-  deleteManagedWorktree: (managed, signal) => gitDeleteManagedWorktree(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.createdFromHead,
-    signal,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-    managed.worktreeDevice,
-    managed.worktreeInode,
-  ),
-  managedWorktreeDeletionPending: (managed) => gitManagedWorktreeDeletionPending(
-    managed.worktreePath,
-    managed.worktreeGitDir!,
-    managed.ownershipToken!,
-  ),
-  managedWorktreeRegistered: (managed) => gitManagedWorktreeRegistered(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-  ),
-  managedWorktreeUsable: (managed) => gitManagedWorktreeUsable(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-    managed.worktreeDevice,
-    managed.worktreeInode,
-  ),
-  finalizeManagedWorktreeDeletion: (managed) => gitFinalizeManagedWorktreeDeletion(
-    managed.worktreePath,
-    managed.worktreeGitDir!,
-    managed.ownershipToken!,
-  ),
+  deleteManagedWorktree: (managed, signal, options) =>
+    gitDeleteManagedWorktree(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.createdFromHead,
+      signal,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+      managed.worktreeDevice,
+      managed.worktreeInode,
+      true,
+      {
+        force: options?.force,
+        provisionedFiles: managed.provisionedFiles,
+      },
+    ),
+  managedWorktreeDeletionPending: (managed) =>
+    gitManagedWorktreeDeletionPending(
+      managed.worktreePath,
+      managed.worktreeGitDir!,
+      managed.ownershipToken!,
+    ),
+  managedWorktreeRegistered: (managed) =>
+    gitManagedWorktreeRegistered(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+    ),
+  managedWorktreeUsable: (managed) =>
+    gitManagedWorktreeUsable(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+      managed.worktreeDevice,
+      managed.worktreeInode,
+    ),
+  finalizeManagedWorktreeDeletion: (managed) =>
+    gitFinalizeManagedWorktreeDeletion(
+      managed.worktreePath,
+      managed.worktreeGitDir!,
+      managed.ownershipToken!,
+    ),
   workspacePathExists: async (worktreePath) => {
     try {
       await fs.stat(worktreePath);

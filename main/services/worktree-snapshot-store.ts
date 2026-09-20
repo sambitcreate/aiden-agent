@@ -312,8 +312,10 @@ export class WorktreeSnapshotStore {
           );
         }
         await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+        // Payload contents may hold secrets — the private copy is owner-only
+        // while the manifest keeps the original mode for restore.
         const mode = info.mode & 0o777;
-        await fs.chmod(destination, mode);
+        await fs.chmod(destination, 0o600);
         stored.push({ relativePath: entry.relativePath, mode, storedPath: destination });
       }
     } catch (error) {
