@@ -1,5 +1,6 @@
 /** Jina Search Foundation API adapter (API-key mode only). */
 
+import { cancelWebSearchResponse } from "./web-search-response.js";
 import {
   WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
   mapWebSearchJsonHttpError,
@@ -193,14 +194,6 @@ function ensureJinaResponseShape(response: Response): void {
   }
 }
 
-async function cancelBody(response: Response): Promise<void> {
-  try {
-    await response.body?.cancel();
-  } catch {
-    // The body is discarded and cancellation failures are intentionally closed.
-  }
-}
-
 function requestWithSignal(
   contract: WebSearchJsonRequestContract,
   signal: AbortSignal,
@@ -254,7 +247,7 @@ export function createJinaWebSearchAdapter(
       }
       ensureJinaResponseShape(response);
       if (response.status < 200 || response.status >= 300) {
-        await cancelBody(response);
+        cancelWebSearchResponse(response.body);
         throw mapWebSearchJsonHttpError("jina", response.status, [402]);
       }
 

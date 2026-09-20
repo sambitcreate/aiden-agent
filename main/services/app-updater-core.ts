@@ -52,6 +52,7 @@ export function appUpdateRetryDelay(attempt: number): number | null {
 }
 
 export class AppUpdateController {
+  private disposed = false;
   private operationPromise: Promise<AppUpdateCheckResult> | null = null;
   private currentSnapshot: AppUpdateSnapshot = IDLE_APP_UPDATE_SNAPSHOT;
   private readonly listeners = new Set<(snapshot: AppUpdateSnapshot) => void>();
@@ -68,6 +69,7 @@ export class AppUpdateController {
   }
 
   announceSnapshot(): void {
+    if (this.disposed) return;
     for (const listener of this.listeners) {
       try {
         listener(this.currentSnapshot);
@@ -83,7 +85,7 @@ export class AppUpdateController {
     transferred?: unknown;
     total?: unknown;
   }): boolean {
-    if (this.currentSnapshot.status !== "downloading") return false;
+    if (this.disposed || this.currentSnapshot.status !== "downloading") return false;
     const previous = this.currentSnapshot;
     const percent =
       typeof progress.percent === "number" &&
@@ -139,6 +141,7 @@ export class AppUpdateController {
   }
 
   checkNow(): Promise<AppUpdateCheckResult> {
+    if (this.disposed) return Promise.resolve({ outcome: "unavailable" });
     if (this.currentSnapshot.status === "ready") {
       return Promise.resolve({ outcome: "ready" });
     }
@@ -153,14 +156,17 @@ export class AppUpdateController {
 
   private async runCheck(): Promise<AppUpdateCheckResult> {
     this.setSnapshot({ status: "checking", version: null });
+    if (this.disposed) return { outcome: "unavailable" };
     let result: AppUpdateDriverResult | null;
     try {
       result = await this.driver.checkForUpdates();
     } catch {
+      if (this.disposed) return { outcome: "unavailable" };
       this.setSnapshot({ status: "error", version: null, error: "check-failed" });
       return { outcome: "failed" };
     }
 
+    if (this.disposed) return { outcome: "unavailable" };
     if (!result?.isUpdateAvailable) {
       this.setSnapshot(IDLE_APP_UPDATE_SNAPSHOT);
       return { outcome: "up-to-date" };
@@ -179,13 +185,16 @@ export class AppUpdateController {
       transferred: null,
       total: null,
     });
+    if (this.disposed) return { outcome: "unavailable" };
     try {
       await this.driver.downloadUpdate();
     } catch {
+      if (this.disposed) return { outcome: "unavailable" };
       this.setSnapshot({ status: "error", version, error: "download-failed" });
       return { outcome: "failed" };
     }
 
+    if (this.disposed) return { outcome: "unavailable" };
     this.setSnapshot({ status: "ready", version });
     return { outcome: "ready" };
   }
@@ -193,6 +202,14 @@ export class AppUpdateController {
   private setSnapshot(snapshot: AppUpdateSnapshot): void {
     this.currentSnapshot = snapshot;
     this.announceSnapshot();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.listeners.clear();
+    // Keep a completed installer available: protected shutdown disposes
+    // services before invoking Update and restart. Pending work cannot
+    // publish readiness after this boundary.
   }
 }
 

@@ -304,50 +304,66 @@ export class MemoryStore {
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
       throw new Error("Memory confidence must be between 0 and 1.");
     }
-    const now = this.now();
-    if (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)) {
-      throw new Error("Memory expiry must be a future millisecond timestamp.");
-    }
     const supersedesId = input.supersedesId === undefined
       ? undefined
       : safeId(input.supersedesId, "superseded fact");
-    const prior = supersedesId
-      ? database.prepare(`
-          SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
-        `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
-      : undefined;
-    if (supersedesId && !prior) {
-      throw new Error("The superseded memory fact is unavailable in this scope.");
-    }
-    const existing = database.prepare(`
-      SELECT * FROM memory_facts
-      WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
-    `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
-    if (existing && !supersedesId) return factFromRow(existing);
-    if (existing && existing.id !== supersedesId) {
-      throw new Error("The replacement duplicates another active fact in this scope.");
-    }
-    const count = database.prepare(`
-      SELECT count(*) AS count FROM memory_facts
-      WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
-        AND (expires_at IS NULL OR expires_at > ?)
-        AND (? IS NULL OR id <> ?)
-    `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
-    if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
-    if (input.alwaysOn) {
-      const alwaysOn = database.prepare(`
-        SELECT count(*) AS count FROM memory_facts
-        WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
-          AND (expires_at IS NULL OR expires_at > ?)
-          AND (? IS NULL OR id <> ?)
-      `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
-      if (Number(alwaysOn.count) >= MAX_ALWAYS_ON) {
-        throw new Error("This memory scope already has the maximum always-on facts.");
-      }
-    }
     const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
     database.exec("BEGIN IMMEDIATE");
     try {
+      // Lock acquisition may wait for another writer. Use the admitted time
+      // consistently for expiry, capacity, retirement, and the new record.
+      const now = this.now();
+      if (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)) {
+        throw new Error("Memory expiry must be a future millisecond timestamp.");
+      }
+      const prior = supersedesId
+        ? database.prepare(`
+            SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
+          `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
+        : undefined;
+      if (supersedesId && !prior) {
+        throw new Error("The superseded memory fact is unavailable in this scope.");
+      }
+      const existing = database.prepare(`
+        SELECT * FROM memory_facts
+        WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
+      `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
+      const existingExpired = existing !== undefined
+        && existing.expires_at !== null && existing.expires_at <= now;
+      if (existing && !existingExpired && !supersedesId) {
+        database.exec("COMMIT");
+        return factFromRow(existing);
+      }
+      if (existing && !existingExpired && existing.id !== supersedesId) {
+        throw new Error("The replacement duplicates another active fact in this scope.");
+      }
+      const count = database.prepare(`
+        SELECT count(*) AS count FROM memory_facts
+        WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
+          AND (expires_at IS NULL OR expires_at > ?)
+          AND (? IS NULL OR id <> ?)
+      `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
+      if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
+      if (input.alwaysOn) {
+        const alwaysOn = database.prepare(`
+          SELECT count(*) AS count FROM memory_facts
+          WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
+            AND (expires_at IS NULL OR expires_at > ?)
+            AND (? IS NULL OR id <> ?)
+        `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
+        if (Number(alwaysOn.count) >= MAX_ALWAYS_ON) {
+          throw new Error("This memory scope already has the maximum always-on facts.");
+        }
+      }
+      // Expired rows still occupy the active-text unique index. Keep their
+      // history, but free the text atomically with the newly approved insert.
+      if (existing && existingExpired) {
+        database.prepare(`
+          UPDATE memory_facts SET state = 'superseded', updated_at = ?
+          WHERE id = ? AND scope_kind = ? AND scope_id = ? AND normalized_text = ?
+            AND state = 'active' AND expires_at <= ?
+        `).run(now, existing.id, scope.kind, scope.id, text, now);
+      }
       if (supersedesId) {
         database.prepare("UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
           .run(now, supersedesId);

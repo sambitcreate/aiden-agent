@@ -1829,18 +1829,9 @@ final class AidenRemoteClient: @unchecked Sendable {
                             }
                         }
                     }
-                    if !lineBytes.isEmpty {
-                        if lineBytes.last == 0x0D { lineBytes.removeLast() }
-                        guard let line = String(bytes: lineBytes, encoding: .utf8) else {
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if let event = try parser.consume(line: line) {
-                            try yield(event)
-                        }
-                    }
-                    if let event = try parser.finish() {
-                        try yield(event)
-                    }
+                    // EOF is not an SSE frame delimiter. Discard the pending
+                    // line and frame, including any partial UTF-8 scalar, so
+                    // reconnect resumes after the last fully delivered event.
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()

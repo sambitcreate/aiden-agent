@@ -327,3 +327,227 @@ test("production updater awaits downloads and exposes a sender-scoped retry entr
   assert.match(handler, /event\.sender\.id !== mainWindow\.webContents\.id/u);
   assert.match(handler, /appUpdateService\.checkNow\(false\)/u);
 });
+
+test("disposed controller cannot start a download from a late feed response", async () => {
+  const check = deferred<{ isUpdateAvailable: boolean; version: unknown }>();
+  let downloads = 0;
+  const controller = new AppUpdateController({
+    checkForUpdates: () => check.promise,
+    downloadUpdate: async () => {
+      downloads += 1;
+    },
+  });
+  const received: string[] = [];
+  controller.subscribe(({ status }) => received.push(status));
+  const operation = controller.checkNow();
+  controller.dispose();
+  check.resolve({ isUpdateAvailable: true, version: "0.28.32" });
+  assert.deepEqual(await operation, { outcome: "unavailable" });
+  assert.deepEqual(await controller.checkNow(), { outcome: "unavailable" });
+  assert.equal(downloads, 0);
+  assert.deepEqual(received, ["checking"]);
+});
+
+for (const completion of ["success", "failure"] as const) {
+  test(`disposed controller ignores late download ${completion} and progress`, async () => {
+    const download = deferred<unknown>();
+    const controller = new AppUpdateController({
+      checkForUpdates: async () => ({ isUpdateAvailable: true, version: "0.28.32" }),
+      downloadUpdate: () => download.promise,
+    });
+    const operation = controller.checkNow();
+    await Promise.resolve();
+    assert.equal(controller.snapshot().status, "downloading");
+    controller.dispose();
+    const snapshot = controller.snapshot();
+    const received: string[] = [];
+    controller.subscribe(({ status }) => received.push(status));
+    assert.equal(controller.recordDownloadProgress({ percent: 99 }), false);
+    if (completion === "success") download.resolve([]);
+    else download.reject(new Error("cancelled"));
+    assert.deepEqual(await operation, { outcome: "unavailable" });
+    assert.deepEqual(controller.snapshot(), snapshot);
+    assert.deepEqual(received, []);
+  });
+}
+
+test("disposing an already-ready controller preserves the protected restart handoff", async () => {
+  const controller = new AppUpdateController({
+    checkForUpdates: async () => ({ isUpdateAvailable: true, version: "0.28.32" }),
+    downloadUpdate: async () => [],
+  });
+  await controller.checkNow();
+  controller.dispose();
+  assert.deepEqual(controller.snapshot(), { status: "ready", version: "0.28.32" });
+  assert.deepEqual(await controller.checkNow(), { outcome: "unavailable" });
+});
+
+// Execute the real service with an in-memory SDK and platform. No Electron,
+// network, installed application, or user-data directory is involved.
+async function simulatedService() {
+  const { build } = await import("esbuild");
+  const { EventEmitter } = await import("node:events");
+  const nodePath = await import("node:path");
+  const check = deferred<{ isUpdateAvailable: boolean; updateInfo: { version: string } }>();
+  const download = deferred<unknown>();
+  let downloads = 0;
+  let cancellations = 0;
+  let installs = 0;
+  const dialogs: unknown[] = [];
+  const updater = Object.assign(new EventEmitter(), {
+    checkForUpdates: () => check.promise,
+    downloadUpdate: () => {
+      downloads += 1;
+      return download.promise;
+    },
+    quitAndInstall: () => {
+      installs += 1;
+    },
+  });
+  class CancellationToken {
+    cancel() {
+      cancellations += 1;
+    }
+  }
+  const mocks: Record<string, unknown> = {
+    "electron-updater": { autoUpdater: updater, CancellationToken },
+    "../platform.js": {
+      app: { getVersion: () => "0.28.31" },
+      dialog: {
+        showMessageBox: async (options: unknown) => {
+          dialogs.push(options);
+        },
+      },
+      logger: { debug() {}, error() {}, info() {}, warn() {} },
+    },
+    "../runtime-mode.js": { isPackagedRuntime: () => true },
+    "../runtime-profile.js": { currentRuntimeProfile: () => ({ id: "production" }) },
+    "node:fs": { existsSync: () => true },
+    "node:path": nodePath,
+  };
+  const bundle = await build({
+    entryPoints: [new URL("./app-updater.ts", import.meta.url).pathname],
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "cjs",
+    external: Object.keys(mocks),
+  });
+  const module = { exports: {} as typeof import("./app-updater.js") };
+  const run = new Function("require", "module", "exports", "process", bundle.outputFiles[0]!.text);
+  run(
+    (name: string) => {
+      assert.ok(name in mocks, `unexpected dependency: ${name}`);
+      return mocks[name];
+    },
+    module,
+    module.exports,
+    { platform: "darwin", resourcesPath: "/simulated-resources" },
+  );
+  return {
+    service: new module.exports.AppUpdateService(),
+    check,
+    download,
+    updater,
+    dialogs,
+    downloads: () => downloads,
+    cancellations: () => cancellations,
+    installs: () => installs,
+  };
+}
+
+async function flushUpdater() {
+  for (let step = 0; step < 12; step += 1) await Promise.resolve();
+}
+
+test("service disposal prevents late feed downloads, manual dialogs, and restarts", async () => {
+  const fixture = await simulatedService();
+  try {
+    const operation = fixture.service.checkNow(true);
+    fixture.service.dispose();
+    fixture.check.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.28.32" } });
+    await flushUpdater();
+    assert.equal(fixture.downloads(), 0, "shutdown must not launch a new download");
+    assert.deepEqual(await operation, { outcome: "unavailable" });
+    fixture.service.start();
+    assert.deepEqual(await fixture.service.checkNow(true), { outcome: "unavailable" });
+    assert.equal(fixture.updater.listenerCount("download-progress"), 0);
+    assert.deepEqual(fixture.dialogs, []);
+  } finally {
+    fixture.download.resolve([]);
+    fixture.service.dispose();
+  }
+});
+
+for (const completion of ["success", "failure"] as const) {
+  test(`service disposal suppresses late download ${completion}`, async () => {
+    const fixture = await simulatedService();
+    try {
+      const operation = fixture.service.checkNow(true);
+      fixture.check.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.28.32" } });
+      await flushUpdater();
+      assert.equal(fixture.downloads(), 1);
+      fixture.service.dispose();
+      assert.equal(fixture.cancellations(), 1);
+      fixture.updater.emit("download-progress", { percent: 100 });
+      if (completion === "success") fixture.download.resolve([]);
+      else fixture.download.reject(new Error("cancelled"));
+      assert.deepEqual(await operation, { outcome: "unavailable" });
+      assert.equal(fixture.service.canInstallDownloadedUpdate(), false);
+      assert.deepEqual(fixture.dialogs, []);
+    } finally {
+      fixture.service.dispose();
+    }
+  });
+}
+
+test("service preserves a completed installer across shutdown cleanup", async () => {
+  const fixture = await simulatedService();
+  try {
+    const operation = fixture.service.checkNow(false);
+    fixture.check.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.28.32" } });
+    fixture.download.resolve([]);
+    assert.deepEqual(await operation, { outcome: "ready" });
+    fixture.service.dispose();
+    assert.equal(fixture.service.installDownloadedUpdateAndRestart(), true);
+    assert.equal(fixture.installs(), 1);
+  } finally {
+    fixture.service.dispose();
+  }
+});
+
+for (const boundary of ["checking", "downloading"] as const) {
+  test(`disposal from a ${boundary} subscriber prevents starting the next SDK operation`, async () => {
+    let checks = 0;
+    let downloads = 0;
+    const controller = new AppUpdateController({
+      checkForUpdates: async () => {
+        checks += 1;
+        return { isUpdateAvailable: true, version: "0.28.32" };
+      },
+      downloadUpdate: async () => {
+        downloads += 1;
+      },
+    });
+    controller.subscribe(({ status }) => {
+      if (status === boundary) controller.dispose();
+    });
+    assert.deepEqual(await controller.checkNow(), { outcome: "unavailable" });
+    assert.equal(checks, boundary === "checking" ? 0 : 1);
+    assert.equal(downloads, 0);
+  });
+}
+
+test("service disposal ignores a late feed error without a manual failure dialog", async () => {
+  const fixture = await simulatedService();
+  try {
+    const operation = fixture.service.checkNow(true);
+    fixture.service.dispose();
+    fixture.check.reject(new Error("offline"));
+    assert.deepEqual(await operation, { outcome: "unavailable" });
+    assert.equal(fixture.downloads(), 0);
+    assert.deepEqual(fixture.dialogs, []);
+  } finally {
+    fixture.service.dispose();
+  }
+});
