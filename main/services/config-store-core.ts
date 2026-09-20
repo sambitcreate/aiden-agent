@@ -67,6 +67,7 @@ import {
 } from "./web-search-provider-registry-core.js";
 import type {
   AppSettings,
+  ManagedWorktree,
   McpServer,
   Provider,
   Skill,
@@ -179,6 +180,33 @@ function normalizePortableConfig(value: unknown): {
   };
 }
 
+/** Bounded validation for recorded `.worktreeinclude` provisioning manifests. */
+function normalizeProvisionedManifest(
+  value: ManagedWorktree["provisionedFiles"],
+): { relativePath: string; mode: number }[] {
+  if (!Array.isArray(value) || value.length > 512) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return undefined;
+      const { relativePath, mode } = entry;
+      if (
+        typeof relativePath !== "string" ||
+        relativePath.length === 0 ||
+        relativePath.length > 4_096 ||
+        path.isAbsolute(relativePath) ||
+        relativePath.includes("\u0000") ||
+        relativePath.split("/").some((segment) => segment === ".." || segment === "") ||
+        !Number.isSafeInteger(mode) ||
+        mode < 0 ||
+        mode > 0o7777
+      ) {
+        return undefined;
+      }
+      return { relativePath, mode };
+    })
+    .filter((entry): entry is { relativePath: string; mode: number } => entry !== undefined);
+}
+
 function normalizeWorkspace(w: Workspace): Workspace {
   return {
     ...w,
@@ -217,6 +245,24 @@ function normalizeWorkspace(w: Workspace): Workspace {
               ? { worktreeInode: w.managedWorktree.worktreeInode }
               : {}),
             createdFromHead: w.managedWorktree.createdFromHead,
+            ...(typeof w.managedWorktree.snapshotId === "string"
+              ? { snapshotId: w.managedWorktree.snapshotId }
+              : {}),
+            ...(w.managedWorktree.owner === "manual" || w.managedWorktree.owner === "session"
+              ? { owner: w.managedWorktree.owner }
+              : {}),
+            ...(typeof w.managedWorktree.lastUsedAt === "number" &&
+            Number.isFinite(w.managedWorktree.lastUsedAt) &&
+            w.managedWorktree.lastUsedAt >= 0
+              ? { lastUsedAt: w.managedWorktree.lastUsedAt }
+              : {}),
+            ...(normalizeProvisionedManifest(w.managedWorktree.provisionedFiles).length > 0
+              ? {
+                  provisionedFiles: normalizeProvisionedManifest(
+                    w.managedWorktree.provisionedFiles,
+                  ),
+                }
+              : {}),
           }
         : undefined,
     folderPath:
@@ -687,8 +733,7 @@ export function createConfigStore(
           if (provider.modelMetadata !== undefined && intent.customModelOptions === undefined) {
             delete config.providers[idx].customModelOptions;
           }
-        }
-        else config.providers.push(intent);
+        } else config.providers.push(intent);
         return structuredClone(config.providers.find((p) => p.id === intent.id)!);
       }, isCurrent);
       const entry = await modelCache.update((draft) => {

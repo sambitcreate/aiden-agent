@@ -2380,6 +2380,59 @@ test("relative workspace paths stay hidden and block local writes", async (t) =>
   assert.deepEqual(await readJson(h.localFile), unsafe);
 });
 
+test("managed worktree lifecycle metadata survives workspace round-trips", async (t) => {
+  const h = await harness(t, {
+    workspaces: [],
+    seeded: true,
+    aidenDirMigratedAt: Date.now(),
+  });
+  const workspace = {
+    id: "lifecycle",
+    name: "Lifecycle",
+    permission: "full" as const,
+    folderPath: "/worktrees/managed",
+    managedWorktree: {
+      repositoryPath: "/repo",
+      worktreePath: "/worktrees/managed",
+      branch: "codex/lifecycle",
+      createdFromHead: "a".repeat(40),
+      snapshotId: "11111111-2222-4333-8444-555555555555",
+      owner: "session" as const,
+      lastUsedAt: 1_700_000_000_000,
+      provisionedFiles: [{ relativePath: ".env.local", mode: 0o600 }],
+    },
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await h.store.saveWorkspace(workspace);
+  assert.deepEqual(
+    (await h.store.getWorkspace("lifecycle"))?.managedWorktree,
+    workspace.managedWorktree,
+  );
+
+  // Malformed lifecycle fields are dropped without invalidating the workspace.
+  await h.store.saveWorkspace({
+    ...workspace,
+    managedWorktree: {
+      ...workspace.managedWorktree,
+      snapshotId: 42 as unknown as string,
+      owner: "nobody" as never,
+      lastUsedAt: -1,
+      provisionedFiles: [
+        { relativePath: "../escape", mode: 0o600 },
+        { relativePath: ".ok", mode: 0o640 },
+      ],
+    },
+  });
+  const normalized = await h.store.getWorkspace("lifecycle");
+  assert.equal(normalized?.managedWorktree?.snapshotId, undefined);
+  assert.equal(normalized?.managedWorktree?.owner, undefined);
+  assert.equal(normalized?.managedWorktree?.lastUsedAt, undefined);
+  assert.deepEqual(normalized?.managedWorktree?.provisionedFiles, [
+    { relativePath: ".ok", mode: 0o640 },
+  ]);
+});
+
 test("malformed known settings fields are dropped before type-assuming consumers", async (t) => {
   const h = await harness(t, {
     workspaces: [],
@@ -2872,12 +2925,22 @@ test("compaction preference defaults to LLM and survives a restart independently
 test("global skills preference persists independently of individual skill choices", async (t) => {
   const h = await harness(t);
   assert.notEqual((await h.store.getSettings()).skillsEnabled, false);
-  const skill = { id: "saved-skill", name: "Review", description: "Review code", instructions: "Review carefully", enabled: true };
+  const skill = {
+    id: "saved-skill",
+    name: "Review",
+    description: "Review code",
+    instructions: "Review carefully",
+    enabled: true,
+  };
   await h.store.saveSkill(skill);
   await h.store.setSettings({ skillsEnabled: false });
   await h.store.setSettings({ profileName: "Unrelated preference" });
   assert.equal((await h.store.getSettings()).skillsEnabled, false);
-  assert.equal((await readJson<{ settings: { skillsEnabled: boolean } }>(h.settingsFile)).settings.skillsEnabled, false);
+  assert.equal(
+    (await readJson<{ settings: { skillsEnabled: boolean } }>(h.settingsFile)).settings
+      .skillsEnabled,
+    false,
+  );
   assert.deepEqual(await h.store.listSkills(), [skill]);
   await h.store.setSettings({ skillsEnabled: true });
   assert.equal((await h.store.getSettings()).skillsEnabled, true);
@@ -2886,7 +2949,12 @@ test("global skills preference persists independently of individual skill choice
 
 test("custom model overrides survive restart and reset through the config store", async (t) => {
   const h = await harness(t);
-  const configured = { ...provider, modelMetadata: { "qwen3-8b": { source: "lmstudio" as const, overrides: { vision: true, maxImages: 2 } } } };
+  const configured = {
+    ...provider,
+    modelMetadata: {
+      "qwen3-8b": { source: "lmstudio" as const, overrides: { vision: true, maxImages: 2 } },
+    },
+  };
   await h.store.saveProvider(configured);
   const loaded = await h.store.getProvider(provider.id);
   assert.deepEqual(loaded?.modelMetadata?.["qwen3-8b"].overrides, { vision: true, maxImages: 2 });

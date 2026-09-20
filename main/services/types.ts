@@ -114,6 +114,14 @@ export interface ManagedWorktree {
   worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
+  /** Snapshot identity published when this worktree was last deleted; restored copies omit it. */
+  snapshotId?: string;
+  /** Lifecycle ownership class. Missing records are treated as "manual". */
+  owner?: "manual" | "session";
+  /** Last time the worktree was opened or mutated through Aiden. */
+  lastUsedAt?: number;
+  /** Files Aiden provisioned from `.worktreeinclude`; authoritative at delete time. */
+  provisionedFiles?: { relativePath: string; mode: number }[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */

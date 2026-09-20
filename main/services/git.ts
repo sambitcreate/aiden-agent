@@ -216,6 +216,15 @@ interface GitWorktreeRemovalJournal {
   gitDirQuarantine: string;
   ownershipToken: string;
   repositoryPath: string;
+  /**
+   * Identity of the lossless snapshot published before quarantine began. Its
+   * presence in a recovered journal tells reconciliation that deleting the
+   * quarantined checkout cannot lose uncommitted work. Optional so journals
+   * written before snapshots existed still parse.
+   */
+  snapshotId?: string;
+  snapshotRef?: string;
+  snapshotCommit?: string;
 }
 
 export interface GitCreatedWorktree extends GitWorktree {
@@ -3506,8 +3515,8 @@ export class GitService {
       );
     }
     const journal = value as Partial<GitWorktreeRemovalJournal>;
-    const keys = Object.keys(journal).sort();
-    const expectedKeys = [
+    const keys = Object.keys(journal);
+    const requiredKeys = [
       "adminDevice",
       "adminGitdirContents",
       "adminInode",
@@ -3527,9 +3536,11 @@ export class GitService {
       "phase",
       "repositoryPath",
       "version",
-    ].sort();
+    ];
+    const optionalKeys = ["snapshotId", "snapshotRef", "snapshotCommit"];
     if (
-      JSON.stringify(keys) !== JSON.stringify(expectedKeys) ||
+      !requiredKeys.every((key) => keys.includes(key)) ||
+      !keys.every((key) => requiredKeys.includes(key) || optionalKeys.includes(key)) ||
       journal.version !== 3 ||
       (journal.phase !== "prepared" &&
         journal.phase !== "quarantined" &&
@@ -3569,7 +3580,14 @@ export class GitService {
       !path.isAbsolute(journal.gitDir) ||
       !path.isAbsolute(journal.gitDirAuthorization) ||
       !path.isAbsolute(journal.gitDirQuarantine) ||
-      !path.isAbsolute(journal.repositoryPath)
+      !path.isAbsolute(journal.repositoryPath) ||
+      (journal.snapshotId !== undefined && !WORKTREE_OWNER_TOKEN.test(journal.snapshotId)) ||
+      (journal.snapshotRef !== undefined &&
+        journal.snapshotRef !== `refs/aiden/snapshots/${journal.snapshotId}`) ||
+      (journal.snapshotCommit !== undefined &&
+        !/^[0-9a-f]{40,64}$/u.test(journal.snapshotCommit)) ||
+      ((journal.snapshotRef !== undefined || journal.snapshotCommit !== undefined) &&
+        journal.snapshotId === undefined)
     ) {
       throw new GitServiceError(
         "command_failed",

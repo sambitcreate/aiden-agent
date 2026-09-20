@@ -82,6 +82,7 @@ async function persistRemovalJournal(
     admin?: string;
     checkout?: string;
   } = {},
+  extra: Record<string, unknown> = {},
 ): Promise<string> {
   const checkoutQuarantine = path.join(
     path.dirname(created.path),
@@ -127,6 +128,7 @@ async function persistRemovalJournal(
       gitDirQuarantine,
       ownershipToken: created.ownershipToken,
       repositoryPath: created.repositoryPath,
+      ...extra,
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
@@ -3534,6 +3536,86 @@ test("GitService resumes managed deletion from each quarantined midpoint", async
     await assert.rejects(fs.access(adminAuthorization));
     await assert.rejects(fs.access(journal));
     assert.equal((await service.worktrees(repository)).length, 1, stage);
+  }
+});
+
+test("GitService deletion journals accept and validate snapshot identity fields", async (t) => {
+  // A journal written after a snapshot was published still recovers normally.
+  // Remover internals are stubbed so the journal-shape contract runs on every
+  // platform; the native helper is exercised by the dedicated remover tests.
+  {
+    const repository = await createRepository(t);
+    const root = await temporaryDirectory(t);
+    const service = new GitService({
+      cacheTtlMs: 0,
+      worktreeDirectoryRemover: async (identity) => {
+        await fs.rm(identity.path, { recursive: true, force: true });
+      },
+      worktreeRemovalManifestFinalizer: async () => {},
+      worktreeRemovalManifestInspector: async () => false,
+    });
+    const created = await service.createWorktree(repository, root, "codex/journal-snapshot");
+    const snapshotId = "11111111-2222-4333-8444-555555555555";
+    await persistRemovalJournal(
+      created,
+      "prepared",
+      {},
+      {
+        snapshotId,
+        snapshotRef: `refs/aiden/snapshots/${snapshotId}`,
+        snapshotCommit: "b".repeat(40),
+      },
+    );
+    const deleted = await service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    );
+    assert.equal(deleted.branchDeleted, true);
+    await assert.rejects(fs.access(created.path));
+  }
+
+  // Journals carrying unknown keys or mismatched snapshot refs fail closed.
+  for (const extra of [
+    { snapshotId: "11111111-2222-4333-8444-555555555555", snapshotRef: "refs/heads/other" },
+    { snapshotRef: "refs/aiden/snapshots/11111111-2222-4333-8444-555555555555" },
+    { snapshotId: "not-a-uuid", snapshotRef: "refs/aiden/snapshots/not-a-uuid" },
+    { unexpectedKey: "value" },
+  ]) {
+    const repository = await createRepository(t);
+    const root = await temporaryDirectory(t);
+    const service = new GitService({ cacheTtlMs: 0 });
+    const created = await service.createWorktree(
+      repository,
+      root,
+      `codex/journal-snapshot-${Object.keys(extra).join("-")}`,
+    );
+    await persistRemovalJournal(created, "prepared", {}, extra);
+    await assert.rejects(
+      service.deleteManagedWorktree(
+        repository,
+        created.path,
+        created.branch,
+        created.createdFromHead,
+        undefined,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      ),
+      (error) =>
+        error instanceof GitManagedWorktreeDeleteError &&
+        /journal could not be verified/u.test(error.message),
+      JSON.stringify(extra),
+    );
+    // The invalid journal aborts before any destructive step.
+    assert.equal((await fs.stat(created.path)).isDirectory(), true);
   }
 });
 
