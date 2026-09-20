@@ -35,7 +35,11 @@ import {
   resolveCurrentPullRequest,
   type PullRequestResolverContext,
 } from "./pull-request-current-resolver.js";
-import { reconcilePullRequestCreate } from "./pull-request-create-reconciliation.js";
+import {
+  intentMatchesRef,
+  matchesCreateIntent,
+  reconcilePullRequestCreate,
+} from "./pull-request-create-reconciliation.js";
 import type { GitHubPullRequestSummary } from "./types.js";
 
 export type GitHubAccessForPullRequests = Pick<
@@ -394,8 +398,13 @@ export class ChatPullRequestService {
     const links = await this.deps.store.list(chatId);
     const matches: ChatPullRequestView[] = [];
     const refreshed: ChatPullRequestView[] = [];
+    const expectedSha = input.expectedHeadSha?.toLowerCase();
     for (const summary of found.pullRequests) {
       if (summary.state !== "open") continue;
+      // `gh pr list --head` matches the branch name, not the commit: only a PR
+      // whose head still points at the pushed SHA can be offered as this push's
+      // result — a same-named PR from another source stays unoffered.
+      if (expectedSha && summary.headSha !== expectedSha) continue;
       const identity = pullRequestIdentityFromSummary(summary);
       if (!identity) continue;
       const existing = links.find(
@@ -462,7 +471,17 @@ export class ChatPullRequestService {
       title: input.title,
       requestedAt: Date.now(),
     };
-    await this.deps.store.recordCreateIntent(chatId, intent);
+    try {
+      await this.deps.store.recordCreateIntent(chatId, intent);
+    } catch (error) {
+      return {
+        kind: "failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The pull request creation intent could not be recorded.",
+      };
+    }
     const result = await this.deps.github.createPullRequest(folderPath, {
       title: input.title,
       body: input.body,
@@ -533,10 +552,32 @@ export class ChatPullRequestService {
     ref: ChatPullRequestRef,
   ): Promise<ChatPullRequestLinkResult> {
     const intents = await this.deps.store.listCreateIntents(chatId);
-    if (!intents.some((intent) => intent.operationId === operationId)) {
+    const intent = intents.find((entry) => entry.operationId === operationId);
+    if (!intent) {
       return { ok: false, message: "The pull request creation is no longer pending." };
     }
-    const linked = await this.linkExisting(chatId, ref, "created");
+    if (!intentMatchesRef(intent, ref)) {
+      return { ok: false, message: "That pull request is not in the pending create's repository." };
+    }
+    // Re-fetch and prove the chosen PR is the recorded create — repository and
+    // head/base branches, plus the expected head SHA when one was captured —
+    // before the durable intent is cleared.
+    const cwd = await this.cwdFor(chatId);
+    const status = await this.deps.github.getPullRequest(
+      cwd,
+      repoSelector(ref.host, ref.repository),
+      ref.number,
+    );
+    if (status.availability !== "ready" || !status.pullRequest) {
+      return {
+        ok: false,
+        message: status.message ?? "The pull request could not be read from GitHub.",
+      };
+    }
+    if (!matchesCreateIntent(intent, status.pullRequest)) {
+      return { ok: false, message: "That pull request does not match the pending create." };
+    }
+    const linked = await this.linkSummary(chatId, status.pullRequest, "created");
     if (linked.ok) await this.deps.store.clearCreateIntent(chatId, operationId);
     return linked;
   }

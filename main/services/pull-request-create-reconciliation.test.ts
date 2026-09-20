@@ -93,6 +93,36 @@ test("a matching branch but different head SHA is not adopted", async () => {
   assert.equal(outcome.kind, "none");
 });
 
+test("a matching head branch targeting another base branch is not adopted", async () => {
+  const outcome = await reconcilePullRequestCreate({
+    github: github({
+      availability: "ready",
+      pullRequests: [summary(9, { baseBranch: "release" })],
+    }),
+    cwd: "/work",
+    intent: INTENT,
+  });
+  assert.equal(outcome.kind, "none");
+});
+
+test("a candidate whose head SHA cannot be read stays unresolved for the user", async () => {
+  const outcome = await reconcilePullRequestCreate({
+    github: github({
+      availability: "ready",
+      pullRequests: [summary(9, { headSha: undefined })],
+    }),
+    cwd: "/work",
+    intent: INTENT,
+  });
+  assert.equal(outcome.kind, "multiple");
+  if (outcome.kind === "multiple") {
+    assert.deepEqual(
+      outcome.candidates.map((candidate) => candidate.ref.number),
+      [9],
+    );
+  }
+});
+
 test("PRs on the same branch name in another repository do not match", async () => {
   const outcome = await reconcilePullRequestCreate({
     github: github({

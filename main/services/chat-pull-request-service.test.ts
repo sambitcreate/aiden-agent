@@ -308,6 +308,69 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
   assert.equal((await service.list(CHAT)).links[0]?.number, 2);
 });
 
+test("adopting a candidate outside the intent is rejected and keeps it pending", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service, calls } = fakeService(directory, {
+    createPullRequest: async () =>
+      ({ kind: "unknown", message: "timed out" }) as GitHubPullRequestCreateResult,
+    findForBranch: async () =>
+      ready({ pullRequests: [summary(1), summary(2)] }) as GitHubPullRequestListStatus,
+    // The fetched PR does not match the recorded intent (wrong head branch).
+    getPullRequest: async () =>
+      ready({ pullRequest: summary(2, { headBranch: "other" }) }) as GitHubPullRequestStatus,
+  });
+  await service.create(CHAT, {
+    workspaceId: "workspace-1",
+    title: "New work",
+    baseBranch: "main",
+    headBranch: "feature/x",
+  });
+  const pending = await service.pendingCreates(CHAT);
+  const operationId = pending[0]!.intent.operationId;
+
+  // A ref outside the intent's repository never reaches GitHub.
+  const foreign = await service.adoptCandidate(CHAT, operationId, {
+    host: "github.com",
+    repository: "other/repo",
+    number: 2,
+  });
+  assert.equal(foreign.ok, false);
+  assert.equal(calls.getPullRequest, 0);
+
+  // A fetched summary that contradicts the intent is refused; intent survives.
+  const mismatched = await service.adoptCandidate(CHAT, operationId, {
+    host: "github.com",
+    repository: REPO,
+    number: 2,
+  });
+  assert.equal(mismatched.ok, false);
+  assert.equal((await service.pendingCreates(CHAT)).length, 1);
+});
+
+test("detectAfterPush only offers PRs whose head matches the pushed commit", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service } = fakeService(directory, {
+    findForBranch: async () =>
+      ready({
+        pullRequests: [
+          summary(41, { headSha: "b".repeat(40) }),
+          summary(42, { headSha: "a".repeat(40) }),
+        ],
+      }) as GitHubPullRequestListStatus,
+  });
+  const detected = await service.detectAfterPush(CHAT, {
+    workspaceId: "workspace-1",
+    headBranch: "feature/x",
+    expectedHeadSha: "a".repeat(40),
+  });
+  assert.deepEqual(
+    detected.matches.map((view) => view.number),
+    [42],
+  );
+});
+
 test("a create lost across restart reconciles on the next pending pass", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

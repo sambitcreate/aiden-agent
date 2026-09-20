@@ -448,7 +448,6 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
     queryKey: queryKeys.chatPullRequests(chatId),
     queryFn: () => pullRequestsApi.list(chatId as string),
     enabled: Boolean(chatId) && enabled,
-    refetchInterval: enabled ? 60_000 : false,
     staleTime: 30_000,
   });
 }
@@ -458,7 +457,6 @@ export function useChatCurrentPullRequest(chatId: string | undefined, enabled = 
     queryKey: queryKeys.chatCurrentPullRequest(chatId),
     queryFn: () => pullRequestsApi.current(chatId as string),
     enabled: Boolean(chatId) && enabled,
-    refetchInterval: enabled ? 60_000 : false,
     staleTime: 30_000,
   });
 }

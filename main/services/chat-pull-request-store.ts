@@ -165,8 +165,12 @@ export class ChatPullRequestStore {
       file.pendingCreates = file.pendingCreates.filter(
         (entry) => entry.operationId !== normalized.operationId,
       );
+      // Never evict: a dropped intent is a remote create we may have to
+      // reconcile. At capacity the caller must resolve the backlog first.
       if (file.pendingCreates.length >= MAX_PENDING_CREATES) {
-        file.pendingCreates.shift();
+        throw new Error(
+          "This chat has too many unresolved pull request creations. Resolve or clear them before creating another.",
+        );
       }
       file.pendingCreates.push(normalized);
       return undefined;

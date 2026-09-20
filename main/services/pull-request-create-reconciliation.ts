@@ -29,20 +29,31 @@ export type PullRequestCreateReconciliation =
   | { kind: "multiple"; candidates: PullRequestCreateCandidate[] }
   | { kind: "unavailable"; message: string };
 
-function matchesIntent(
+/**
+ * Host + repository + exact head/base branches. GitHub allows several PRs on
+ * one head branch with different bases, so the base is part of the identity.
+ */
+function intentIdentityMatches(
   intent: ChatPullRequestCreateIntent,
   summary: GitHubPullRequestSummary,
 ): boolean {
   const ref = parseGitHubPullRequestUrl(summary.url);
   if (!ref) return false;
   if (ref.repository !== intent.repository || ref.host !== intent.host) return false;
-  if (summary.headBranch !== intent.headBranch) return false;
-  // When we recorded the exact head SHA we pushed, a PR whose head still points
-  // at that commit is ours; a different head means someone else's PR on the
-  // same branch name — not adoptable.
-  if (intent.expectedHeadSha && summary.headSha && summary.headSha !== intent.expectedHeadSha) {
-    return false;
-  }
+  return summary.headBranch === intent.headBranch && summary.baseBranch === intent.baseBranch;
+}
+
+/**
+ * Adoption-grade match: identity plus, when the pushed head SHA was recorded,
+ * proof the PR's head still points at it. A missing or different SHA means we
+ * cannot prove the PR came from this create — it is never auto-adopted.
+ */
+export function matchesCreateIntent(
+  intent: ChatPullRequestCreateIntent,
+  summary: GitHubPullRequestSummary,
+): boolean {
+  if (!intentIdentityMatches(intent, summary)) return false;
+  if (intent.expectedHeadSha && summary.headSha !== intent.expectedHeadSha) return false;
   return true;
 }
 
@@ -83,15 +94,36 @@ export async function reconcilePullRequestCreate(options: {
         found.message ?? "Could not check GitHub for the pull request that may have been created.",
     };
   }
-  const matching = found.pullRequests.filter((summary) => matchesIntent(intent, summary));
-  if (matching.length === 0) return { kind: "none" };
+  const onBranch = found.pullRequests.filter((summary) =>
+    intentIdentityMatches(intent, summary),
+  );
+  const verified = onBranch.filter((summary) => matchesCreateIntent(intent, summary));
   // A closed/merged match on the branch is still adoption-worthy — the create
   // may have landed and the PR changed state meanwhile.
-  if (matching.length === 1) return { kind: "adopted", pullRequest: matching[0] };
-  const candidates = matching
-    .map(toCandidate)
-    .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined);
-  return { kind: "multiple", candidates };
+  if (verified.length === 1) return { kind: "adopted", pullRequest: verified[0] };
+  if (verified.length > 1) {
+    return {
+      kind: "multiple",
+      candidates: verified
+        .map(toCandidate)
+        .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined),
+    };
+  }
+  // Same-branch/base PRs whose head SHA we could not read are unverifiable,
+  // not absent: handing them to the user beats clearing the intent into a
+  // retry that could duplicate a create GitHub actually applied.
+  if (intent.expectedHeadSha) {
+    const unverifiable = onBranch.filter((summary) => summary.headSha === undefined);
+    if (unverifiable.length > 0) {
+      return {
+        kind: "multiple",
+        candidates: unverifiable
+          .map(toCandidate)
+          .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined),
+      };
+    }
+  }
+  return { kind: "none" };
 }
 
 /** Whether a candidate ref belongs to the repository the intent targets. */

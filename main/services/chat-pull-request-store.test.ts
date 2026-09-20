@@ -153,6 +153,29 @@ test("create intents persist, cap, and clear", async (t) => {
   await assert.rejects(store.recordCreateIntent("chat-1", { ...intent, operationId: "bad id" }));
 });
 
+test("pending intents are never evicted — capacity rejects the new intent", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatPullRequestStore(() => directory);
+  const intent = {
+    operationId: "op-0",
+    host: "github.com",
+    repository: "owner/repo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    title: "Add x",
+    requestedAt: 1_700,
+  };
+  for (let index = 0; index < 16; index += 1) {
+    await store.recordCreateIntent("chat-1", { ...intent, operationId: `op-${index}` });
+  }
+  await assert.rejects(
+    store.recordCreateIntent("chat-1", { ...intent, operationId: "op-16" }),
+    /unresolved pull request creations/u,
+  );
+  assert.equal((await store.listCreateIntents("chat-1")).length, 16);
+});
+
 test("deleteChat removes the file and never requires GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
