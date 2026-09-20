@@ -2,6 +2,39 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
+test("Live audio selectors keep long labels and chevrons inside their bounds", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.evaluate(() => {
+    localStorage.setItem("aiden.live.audio-devices.v1", JSON.stringify({ input: "fixture-mic", output: "fixture-speaker" }));
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", { configurable: true, value: async () => [
+      { kind: "audioinput", deviceId: "fixture-mic", label: "MacBook Pro Microphone (Built-in) with a deliberately very long device name" },
+      { kind: "audiooutput", deviceId: "fixture-speaker", label: "MacBook Pro Speakers (Built-in) with a deliberately very long device name" },
+    ] });
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Aiden Live", exact: true }).click();
+  for (const width of [1280, 600, 390]) {
+    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
+    for (const name of ["Live input device", "Live output device"]) {
+      const trigger = page.getByRole("combobox", { name });
+      await expect(trigger).toContainText("MacBook Pro");
+      await expect.poll(async () => trigger.evaluate((element) => {
+        const outer = element.getBoundingClientRect();
+        const label = element.firstElementChild!;
+        const icon = element.lastElementChild!;
+        const labelRect = label.getBoundingClientRect();
+        const iconRect = icon.getBoundingClientRect();
+        return getComputedStyle(element).flexWrap === "nowrap"
+          && getComputedStyle(label).textOverflow === "ellipsis"
+          && labelRect.right <= iconRect.left + 1
+          && iconRect.right <= outer.right + 1
+          && iconRect.bottom <= outer.bottom + 1;
+      })).toBe(true);
+    }
+  }
+});
+
 test("disabling Skills removes hidden instructions from the next provider request", async ({
   aiden,
 }) => {

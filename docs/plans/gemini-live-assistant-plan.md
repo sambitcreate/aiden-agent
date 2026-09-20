@@ -2,6 +2,18 @@
 
 Status: Partial — Phases 0–4 plus the beta-labeled Aiden Live orb/setup shell and dedicated metadata-only session threads are implemented; authorized macOS screen capture and real Google beta receipts remain operator-owned
 Date: 2026-09-15
+Voice-default release follow-up (2026-09-17): 0.41.5 exposes ordinary voice-only Aiden Live in normal Finder-launched production builds. The existing `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0`/`false` values remain an incident kill switch. Screen capture is unchanged and stays unavailable unless `AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN=1` is deliberately supplied; the native-picker acceptance receipt remains pending.
+Continuous orb follow-up (2026-09-17): active listening/thinking/speaking/acting now share stable Listening + Weaving canvas layers with a slow complementary blend and connection/rest crossfades. Removed visible dock status text (retained screen-reader status). First active click reveals Stop; the second stops, Escape restores the orb, and closing disables duplicate clicks. Sharing/error surfaces remain visible. Added mapping/click-policy regressions; all 230 Live tests, type-check, lint, and standalone browser interaction/motion checks pass. Downloads duplex-review.html uses the actual orb component; the installed notarized app has not been rebuilt for this change.
+
+Release hardening follow-up (2026-09-17): Pullfrog's post-merge review blocked 0.41.4 publication until screen authority is generation-fenced. Exact binding tokens now prevent stale releases from revoking replacements, late picker streams stop after teardown, rejected frame sends revoke capture, and temporary Electron permission handlers admit only audio-only media for the exact document before restoring defaults when the final binding closes. Source Change/Remove is locked across pending provider startup and start failure releases the exact current binding. Adversarial coverage was added for each path.
+
+Final picker-state follow-up (2026-09-17): Live start is also blocked while the native picker is pending, and every authority-cancellation path synchronously clears the picker busy state before a later picker can begin. This prevents a superseded picker from leaving setup permanently disabled.
+Combined artifact verification (2026-09-17): Apple accepted notarization submission `5b7f74d8-4740-47b9-82d8-66704cb75ec7`; the Downloads Combined Notarized app has a stapled ticket and passes the repository notarized-package/Gatekeeper check. Opened with the preserved isolated Test Profile and verified its renderer and Start Aiden Live control. Full Live suites, type-check, lint, audio/settings tests, and Electron selector-layout regression passed. Native-picker and real-provider acceptance remain separate and pending.
+Combined build (2026-09-17): integrated the screen-sharing work from the 2f30 worktree into this audio-fix checkout without changing the source worktree. Preserved extended-thinking model selection, dedicated session threads, async thread finalization, direct actions, diagnostic markers, empty-envelope handling, device routing, and dropdown layout. Screen capture remains separately gated and off in the ordinary test launcher pending the exact-build native-picker acceptance receipt. Notarization and attended acceptance are separate gates; this is not a public release.
+Audio selector layout follow-up: scoped single-line trigger styling and actual Radix value-span ellipsis fix long device labels pushing chevrons outside the control. Real Electron geometry regression passes at 1280, 600, and 390px; the full label remains available through the dropdown and hover title.
+Audio selection (2026-09-16 local): Settings → Aiden Live now offers device-local input/output preferences, system defaults, hotplug list refresh, and a speaker test. Selections are snapshotted per session; explicit microphone constraints and output sink routing apply to voice capture, replies, and both cues. Missing selections fail with recovery instructions instead of silent startup fallback. Setup points users to these settings. The shared audio player remains stable across capability refresh; preparation is cancellation-fenced. Tests extend the existing registered Live/UI/audio suites.
+Runtime diagnosis (2026-09-16 local): signed Live reached Google/open and microphone packet flow, but an empty top-level server envelope caused a fatal parser error. Exact empty envelopes now count against rate limits without extending idle liveness. Fixed lifecycle/audio/cue markers enter the local diagnostic journal without media/transcripts/credentials. The orb now labels microphone state, preserves terminal errors, and uses more audible connection tones. The signed Audio Fix build subsequently connected, captured microphone packets, received Google response audio, started playback, and stayed connected for 54 seconds until manually stopped. Both cue markers and the listening/idle labels were verified. Physical audibility still needs user confirmation; Computer Use acceptance remains unclaimed. Relevant tests, type-check, lint, and hardened development package verification passed.
+Local test-build update (2026-09-16): signed development profiles resolve the bundled Computer Use helper by physical package layout. Live plays connection/disconnection cues. At the user's explicit request, starting Live with Computer Use enabled authorizes direct actions for that session without per-action prompts or voice approvals. The dock no longer mounts the voice-approval listener. Target binding, current capture requirements, cancellation, owner identity, and enablement checks remain enforced. Historical per-action approval sections below describe the superseded implementation; ordinary chat policy is unchanged. No new real-provider acceptance is claimed.
 Related: `aiden-assistant-plan.md`, `pi-provider-integration-plan.md`, and
 `../computer-use-integration.md`
 
@@ -11,9 +23,9 @@ The bottom-right **Aiden orb** becomes the single entry point for a
 user-started Aiden Live session. Aiden streams microphone PCM and a
 user-approved screen/window as bounded JPEG frames to Gemini Live, plays Gemini
 native audio, and shows its input/output captions. When Gemini needs to act, it
-invokes Aiden's existing `computer_use` tool; every input action keeps the
-current global gate, per-chat activation, target binding, and fresh **Allow
-once** approval.
+invokes Aiden's existing `computer_use` tool. During Live, actions execute under
+the user's session consent with global enablement and exact target binding.
+Stopping Live revokes this authority. Ordinary chats retain their own policy.
 
 This is deliberately not a general screen recorder, an unattended assistant,
 or a second automation authority.
@@ -80,9 +92,9 @@ Stop, manual reconnect, and exact-session renderer teardown/late-event fencing.
 The UI and main service both keep screen capture unavailable until the native
 macOS picker acceptance is recorded. No capture resumes automatically.
 
-The candidate voice-first model is `gemini-3.8-live-extended-thinking`. The beta
-remains acceptance-gated with `AIDEN_EXPERIMENTAL_GEMINI_LIVE=1` until the exact
-model passes the credentialed Google Live and Computer Use contract.
+The voice-first model is `gemini-3.8-live-extended-thinking`. Voice-only Live
+ships enabled as a beta; `AIDEN_EXPERIMENTAL_GEMINI_LIVE=0` is the incident
+kill switch. Screen capture remains separately acceptance-gated.
 Extended Thinking uses explicit `NON_BLOCKING` Computer Use declarations so it
 can speak brief progress updates while tools run. Every mutation remains paused
 behind a fresh, finalized user-voice “Allow once” or “Deny” decision.

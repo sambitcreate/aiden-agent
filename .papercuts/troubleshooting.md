@@ -1,5 +1,9 @@
 # Troubleshooting
 
+- 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
+- 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.
+- 2026-09-17 Live motion: do not key canvas layers by caption/action state; remounting restarts the animation and causes jumps. Kept stable duplex layers and separated visual activity from microphone activity so mic-off sessions retain Stop. Production macOS package must be rebuilt separately from the HTML review bundle.
+
 ## 2026-09-12 — Listed upstream integration audit
 
 - This worktree has no `.memory/` or `node_modules/`. Read the main checkout's project memory as historical context, but use this worktree's exact HEAD/source as authority. The main checkout's `tsx` binary can execute dependency-free focused suites without installing packages here; suites with runtime package imports still fail module resolution (observed: `entities` in the subagent capability suite). Treat that as an environment limitation, not a product regression or passing test.
@@ -505,10 +509,30 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - The installed Google SDK exposes Live `interactionStatus` inside `serverContent`, while newer Extended Thinking examples describe status alongside tool-call lifecycle events; pin protocol handling to the installed typed wire contract and cover `IDLE` explicitly when adopting the new model.
 # Release coordination
 
+- Screen-share work was based on an older Live contract. Integration must retain the exact Computer Use authorization token, extended-thinking model, async thread finalization, direct-action policy, device routing, and empty-envelope fix; add screen intent without replacing these later changes. Original screen worktree remains unchanged.
+
+- Live device picker visual check found two interacting issues: settings action-cluster CSS wraps every direct `.flex` child, including combobox triggers, and Radix Select.Value strips className/style. Scope a no-wrap override to Live device triggers and truncate their actual value spans; static markup tests alone did not catch geometry.
+
+- Live device routing must retain one audio dependency/player instance across capability refresh; otherwise start preflight can configure a different player from the hook's retained playback ref. Keep capabilities separate from audio ownership.
+
+- Audio selectors: Radix SelectValue has no selected-item text in static rendering until its item collection mounts; supply an explicit selected label so unavailable-device and initial-render states are readable and testable.
+
 - Pullfrog took just over one hour to review PR #132 after first-party CI was green; keep exact-head checks separate so the long external review does not obscure test status.
 - Moving Live from default-on to acceptance-gated correctly hid the dock but invalidated the local UI E2E; keep default-off rendering covered separately and opt the isolated provider-free E2E harness into the experimental surface explicitly.
 - The hosted full Electron suite marked the unrelated chat-switch queue test flaky after it passed on retry, and `--fail-on-flaky-tests` failed the whole gate; rerun the exact failed job before changing unrelated product behavior, while preserving the strict gate if the flake repeats.
 - A distant Environment source-contract test asserted Aiden Live's two-argument command registration, so focused Live tests missed the intentional capability gate; search all source-contract assertions when changing a shared command signature.
+- Signed Live test build: `isPackagedRuntime()` is false for an isolated development profile, causing Computer Use to search inside app.asar/build instead of Contents/Helpers. Resolve physical helper layout using `app.isPackaged`; profile identity must not determine package resource locations.
+- Live cue tests must flush passive React effects after microphone and stop state updates before asserting audio feedback. The repo has no local Prettier binary; use its configured ESLint validation instead.
+- Real signed Live session reached open/microphone-ready/input-first-packet, then Google emitted an empty top-level envelope at 00:20:01 UTC on 2026-09-17. Rejecting `{}` caused the observed silent disconnect. Admit exact empty envelopes as rate-limited no-ops without extending idle timeout; keep unknown populated fields rejected. Terminal error HUDs must remain visible after active becomes false.
+- The Mac's default input was Bose Mini II while output was MacBook speakers. Packet flow alone does not prove intelligible user speech or audible playback; retain separate operator verification.
+- Pullfrog completed only after GitHub had already accepted the exact-head merge, and it found release-blocking screen-capture races. Keep publication cancellable until external review finishes, even when first-party CI and the merge gate are green.
+- Electron exposes setters but no getters for session permission handlers. Scope the Live handler to the lifetime of exact display bindings, explicitly admit only display capture and microphone for that bound document, then restore the default handlers when the last binding disappears.
+- Electron's `media` permission covers camera as well as microphone; check `mediaType` on permission checks and exact `mediaTypes: ["audio"]` on permission requests instead of treating the permission name as audio-only.
+- A green external-review check can race a final inline comment by seconds. Re-read unresolved review threads after the check completes and make the merge command conditional on an empty result rather than chaining inspection and merge unconditionally.
+- React effect cleanup marks the hook unmounted before revoking picker authority; reconfiguration needs the replacement effect setup to reset UI ownership, while final unmount must not schedule state recovery.
+- A release can contain a fully tested user-facing feature while still hiding it from Finder launches if its main-process capability defaults to an environment-only opt-in. Add a focused default-environment regression whenever changing a shipping feature gate.
+- For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
+- E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
 
 ## 2026-09-17 — Cursor via fitchmultz/pi-cursor-sdk
 

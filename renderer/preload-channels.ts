@@ -60,7 +60,6 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:update-state",
   "assistant-live:event",
   "chat:approval",
-  "chat:approval-withdrawn",
   "chat:artifact",
   "chat:delta",
   "chat:done",

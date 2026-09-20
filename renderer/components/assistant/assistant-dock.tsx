@@ -13,14 +13,25 @@ import {
 } from "./assistant-live";
 import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
-import {
-  useAssistantLiveApprovals,
-  type AssistantLiveApprovals,
-} from "./use-assistant-live-approvals";
+import type { AssistantLiveApprovals } from "./use-assistant-live-approvals";
+
+const SESSION_ACTIONS: AssistantLiveApprovals = {
+  approvals: [],
+  decidingApprovalId: null,
+  decideApproval: async () => undefined,
+};
 
 const AIDEN_LOGO_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const AIDEN_LIVE_SETUP_COMPLETE_KEY = "aiden.live.setup-complete";
 const LEGACY_GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
+
+export function liveDockClickAction(live: Pick<AssistantLiveController, "state" | "active" | "busy" | "setupComplete">, setupCompleted: boolean, stopRevealed: boolean) {
+  if (live.state === "closing") return "none";
+  if (live.active) return stopRevealed ? "stop" : "reveal-stop";
+  if (live.busy) return "none";
+  if (!setupCompleted) return "setup";
+  return live.setupComplete ? "start" : "settings";
+}
 
 function storedSetupComplete(): boolean {
   try {
@@ -36,11 +47,6 @@ function storedSetupComplete(): boolean {
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
   const live = useAssistantLive(null);
-  const chat = useAssistantLiveApprovals(
-    live.voiceApprovalReceipts,
-    live.latestVoiceApprovalReceiptId,
-    live.retainVoiceApprovalReceiptsAfter,
-  );
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
@@ -50,7 +56,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   );
   return (
     <AssistantDockPresentation
-      chat={chat}
+      chat={SESSION_ACTIONS}
       live={live}
       rightInset={rightInset}
       onOpenSettings={openSettings}
@@ -71,7 +77,8 @@ export function AssistantDockPresentation({
   onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
   useCommand?: typeof useCommandHandler;
 }): React.ReactElement {
-  const [hudOpen, setHudOpen] = React.useState(false);
+  const [hudOpen, setHudOpen] = React.useState(Boolean(live.error));
+  const [stopRevealed, setStopRevealed] = React.useState(false);
   const [setupCompleted, setSetupCompleted] = React.useState(storedSetupComplete);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
@@ -79,8 +86,12 @@ export function AssistantDockPresentation({
   const orbState = assistantLiveOrbState(live, approvalPending);
 
   React.useEffect(() => {
+    if (!live.active) setStopRevealed(false);
+  }, [live.active]);
+
+  React.useEffect(() => {
     if (approvalPending || live.error) setHudOpen(true);
-    if (!live.active) setHudOpen(false);
+    else if (!live.active) setHudOpen(false);
   }, [approvalPending, live.active, live.error]);
 
   React.useEffect(() => {
@@ -94,20 +105,20 @@ export function AssistantDockPresentation({
   }, [live.active, live.microphoneActive, setupCompleted]);
 
   const openPanel = React.useCallback(() => {
-    if (!setupCompleted) {
+    const action = liveDockClickAction(live, setupCompleted, stopRevealed);
+    if (action === "none") return;
+    if (action === "stop") { void live.stop(); return; }
+    if (action === "reveal-stop") { setStopRevealed(true); return; }
+    if (action === "setup") {
       live.setSetupOpen(true);
       return;
     }
-    if (live.active) {
-      setHudOpen((open) => !open);
-      return;
-    }
-    if (live.setupComplete) {
+    if (action === "start") {
       void live.start();
       return;
     }
     onOpenSettings(live.available ? "computerUse" : "providers");
-  }, [live, onOpenSettings, setupCompleted]);
+  }, [live, onOpenSettings, setupCompleted, stopRevealed]);
   useCommand("assistant.open", openPanel, live.visible);
   if (!live.visible) return <></>;
 
@@ -116,7 +127,7 @@ export function AssistantDockPresentation({
       className="pointer-events-none absolute bottom-4 z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
       style={{ right: `calc(1rem + ${Math.max(0, rightInset)}px)` }}
     >
-      {live.active && hudOpen ? (
+      {(live.active || live.error) && (hudOpen || live.screenActive) ? (
         <AssistantLiveHud live={live} orbState={orbState}>
           {liveApproval ? (
             <AssistantComputerUseApproval
@@ -132,14 +143,17 @@ export function AssistantDockPresentation({
         className="aiden-live-trigger pointer-events-auto"
         data-kind={setupCompleted ? "orb" : "logo"}
         data-state={orbState}
+        data-stop-revealed={stopRevealed && live.active}
+        disabled={live.state === "closing"}
         aria-label={
-          !setupCompleted
+          live.active
+            ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
+            : !setupCompleted
             ? "Set up Aiden Live"
-            : live.active
-              ? `${hudOpen ? "Hide" : "Show"} Aiden Live controls`
-              : "Start Aiden Live"
+            : "Start Aiden Live"
         }
-        aria-expanded={live.active ? hudOpen : live.setupOpen}
+        aria-expanded={live.active ? stopRevealed : live.setupOpen}
+        onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
         onClick={openPanel}
       >
         {setupCompleted ? (
@@ -149,8 +163,14 @@ export function AssistantDockPresentation({
             <img src={AIDEN_LOGO_URL} alt="" draggable={false} />
           </span>
         )}
+        <span className="aiden-live-stop-symbol" aria-hidden="true" />
         {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
       </button>
+      <span role="status" aria-live="polite" className="sr-only">
+        {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : live.active
+          ? live.microphoneActive ? "Listening · mic on" : "Live · mic off"
+          : "Start Live"}
+      </span>
       {!setupCompleted ? (
         <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
       ) : null}

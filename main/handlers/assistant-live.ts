@@ -5,8 +5,14 @@ import {
 } from "../services/gemini-live/service-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
+  bindGeminiLiveDisplayMediaDocument,
+} from "../services/gemini-live/display-media-contract.js";
+import {
   parseAssistantLiveStartIntent,
   parseAssistantLiveAudioIntent,
+  parseAssistantLiveEmptyIntent,
+  parseAssistantLiveFrameIntent,
+  parseAssistantLiveDisplayReleaseIntent,
   parseAssistantLiveStopIntent,
 } from "./assistant-live-parse.js";
 import { invokeAssistantLiveStart } from "./assistant-live-start.js";
@@ -42,5 +48,18 @@ export function registerAssistantLiveHandlers(): void {
   ipcMain.handle("assistant-live:audio", (event, input: unknown) => {
     const intent = parseAssistantLiveAudioIntent(input);
     return geminiLiveService.sendAudio(owner(event), intent.sessionId, intent.pcm);
+  });
+  ipcMain.handle("assistant-live:display-bind", (event, input: unknown) => {
+    parseAssistantLiveEmptyIntent(input, "display-bind");
+    const binding = bindGeminiLiveDisplayMediaDocument(event);
+    return geminiLiveService.bindDisplayMedia(owner(event), binding);
+  });
+  ipcMain.handle("assistant-live:display-release", (event, input: unknown) => {
+    const intent = parseAssistantLiveDisplayReleaseIntent(input);
+    return geminiLiveService.releaseDisplayMedia(owner(event), intent.bindingId);
+  });
+  ipcMain.handle("assistant-live:frame", (event, input: unknown) => {
+    const intent = parseAssistantLiveFrameIntent(input);
+    return geminiLiveService.sendFrame(owner(event), intent.sessionId, intent.frame);
   });
 }

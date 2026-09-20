@@ -1,4 +1,5 @@
 import { rendererDocumentOwner, type RendererDocumentOwner } from "../renderer-document-owner.js";
+import { randomUUID } from "node:crypto";
 
 export const GEMINI_LIVE_SYSTEM_PICKER_OPTIONS: Electron.DisplayMediaRequestHandlerOpts = {
   useSystemPicker: true,
@@ -7,9 +8,12 @@ export const GEMINI_LIVE_SYSTEM_PICKER_OPTIONS: Electron.DisplayMediaRequestHand
 interface DisplayPermissionDetails {
   isMainFrame: boolean;
   requestingUrl: string;
+  mediaType?: "video" | "audio" | "unknown";
+  mediaTypes?: Array<"video" | "audio">;
 }
 
 export interface GeminiLiveDisplayMediaBinding {
+  readonly bindingId: string;
   readonly documentId: string;
   readonly owner: RendererDocumentOwner;
   allowsDisplayRequest(request: Electron.DisplayMediaRequestHandlerHandlerRequest): boolean;
@@ -68,6 +72,7 @@ export function bindGeminiLiveDisplayMediaDocument(
   };
 
   return {
+    bindingId: randomUUID(),
     documentId: owner.documentId,
     owner,
     allowsDisplayRequest: (request) =>
@@ -78,11 +83,106 @@ export function bindGeminiLiveDisplayMediaDocument(
       request.frame !== null &&
       liveFrame(request.frame) &&
       sameFrame(request.frame, frame),
-    allowsPermissionRequest: (webContents, permission, details) =>
-      current() &&
-      webContents === sender &&
-      permission === "display-capture" &&
-      details.isMainFrame === true &&
-      details.requestingUrl === requestingUrl,
+    allowsPermissionRequest: (webContents, permission, details) => {
+      const audioOnly =
+        details.mediaType === "audio" ||
+        (details.mediaTypes?.length === 1 && details.mediaTypes[0] === "audio");
+      return (
+        current() &&
+        webContents === sender &&
+        (permission === "display-capture" || (permission === "media" && audioOnly)) &&
+        details.isMainFrame === true &&
+        details.requestingUrl === requestingUrl
+      );
+    },
   };
+}
+
+interface DisplayMediaGuardSession {
+  setPermissionCheckHandler(
+    handler: ((
+      webContents: Electron.WebContents | null,
+      permission: string,
+      requestingOrigin: string,
+      details: Electron.PermissionCheckHandlerHandlerDetails,
+    ) => boolean) | null,
+  ): void;
+  setPermissionRequestHandler(
+    handler: ((
+      webContents: Electron.WebContents,
+      permission: string,
+      callback: (permissionGranted: boolean) => void,
+      details: Electron.PermissionRequest,
+    ) => void) | null,
+  ): void;
+  setDisplayMediaRequestHandler(
+    handler:
+      | ((
+          request: Electron.DisplayMediaRequestHandlerHandlerRequest,
+          callback: (streams: Electron.Streams) => void,
+        ) => void)
+      | null,
+    opts?: Electron.DisplayMediaRequestHandlerOpts,
+  ): void;
+}
+
+const guardedSessions = new WeakMap<object, () => void>();
+
+/**
+ * Installs the display-capture boundary once per Electron session. Every
+ * display or microphone permission succeeds only for a currently bound Live
+ * document. Every unrelated permission is denied while this temporary guard
+ * owns the session policy, and disposal restores Electron's default handlers.
+ * The system-picker session never dispatches to the fallback handler; any
+ * non-picker dispatch is denied rather than trusted to select a source.
+ */
+export function installGeminiLiveDisplayMediaGuards(
+  electronSession: DisplayMediaGuardSession,
+  getBindings: () => readonly GeminiLiveDisplayMediaBinding[],
+): () => void {
+  const installed = guardedSessions.get(electronSession);
+  if (installed) return installed;
+  let active = true;
+  const dispose = () => {
+    if (!active || guardedSessions.get(electronSession) !== dispose) return;
+    active = false;
+    guardedSessions.delete(electronSession);
+    electronSession.setPermissionCheckHandler(null);
+    electronSession.setPermissionRequestHandler(null);
+    electronSession.setDisplayMediaRequestHandler(null);
+  };
+  guardedSessions.set(electronSession, dispose);
+  electronSession.setPermissionCheckHandler(
+    (webContents, permission, _requestingOrigin, details) => {
+      if (!webContents) return false;
+      return getBindings().some((binding) =>
+        binding.allowsPermissionRequest(webContents, String(permission), {
+          isMainFrame: details.isMainFrame === true,
+          requestingUrl: details.requestingUrl ?? "",
+          mediaType: details.mediaType,
+        }),
+      );
+    },
+  );
+  electronSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      const mediaDetails = details as Electron.MediaAccessPermissionRequest;
+      callback(
+        getBindings().some((binding) =>
+          binding.allowsPermissionRequest(webContents, String(permission), {
+            isMainFrame: details.isMainFrame === true,
+            requestingUrl: details.requestingUrl ?? "",
+            mediaTypes: mediaDetails.mediaTypes,
+          }),
+        ),
+      );
+    },
+  );
+  electronSession.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      callback({});
+    },
+    GEMINI_LIVE_SYSTEM_PICKER_OPTIONS,
+  );
+  return dispose;
 }

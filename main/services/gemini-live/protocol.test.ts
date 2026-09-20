@@ -149,7 +149,7 @@ test("extended-thinking sessions enable low thinking and a voice-first action co
   const config = subject.server.latest.params.config!;
   assert.deepEqual(config.thinkingConfig, { thinkingLevel: "LOW" });
   assert.match(String(config.systemInstruction), /fully voice-first/u);
-  assert.match(String(config.systemInstruction), /Allow once.*Deny/u);
+  assert.match(String(config.systemInstruction), /without per-action approval prompts/u);
 });
 
 test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob", async () => {
@@ -869,9 +869,17 @@ test("one compound event has a total decoded-content budget", async () => {
   );
 });
 
-test("empty, unknown, and invalid aggregate events are transport-terminal", async () => {
+test("empty provider envelopes are ignored without refreshing the idle deadline", async () => {
+  const subject = harness({ idleTimeoutMs: 100 });
+  await subject.protocol.start();
+  subject.server.latest.emit({});
+  assert.equal(subject.protocol.state, "open");
+  subject.clock.advance(101);
+  assert.equal(subject.protocol.state, "failed");
+});
+
+test("unknown and invalid aggregate events are transport-terminal", async () => {
   for (const message of [
-    {},
     { unsupportedProviderField: {} },
     { usageMetadata: { totalTokenCount: "1" } },
   ]) {
