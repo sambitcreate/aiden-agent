@@ -16,6 +16,7 @@ import {
   activityTrailNeedsAttention,
   formatThinkingDuration,
   isActiveStep,
+  isCompactContextOnly,
   reasoningActivityLabel,
   summarizeActivity,
 } from "./agent-steps.js";
@@ -280,6 +281,12 @@ test("summary leads with the work when nothing was explored", () => {
   assert.equal(
     summarizeActivity(timeline("completed", tools({ compact_context: 1 }))),
     "Compacted context",
+  );
+  assert.equal(isCompactContextOnly(tools({ compact_context: 1 })), true);
+  assert.equal(isCompactContextOnly(tools({ compact_context: 1, read_file: 1 })), false);
+  assert.equal(
+    isCompactContextOnly([thinking("think-1", 0, 1_000), step("compact", 1, "compact_context")]),
+    false,
   );
 });
 

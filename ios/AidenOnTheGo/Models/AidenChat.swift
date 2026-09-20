@@ -461,6 +461,10 @@ enum AidenAgentActivityPresentation {
         "compact_context": ("Compacting context", "Compacted context"),
     ]
 
+    static func isCompactContextOnly(_ steps: [AidenAgentStep]) -> Bool {
+        !steps.isEmpty && steps.allSatisfy { $0.kind == .tool && $0.toolName == "compact_context" }
+    }
+
     static func duration(_ milliseconds: Double?) -> String {
         guard let milliseconds, milliseconds >= 2_000 else { return "briefly" }
         let seconds = Int((milliseconds / 1_000).rounded())

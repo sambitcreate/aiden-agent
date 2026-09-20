@@ -375,6 +375,10 @@ object AidenAgentActivityPresentation {
         "compact_context" to Pair("Compacting context", "Compacted context")
     )
 
+    fun isCompactContextOnly(steps: List<AidenAgentStep>): Boolean {
+        return steps.isNotEmpty() && steps.all { it.kind == AidenAgentStep.Kind.TOOL && it.toolName == "compact_context" }
+    }
+
     fun duration(milliseconds: Double?): String {
         if (milliseconds == null || milliseconds < 2_000.0) return "briefly"
         val seconds = Math.round(milliseconds / 1_000.0).toInt()

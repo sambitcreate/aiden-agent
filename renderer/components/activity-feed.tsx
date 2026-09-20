@@ -9,6 +9,7 @@ import {
   activityIssueCount,
   activityLine,
   activityLineText,
+  isCompactContextOnly,
   summarizeActivity,
   type ActivityLine,
 } from "../lib/agent-steps";
@@ -131,15 +132,71 @@ export function ActivityFeed({
 
   if (!visible?.steps.length) return null;
   const running = visible.status === "running";
-  const showTicker = running && !open;
+  const issues = activityIssueCount(visible);
+  const compactOnly = isCompactContextOnly(visible.steps);
+  const disclosure = !compactOnly || issues > 0 || Boolean(visible.claimCheck);
+  const showTicker = running && (!open || !disclosure);
   const rows = visible.steps.slice(-TICKER_ROWS);
   const newest = visible.steps[visible.steps.length - 1];
-  const issues = activityIssueCount(visible);
+  const presence = exiting ? "exiting" : "visible";
+  const header = (
+    <>
+      {showTicker && newest ? (
+        <div
+          className="activity-feed-window min-w-0 flex-1 overflow-hidden"
+          data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
+          role="status"
+          aria-live="polite"
+          aria-label={activityLineText(newest)}
+        >
+          <div className="activity-feed-stack flex flex-col">
+            {rows.map((step) => (
+              <TickerRow key={step.id} step={step} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <Text
+          variant="small-strong"
+          color="secondary"
+          className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
+            running ? "agent-thinking-shimmer" : ""
+          }`}
+        >
+          {compactOnly && newest ? <StepLine step={newest} /> : summarizeActivity(visible)}
+        </Text>
+      )}
+      {issues ? (
+        <Text variant="small-strong" className="shrink-0 text-support-warning">
+          {issues === 1 ? "1 issue" : `${issues} issues`}
+        </Text>
+      ) : null}
+    </>
+  );
+
+  if (!disclosure) {
+    return (
+      <div
+        className="activity-feed min-w-0"
+        data-presence={presence}
+        data-animate={animate ? "true" : "false"}
+        data-state="closed"
+      >
+        <div
+          className={`-mx-1.5 flex min-w-0 gap-2 rounded-control px-1.5 py-0.5 ${
+            showTicker ? "items-end" : "items-center"
+          }`}
+        >
+          {header}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <details
       className="activity-feed group/activity min-w-0"
-      data-presence={exiting ? "exiting" : "visible"}
+      data-presence={presence}
       data-animate={animate ? "true" : "false"}
       data-state={open ? "open" : "closed"}
       open={open}
@@ -150,36 +207,7 @@ export function ActivityFeed({
           showTicker ? "items-end" : "items-center"
         }`}
       >
-        {showTicker && newest ? (
-          <div
-            className="activity-feed-window min-w-0 flex-1 overflow-hidden"
-            data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
-            role="status"
-            aria-live="polite"
-            aria-label={activityLineText(newest)}
-          >
-            <div className="activity-feed-stack flex flex-col">
-              {rows.map((step) => (
-                <TickerRow key={step.id} step={step} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <Text
-            variant="small-strong"
-            color="secondary"
-            className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
-              running ? "agent-thinking-shimmer" : ""
-            }`}
-          >
-            {summarizeActivity(visible)}
-          </Text>
-        )}
-        {issues ? (
-          <Text variant="small-strong" className="shrink-0 text-support-warning">
-            {issues === 1 ? "1 issue" : `${issues} issues`}
-          </Text>
-        ) : null}
+        {header}
         <ChevronRight
           className="agent-activity-chevron size-3.5 shrink-0 text-tertiary transition-transform group-open/activity:rotate-90"
           aria-hidden="true"

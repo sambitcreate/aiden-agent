@@ -819,6 +819,15 @@ class AidenChatTest {
             durationMs = 1000.0, detail = "pi-vcc · 0.4s · ~25900 → 6758 tokens"
         )
         assertEquals("Compacted context pi-vcc · 0.4s · ~25900 → 6758 tokens", AidenAgentActivityPresentation.line(step))
+        assertTrue(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step)))
+        val read = AidenAgentStep(
+            id = "read-1", order = 1, kind = AidenAgentStep.Kind.TOOL,
+            toolName = "read_file", label = "Read file",
+            status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0,
+            updatedAt = 2000.0, finishedAt = 2000.0, contentOffset = 0,
+            durationMs = 1000.0, target = "README.md"
+        )
+        assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, read)))
         assertEquals(step.detail, json.decodeFromString<AidenAgentStep>(json.encodeToString(step)).detail)
     }
 }

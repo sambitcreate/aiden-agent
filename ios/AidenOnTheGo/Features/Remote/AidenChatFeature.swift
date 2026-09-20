@@ -3341,58 +3341,21 @@ private struct AidenActivityFeed: View {
     private var visibleSteps: [AidenAgentStep] { steps ?? timeline.steps }
     private var rows: [AidenAgentStep] { Array(visibleSteps.suffix(3)) }
     private var isRunning: Bool { active && timeline.status == .running }
+    private var compactOnly: Bool { AidenAgentActivityPresentation.isCompactContextOnly(visibleSteps) }
+    private var allowsDisclosure: Bool {
+        !compactOnly || timeline.issueCount > 0 || !(progressText ?? "").isEmpty
+    }
+    private var headline: String {
+        if compactOnly, let last = visibleSteps.last {
+            return AidenAgentActivityPresentation.line(for: last)
+        }
+        return AidenAgentActivityPresentation.summary(timeline)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isExpanded ? 4 : 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(
-                    alignment: isRunning && !isExpanded && showsRunningRowsWhenCollapsed ? .bottom : .center,
-                    spacing: 8
-                ) {
-                    Group {
-                        if isRunning && !isExpanded && showsRunningRowsWhenCollapsed {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows) { step in
-                                    AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
-                                        .frame(height: 24)
-                                        .id(step.id)
-                                        .transition(.opacity)
-                                }
-                            }
-                            .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
-                            .clipped()
-                        } else {
-                            Text(AidenAgentActivityPresentation.summary(timeline))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.secondary)
-                                .lineLimit(1)
-                                .aidenActivityShimmer(isRunning)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if timeline.issueCount > 0 {
-                        Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.warning)
-                    }
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(palette.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(AidenAgentActivityPresentation.summary(timeline))
-            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
-
-            if isExpanded {
+        VStack(alignment: .leading, spacing: isExpanded && allowsDisclosure ? 4 : 0) {
+            header
+            if allowsDisclosure, isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(visibleSteps) { step in
                         AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
@@ -3419,6 +3382,65 @@ private struct AidenActivityFeed: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: timeline.steps.last?.id)
         .onAppear {
             if timeline.issueCount > 0 { isExpanded = true }
+        }
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        let alignment: VerticalAlignment =
+            isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed ? .bottom : .center
+        let row = HStack(alignment: alignment, spacing: 8) {
+            Group {
+                if isRunning && (!isExpanded || !allowsDisclosure) && showsRunningRowsWhenCollapsed {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { step in
+                            AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                                .frame(height: 24)
+                                .id(step.id)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
+                    .clipped()
+                } else {
+                    Text(headline)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                        .aidenActivityShimmer(isRunning)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if timeline.issueCount > 0 {
+                Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+            }
+
+            if allowsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+        }
+
+        if allowsDisclosure {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                row.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(headline)
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+        } else {
+            row
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(headline)
         }
     }
 }

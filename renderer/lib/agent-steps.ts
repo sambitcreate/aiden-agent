@@ -144,6 +144,13 @@ function countTools(steps: AgentStep[], names: string[]): number {
   return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
 }
 
+/** Compaction is already named in the summary; expanding it only repeats that label. */
+export function isCompactContextOnly(steps: readonly AgentStep[]): boolean {
+  return (
+    steps.length > 0 && steps.every((step) => isToolStep(step) && step.toolName === "compact_context")
+  );
+}
+
 const TALLIED_TOOLS = [
   "read_file",
   "grep",
