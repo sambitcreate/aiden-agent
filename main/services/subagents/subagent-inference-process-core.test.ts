@@ -589,6 +589,95 @@ test("abort escalates from cooperative cancel to TERM and verified hard kill", a
   assert.equal(await owner.shutdown(), true);
 });
 
+test("a throwing TERM still escalates to verified hard kill and delivers cancellation", async () => {
+  const child = new FakeProcess();
+  child.terminate = () => {
+    child.terminations += 1;
+    throw new Error("TERM failed");
+  };
+  let cleanupFailures = 0;
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => { cleanupFailures += 1; },
+  );
+  const stream = owner.stream(request, { model });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(await owner.shutdown(), true);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+  assert.equal(cleanupFailures, 0);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  for (const event of ["message", "exit", "process-error"]) {
+    assert.equal(child.listenerCount(event), 0);
+  }
+});
+
+test("out-of-sequence frames and cancellation share one owned shutdown", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const stream = owner.stream(request, { model });
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 1,
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  assert.equal(await owner.shutdown(), true);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  assert.equal(child.sent.filter((message) => (message as { kind?: string }).kind === "cancel").length, 1);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+});
+
+test("out-of-sequence cleanup failure stays owned even when its observer throws", { timeout: 2_000 }, async () => {
+  const child = new StubbornProcess();
+  let cleanupFailures = 0;
+  let observedFailure!: () => void;
+  const failureObserved = new Promise<void>((resolve) => { observedFailure = resolve; });
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => {
+      cleanupFailures += 1;
+      observedFailure();
+      throw new Error("Diagnostic observer failed");
+    },
+  );
+  const stream = owner.stream(request, { model });
+  let resultDelivered = false;
+  void stream.result().then(() => { resultDelivered = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 1,
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  await failureObserved;
+  assert.equal(await owner.shutdown(), false);
+  assert.equal(cleanupFailures, 1);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+  assert.equal(resultDelivered, false, "unverified process exit must not publish a terminal result");
+  assert.equal(child.listenerCount("exit"), 1, "the unresolved child remains owned");
+
+  child.alive = false;
+  child.emit("exit", 137);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  assert.equal(await owner.shutdown(), false, "late exit must not erase the cleanup failure");
+  assert.equal(child.listenerCount("exit"), 0);
+});
+
 test("an unverified launch never receives provider request data", async () => {
   const child = new UnverifiedLaunchProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {

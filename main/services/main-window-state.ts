@@ -3,6 +3,7 @@ import type { BrowserWindow } from "electron";
 import { DataStore } from "./data-store.js";
 import {
   normalizeMainWindowState,
+  trackMainWindowState,
   restoredMainWindowBounds,
   type MainWindowState,
   type WindowBounds,
@@ -15,7 +16,15 @@ const persistence = new DataStore<MainWindowState>(
   { normalize: normalizeMainWindowState, maxBytes: 4_096 },
 );
 
+const trackedWindows = new WeakMap<BrowserWindow, () => MainWindowState>();
+
 export const mainWindowState = {
+  track(window: BrowserWindow): void {
+    if (!trackedWindows.has(window)) {
+      trackedWindows.set(window, trackMainWindowState(window));
+    }
+  },
+
   async restore(workAreas: readonly WindowBounds[]) {
     const state = await persistence.load();
     return {
@@ -26,6 +35,11 @@ export const mainWindowState = {
   },
 
   async save(window: BrowserWindow): Promise<void> {
+    const tracked = trackedWindows.get(window);
+    if (tracked) {
+      await persistence.save(tracked());
+      return;
+    }
     const bounds = window.getNormalBounds();
     await persistence.save({
       version: 1,

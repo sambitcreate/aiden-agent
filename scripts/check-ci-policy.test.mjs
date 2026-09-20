@@ -8,6 +8,10 @@ const catalogWorkflowUrl = new URL(
   "../.github/workflows/model-catalog-refresh.yml",
   import.meta.url,
 );
+const pullfrogWorkflowUrl = new URL(
+  "../.github/workflows/pullfrog.yml",
+  import.meta.url,
+);
 
 function workflowStep(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -66,6 +70,13 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /needs: refresh/u);
   assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.match(workflow, /git push.*HEAD:main/u);
+});
+
+test("Pullfrog allows aggregate release reviews to finish", async () => {
+  const workflow = await readFile(pullfrogWorkflowUrl, "utf8");
+
+  assert.match(workflow, /uses: pullfrog\/pullfrog@v0\.1\.57/u);
+  assert.match(workflow, /^ {10}timeout: 2h$/mu);
 });
 
 test("coverage collection is enabled before positional test paths", async () => {

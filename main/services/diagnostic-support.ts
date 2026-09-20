@@ -510,6 +510,14 @@ export async function createDiagnosticExport(options: ExportOptions): Promise<Di
 
 export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Promise<void> {
   await ensurePrivateDirectory(roots.logsPath);
+  const journalPath = diagnosticJournalStatus().path;
+  // The live journal owns deletion ordering. Its files may already contain new
+  // records by the time the fallback sweep reaches them, including rotations.
+  const ownedJournalFiles = new Set(journalPath ? [
+    path.resolve(journalPath),
+    path.resolve(path.dirname(journalPath), "aiden-fatal.log"),
+    ...Array.from({ length: MAX_DIAGNOSTIC_LOG_FILES - 1 }, (_, index) => path.resolve(`${journalPath}.${index + 1}`)),
+  ] : []);
   await deleteDiagnosticJournalFiles();
   await deleteDiagnosticHealth();
   await deleteSubagentRuntimeDiagnostics();
@@ -523,7 +531,9 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
     "diagnostic-health.json",
   ]) {
     const candidate = path.join(roots.logsPath, name);
-    if (withinRoot(roots.logsPath, candidate)) await fs.rm(candidate, { force: true });
+    if (withinRoot(roots.logsPath, candidate) && !ownedJournalFiles.has(path.resolve(candidate))) {
+      await fs.rm(candidate, { force: true });
+    }
   }
   await withCrashMaintenance(async () => {
     await ensurePrivateDirectory(roots.crashDumpsPath);

@@ -4265,6 +4265,67 @@ test("GitService preserves nested workspace scope in managed worktrees", async (
   await service.rollbackWorktree(nested, created);
 });
 
+async function worktreeHeadRaceFixture(t: test.TestContext) {
+  const repository = await createRepository(t);
+  const sourceHead = await git(repository, ["rev-parse", "HEAD"]);
+  await git(repository, ["switch", "-c", "external-checkout"]);
+  await fs.writeFile(path.join(repository, "README.md"), "external checkout\n", "utf8");
+  await git(repository, ["commit", "-am", "External commit"]);
+  const externalHead = await git(repository, ["rev-parse", "HEAD"]);
+  await git(repository, ["switch", "main"]);
+
+  const root = await temporaryDirectory(t);
+  const wrapper = path.join(root, "git-head-race");
+  await fs.writeFile(
+    wrapper,
+    '#!/bin/sh\nif [ "$1" = "worktree" ] && [ "$2" = "add" ]; then\n  /usr/bin/git switch external-checkout || exit $?\nfi\nexec /usr/bin/git "$@"\n',
+    { encoding: "utf8", mode: 0o700 },
+  );
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    readTimeoutMs: 10_000,
+    mutationTimeoutMs: 10_000,
+  });
+  return { repository, root, service, sourceHead, externalHead };
+}
+
+test("GitService pins worktree creation to its recorded commit across an external checkout", async (t) => {
+  const { repository, root, service, sourceHead, externalHead } = await worktreeHeadRaceFixture(t);
+  const created = await service.createWorktree(repository, root, "feature/pinned-worktree");
+
+  assert.equal(await git(repository, ["rev-parse", "HEAD"]), externalHead);
+  assert.equal(created.createdFromHead, sourceHead);
+  assert.equal(created.head, sourceHead);
+  assert.equal(await git(created.path, ["rev-parse", "HEAD"]), sourceHead);
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "initial\n");
+
+  // Workspace persistence can fail after creation. Its rollback must still own
+  // the recorded commit even though another client changed the source checkout.
+  await service.rollbackWorktree(repository, created);
+  await assert.rejects(fs.access(created.path));
+  await assert.rejects(git(repository, ["show-ref", "--verify", `refs/heads/${created.branch}`]));
+  assert.equal(await git(repository, ["rev-parse", "HEAD"]), externalHead);
+});
+
+test("GitService rolls back a missing nested workspace across an external checkout", async (t) => {
+  const { repository, root, service, externalHead } = await worktreeHeadRaceFixture(t);
+  const nested = path.join(repository, "untracked-workspace");
+  await fs.mkdir(nested);
+
+  await assert.rejects(
+    service.createWorktree(nested, root, "feature/missing-nested-worktree"),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "refs/heads/feature/missing-nested-worktree"]),
+  );
+  assert.equal(await git(repository, ["rev-parse", "HEAD"]), externalHead);
+  assert.equal((await fs.stat(nested)).isDirectory(), true);
+});
+
 test("GitService serializes mutations across linked worktree paths", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

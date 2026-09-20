@@ -1658,24 +1658,34 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index]!;
       if (index === 0 && draftMessageId !== undefined) {
-        await deps.api.editMessageText({
-          chatId,
-          messageId: draftMessageId,
-          text: chunk,
-          parseMode: "HTML",
-          disablePreview: true,
-          ...(index === chunks.length - 1 && replyMarkup ? { replyMarkup } : {}),
-        });
-      } else {
-        await deps.api.sendMessage({
-          chatId,
-          threadId,
-          text: chunk,
-          parseMode: "HTML",
-          ...(index === chunks.length - 1 && replyMarkup ? { replyMarkup } : {}),
-          disablePreview: true,
-        });
+        try {
+          await deps.api.editMessageText({
+            chatId,
+            messageId: draftMessageId,
+            text: chunk,
+            parseMode: "HTML",
+            disablePreview: true,
+            ...(index === chunks.length - 1 && replyMarkup ? { replyMarkup } : {}),
+          });
+          continue;
+        } catch (cause) {
+          if (!(cause instanceof TelegramApiError) || cause.code !== 400) throw cause;
+          // The persisted preview already contains this chunk. Finalization
+          // must still deliver any remaining chunks and outbound actions.
+          if (/\bmessage is not modified\b/iu.test(cause.message)) continue;
+          // Replace only a definitively unavailable preview. Retrying unknown
+          // transport failures as sends could duplicate a successful edit.
+          if (!/\bmessage (?:to edit not found|can't be edited)\b/iu.test(cause.message)) throw cause;
+        }
       }
+      await deps.api.sendMessage({
+        chatId,
+        threadId,
+        text: chunk,
+        parseMode: "HTML",
+        ...(index === chunks.length - 1 && replyMarkup ? { replyMarkup } : {}),
+        disablePreview: true,
+      });
     }
   }
 

@@ -95,6 +95,7 @@ function makeTransport(
   isCurrent: () => boolean = () => true,
   options: {
     forceNoRedirect?: boolean;
+    onTerminalFailure?: () => void;
     registerCredentialRedactor?: (
       redactor: SubagentMcpCredentialRedactor,
     ) => void;
@@ -137,6 +138,7 @@ function makeTransport(
     isCurrent,
     authProvider,
     fetch: guardedFetch,
+    onTerminalFailure: options.onTerminalFailure,
   });
 }
 
@@ -276,12 +278,16 @@ class McpManager {
           { name: "aiden-agent", version: "1.0.0" },
           { capabilities: {} },
         ),
-      async (client, connectionIsCurrent) => {
+      async (client, connectionIsCurrent, onClosed) => {
+        // Register before connect: closure during initialization must also
+        // prevent a dead client from being published to the cache.
+        client.onclose = onClosed;
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
           makeTransport(
             await resolveAuth(server, connectionIsCurrent),
             connectionIsCurrent,
+            { onTerminalFailure: onClosed },
           ) as never,
         );
       },

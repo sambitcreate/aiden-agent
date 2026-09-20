@@ -784,7 +784,7 @@ class AidenChatViewModel(
                 if (e !is CancellationException) {
                     val fallbackMessages = _chat.value?.messages?.filter { it.id != optimisticId } ?: emptyList()
                     _chat.value = _chat.value?.copy(messages = fallbackMessages, updatedAt = previousUpdatedAt)
-                    _draft.value = AidenDraftSendReconciliation.failedDraft(text, _draft.value)
+                    updateDraft(AidenDraftSendReconciliation.failedDraft(text, _draft.value))
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
                     _presentedError.value = e.localizedMessage

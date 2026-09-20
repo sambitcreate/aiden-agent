@@ -4971,11 +4971,14 @@ export class GitService {
       let createdByCommand = false;
       let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
       try {
-        await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", worktreePath, "HEAD"], {
-          hooksDisabled: true,
-          mutation: true,
-          signal,
-        });
+        // Other Git clients do not share our mutation queue. Use the captured
+        // commit so the checkout and its rollback identity cannot diverge when
+        // the source HEAD moves while creation is in progress.
+        await this.run(
+          repo.cwd,
+          ["worktree", "add", "-b", branch, "--", worktreePath, createdFromHead],
+          { hooksDisabled: true, mutation: true, signal },
+        );
         createdByCommand = true;
         const created = (await this.inspectWorktrees(repo, worktreePath)).find(
           (worktree) => worktree.branch === branch,

@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -9,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +24,88 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 
 class AidenChatProgressTest {
     private val json = Json { ignoreUnknownKeys = false }
+
+    private fun textEventFrame(sequence: Int, lineEnding: String = "\n"): String = listOf(
+        "id: $sequence",
+        "event: text_delta",
+        """data: {"protocolVersion":1,"streamId":"stream_test","sequence":$sequence,"timestamp":"2026-09-19T00:00:00Z","type":"text_delta","terminal":false,"payload":{"text":"Hello"}}"""
+    ).joinToString(lineEnding)
+
+    @Test
+    fun sseEofDiscardsPendingFrameAndResetsParser() {
+        val parser = AidenSSEParser()
+        textEventFrame(1).lines().forEach { assertNull(parser.consume(it)) }
+        assertNull(parser.finish())
+        assertNull(parser.finish())
+        assertNull(parser.consume(""))
+
+        // A discarded frame must not leak its data or metadata into the next one.
+        textEventFrame(2).lines().forEach { assertNull(parser.consume(it)) }
+        assertEquals(2, parser.consume("")?.sequence)
+        assertNull(parser.finish())
+    }
+
+    @Test
+    fun sseStreamRequiresBlankLineBeforeEofForEveryLineEnding() = runTest {
+        for (lineEnding in listOf("\n", "\r\n", "\r")) {
+            val frame = textEventFrame(1, lineEnding)
+            for (suffix in listOf("", lineEnding)) {
+                val events = AidenSSEParser.parseStream(
+                    (frame + suffix).byteInputStream(), expectedStreamId = "stream_test"
+                ).toList()
+                assertTrue("EOF must not dispatch an unterminated frame", events.isEmpty())
+            }
+            val events = AidenSSEParser.parseStream(
+                (frame + lineEnding + lineEnding).byteInputStream(), expectedStreamId = "stream_test"
+            ).toList()
+            assertEquals(listOf(1), events.map { it.sequence })
+        }
+    }
+
+    @Test
+    fun sseTruncatedTailDoesNotAdvanceReplayCursor() = runTest {
+        val events = AidenSSEParser.parseStream(
+            (textEventFrame(1) + "\n\n" + textEventFrame(2) + "\n").byteInputStream(),
+            expectedStreamId = "stream_test"
+        ).toList()
+        assertEquals(listOf(1), events.map { it.sequence })
+
+        val replay = AidenSSEParser.parseStream(
+            (textEventFrame(1) + "\n\n" + textEventFrame(2) + "\n\n").byteInputStream(),
+            expectedStreamId = "stream_test", startSequence = events.last().sequence
+        ).toList()
+        assertEquals(listOf(2), replay.map { it.sequence })
+    }
+
+    @Test
+    fun sseEofDiscardsPartialHeadersAndJsonWithoutDecoding() = runTest {
+        for (tail in listOf("id: 1\n", "id: 1\nevent: text_delta\n", "id: 1\ndata: {\n")) {
+            assertTrue(AidenSSEParser.parseStream(tail.byteInputStream()).toList().isEmpty())
+        }
+        // Malformed complete frames must still fail validation.
+        assertThrows(AidenRemoteContractException.InvalidJson::class.java) {
+            val parser = AidenSSEParser()
+            parser.consume("id: 1")
+            parser.consume("data: {")
+            parser.consume("")
+        }
+    }
+
+    @Test
+    fun progressSseStreamAlsoDiscardsUnterminatedSnapshot() = runTest {
+        val event = fixtureRoot().getValue("chatProgressEvents").jsonArray.first().jsonObject
+        val frame = "id: ${event.getValue("sequence")}\nevent: task_update\ndata: $event\n"
+        val truncated = AidenSSEParser.parseStream(
+            frame.byteInputStream(), expectedStreamId = "chat_fixture_01",
+            expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
+        ).toList()
+        assertTrue(truncated.isEmpty())
+        val complete = AidenSSEParser.parseStream(
+            (frame + "\n").byteInputStream(), expectedStreamId = "chat_fixture_01",
+            expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
+        ).toList()
+        assertEquals(3, complete.single().payload?.taskProgress?.tasks?.size)
+    }
 
     private fun fixtureRoot(): JsonObject {
         val stream = javaClass.classLoader?.getResourceAsStream("contract.json")

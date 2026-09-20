@@ -480,6 +480,174 @@ test("persisted history seeds a reopened terminal buffer", async () => {
   assert.equal(flushAllCount, 1);
 });
 
+test("terminal history finishes before spawn and access is revalidated afterward", async () => {
+  const owner = ownerState();
+  const historyReady = deferred();
+  const child = fakePty();
+  const order: string[] = [];
+  const appended: string[] = [];
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => {
+      order.push("spawn");
+      // Even the first queued callback must see an installed output listener.
+      queueMicrotask(() => child.emitData("prompt> "));
+      return child.pty;
+    }) as typeof spawn,
+    historyStore: {
+      read: async () => {
+        order.push("history-start");
+        await historyReady.promise;
+        order.push("history-end");
+        return "prior output\n";
+      },
+      append: (_workspaceId, data) => appended.push(data),
+      flush: async () => undefined,
+    },
+  });
+  const creating = service.create("workspace-1", "/tmp", owner.owner, undefined, async () => {
+    order.push("revalidate");
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const orderDuringRead = [...order];
+  historyReady.resolve();
+  const session = await creating;
+
+  assert.deepEqual(orderDuringRead, ["history-start"]);
+  assert.deepEqual(order, ["history-start", "history-end", "revalidate", "spawn"]);
+  assert.deepEqual(service.snapshot(session.id, owner.owner), {
+    buffer: "prior output\nprompt> ",
+    sequence: 2,
+  });
+  assert.deepEqual(appended, ["prompt> "]);
+  service.close(session.id, owner.owner);
+});
+
+test("a history read failure cannot leak an unowned shell", async () => {
+  const owner = ownerState();
+  let spawnCount = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => {
+      spawnCount += 1;
+      return fakePty().pty;
+    }) as typeof spawn,
+    historyStore: {
+      read: async () => {
+        throw new Error("history failed");
+      },
+      append: () => undefined,
+      flush: async () => undefined,
+    },
+  });
+  await assert.rejects(service.create("workspace-1", "/tmp", owner.owner), /history failed/u);
+  assert.equal(spawnCount, 0);
+});
+
+test("terminal cancellation during history restore prevents shell startup", async (t) => {
+  for (const cancellation of ["document", "web-contents", "admission"] as const) {
+    await t.test(cancellation, async () => {
+      const owner = ownerState();
+      const historyReady = deferred();
+      const admission = new AbortController();
+      let spawnCount = 0;
+      let revalidations = 0;
+      const service = new TerminalService({
+        prepareSpawnHelper: async () => undefined,
+        spawnPty: (() => {
+          spawnCount += 1;
+          return fakePty().pty;
+        }) as typeof spawn,
+        historyStore: {
+          read: async () => {
+            await historyReady.promise;
+            return "prior output";
+          },
+          append: () => undefined,
+          flush: async () => undefined,
+        },
+      });
+      const creating = service.create(
+        "workspace-1",
+        "/tmp",
+        owner.owner,
+        admission.signal,
+        async () => { revalidations += 1; },
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (cancellation === "document") owner.destroy();
+      else if (cancellation === "web-contents") service.closeForWebContents(owner.owner.id);
+      else admission.abort();
+      historyReady.resolve();
+
+      await assert.rejects(creating, /workspace changed before the terminal could start/u);
+      assert.equal(spawnCount, 0);
+      assert.equal(revalidations, 0);
+    });
+  }
+});
+
+test("an immediately exiting shell is observed and releases its session", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => {
+      queueMicrotask(() => child.emitExit(7));
+      return child.pty;
+    }) as typeof spawn,
+  });
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  assert.deepEqual(owner.sent, [
+    {
+      channel: "terminal:exit",
+      payload: { sessionId: session.id, exitCode: 7, signal: undefined },
+    },
+  ]);
+  assert.throws(() => service.snapshot(session.id, owner.owner), /unavailable/u);
+});
+
+test("concurrent terminal opens enforce the session cap before spawning", async (t) => {
+  for (const withHistory of [false, true]) {
+    await t.test(withHistory ? "with history" : "without history", async () => {
+      const owner = ownerState();
+      const historyReady = deferred();
+      let spawnCount = 0;
+      const service = new TerminalService({
+        prepareSpawnHelper: async () => undefined,
+        spawnPty: (() => {
+          spawnCount += 1;
+          return fakePty().pty;
+        }) as typeof spawn,
+        historyStore: withHistory ? {
+          read: async () => {
+            await historyReady.promise;
+            return "prior output";
+          },
+          append: () => undefined,
+          flush: async () => undefined,
+        } : undefined,
+      });
+      const opening = Promise.allSettled(Array.from({ length: 10 }, (_, index) =>
+        service.create(`workspace-${index}`, "/tmp", owner.owner),
+      ));
+      historyReady.resolve();
+      const results = await opening;
+      assert.equal(results.filter((result) => result.status === "fulfilled").length, 8);
+      const rejected = results.filter((result) => result.status === "rejected");
+      assert.equal(rejected.length, 2);
+      for (const result of rejected) {
+        assert.match(String(result.reason), /maximum of 8 terminal sessions/u);
+      }
+      assert.equal(spawnCount, 8);
+      service.closeForWebContents(owner.owner.id);
+      await service.create("workspace-replacement", "/tmp", owner.owner);
+      assert.equal(spawnCount, 9);
+      service.closeForWebContents(owner.owner.id);
+    });
+  }
+});
+
 test("terminal sessions cover input, resize, output, snapshot, history, and natural exit", async () => {
   const owner = ownerState();
   const child = fakePty();
