@@ -833,3 +833,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `npm run test:bots` stops before tests because the native inbox writer links against the CLT macOS 27 SDK with unsupported `arm64e.x1`; `npm --ignore-scripts run test:bots` passes 446 TypeScript tests, but native-helper-dependent pretests remain unverified.
 - Deep OpenCode review exposed the receipt-written/manifest-unpublished crash window after remount: publishing the live device would disagree with the old receipt. Preserve the receipt token in the durable manifest and return a separately re-inspected live token.
 - PR #209 review: Pullfrog required either a remount-stable volume identity or an explicitly documented, tested trust assumption. Node's `fs.statfs` exposes no `f_fsid`, so a real volume identity needs a native probe or a `diskutil` subprocess; the documented assumption is the patch-release choice, so the accepted substituted-volume case and the checks that still fail closed are now stated in `sameHomeByInode` and named in the remount regression.
+
+## 2026-09-21 — 0.42.2 release gates
+
+- Hosted CI run 35643207134 marked `chat-message-queue` flaky because its first attempt read `settings.json` before that file existed (ENOENT); the retry passed. Poll for the file's first durable write, retrying only ENOENT.
+- The `setsid` fixture wrote its PID from the detached grandchild after scheduling; publish it from the intermediate process, allow a bounded 20s wait under CI load, and arrange cleanup even when the test assertion fails.
+- Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
+- Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.

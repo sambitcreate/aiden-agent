@@ -223,7 +223,15 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   const result = await run(t, `${fixture} ${marker}`);
   assert.equal(result.outcome, "exited");
   let pid = 0;
-  const markerDeadline = Date.now() + 5_000;
+  t.after(() => {
+    if (pid <= 1) return;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  });
+  const markerDeadline = Date.now() + 20_000;
   while (Date.now() < markerDeadline) {
     try {
       const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
@@ -234,9 +242,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
     } catch {
       // The detached grandchild publishes the marker asynchronously.
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(pid > 1, "detached fixture must publish its PID");
   assert.doesNotThrow(() => process.kill(pid, 0));
-  process.kill(pid, "SIGKILL");
 });
