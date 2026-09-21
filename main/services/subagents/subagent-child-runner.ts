@@ -674,6 +674,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     let terminalOutput = "";
     // Only assistant-authored text from settled messages, never tool results or thinking.
     const partialReports: string[] = [];
+    let partialReportsTruncated = false;
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -771,7 +772,10 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           const exactOutput = terminalAssistantText(message);
           if (!messageWasAborted && exactOutput.trim()) {
             partialReports.push(exactOutput.trim().slice(0, MAX_SUBAGENT_SUMMARY_CHARS));
-            if (partialReports.length > 8) partialReports.shift();
+            if (partialReports.length > 8) {
+              partialReports.shift();
+              partialReportsTruncated = true;
+            }
           }
           const additionalObserved = currentTurnHadTextDelta
             ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
@@ -838,7 +842,12 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       }
       // Keep source paths useful to the parent; the renderer projector applies its
       // stricter snapshot/path policy separately.
-      const modelSafePartial = sanitizePartialFindingsForParent(partialReports.join("\n\n"));
+      // Once an older report is evicted, its discarded prefix could identify
+      // a credential value that remains in the retained suffix. No retained
+      // fragment can be proved safe in isolation at that boundary.
+      const modelSafePartial = partialReportsTruncated
+        ? REDACTED_CREDENTIAL
+        : sanitizePartialFindingsForParent(partialReports.join("\n\n"));
       return {
         role: input.request.role,
         label: input.request.label,

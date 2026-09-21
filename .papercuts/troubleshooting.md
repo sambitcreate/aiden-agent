@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- 2026-09-21 PR #207 follow-up: a sliding window of assistant partials can discard a credential-key prefix while retaining its value. Mark any eviction and fail closed on turn-limit findings, rather than classifying only the retained suffix.
 - 2026-09-21 PR #207 follow-up: line-wise credential filtering misses assignment keys split across settled messages. Check bounded adjacent spans with line breaks removed and fail closed on the compact whole report; keep unaffected path lines where possible.
 - 2026-09-21 PR #207 Pullfrog follow-up: real V2 authority tests using random UUIDs can trip the renderer-safe opaque-identifier classifier nondeterministically. Inject a known-safe UUID in the persistence fixture, then test the complete authority and ledger path.
 - 2026-09-21 PR #207 follow-up: `.memory/` is ignored even when its existing note is tracked; stage note updates with `git add -f` after checking the exact path.

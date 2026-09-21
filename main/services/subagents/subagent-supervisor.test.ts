@@ -2268,6 +2268,46 @@ test("turn-limit findings redact line-split assignment keys before parent format
   assert.doesNotMatch(parentFacing, /split-secret-value|OPENAI_API_|KEY=/u);
 });
 
+test("turn-limit findings fail closed after an earlier report is evicted", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    const reports = [
+      "OPENAI_API_",
+      ...Array.from({ length: 7 }, (_value, index) => `Safe finding ${index}`),
+      "KEY=evicted-prefix-secret",
+    ];
+    for (const report of reports) {
+      const message = assistant(report);
+      await emit({ type: "turn_start" } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+      await emit({ type: "turn_end", message, toolResults: [] } as AgentEvent);
+    }
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "evicted-partial-credential-boundary",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: (input) => runSubagentChild({
+      ...input,
+      dependencies: {
+        buildTools: async () => [],
+        createChild: () => control.child,
+        recordUsage: async () => {},
+      },
+    }),
+  });
+  const parentFacing = await supervisor.execute({ tasks: [
+    { role: "scout", label: "Evicted", task: "Investigate.", maxTurns: 9 },
+  ] });
+  assert.match(parentFacing, /Status: failed/u);
+  assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
+  assert.doesNotMatch(parentFacing, /evicted-prefix-secret|KEY=|Safe finding/u);
+});
+
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
   const streamedControl = fakeChild(async ({ emit }) => {
     const message = assistant("abcde");
