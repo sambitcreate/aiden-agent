@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- 2026-09-21 PR #207 Pullfrog follow-up: real V2 authority tests using random UUIDs can trip the renderer-safe opaque-identifier classifier nondeterministically. Inject a known-safe UUID in the persistence fixture, then test the complete authority and ledger path.
 - 2026-09-21 PR #207 follow-up: `.memory/` is ignored even when its existing note is tracked; stage note updates with `git add -f` after checking the exact path.
 - 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
 - 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.

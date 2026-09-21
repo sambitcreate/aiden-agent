@@ -10,7 +10,11 @@ On a turn-limit stop, bounded assistant-authored text from settled messages is
 credential-filtered and returned as explicitly incomplete findings. Source paths
 remain useful to the parent; the persisted renderer snapshot gets its stricter
 path and environment redaction. Tool outputs, thinking, and aborted assistant
-messages are never used as a report. Other limits and cancellations remain
+messages are never used as a report. Model-facing partials filter raw and
+obfuscated/encoded credentials while retaining unaffected source paths.
+Mixed V2 batches add accepted child ceilings to a generation-wide turn ledger,
+bounded at 512 turns, so a default sibling cannot truncate an extended scout.
+Other limits and cancellations remain
 fail-closed. OpenCode v2's task/session design (MIT, studied conceptually)
 retains child sessions for continuation and defaults to no step cap; Aiden
 retains explicit resource ceilings and does not copy its implementation.

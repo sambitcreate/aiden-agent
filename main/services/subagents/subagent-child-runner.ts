@@ -37,7 +37,10 @@ import {
   type SubagentContextMode,
 } from "./forked-context.js";
 import { normalizeSubagentModelText } from "./model-text.js";
-import { sanitizeCredentialText } from "../../../renderer/shared/subagent-safe-text.js";
+import {
+  containsHighConfidenceSecretIncludingEncodings,
+  sanitizeCredentialText,
+} from "../../../renderer/shared/subagent-safe-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
@@ -797,13 +800,22 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       }
       // Keep source paths useful to the parent; the renderer projector applies its
       // stricter snapshot/path policy separately.
-      const partial = sanitizeCredentialText(partialReports.join("\n\n"))
-        .trim();
+      const partial = partialReports.join("\n\n").split("\n").map((line) => {
+        const directSafe = sanitizeCredentialText(line);
+        return containsHighConfidenceSecretIncludingEncodings(directSafe)
+          ? "[REDACTED CREDENTIAL]"
+          : directSafe;
+      }).join("\n").trim();
+      // Encoded or split material may cross a line boundary. Fail closed on
+      // the complete report while keeping unaffected source-path lines useful.
+      const modelSafePartial = containsHighConfidenceSecretIncludingEncodings(partial)
+        ? "[REDACTED CREDENTIAL]"
+        : partial;
       return {
         role: input.request.role,
         label: input.request.label,
         status: "failed",
-        ...projectSubagentCompletedSummary(partial),
+        ...projectSubagentCompletedSummary(modelSafePartial),
         warning: "The child reached its turn limit. These are incomplete, unverified partial findings.",
       };
     }

@@ -24,6 +24,8 @@ import {
 import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
 import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
 import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
+import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import { SUBAGENT_PARENT_SECURITY_GUIDANCE, subagentRoleSystemPrompt } from "./role-catalog.js";
 import { normalizeSubagentModelText } from "./model-text.js";
@@ -488,6 +490,73 @@ test("supervisor passes a requested read-only turn ceiling to its child", async 
     { role: "scout", label: "Default", task: "Check a narrow source." },
   ] });
   assert.deepEqual(policies.sort((a, b) => (a ?? 0) - (b ?? 0)), [24, 72]);
+});
+
+test("V2 mixed read-only ceilings admit the extended child without losing the tree bound", async () => {
+  const generationId = "mixed-v2-turn-budget";
+  const persistence = createForegroundSubagentPersistenceV2({
+    store: {
+      selection: "v2",
+      async reserveRun() {},
+      releaseRunReservation() {},
+      async upsert(snapshot: unknown) { return snapshot as never; },
+    } as unknown as ProductionSubagentRunStore,
+    generationId,
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspace: {
+      id: TEST_SUPERVISOR_SCOPE.workspaceId,
+      name: "Workspace",
+      folderPath: "/workspace",
+      permission: "full",
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    runtime: runtime(),
+    thinkingLevel: "high",
+    ownerDocumentId: "1:2:document-one",
+    permission: "full",
+    randomUUID: () => "00000000-0000-4000-8000-000000000001",
+  });
+  const observed: Array<{ label: string; authorityTurns: number; policyTurns: number }> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId,
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    prepareRun: (input) => persistence.prepareRun(input),
+    runChild: async (child) => {
+      observed.push({
+        label: child.request.label,
+        authorityTurns: child.v2Authority!.budgets.maxTurns,
+        policyTurns: child.policy!.maxTurns!,
+      });
+      const turns = child.request.label === "Extended" ? 72 : 24;
+      for (let index = 0; index < turns; index += 1) child.telemetry?.turnStarted();
+      return completed(child.request.label);
+    },
+  });
+  const result = await supervisor.execute({ tasks: [
+    { role: "scout", label: "Extended", task: "Survey source.", maxTurns: 72 },
+    { role: "scout", label: "Default", task: "Check a narrow source." },
+  ] });
+  assert.match(result, /## 1\. Extended[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Default[\s\S]*Status: completed/u);
+  assert.deepEqual(observed.sort((a, b) => a.policyTurns - b.policyTurns), [
+    { label: "Default", authorityTurns: 24, policyTurns: 24 },
+    { label: "Extended", authorityTurns: 72, policyTurns: 72 },
+  ]);
+  await assert.rejects(
+    supervisor.execute({ tasks: Array.from({ length: 4 }, (_value, index) => ({
+      role: "scout" as const,
+      label: `Next ${index}`,
+      task: "One more.",
+      maxTurns: 128,
+    })) }),
+    /generation tree budget exhausted.*new parent turn with narrower tasks/u,
+  );
 });
 
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
@@ -2120,6 +2189,45 @@ test("turn-limit partial findings exclude text from aborted assistant messages",
   assert.match(result.warning ?? "", /turn limit/u);
   assert.match(result.summary, /Verified source path: \/workspace\/src\/index\.ts/u);
   assert.doesNotMatch(result.summary, /Unverified draft finding/u);
+});
+
+test("turn-limit findings reaching the parent filter obfuscated and encoded credentials", async () => {
+  const encoded = Buffer.from("OPENAI_API_KEY=encoded-secret-value").toString("base64");
+  const control = fakeChild(async ({ emit }) => {
+    const message = assistant([
+      "Verified source path: /workspace/src/index.ts",
+      "OPENAI_API_KEY\u200b＝obfuscated-secret-value",
+      `Encoded credential: ${encoded}`,
+    ].join("\n"));
+    await emit({ type: "turn_start" } as AgentEvent);
+    await emit({ type: "message_end", message } as AgentEvent);
+    await emit({ type: "turn_end", message, toolResults: [] } as AgentEvent);
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "partial-credential-boundary",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: (input) => runSubagentChild({
+      ...input,
+      dependencies: {
+        buildTools: async () => [],
+        createChild: () => control.child,
+        recordUsage: async () => {},
+      },
+    }),
+  });
+  const parentFacing = await supervisor.execute({ tasks: [
+    { role: "scout", label: "Bounded", task: "Investigate.", maxTurns: 1 },
+  ] });
+  assert.match(parentFacing, /\/workspace\/src\/index\.ts/u);
+  assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
+  assert.doesNotMatch(parentFacing, /obfuscated-secret-value|encoded-secret-value/u);
+  assert.doesNotMatch(parentFacing, new RegExp(encoded, "u"));
 });
 
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {

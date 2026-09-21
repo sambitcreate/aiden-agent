@@ -64,6 +64,7 @@ import type {
 
 export const DEFAULT_SUBAGENT_TREE_DEADLINE_MS = 10 * 60_000;
 const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
+const MAX_SUBAGENT_V2_TREE_TURNS = 512;
 
 export interface SubagentSupervisorPolicy {
   childDeadlineMs?: number;
@@ -306,6 +307,7 @@ export class SubagentSupervisor {
   private v2ToolCallsUsed = 0;
   private v2OutputCharsUsed = 0;
   private v2TurnsUsed = 0;
+  private v2TurnAllowance = 0;
   private v2NetworkOperationsUsed = 0;
   private calls = 0;
   private treeExpired = false;
@@ -1462,9 +1464,11 @@ export class SubagentSupervisor {
           Math.min(
             ...authorities.map(({ budgets }) => budgets.maxOutputChars),
           ) - this.v2OutputCharsUsed;
-        const remainingTurns =
-          Math.min(...authorities.map(({ budgets }) => budgets.maxTurns)) -
-          this.v2TurnsUsed;
+        // Every admitted child contributes its own bounded turn ceiling. A
+        // sibling with the default 24 must not silently clamp a 72-turn scout.
+        const nextTurnAllowance = this.v2TurnAllowance +
+          authorities.reduce((total, authority) => total + authority.budgets.maxTurns, 0);
+        const remainingTurns = nextTurnAllowance - this.v2TurnsUsed;
         const remainingNetworkOperations =
           Math.min(
             ...authorities.map(({ budgets }) => budgets.maxNetworkOperations),
@@ -1477,6 +1481,7 @@ export class SubagentSupervisor {
           remainingTokens < 1 ||
           remainingToolCalls < 1 ||
           remainingOutputChars < 1 ||
+          nextTurnAllowance > MAX_SUBAGENT_V2_TREE_TURNS ||
           remainingTurns < 1 ||
           (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
@@ -1513,6 +1518,7 @@ export class SubagentSupervisor {
           );
         }
         try {
+          this.v2TurnAllowance = nextTurnAllowance;
           results = (await scheduler.run(
             request.tasks.map((task, index) => ({
               node: nodes[index]!,
