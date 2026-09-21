@@ -199620,13 +199620,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1048576,
-          "output": 393216
+          "context": 1024000,
+          "output": 384000
         },
         "cost": {
-          "input": 0.56628,
-          "output": 1.69884,
-          "cache_read": 0.018018
+          "input": 0.558624,
+          "output": 1.675872,
+          "cache_read": 0.018621
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -205103,7 +205103,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
           "input": 1.32,
@@ -224030,7 +224030,7 @@
         "name": "Qwen3.5 397B A17B",
         "description": "Large open Qwen multimodal MoE for visual agents and long technical tasks",
         "family": "qwen",
-        "attachment": true,
+        "attachment": false,
         "reasoning": true,
         "reasoning_options": [
           {
@@ -224044,8 +224044,7 @@
         "last_updated": "2026-02-15",
         "modalities": {
           "input": [
-            "text",
-            "image"
+            "text"
           ],
           "output": [
             "text"
@@ -224053,8 +224052,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 256000,
-          "output": 64000
+          "context": 131072,
+          "output": 32768
         },
         "cost": {
           "input": 0.172,
@@ -224239,7 +224238,7 @@
         "name": "Qwen3.5 122B A10B",
         "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
         "family": "qwen",
-        "attachment": true,
+        "attachment": false,
         "reasoning": true,
         "reasoning_options": [
           {
@@ -224253,8 +224252,7 @@
         "last_updated": "2026-02-23",
         "modalities": {
           "input": [
-            "text",
-            "image"
+            "text"
           ],
           "output": [
             "text"
@@ -224262,8 +224260,8 @@
         },
         "open_weights": true,
         "limit": {
-          "context": 256000,
-          "output": 64000
+          "context": 131072,
+          "output": 32768
         },
         "cost": {
           "input": 0.115,
@@ -244054,12 +244052,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 0.56628,
-          "output": 1.69884,
-          "cache_read": 0.018018
+          "input": 0.558624,
+          "output": 1.675872,
+          "cache_read": 0.018621
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -249786,12 +249784,12 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 393216
+          "output": 384000
         },
         "cost": {
-          "input": 0.56628,
-          "output": 1.69884,
-          "cache_read": 0.018018
+          "input": 0.66,
+          "output": 1.98,
+          "cache_read": 0.022
         }
       },
       "deepseek/deepseek-v4-flash-0731": {
@@ -250216,9 +250214,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.924462,
-          "output": 1.848924,
-          "cache_read": 0.077039
+          "input": 0.922722,
+          "output": 1.845444,
+          "cache_read": 0.076894
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
