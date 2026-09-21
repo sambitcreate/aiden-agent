@@ -2010,6 +2010,7 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   });
   assert.equal(limited.status, "failed");
   assert.match(limited.warning ?? "", /output limit/);
+  assert.equal(limited.summary, "", "other hard-limit failures never expose partial output");
   assert.equal(outputControl.cancelCount, 1);
 
   const turnControl = fakeChild(async ({ emit }) => {
@@ -2038,6 +2039,33 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.equal(turnLimited.status, "failed");
   assert.match(turnLimited.warning ?? "", /turn limit/);
   assert.equal(turnControl.cancelCount, 1);
+
+  const partialControl = fakeChild(async ({ emit }) => {
+    await emit({ type: "turn_start" } as AgentEvent);
+    await emit({ type: "message_end", message: { ...assistant("Observed the manifest mismatch."), stopReason: "toolUse" } } as AgentEvent);
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const partial = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "partial-turns",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Partial", task: "Investigate." },
+    policy: { maxTurns: 1 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => partialControl.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(partial.status, "failed");
+  assert.equal(partial.summary, "Observed the manifest mismatch.");
+  assert.match(partial.warning ?? "", /incomplete and unverified/u);
+  assert.equal(partialControl.cancelCount, 1);
 });
 
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {

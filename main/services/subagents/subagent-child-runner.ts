@@ -629,6 +629,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
 
     let currentTurnOutput = "";
     let terminalOutput = "";
+    const completedPartialNotes: string[] = [];
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -748,6 +749,12 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           if (message.stopReason !== "toolUse") {
             observedTerminalAssistant = true;
             terminalOutput = currentTurnOutput;
+          } else if (exactOutput.trim()) {
+            // Only completed assistant text, never an unfinished stream or raw
+            // tool result, can accompany a turn-budget failure. Keep a small
+            // tail; it is evidence of progress, not a successful child report.
+            completedPartialNotes.push(exactOutput.trim());
+            if (completedPartialNotes.length > 4) completedPartialNotes.shift();
           }
         }
       }
@@ -782,7 +789,15 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       return timedOutResult(input.request);
     }
     throwIfParentAborted(input.signal);
-    if (limitWarning) return safeFailure(input.request, limitWarning);
+    if (limitWarning) {
+      if (limitWarning === "The child reached its turn limit." && completedPartialNotes.length) {
+        return {
+          ...safeFailure(input.request, `${limitWarning} The notes below are incomplete and unverified.`),
+          ...projectSubagentCompletedSummary(completedPartialNotes.join("\n\n")),
+        };
+      }
+      return safeFailure(input.request, limitWarning);
+    }
     if (outcome.kind === "failed") {
       return safeFailure(input.request);
     }

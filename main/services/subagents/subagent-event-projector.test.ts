@@ -261,6 +261,36 @@ test("producer summary truncation is explicit and literal report markers remain 
   assert.deepEqual(snapshot.projectionNotices, ["report_truncated"]);
 });
 
+test("failed turn-limit notes retain truncation provenance and failed status", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-partial-limit",
+    chatId: "chat-partial-limit",
+    workspaceId: "workspace-partial-limit",
+    modelId: "model-partial-limit",
+    now: () => 1,
+  });
+  projector.begin(
+    {
+      runId: "run-partial-limit",
+      groupId: "generation-partial-limit:group-1",
+      childId: "child-partial-limit",
+    },
+    { role: "scout", label: "Inspect", task: "Investigate a bounded question" },
+  );
+  projector.finish("run-partial-limit", {
+    role: "scout",
+    label: "Inspect",
+    status: "failed",
+    summary: "Incomplete observation.",
+    summaryTruncated: true,
+    warning: "The child reached its turn limit. The notes are incomplete and unverified.",
+  });
+  const snapshot = projector.snapshot()[0]!;
+  assert.equal(snapshot.state, "failed");
+  assert.equal(snapshot.terminalMarkdown, "Incomplete observation.");
+  assert.deepEqual(snapshot.projectionNotices, ["report_truncated"]);
+});
+
 test("label and model privacy projection contributes explicit display provenance", () => {
   const cases = [
     {
