@@ -308,7 +308,13 @@ function sameIncarnation(
   return left.device === right.device && left.inode === right.inode;
 }
 
-/** The adapter proves the live home remains on its owned private volume. */
+/**
+ * The adapter proves the live home still sits on its owned private volume, so
+ * this comparison intentionally drops the mount-volatile device to keep a
+ * legitimate remount working. `sameHomeByInode` in bot-managed-workspace.ts
+ * documents the accepted boundary, the residual substituted-volume case, and
+ * the live checks every caller must still satisfy.
+ */
 function sameHomeAcrossRemount(
   left: BotManagedWorkspaceIncarnation,
   right: BotManagedWorkspaceIncarnation,

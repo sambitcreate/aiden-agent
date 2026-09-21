@@ -23,3 +23,30 @@ Validation: 447 Bot TypeScript tests via `npm --ignore-scripts run test:bots`,
 type-check, lint, and diff whitespace pass. The ordinary pretest cannot build
 its native inbox writer on this host's mismatched CLT SDK; native-dependent
 pretests remain unverified.
+
+## Review resolution: the remount boundary is an approved assumption
+
+Pullfrog (head `3caae7d3`) required either a remount-stable volume identity or
+an explicitly documented and tested trust assumption. The documented assumption
+is the reviewed choice for this patch: `sameHomeByInode` in
+`bot-managed-workspace.ts` and `sameHomeAcrossRemount` in
+`bot-managed-workspace-core.ts` now state it in code, and the remount
+regression names it.
+
+- Accepted by design: a different private volume mounted at the private root
+  that presents the persisted home inode, because the durable manifest and
+  receipt that identify the home live inside that same root, so a substituting
+  actor already controls every record that could identify it.
+- Still rejected, each with coverage: inode changes, symlinked roots, foreign
+  or unowned directories, non-private permissions, non-canonical home paths,
+  mismatched persisted copies, and resolve-to-effect directory swaps.
+- Follow-up to restore detection: a remount-stable volume identity, i.e. the
+  `statfs` `f_fsid` field or the APFS volume UUID. Node's `fs.statfs` exposes
+  only type/bsize/blocks/bfree/bavail/files/ffree, so this needs a native probe
+  following the existing helper pattern, or a `diskutil info -plist`
+  subprocess; both exceed a patch release's intended scope.
+- Native path verified for this fix: the bot inbox writer still receives the
+  live token through `BotInboundAttachmentHomeLease`, and that lease revalidates
+  the live token immediately before each effect, so the writer's `st_dev` and
+  `st_ino` fence keeps passing after a remount and Issue 201 stays fixed end to
+  end.

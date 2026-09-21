@@ -149,13 +149,31 @@ async function captureHomeIncarnation(candidate: string): Promise<BotManagedWork
   return { device: info.dev.toString(10), inode: info.ino.toString(10) };
 }
 
+/**
+ * Remount acceptance is a documented, deliberately narrow trust boundary.
+ *
+ * macOS assigns `st_dev` at mount time, so a legitimate remount changes the
+ * live device while the owned home's inode survives. Accepting the inode alone
+ * also accepts one case this comparison does not attempt to detect: a
+ * *different* private volume mounted at the private root that presents the
+ * persisted home inode. That case is out of scope because the durable manifest
+ * and ownership receipt that describe the home live inside that same private
+ * root, so an actor able to substitute the volume at that path already controls
+ * every record that could identify it. Detecting it again needs a volume
+ * identity that survives a remount (`statfs` `f_fsid`, which Node does not
+ * expose); until then this is the reviewed behavior rather than an oversight.
+ *
+ * Every caller must still prove on the live filesystem that the home shares one
+ * device with the `root`, `homes`, and `receipts` anchors (see
+ * `assertOwnedVolume`), that the home and its receipt are owned by the current
+ * user and are not symlinks, that the home resolves to its own path, and that
+ * both hold private permissions. Substitutions that change the inode stay
+ * rejected.
+ */
 function sameHomeByInode(
   left: BotManagedWorkspaceIncarnation,
   right: BotManagedWorkspaceIncarnation,
 ): boolean {
-  // st_dev is assigned at mount time on macOS; the owned home's inode survives
-  // a remount. Callers must also prove the home is still on the private root's
-  // volume before accepting this comparison.
   return left.inode === right.inode;
 }
 

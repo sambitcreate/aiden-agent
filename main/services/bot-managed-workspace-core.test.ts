@@ -114,6 +114,19 @@ test("one private non-Git home is stable across chats, concurrency, and restart"
   }
 });
 
+/**
+ * Approved remount boundary. macOS reassigns `st_dev` at mount time, so this
+ * test fabricates prior-mount device metadata that no live volume presents and
+ * asserts the home still resolves and revalidates: acceptance rests on the
+ * surviving inode, the single owned-volume anchor checks, and exact
+ * manifest/receipt agreement. A different private volume that reproduced the
+ * persisted inode would therefore be accepted by design; inode changes remain
+ * rejected by "traversal, symlinked roots, and substituted homes never
+ * resolve" and "fresh revalidation rejects a resolve-to-effect directory
+ * swap". See `sameHomeByInode` in bot-managed-workspace.ts for why the
+ * residual substituted-volume case is out of scope and what a future stable
+ * volume identity would require.
+ */
 test("a remounted volume keeps the same owned home without rewriting its receipt", async () => {
   const paths = await temporaryRoot("aiden-bot-home-remount-");
   try {
