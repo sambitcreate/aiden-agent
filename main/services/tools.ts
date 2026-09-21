@@ -14,6 +14,8 @@ import { skillRegistry } from "./skill-registry-main.js";
 import { buildSkillTools } from "./skill-tools.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import type { FormFillService } from "./form-fill/service.js";
+import { createFormFillAgentTool } from "./form-fill/tool.js";
 import {
   scheduleTaskToolsForContext,
   type AssistantScheduleModelSelection,
@@ -44,6 +46,8 @@ export interface ToolContext {
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Optional generation-scoped Form Fill Specialist. Present only when enabled and ready. */
+  formFill?: FormFillService;
   /** Main-created tools bound to this generation's workspace and browser host. */
   browserTools?: readonly AgentTool[];
   /** Background scheduled runs disable this to prevent recursive task creation. */
@@ -160,6 +164,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.computerUse && ctx.formFill) tools.push(createFormFillAgentTool(ctx.formFill));
   if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
   if (ctx.allowScheduling !== false) {
     tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());

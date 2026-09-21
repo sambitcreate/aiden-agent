@@ -630,6 +630,8 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
+  formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;

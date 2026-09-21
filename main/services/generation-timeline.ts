@@ -80,6 +80,26 @@ function safeToolIssue(value: unknown): string | undefined {
     : undefined;
 }
 
+/** Count-only summary of a form_fill result — labels and values never persisted. */
+function safeFormFillOutcome(value: unknown): string | undefined {
+  const details = record(value);
+  const count = (key: string): number | undefined =>
+    Number.isSafeInteger(details[key]) ? (details[key] as number) : undefined;
+  const filled = count("filled");
+  if (filled === undefined) return undefined;
+  const parts = [`${filled} filled`];
+  const satisfied = count("alreadySatisfied");
+  if (satisfied) parts.push(`${satisfied} already satisfied`);
+  const review = count("needsReview");
+  if (review) parts.push(`${review} need${review === 1 ? "s" : ""} review`);
+  const failed = count("failed");
+  if (failed) parts.push(`${failed} failed`);
+  const notAttempted = count("notAttempted");
+  if (notAttempted) parts.push(`${notAttempted} not attempted`);
+  if (details.stoppedEarly === true) parts.push("stopped early");
+  return parts.join(" · ");
+}
+
 function firstToolResultText(result: unknown): string | undefined {
   const content = record(result).content;
   if (!Array.isArray(content)) return undefined;
@@ -229,6 +249,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use Mac", detail: safeDetail(values.action) };
+    case "form_fill":
+      return { label: "Fill form fields" };
     case "vcc_recall":
       return { label: "Recall chat history" };
     case "compact_context":
@@ -456,6 +478,18 @@ export class GenerationTimelineProjector {
     this.updateTool(toolCallId, "running");
   }
 
+  /** Bounded non-terminal detail update for a running tool step (counts only). */
+  toolDetail(toolCallId: string, detail: string): void {
+    if (this.timeline.status !== "running") return;
+    const index = this.stepIndex.get(toolCallId);
+    if (index === undefined) return;
+    const step = this.timeline.steps[index];
+    if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
+    step.detail = detail;
+    step.updatedAt = this.now();
+    this.emit();
+  }
+
   toolFinished(
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
@@ -535,6 +569,10 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
+        if (step.toolName === "form_fill") {
+          const outcome = safeFormFillOutcome(resultDetails);
+          if (outcome) step.detail = outcome;
+        }
       } else {
         const issue = safeToolIssue(resultDetails);
         if (issue) step.detail = issue;

@@ -14,6 +14,8 @@ import type {
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
+  FormFillArtifactStatus,
+  FormFillSettingsView,
   EngineStatus,
   ExternalEditor,
   GitBranches,
@@ -310,8 +312,7 @@ export const assistantApi = {
 
 export const assistantLiveApi = {
   status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
-  authorizeComputerUse: () =>
-    invoke<string | null>("assistant-live:authorize-computer-use", {}),
+  authorizeComputerUse: () => invoke<string | null>("assistant-live:authorize-computer-use", {}),
   start: (intent: AssistantLiveStartIntent) =>
     invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
   stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
@@ -337,6 +338,16 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+};
+
+export const formFillApi = {
+  status: () => invoke<FormFillSettingsView>("formFill:status"),
+  setEnabled: (enabled: boolean) => invoke<FormFillSettingsView>("formFill:setEnabled", enabled),
+  download: () => invoke<FormFillArtifactStatus>("formFill:download"),
+  cancel: () => invoke<FormFillArtifactStatus>("formFill:cancel"),
+  remove: () => invoke<FormFillArtifactStatus>("formFill:remove"),
+  onProgress: (handler: (status: FormFillArtifactStatus) => void) =>
+    onNotification<FormFillArtifactStatus>("formFill:progress", handler),
 };
 
 export const titleProvidersApi = {
@@ -896,8 +907,11 @@ export const chatsApi = {
       skillInvocation?: SkillInvocationV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
-  approve: (approvalId: string, decision: ApprovalDecision) =>
-    invoke<void>("chat:approve", approvalId, decision),
+  approve: (
+    approvalId: string,
+    decision: ApprovalDecision,
+    options?: { formFillExcludedOrders?: number[] },
+  ) => invoke<void>("chat:approve", approvalId, decision, options),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
