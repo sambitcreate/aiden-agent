@@ -1326,11 +1326,12 @@ test("agent commands find user CLIs from a macOS GUI launch PATH", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agent-path-"));
   try {
     const localBin = path.join(home, ".local", "bin");
+    const commandName = `aiden-cli-${path.basename(home)}`;
     await fs.mkdir(localBin, { recursive: true });
-    await fs.writeFile(path.join(localBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.writeFile(path.join(localBin, commandName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const env = agentCommandEnvironment({ HOME: home, PATH: "/usr/bin:/bin" }, "darwin");
-    const result = await execFileAsync("/bin/sh", ["-c", "command -v gh"], { env });
-    assert.equal(result.stdout.trim(), path.join(localBin, "gh"));
+    const result = await execFileAsync("/bin/sh", ["-c", `command -v ${commandName}`], { env });
+    assert.equal(result.stdout.trim(), path.join(localBin, commandName));
   } finally {
     await fs.rm(home, { recursive: true, force: true });
   }
@@ -1343,15 +1344,16 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
   const previousPath = process.env.PATH;
   try {
     const localBin = path.join(home, ".local", "bin");
+    const commandName = `aiden-cli-${path.basename(home)}`;
     await fs.mkdir(localBin, { recursive: true });
-    await fs.writeFile(path.join(localBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.writeFile(path.join(localBin, commandName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     process.env.HOME = home;
     process.env.PATH = "/usr/bin:/bin";
     const runCommand = buildCodingTools(home).find((tool) => tool.name === "run_command");
     assert.ok(runCommand);
-    const result = await runCommand.execute("test", { command: "command -v gh" });
+    const result = await runCommand.execute("test", { command: `command -v ${commandName}` });
     assert.equal(result.content[0]?.type, "text");
-    assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(localBin));
+    assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(path.join(localBin, commandName)));
   } finally {
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;

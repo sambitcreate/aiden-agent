@@ -806,3 +806,4 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Fresh-worktree Git cleanup tests require the native remover; its build script pins a minimal environment, and this host's default Command Line Tools SDK has an incompatible `arm64e.x1` stub. An explicit Xcode `-isysroot` compiles the helper, but the script still fails until that SDK selection is repaired.
 - `.memory/` ignores new files; append this work's context to a tracked memory note so it reaches the PR.
 - `git add` rejected paths inside ignored `.memory/` and `.papercuts/` even though their files are tracked; use `git add -u` for those updates.
+- A PATH regression test using `gh` can resolve a host-installed binary first; give fixture executables unique generated names to keep CLI lookup tests portable.
