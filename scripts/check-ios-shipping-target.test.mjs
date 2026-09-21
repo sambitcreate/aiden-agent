@@ -928,6 +928,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /PhotosPicker|AidenUIKitMenuButton|UIImagePickerController/u);
   assert.match(attachmentPicker, /PHPhotoLibrary\.requestAuthorization\(for: \.readWrite\)/u);
   assert.match(attachmentPicker, /PHAsset\.fetchAssets\(with: \.image/u);
+  assert.match(attachmentPicker, /guard isCurrentLibraryLoad\(generation\), !Task\.isCancelled else \{ return \}/u);
+  assert.match(attachmentPicker, /AidenWindowSizeReader \{ windowSize = \$0 \}/u);
+  assert.match(attachmentPicker, /manager\.requestImage\(\s*for: asset,\s*targetSize:/u);
+  assert.doesNotMatch(attachmentPicker, /requestImageDataAndOrientation/u);
   assert.match(attachmentPicker, /maximumVisiblePhotos = 180/u);
   assert.match(attachmentPicker, /case camera/u);
   assert.match(attachmentPicker, /photoColumnCount = 3/u);

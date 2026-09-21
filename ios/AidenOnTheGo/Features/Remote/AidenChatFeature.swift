@@ -221,7 +221,7 @@ enum AidenAttachmentPreparation {
         }
     }
 
-    private static func hasAlpha(_ image: UIImage) -> Bool {
+    static func hasAlpha(_ image: UIImage) -> Bool {
         guard let alphaInfo = image.cgImage?.alphaInfo else { return true }
         return [.first, .last, .premultipliedFirst, .premultipliedLast].contains(alphaInfo)
     }

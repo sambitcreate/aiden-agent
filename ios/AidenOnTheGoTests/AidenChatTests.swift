@@ -3967,6 +3967,31 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertTrue(AidenAttachmentPickerPolicy.visibleSelection(selected, visibleIDs: []).isEmpty)
     }
 
+    func testPhotoLibraryBoundedRenderingKeepsTransparency() throws {
+        XCTAssertEqual(AidenPhotoLibraryImageLoader.maximumRequestedPixelDimension, 2_048)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        let transparent = UIGraphicsImageRenderer(
+            size: CGSize(width: 32, height: 32), format: format
+        ).image { context in
+            UIColor.red.withAlphaComponent(0.5).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let data = try AidenPhotoLibraryImageLoader.encodedData(from: transparent)
+        XCTAssertTrue(data.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+
+        let opaqueFormat = UIGraphicsImageRendererFormat.default()
+        opaqueFormat.opaque = true
+        let opaque = UIGraphicsImageRenderer(
+            size: CGSize(width: 32, height: 32), format: opaqueFormat
+        ).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let jpeg = try AidenPhotoLibraryImageLoader.encodedData(from: opaque)
+        XCTAssertTrue(jpeg.starts(with: [0xFF, 0xD8]))
+    }
+
     func testAttachmentPickerCapacityAndConfirmationCopyAreBounded() {
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 0), 10)
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 9), 1)
@@ -4045,6 +4070,23 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(splitView.panelSize.width, 516, accuracy: 0.001)
         XCTAssertLessThanOrEqual(splitView.panelSize.height + splitView.bottomPadding, 720)
         XCTAssertEqual(AidenAttachmentPickerLayout.photoColumnCount, 3)
+
+        let narrowDetailInLandscapeWindow = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 540, height: 720),
+            windowSize: CGSize(width: 1_024, height: 768),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 684),
+            isPad: true
+        )
+        XCTAssertEqual(narrowDetailInLandscapeWindow.panelSize.width, 488, accuracy: 0.001)
+        XCTAssertEqual(narrowDetailInLandscapeWindow.leadingPadding, 26, accuracy: 0.001)
+
+        let unknownWindow = AidenChatReadableLayout.contentWidth(
+            containerSize: CGSize(width: 1_024, height: 768),
+            windowSize: .zero,
+            isPad: true
+        )
+        XCTAssertEqual(unknownWindow, 512, accuracy: 0.001)
     }
 
     func testAttachmentPickerLayoutHandlesRotationAndCompactHeight() {
@@ -4082,6 +4124,23 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(picker.mode, .photos)
         picker.markLibraryForRefresh()
         XCTAssertEqual(picker.libraryStatus, .loading)
+    }
+
+    @MainActor
+    func testAttachmentPickerIgnoresSupersededAndDismissedLibraryLoads() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let first = picker.markLibraryForRefresh()
+        let second = picker.markLibraryForRefresh()
+        XCTAssertFalse(picker.isCurrentLibraryLoad(first))
+        XCTAssertTrue(picker.isCurrentLibraryLoad(second))
+
+        picker.dismiss()
+        XCTAssertFalse(picker.isCurrentLibraryLoad(second))
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        XCTAssertFalse(picker.isCurrentLibraryLoad(second))
     }
 
     func testCameraAuthorizationPolicyMapsEveryKnownState() {

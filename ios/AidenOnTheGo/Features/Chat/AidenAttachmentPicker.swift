@@ -105,7 +105,14 @@ struct AidenChatReadableLayout {
         ) else {
             return width
         }
-        return floor(width * landscapeWidthFraction)
+        let referenceWidth = if let windowSize,
+                                windowSize.width > 0,
+                                windowSize.height > 0 {
+            windowSize.width
+        } else {
+            width
+        }
+        return min(width, floor(referenceWidth * landscapeWidthFraction))
     }
 
     static func horizontalInset(
@@ -185,6 +192,7 @@ struct AidenAttachmentPickerLayout {
 
     static func resolve(
         containerSize: CGSize,
+        windowSize: CGSize? = nil,
         mode: AidenAttachmentPickerMode,
         attachmentButtonCenter: CGPoint?,
         isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad
@@ -194,14 +202,17 @@ struct AidenAttachmentPickerLayout {
         let expanded = mode == .photos || mode == .camera
         let centersLandscapeColumn = AidenChatReadableLayout.usesCenteredLandscapeColumn(
             containerSize: containerSize,
+            windowSize: windowSize,
             isPad: isPad
         )
         let readableWidth = AidenChatReadableLayout.contentWidth(
             containerSize: containerSize,
+            windowSize: windowSize,
             isPad: isPad
         )
         let readableInset = AidenChatReadableLayout.horizontalInset(
             containerSize: containerSize,
+            windowSize: windowSize,
             isPad: isPad
         )
         let usesWidePresentation = expanded && containerWidth >= 700
@@ -268,24 +279,29 @@ final class AidenAttachmentPickerState {
     private(set) var committingPendingPrefixCount = 0
     private(set) var selectionFeedbackSequence = 0
     private var commitFence = AidenAttachmentLifecycleFence()
+    private var libraryLoadGeneration = 0
 
     var isPresented: Bool { mode != .closed }
 
     func openMenu() {
+        invalidateLibraryLoad()
         selectedAssetIDs = []
         mode = .menu
     }
 
     func dismiss() {
+        invalidateLibraryLoad()
         selectedAssetIDs = []
         mode = .closed
     }
 
     func beginShowingPhotos() {
         mode = .photos
+        markLibraryForRefresh()
     }
 
     func beginShowingCamera() {
+        invalidateLibraryLoad()
         selectedAssetIDs = []
         mode = .camera
     }
@@ -296,6 +312,7 @@ final class AidenAttachmentPickerState {
     }
 
     func backToMenu() {
+        invalidateLibraryLoad()
         selectedAssetIDs = []
         mode = .menu
     }
@@ -324,6 +341,7 @@ final class AidenAttachmentPickerState {
         committingPendingPrefixCount = pendingCount
         committingAssets = selected
         selectedAssetIDs = []
+        invalidateLibraryLoad()
         mode = .closed
         return AidenAttachmentPhotoCommit(id: commitID, assets: selected)
     }
@@ -335,6 +353,7 @@ final class AidenAttachmentPickerState {
     }
 
     func reset() {
+        invalidateLibraryLoad()
         mode = .closed
         selectedAssetIDs = []
         committingAssets = []
@@ -342,16 +361,29 @@ final class AidenAttachmentPickerState {
         commitFence.invalidate()
     }
 
-    func markLibraryForRefresh() {
+    @discardableResult
+    func markLibraryForRefresh() -> Int {
+        libraryLoadGeneration &+= 1
         libraryStatus = .loading
+        return libraryLoadGeneration
+    }
+
+    func isCurrentLibraryLoad(_ generation: Int) -> Bool {
+        mode == .photos && generation == libraryLoadGeneration
+    }
+
+    private func invalidateLibraryLoad() {
+        libraryLoadGeneration &+= 1
     }
 
     func loadLibrary() async {
-        markLibraryForRefresh()
+        guard mode == .photos else { return }
+        let generation = markLibraryForRefresh()
         var authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if authorization == .notDetermined {
             authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         }
+        guard isCurrentLibraryLoad(generation), !Task.isCancelled else { return }
         guard authorization == .authorized || authorization == .limited else {
             assets = []
             selectedAssetIDs = []
@@ -376,6 +408,8 @@ final class AidenAttachmentPickerState {
 }
 
 enum AidenPhotoLibraryImageLoader {
+    static let maximumRequestedPixelDimension: CGFloat = 2_048
+
     struct PickedImage: Sendable {
         let data: Data
         let name: String
@@ -386,6 +420,8 @@ enum AidenPhotoLibraryImageLoader {
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = true
         options.version = .current
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .exact
         let request = AidenPhotoLibraryImageRequest()
 
         return try await withTaskCancellationHandler {
@@ -401,6 +437,17 @@ enum AidenPhotoLibraryImageLoader {
         } onCancel: {
             request.cancel()
         }
+    }
+
+    static func encodedData(from image: UIImage) throws -> Data {
+        let data = AidenAttachmentPreparation.hasAlpha(image)
+            ? image.pngData()
+            : image.jpegData(compressionQuality: 0.86)
+        guard let data, !data.isEmpty else { throw AidenAttachmentPreparationError.invalidImage }
+        guard data.count <= AidenAttachmentPreparation.maximumSourceImageBytes else {
+            throw AidenAttachmentPreparationError.imageTooLarge
+        }
+        return data
     }
 }
 
@@ -426,17 +473,27 @@ private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
         self.continuation = continuation
         lock.unlock()
 
-        let id = manager.requestImageDataAndOrientation(
+        // Request a bounded current rendering instead of retaining a ProRAW or
+        // iCloud original before attachment validation gets a chance to run.
+        let id = manager.requestImage(
             for: asset,
+            targetSize: CGSize(
+                width: AidenPhotoLibraryImageLoader.maximumRequestedPixelDimension,
+                height: AidenPhotoLibraryImageLoader.maximumRequestedPixelDimension
+            ),
+            contentMode: .aspectFit,
             options: options
-        ) { [weak self] data, _, _, info in
+        ) { [weak self] image, info in
+            if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
             let result: Result<AidenPhotoLibraryImageLoader.PickedImage, Error>
             if let error = info?[PHImageErrorKey] as? Error {
                 result = .failure(error)
             } else if (info?[PHImageCancelledKey] as? Bool) == true {
                 result = .failure(CancellationError())
-            } else if let data, !data.isEmpty {
-                result = .success(.init(data: data, name: name))
+            } else if let image {
+                result = Result {
+                    try .init(data: AidenPhotoLibraryImageLoader.encodedData(from: image), name: name)
+                }
             } else {
                 result = .failure(AidenAttachmentPreparationError.invalidImage)
             }
@@ -487,6 +544,7 @@ struct AidenAttachmentPickerOverlay: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var picker: AidenAttachmentPickerState
     @StateObject private var cameraController = AidenAttachmentCameraController()
+    @State private var windowSize: CGSize?
 
     let motionNamespace: Namespace.ID
     let attachmentCapacity: Int
@@ -503,6 +561,7 @@ struct AidenAttachmentPickerOverlay: View {
         GeometryReader { proxy in
             let layout = AidenAttachmentPickerLayout.resolve(
                 containerSize: proxy.size,
+                windowSize: windowSize,
                 mode: picker.mode,
                 attachmentButtonCenter: attachmentButtonCenter
             )
@@ -527,6 +586,10 @@ struct AidenAttachmentPickerOverlay: View {
                     )
                     .opacity(picker.isPresented ? 1 : 0)
             }
+        }
+        .background {
+            AidenWindowSizeReader { windowSize = $0 }
+                .frame(width: 0, height: 0)
         }
         .sensoryFeedback(.selection, trigger: picker.selectionFeedbackSequence)
         .accessibilityAddTraits(.isModal)
