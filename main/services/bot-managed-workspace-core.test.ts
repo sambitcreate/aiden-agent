@@ -250,6 +250,45 @@ test("explicit journal reconciliation adopts only its exact reservation and stay
   }
 });
 
+test("reconciliation keeps a pre-remount receipt aligned with the published binding", async () => {
+  const paths = await temporaryRoot("aiden-bot-remount-reconcile-");
+  try {
+    const storage = createFileBotManagedWorkspaceStorage({ root: () => paths.root });
+    const reservation = { botId: "bot-recovery", workspaceId: WORKSPACE_A, createdAt: 99 };
+    const directoryName = botManagedHomeDirectoryName(reservation.workspaceId);
+    const receipt: BotManagedHomeProvisioningReceipt = {
+      version: BOT_MANAGED_WORKSPACE_VERSION,
+      directoryName,
+      ...reservation,
+    };
+    const created = await storage.createHome(directoryName, receipt);
+    const ownershipPath = receiptPath(paths.root, WORKSPACE_A);
+    const durableReceipt = JSON.parse(await readFile(ownershipPath, "utf8"));
+    const oldDevice = created.incarnation.device === "1" ? "2" : "1";
+    durableReceipt.incarnation.device = oldDevice;
+    await writeFile(ownershipPath, `${JSON.stringify(durableReceipt)}\n`);
+
+    const service = createBotManagedWorkspaceCore({
+      storage,
+      now: () => 100,
+      mintWorkspaceId: () => WORKSPACE_B,
+    });
+    const recovered = await service.reconcileProvision(reservation);
+    assert.deepEqual(recovered.incarnation, created.incarnation, "runtime authority stays live");
+    await service.audit();
+    assert.deepEqual(await service.revalidate(recovered), recovered);
+    assert.equal(
+      JSON.parse(await readFile(join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST), "utf8"))
+        .bindings[0].incarnation.device,
+      oldDevice,
+      "the manifest matches the unchanged receipt",
+    );
+    assert.equal(JSON.parse(await readFile(ownershipPath, "utf8")).incarnation.device, oldDevice);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
 test("failed publication rolls a new empty home back without recursive deletion", async () => {
   const paths = await temporaryRoot("aiden-bot-home-rollback-");
   try {

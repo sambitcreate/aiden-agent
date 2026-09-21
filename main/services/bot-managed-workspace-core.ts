@@ -494,7 +494,10 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     }
 
     const next = cloneDocument(document);
-    const published = { ...requested, incarnation: { ...inspection.incarnation } };
+    // The receipt may predate a remount during interrupted provisioning. Keep
+    // the durable binding byte-for-byte aligned with that receipt; only the
+    // returned runtime token uses the freshly observed filesystem identity.
+    const published = { ...requested, incarnation: { ...actualReceipt.incarnation } };
     next.bindings.push(published);
     try {
       await options.storage.writeManifest(next);
@@ -514,7 +517,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     return {
       ...handleFor(published),
       homePath: inspection.homePath,
-      incarnation: { ...published.incarnation },
+      incarnation: { ...inspection.incarnation },
     };
   };
 
