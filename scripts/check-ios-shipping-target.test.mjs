@@ -59,6 +59,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotSemanticAvatarView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift",
   "AidenOnTheGo/Features/Bots/Prototype/BotFirstPrototype.swift",
+  "AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift",
+  "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
@@ -647,6 +649,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     pairing,
     content,
     chat,
+    attachmentPicker,
+    attachmentCamera,
     scheduledTasks,
     widget,
     project,
@@ -659,6 +663,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenChatFeature.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift`, "utf8"),
     readFile(`${iosRoot}AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`, "utf8"),
     readFile(projectPath, "utf8"),
@@ -917,9 +923,36 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(pairing, /ForEach\(AidenPairingMethod\.primary\)[\s\S]*?NavigationLink/u);
   assert.match(
     chat,
-    /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u,
+    /AidenAttachmentPickerOverlay\([\s\S]*?onCaptureCameraPhoto: commitCapturedPhoto[\s\S]*?onCommitPhotos: commitSelectedPhotos/u,
   );
-  assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
+  assert.doesNotMatch(chat, /PhotosPicker|AidenUIKitMenuButton|UIImagePickerController/u);
+  assert.match(attachmentPicker, /PHPhotoLibrary\.requestAuthorization\(for: \.readWrite\)/u);
+  assert.match(attachmentPicker, /PHAsset\.fetchAssets\(with: \.image/u);
+  assert.match(attachmentPicker, /maximumVisiblePhotos = 180/u);
+  assert.match(attachmentPicker, /case camera/u);
+  assert.match(attachmentPicker, /photoColumnCount = 3/u);
+  assert.match(attachmentPicker, /expandedMaximumWidth: CGFloat = 620/u);
+  assert.match(attachmentPicker, /expandedMaximumHeight: CGFloat = 700/u);
+  assert.match(
+    attachmentPicker,
+    /scaleEffect\(\s*picker\.isPresented \? 1 : 0\.06,\s*anchor: layout\.scaleAnchor\s*\)/u,
+  );
+  assert.match(
+    chat,
+    /AidenAttachmentButtonCenterPreferenceKey[\s\S]*?frame\(in: \.named\(AidenChatAttachmentCoordinateSpace\.name\)\)[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,
+  );
+  assert.match(chat, /AidenAttachmentPickerOverlay\([\s\S]*?\.allowsHitTesting\(attachmentPicker\.isPresented\)/u);
+  assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
+  assert.match(chat, /private var canToggleAttachmentPicker: Bool \{\s*AidenAttachmentPickerPolicy\.canPresent/u);
+  assert.match(attachmentPicker, /committingAssets/u);
+  assert.match(attachmentCamera, /AVCaptureSession\(\)/u);
+  assert.match(attachmentCamera, /AVCapturePhotoOutput\(\)/u);
+  assert.match(attachmentCamera, /AVCaptureDevice\.requestAccess\(for: \.video\)/u);
+  assert.match(attachmentCamera, /session\.startRunning\(\)/u);
+  assert.match(attachmentCamera, /session\.stopRunning\(\)/u);
+  assert.match(attachmentCamera, /AVCaptureDevice\.RotationCoordinator/u);
+  assert.match(attachmentCamera, /photo\.fileDataRepresentation\(\)/u);
+  assert.doesNotMatch(attachmentCamera, /UIImagePickerController/u);
   assert.match(chat, /\.fileImporter\(/u);
   assert.match(
     chat,

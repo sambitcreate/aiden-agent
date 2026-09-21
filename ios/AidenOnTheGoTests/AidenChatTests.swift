@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 import UIKit
@@ -3928,5 +3929,142 @@ final class AidenAppearanceTests: XCTestCase {
         let restored = AidenWorkspaceArchiveStore(defaults: defaults)
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["keep"])
         XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["other-installation"])
+    }
+
+    func testPhotoLibraryUsageDescriptionCoversPickerAndSaveActions() throws {
+        let saveValue = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription") as? String
+        )
+        XCTAssertTrue(saveValue.contains("only when you choose"))
+        XCTAssertTrue(saveValue.contains("Save Image"))
+
+        let pickerValue = try XCTUnwrap(
+            Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryUsageDescription") as? String
+        )
+        XCTAssertTrue(pickerValue.contains("when you open the attachment picker"))
+        XCTAssertTrue(pickerValue.contains("paired Mac"))
+    }
+
+    func testAttachmentPickerSelectionPreservesTapOrderAndHonorsCapacity() {
+        var selected: [String] = []
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-2", capacity: 2)
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-1", capacity: 2)
+        XCTAssertEqual(selected, ["photo-2", "photo-1"])
+
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-3", capacity: 2)
+        XCTAssertEqual(selected, ["photo-2", "photo-1"])
+
+        selected = AidenAttachmentPickerPolicy.toggledSelection(selected, id: "photo-2", capacity: 2)
+        XCTAssertEqual(selected, ["photo-1"])
+    }
+
+    func testAttachmentPickerCapacityAndConfirmationCopyAreBounded() {
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 0), 10)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 9), 1)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 12), 0)
+        XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 1), "Add 1 Photo")
+        XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 3), "Add 3 Photos")
+    }
+
+    func testAttachmentPickerRespectsReadOnlyAndBusyStates() {
+        XCTAssertTrue(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: true,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: true,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: true,
+            capacity: 10
+        ))
+        XCTAssertFalse(AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: false,
+            isStreaming: false,
+            isUploading: false,
+            isPreparing: false,
+            capacity: 0
+        ))
+    }
+
+    func testAttachmentPickerLayoutStaysBoundedAcrossIPadWindowSizes() {
+        let fullSize = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 1_024, height: 1_260),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 1_224),
+            isPad: true
+        )
+        XCTAssertEqual(fullSize.panelSize.width, 620, accuracy: 0.001)
+        XCTAssertEqual(fullSize.panelSize.height, 700, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerLayout.photoCellSide(panelWidth: fullSize.panelSize.width), 205)
+
+        let splitView = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 540, height: 720),
+            mode: .camera,
+            attachmentButtonCenter: CGPoint(x: 50, y: 684),
+            isPad: true
+        )
+        XCTAssertEqual(splitView.panelSize.width, 516, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(splitView.panelSize.height + splitView.bottomPadding, 720)
+        XCTAssertEqual(AidenAttachmentPickerLayout.photoColumnCount, 3)
+    }
+
+    func testAttachmentPickerLayoutHandlesRotationAndCompactHeight() {
+        let landscape = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 1_366, height: 900),
+            mode: .photos,
+            attachmentButtonCenter: CGPoint(x: 50, y: 864),
+            isPad: true
+        )
+        XCTAssertEqual(landscape.panelSize.width, 620, accuracy: 0.001)
+        XCTAssertEqual(landscape.panelSize.height, 594, accuracy: 0.001)
+
+        let compactHeight = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 375, height: 300),
+            mode: .camera,
+            attachmentButtonCenter: CGPoint(x: 50, y: 264),
+            isPad: false
+        )
+        XCTAssertEqual(compactHeight.panelSize.width, 351, accuracy: 0.001)
+        XCTAssertEqual(compactHeight.panelSize.height, 280, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(compactHeight.panelSize.height + compactHeight.bottomPadding, 300)
+    }
+
+    @MainActor
+    func testAttachmentPickerMovesBetweenMenuCameraAndPhotos() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        XCTAssertEqual(picker.mode, .menu)
+
+        picker.beginShowingCamera()
+        XCTAssertEqual(picker.mode, .camera)
+
+        picker.backToMenu()
+        picker.beginShowingPhotos()
+        XCTAssertEqual(picker.mode, .photos)
+    }
+
+    func testCameraAuthorizationPolicyMapsEveryKnownState() {
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .authorized), .configuring)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .notDetermined), .requestingPermission)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
+        XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
     }
 }

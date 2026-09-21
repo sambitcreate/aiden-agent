@@ -1,11 +1,9 @@
 import Accessibility
-import CoreTransferable
 import CryptoKit
 import ImageIO
 import MarkdownUI
 import Observation
 import Photos
-import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -186,6 +184,17 @@ enum AidenAttachmentPreparation {
         }
     }
 
+    static func imageUploadAsync(data: Data, name: String) async throws -> AidenAttachmentUpload {
+        let worker = Task.detached(priority: .userInitiated) {
+            try imageUpload(data: data, name: name)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     private static func decodedUTF8Prefix(_ data: Data, allowTrailingPartialScalar: Bool) -> String? {
         if let exact = String(data: data, encoding: .utf8) { return exact }
         guard allowTrailingPartialScalar else { return nil }
@@ -249,30 +258,6 @@ enum AidenAttachmentPreparation {
         }
         let bounded = String(String.UnicodeScalarView(filtered.prefix(255))).trimmingCharacters(in: .whitespacesAndNewlines)
         return bounded.isEmpty ? "Attachment" : bounded
-    }
-}
-
-private struct AidenPickedImageFile: Transferable, Sendable {
-    let url: URL
-    let name: String
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(importedContentType: .image) { received in
-            let source = received.file
-            let values = try source.resourceValues(forKeys: [.fileSizeKey])
-            guard let size = values.fileSize,
-                  size > 0,
-                  size <= AidenAttachmentPreparation.maximumSourceImageBytes
-            else { throw AidenAttachmentPreparationError.imageTooLarge }
-            let originalName = source.lastPathComponent
-            let destinationBase = FileManager.default.temporaryDirectory
-                .appending(path: "AidenPickedImage-\(UUID().uuidString)")
-            let destination = source.pathExtension.isEmpty
-                ? destinationBase
-                : destinationBase.appendingPathExtension(source.pathExtension)
-            try FileManager.default.copyItem(at: source, to: destination)
-            return Self(url: destination, name: originalName)
-        }
     }
 }
 
@@ -1942,6 +1927,17 @@ final class AidenChatViewModel {
         }
     }
 
+    func pendingAttachmentImageData(for attachment: AidenAttachmentReference) async -> Data? {
+        guard attachment.kind == .image else { return nil }
+        return await attachmentImageData(for: AidenMessageAttachment(
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            kind: attachment.kind,
+            size: attachment.size
+        ))
+    }
+
     func stop() async {
         guard !isReadOnlyPresentation else { return }
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
@@ -2720,6 +2716,18 @@ struct AidenWorkspaceChatsView: View {
     }
 }
 
+private enum AidenChatAttachmentCoordinateSpace {
+    static let name = "aiden-chat-attachment-coordinate-space"
+}
+
+private struct AidenAttachmentButtonCenterPreferenceKey: PreferenceKey {
+    static let defaultValue: CGPoint? = nil
+
+    static func reduce(value: inout CGPoint?, nextValue: () -> CGPoint?) {
+        value = nextValue() ?? value
+    }
+}
+
 struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
@@ -2730,7 +2738,11 @@ struct AidenChatDetailView: View {
     @State private var botSheet: AidenBotChatSheet?
     @State private var progressSheet: AidenProgressSheet?
     @State private var isScrolledAwayFromLatest = false
+    @State private var attachmentPicker = AidenAttachmentPickerState()
+    @State private var isFileImporterPresented = false
+    @State private var attachmentButtonCenter: CGPoint?
     @FocusState private var composerIsFocused: Bool
+    @Namespace private var attachmentMotionNamespace
     @State private var coordinator: AidenRemoteCoordinator?
     let autoStartVoice: Bool
     let allowsMutations: Bool
@@ -2811,6 +2823,10 @@ struct AidenChatDetailView: View {
         .onChange(of: botPrimarySupportsImages, initial: true) { _, supportsImages in
             model.setBotPrimarySupportsImages(supportsImages)
         }
+        .onChange(of: model.isStreaming) { _, isStreaming in
+            guard isStreaming else { return }
+            attachmentPicker.dismiss()
+        }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
@@ -2864,6 +2880,7 @@ struct AidenChatDetailView: View {
         .onDisappear {
             model.setHapticsActive(false)
             model.stopProgressObservation()
+            attachmentPicker.reset()
         }
     }
 
@@ -2871,6 +2888,39 @@ struct AidenChatDetailView: View {
         ZStack(alignment: .bottom) {
             transcript
             composer
+            AidenAttachmentPickerOverlay(
+                picker: attachmentPicker,
+                motionNamespace: attachmentMotionNamespace,
+                attachmentCapacity: attachmentCapacity,
+                canChoosePhotos: model.acceptsImageAttachments,
+                isBotChat: model.chat.isBotChat,
+                isBusy: attachmentControlsAreBusy,
+                attachmentButtonCenter: attachmentButtonCenter,
+                onUnavailableBotPhotos: { model.requestBotVisionSetup() },
+                onChooseFiles: { isFileImporterPresented = true },
+                onCaptureCameraPhoto: commitCapturedPhoto,
+                onCommitPhotos: commitSelectedPhotos
+            )
+            .allowsHitTesting(attachmentPicker.isPresented)
+            .accessibilityHidden(!attachmentPicker.isPresented)
+            .zIndex(20)
+        }
+        .coordinateSpace(name: AidenChatAttachmentCoordinateSpace.name)
+        .onPreferenceChange(AidenAttachmentButtonCenterPreferenceKey.self) { center in
+            attachmentButtonCenter = center
+        }
+        .animation(
+            reduceMotion ? nil : .spring(duration: 0.34, bounce: 0.08),
+            value: attachmentPicker.isPresented
+        )
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: allowedAttachmentContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            model.prepareAttachments(result) { url in
+                try await AidenAttachmentPreparation.fileUploadAsync(url: url)
+            }
         }
     }
 
@@ -2972,7 +3022,11 @@ struct AidenChatDetailView: View {
             AidenComposerView(
                 model: model,
                 autoStartVoice: autoStartVoice,
-                composerFocus: $composerIsFocused
+                composerFocus: $composerIsFocused,
+                attachmentPicker: attachmentPicker,
+                motionNamespace: attachmentMotionNamespace,
+                canToggleAttachments: canToggleAttachmentPicker,
+                onToggleAttachmentPicker: toggleAttachmentPicker
             )
         }
         .disabled(model.isReadOnlyPresentation)
@@ -2985,6 +3039,80 @@ struct AidenChatDetailView: View {
                     value: proxy.size.height
                 )
             }
+        }
+    }
+
+    private var attachmentCapacity: Int {
+        AidenAttachmentPickerPolicy.availableCapacity(pendingCount: model.pendingAttachments.count)
+    }
+
+    private var attachmentControlsAreBusy: Bool {
+        !model.isConnected || !canToggleAttachmentPicker
+    }
+
+    private var canToggleAttachmentPicker: Bool {
+        AidenAttachmentPickerPolicy.canPresent(
+            isReadOnly: model.isReadOnlyPresentation,
+            isStreaming: model.isStreaming,
+            isUploading: model.isUploadingAttachment,
+            isPreparing: model.isPreparingAttachments,
+            capacity: attachmentCapacity
+        )
+    }
+
+    private var allowedAttachmentContentTypes: [UTType] {
+        let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
+        return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
+    }
+
+    private func toggleAttachmentPicker() {
+        guard canToggleAttachmentPicker else { return }
+        composerIsFocused = false
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.34, bounce: 0.08)) {
+            if attachmentPicker.isPresented {
+                attachmentPicker.dismiss()
+            } else {
+                attachmentPicker.openMenu()
+            }
+        }
+    }
+
+    private func commitSelectedPhotos() {
+        guard !attachmentControlsAreBusy else { return }
+        var assets: [PHAsset] = []
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.08)) {
+            assets = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
+        }
+        guard !assets.isEmpty else { return }
+
+        let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(assets)) { asset in
+            let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
+            return try await AidenAttachmentPreparation.imageUploadAsync(
+                data: picked.data,
+                name: picked.name
+            )
+        }
+        guard let preparation else {
+            attachmentPicker.finishCommit()
+            return
+        }
+        Task { @MainActor in
+            await preparation.value
+            attachmentPicker.finishCommit()
+        }
+    }
+
+    private func commitCapturedPhoto(_ data: Data) {
+        guard !attachmentControlsAreBusy, attachmentCapacity > 0,
+              model.acceptsImageAttachments else { return }
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.08)) {
+            attachmentPicker.dismiss()
+        }
+        model.prepareAttachments(.success([data])) { capturedData in
+            try await AidenAttachmentPreparation.imageUploadAsync(
+                data: capturedData,
+                name: "Camera Photo.jpg"
+            )
         }
     }
 
@@ -4912,37 +5040,42 @@ private struct AidenComposerView: View {
     @Bindable var model: AidenChatViewModel
     let autoStartVoice: Bool
     let composerFocus: FocusState<Bool>.Binding
+    @Bindable var attachmentPicker: AidenAttachmentPickerState
+    let motionNamespace: Namespace.ID
+    let canToggleAttachments: Bool
+    let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
-    @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var isPhotoPickerPresented = false
-    @State private var isFileImporterPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !model.pendingAttachments.isEmpty {
+            if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(model.pendingAttachments) { attachment in
-                            HStack(spacing: 6) {
-                                Label(attachment.name, systemImage: attachment.kind == .image ? "photo" : "doc.text")
-                                    .lineLimit(1)
-                                Button {
+                        ForEach(visiblePendingAttachments) { attachment in
+                            AidenPendingAttachmentCard(
+                                attachment: attachment,
+                                loadImageData: {
+                                    await model.pendingAttachmentImageData(for: attachment)
+                                },
+                                onRemove: {
                                     Task { await model.removeAttachment(attachment) }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(attachment.name)")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(palette.raised, in: Capsule())
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        }
+
+                        ForEach(attachmentPicker.committingAssets, id: \.localIdentifier) { asset in
+                            AidenCommittingPhotoCard(
+                                asset: asset,
+                                motionNamespace: motionNamespace
+                            )
                         }
                     }
+                    .padding(.horizontal, 1)
                 }
                 .accessibilityLabel("Attachments")
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             TextField("Message Aiden", text: $model.draft, axis: .vertical)
@@ -4959,31 +5092,38 @@ private struct AidenComposerView: View {
                     }
 
                 HStack(alignment: .center, spacing: 10) {
-                AidenUIKitMenuButton {
-                    if model.isUploadingAttachment || model.isPreparingAttachments {
-                        ProgressView().controlSize(.small).frame(width: 44, height: 44)
-                    } else {
-                        Image(systemName: "plus")
-                            .font(.title3.weight(.medium))
-                            .frame(width: 44, height: 44)
-                    }
-                } menu: {
-                    attachmentMenu()
+                Button(action: onToggleAttachmentPicker) {
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.medium))
+                        .frame(width: 44, height: 44)
+                        .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
+                        .opacity(model.isUploadingAttachment || model.isPreparingAttachments ? 0.48 : 1)
+                        .overlay(alignment: .bottomTrailing) {
+                            if model.isUploadingAttachment || model.isPreparingAttachments {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .padding(3)
+                                    .background(.regularMaterial, in: Circle())
+                            }
+                        }
                 }
-                .disabled(
-                    !model.isConnected || model.isStreaming || model.isUploadingAttachment
-                        || model.isPreparingAttachments || model.pendingAttachments.count >= 10
-                )
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .disabled(!canToggleAttachments)
                 .accessibilityLabel("Add attachment")
+                .accessibilityValue(attachmentPicker.isPresented ? "Open" : "Closed")
                 .accessibilityHint(model.acceptsImageAttachments
                     ? "Attach an image or bounded text file"
                     : "Attach a bounded text file. This model cannot read images")
-                .photosPicker(
-                    isPresented: $isPhotoPickerPresented,
-                    selection: $selectedPhotos,
-                    maxSelectionCount: max(1, attachmentCapacity),
-                    matching: .images
-                )
+                .background {
+                    GeometryReader { proxy in
+                        let frame = proxy.frame(in: .named(AidenChatAttachmentCoordinateSpace.name))
+                        Color.clear.preference(
+                            key: AidenAttachmentButtonCenterPreferenceKey.self,
+                            value: CGPoint(x: frame.midX, y: frame.midY)
+                        )
+                    }
+                }
 
                 if model.showsComposerModelControl, !model.visibleProviders.isEmpty {
                     Menu {
@@ -5149,8 +5289,13 @@ private struct AidenComposerView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(palette.secondary.opacity(0.35), lineWidth: 0.5)
+                .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.34),
+            value: visiblePendingAttachments.map(\.id) + attachmentPicker.committingAssets.map(\.localIdentifier)
+        )
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
@@ -5159,30 +5304,6 @@ private struct AidenComposerView: View {
                 updateDraft: { model.draft = $0 },
                 macTranscriber: model.transcribeMacSpeech
             )
-        }
-        .onChange(of: selectedPhotos) { _, items in
-            guard !items.isEmpty else { return }
-            selectedPhotos = []
-            model.prepareAttachments(.success(items)) { item in
-                guard let picked = try await item.loadTransferable(type: AidenPickedImageFile.self) else {
-                    throw AidenAttachmentPreparationError.invalidImage
-                }
-                defer { try? FileManager.default.removeItem(at: picked.url) }
-                return try await AidenAttachmentPreparation.fileUploadAsync(
-                    url: picked.url,
-                    preferredName: picked.name,
-                    forceImage: true
-                )
-            }
-        }
-        .fileImporter(
-            isPresented: $isFileImporterPresented,
-            allowedContentTypes: allowedAttachmentContentTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            model.prepareAttachments(result) { url in
-                try await AidenAttachmentPreparation.fileUploadAsync(url: url)
-            }
         }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
@@ -5195,41 +5316,9 @@ private struct AidenComposerView: View {
         }
     }
 
-    private func attachmentMenu() -> UIMenu {
-        UIMenu(children: [
-            UIAction(
-                title: String(localized: "Photo Library"),
-                image: UIImage(systemName: "photo.on.rectangle"),
-                attributes: (!model.chat.isBotChat && !model.acceptsImageAttachments) ? [.disabled] : []
-            ) { _ in
-                Task { @MainActor in
-                    if model.chat.isBotChat && !model.acceptsImageAttachments {
-                        model.requestBotVisionSetup()
-                        return
-                    }
-                    composerFocus.wrappedValue = false
-                    isPhotoPickerPresented = true
-                }
-            },
-            UIAction(
-                title: String(localized: "Choose File"),
-                image: UIImage(systemName: "doc")
-            ) { _ in
-                Task { @MainActor in
-                    composerFocus.wrappedValue = false
-                    isFileImporterPresented = true
-                }
-            },
-        ])
-    }
-
-    private var attachmentCapacity: Int {
-        max(0, 10 - model.pendingAttachments.count)
-    }
-
-    private var allowedAttachmentContentTypes: [UTType] {
-        let textTypes: [UTType] = [.plainText, .sourceCode, .json, .xml, .commaSeparatedText]
-        return model.acceptsImageAttachments ? [.image] + textTypes : textTypes
+    private var visiblePendingAttachments: [AidenAttachmentReference] {
+        guard !attachmentPicker.committingAssets.isEmpty else { return model.pendingAttachments }
+        return Array(model.pendingAttachments.prefix(attachmentPicker.committingPendingPrefixCount))
     }
 
     private var sendButtonBackground: Color {
@@ -5297,102 +5386,6 @@ private struct AidenListeningWaveform: View {
             .frame(width: 24, height: 22)
         }
         .accessibilityHidden(true)
-    }
-}
-
-private struct AidenUIKitMenuButton<Label: View>: View {
-    @Environment(\.isEnabled) private var isEnabled
-
-    private let menu: () -> UIMenu
-    private let label: Label
-
-    init(
-        @ViewBuilder label: () -> Label,
-        menu: @escaping () -> UIMenu
-    ) {
-        self.label = label()
-        self.menu = menu
-    }
-
-    var body: some View {
-        label
-            .opacity(isEnabled ? 1 : 0.62)
-            .overlay {
-                AidenUIKitMenuButtonBacker(menu: menu)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-    }
-}
-
-private struct AidenUIKitMenuButtonBacker: UIViewControllerRepresentable {
-    @Environment(\.isEnabled) private var isEnabled
-    let menu: () -> UIMenu
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(menu: menu)
-    }
-
-    func makeUIViewController(context: Context) -> AidenMenuButtonHostController {
-        let controller = AidenMenuButtonHostController()
-        let button = controller.button
-        button.menu = UIMenu(children: [
-            UIDeferredMenuElement.uncached { completion in
-                completion(context.coordinator.menu().children)
-            },
-        ])
-        button.isEnabled = isEnabled
-        button.isAccessibilityElement = false
-        return controller
-    }
-
-    func updateUIViewController(_ controller: AidenMenuButtonHostController, context: Context) {
-        context.coordinator.menu = menu
-        controller.button.isEnabled = isEnabled
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        uiViewController: AidenMenuButtonHostController,
-        context: Context
-    ) -> CGSize? {
-        CGSize(
-            width: proposal.width ?? UIView.noIntrinsicMetric,
-            height: proposal.height ?? UIView.noIntrinsicMetric
-        )
-    }
-
-    final class Coordinator {
-        var menu: () -> UIMenu
-
-        init(menu: @escaping () -> UIMenu) {
-            self.menu = menu
-        }
-    }
-}
-
-private final class AidenMenuButtonHostController: UIViewController {
-    let button = UIButton(type: .custom)
-
-    override func loadView() {
-        let container = UIView()
-        container.backgroundColor = .clear
-        container.isOpaque = false
-        view = container
-
-        button.showsMenuAsPrimaryAction = true
-        button.backgroundColor = .clear
-        button.setTitle(nil, for: .normal)
-        button.setImage(nil, for: .normal)
-        button.translatesAutoresizingMaskIntoConstraints = false
-
-        container.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            button.topAnchor.constraint(equalTo: container.topAnchor),
-            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
     }
 }
 
