@@ -1,5 +1,10 @@
 # Troubleshooting
 
+- 2026-09-21 PR #207 follow-up: fully redacting after the ninth settled report preserved secrecy but erased useful long-task findings. Keep all settled text under the existing output budget, sanitize cross-report boundary fragments before final truncation, and bound comparisons with a fail-closed ceiling.
+- 2026-09-21 PR #207 follow-up: a sliding window of assistant partials can discard a credential-key prefix while retaining its value. Mark any eviction and fail closed on turn-limit findings, rather than classifying only the retained suffix.
+- 2026-09-21 PR #207 follow-up: line-wise credential filtering misses assignment keys split across settled messages. Check bounded adjacent spans with line breaks removed and fail closed on the compact whole report; keep unaffected path lines where possible.
+- 2026-09-21 PR #207 Pullfrog follow-up: real V2 authority tests using random UUIDs can trip the renderer-safe opaque-identifier classifier nondeterministically. Inject a known-safe UUID in the persistence fixture, then test the complete authority and ledger path.
+- 2026-09-21 PR #207 follow-up: `.memory/` is ignored even when its existing note is tracked; stage note updates with `git add -f` after checking the exact path.
 - 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
 - 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.
 - 2026-09-17 Live motion: do not key canvas layers by caption/action state; remounting restarts the animation and causes jumps. Kept stable duplex layers and separated visual activity from microphone activity so mic-off sessions retain Stop. Production macOS package must be rebuilt separately from the HTML review bundle.
@@ -807,3 +812,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - PR #198 validation: repeated full iPhone runs intermittently failed two ActivityKit persistence tests and one snapshot window-scene precondition; all three passed immediately in an isolated physical-device rerun. Keep the failed `.xcresult` evidence and distinguish host/order instability from the focused picker regressions.
 - PR #198 follow-up: Pullfrog found a degraded PhotoKit callback could also carry cancellation or error; check terminal flags before discarding previews, and test the picker result-application seam rather than its generation helper alone.
 - PR #198 hosted E2E reached test 103/103 but GitHub canceled the 30-minute job before its last test/report completed. Increase this job's bound to 45 minutes without reducing coverage; keep CI runner-time cost visible.
+## 2026-09-21: Issues 202 and 201
+
+- 2026-09-21: OpenCode Workers doctor passed, but the worker exited immediately because its launcher sends `--dir` to `opencode run` v2.0.3, which rejects that flag. Use a direct CLI review until the wrapper is updated.
+- 2026-09-21: Fresh isolated worktree lacked `node_modules`; installed with `npm ci` before validation.
+- 2026-09-21: `npm run test:subagents` pretest stops in native worktree-remover linking: CLT's `MacOSX.sdk` targets 27.0 and libSystem.tbd declares unsupported `arm64e.x1`. The build script supplies a restricted environment, so setting SDKROOT externally does not select Xcode's SDK. Run focused TS tests independently; full native gate remains unverified.
