@@ -196753,9 +196753,9 @@
           "output": 128000
         },
         "cost": {
-          "input": 0.14,
-          "output": 0.58,
-          "cache_read": 0.035
+          "input": 0.13,
+          "output": 0.53,
+          "cache_read": 0.033
         }
       },
       "XiaomiMiMo/MiMo-V2.5-Pro": {
@@ -199624,9 +199624,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.558624,
-          "output": 1.675872,
-          "cache_read": 0.018621
+          "input": 0.5544,
+          "output": 1.6632,
+          "cache_read": 0.01848
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -200772,6 +200772,94 @@
           "input": 0.4,
           "output": 2,
           "cache_read": 0.04
+        }
+      },
+      "xiaomi/mimo-v2.6-pro": {
+        "id": "xiaomi/mimo-v2.6-pro",
+        "name": "MiMo-V2.6-Pro",
+        "description": "MiMo-V2.6-Pro is the flagship foundation model developed by Xiaomi. Built at a scale of over 1T parameters, it is designed to push the ceiling of capability for the most demanding...",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.435,
+          "output": 0.87,
+          "cache_read": 0.0036
+        }
+      },
+      "xiaomi/mimo-v2.6-flash": {
+        "id": "xiaomi/mimo-v2.6-flash",
+        "name": "MiMo-V2.6-Flash",
+        "description": "MiMo-V2.6-Flash is an open-source foundation model developed by Xiaomi. Built on a Mixture-of-Experts architecture with 309B total parameters and 15B activated per token, it employs a hybrid attention mechanism for...",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.0028
         }
       },
       "xiaomi/mimo-v2.5": {
@@ -236048,6 +236136,45 @@
           "cache_read": 0.175
         }
       },
+      "mimo-v2.6-flash-free": {
+        "id": "mimo-v2.6-flash-free",
+        "name": "MiMo-V2.6-Flash Free",
+        "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 200000,
+          "output": 32000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0
+        }
+      },
       "longcat-2.0-free": {
         "id": "longcat-2.0-free",
         "name": "LongCat-2.0 Free",
@@ -244055,9 +244182,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.558624,
-          "output": 1.675872,
-          "cache_read": 0.018621
+          "input": 0.5544,
+          "output": 1.6632,
+          "cache_read": 0.01848
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -245162,6 +245289,125 @@
           "input": 0.4,
           "output": 2,
           "cache_read": 0.04
+        }
+      },
+      "xiaomi/mimo-v2.6-pro": {
+        "id": "xiaomi/mimo-v2.6-pro",
+        "name": "MiMo-V2.6-Pro",
+        "description": "MiMo pro model for strong multimodal reasoning and agent execution",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.435,
+          "output": 0.87,
+          "cache_read": 0.0036
+        }
+      },
+      "xiaomi/mimo-v2.6-pro-ultraspeed": {
+        "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+        "name": "MiMo-V2.6-Pro-UltraSpeed",
+        "description": "MiMo pro model for strong multimodal reasoning and agent execution",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-09-21",
+        "last_updated": "2026-09-21",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 4.35,
+          "output": 8.7,
+          "cache_read": 0.036
+        }
+      },
+      "xiaomi/mimo-v2.6-flash": {
+        "id": "xiaomi/mimo-v2.6-flash",
+        "name": "MiMo-V2.6-Flash",
+        "description": "MiMo flash model for fast multimodal assistance and agent workflows",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.0028
         }
       },
       "xiaomi/mimo-v2.5": {
@@ -250214,9 +250460,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.922722,
-          "output": 1.845444,
-          "cache_read": 0.076894
+          "input": 0.91263,
+          "output": 1.82526,
+          "cache_read": 0.076053
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
@@ -303852,6 +304098,45 @@
           "cache_read": 0.002
         }
       },
+      "mimo-v2.6-pro": {
+        "id": "mimo-v2.6-pro",
+        "name": "MiMo-V2.6-Pro",
+        "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.435,
+          "output": 0.87,
+          "cache_read": 0.003625
+        }
+      },
       "minimax-m2.7": {
         "id": "minimax-m2.7",
         "name": "MiniMax-M2.7",
@@ -304737,6 +305022,45 @@
           "output": 0.47,
           "cache_read": 0.016,
           "cache_write": 0.2
+        }
+      },
+      "mimo-v2.6-flash": {
+        "id": "mimo-v2.6-flash",
+        "name": "MiMo-V2.6-Flash",
+        "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.14,
+          "output": 0.28,
+          "cache_read": 0.0028
         }
       },
       "grok-4.6": {
