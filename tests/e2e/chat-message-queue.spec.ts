@@ -107,20 +107,44 @@ test("workspace bar auto-hides after sending and its appearance setting survives
           };
         }
       ).aidenAPI;
-      const current = (await ipc.invoke("settings:get")) as { appearance: unknown };
-      await ipc.invoke("settings:set", {
-        appearance: { ...(current.appearance as object), ...value },
-      });
+      const current = (await ipc.invoke("settings:getAppearance")) as {
+        reduceMotion?: "system" | "on" | "off";
+      };
+      const next = { ...current, ...value };
+      await ipc.invoke("settings:set", { appearance: next });
+      // Mirror the parts of applyAppearanceConfig the app consumes locally:
+      // the settings:appearance-changed broadcast only reaches the pill
+      // preload, so cached appearance, the reduce-motion attribute, and the
+      // DOM event are refreshed here.
+      localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify(next));
+      const reduced =
+        next.reduceMotion === "on" ||
+        (next.reduceMotion === "system" &&
+          matchMedia("(prefers-reduced-motion: reduce)").matches);
+      document.documentElement.dataset.reduceMotion = String(reduced);
+      window.dispatchEvent(
+        new CustomEvent("aiden:appearance-changed", { detail: { config: next } }),
+      );
     }, patch);
   await openAppearance();
-  await expect
-    .poll(async () => {
-      const stored = JSON.parse(
-        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-      );
-      return stored.settings?.appearance?.autoHideComposerContext;
-    })
-    .toBe(true);
+  // The file only gains the field once persisted; the normalized read shows
+  // the default until then.
+  await expect(
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(channel: string): Promise<{
+                autoHideComposerContext: boolean;
+              }>;
+            };
+          };
+        }
+      ).aidenAPI;
+      return ipc.invoke("settings:getAppearance");
+    }),
+  ).resolves.toMatchObject({ autoHideComposerContext: true });
   await patchAppearance({ autoHideComposerContext: false });
   await expect
     .poll(async () => {

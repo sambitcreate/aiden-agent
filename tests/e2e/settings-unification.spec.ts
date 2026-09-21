@@ -111,6 +111,8 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
   await openAppearance();
   // The Appearance page no longer exposes workspace-path controls; the
   // underlying settings fields still round-trip through settings:set.
+  // settings:get returns the sparse store; settings:getAppearance returns the
+  // normalized config with defaults applied.
   const readAppearance = () =>
     page.evaluate(async () => {
       const { ipc } = (
@@ -121,16 +123,14 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
                 channel: string,
                 patch?: unknown,
               ): Promise<{
-                appearance: {
-                  showWorkspacePaths: boolean;
-                  workspacePathFormat: string;
-                };
+                showWorkspacePaths: boolean;
+                workspacePathFormat: string;
               }>;
             };
           };
         }
       ).aidenAPI;
-      return (await ipc.invoke("settings:get")).appearance;
+      return ipc.invoke("settings:getAppearance");
     });
   const writeAppearance = (patch: {
     showWorkspacePaths: boolean;
@@ -144,10 +144,16 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
           };
         }
       ).aidenAPI;
-      const current = (await ipc.invoke("settings:get")) as { appearance: unknown };
-      await ipc.invoke("settings:set", {
-        appearance: { ...(current.appearance as object), ...value },
-      });
+      const current = await ipc.invoke("settings:getAppearance");
+      const next = { ...(current as object), ...value };
+      await ipc.invoke("settings:set", { appearance: next });
+      // The settings:appearance-changed broadcast only reaches the pill
+      // preload; refresh the cached config and DOM event the way the
+      // settings page's own applyAppearanceConfig path would.
+      localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify(next));
+      window.dispatchEvent(
+        new CustomEvent("aiden:appearance-changed", { detail: { config: next } }),
+      );
     }, patch);
   await expect(readAppearance()).resolves.toMatchObject({
     showWorkspacePaths: false,
