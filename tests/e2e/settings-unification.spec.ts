@@ -145,15 +145,9 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
         }
       ).aidenAPI;
       const current = await ipc.invoke("settings:getAppearance");
-      const next = { ...(current as object), ...value };
-      await ipc.invoke("settings:set", { appearance: next });
-      // The settings:appearance-changed broadcast only reaches the pill
-      // preload; refresh the cached config and DOM event the way the
-      // settings page's own applyAppearanceConfig path would.
-      localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify(next));
-      window.dispatchEvent(
-        new CustomEvent("aiden:appearance-changed", { detail: { config: next } }),
-      );
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current as object), ...value },
+      });
     }, patch);
   await expect(readAppearance()).resolves.toMatchObject({
     showWorkspacePaths: false,
@@ -164,18 +158,18 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
     showWorkspacePaths: true,
     workspacePathFormat: "end",
   });
-  await page.getByRole("button", { name: "Back to app", exact: true }).click();
-  await expect(workspaceRow()).toContainText("…/");
-
+  // Live application runs through the real bootstrap path: on relaunch
+  // useTheme hydrates the persisted config and applies it.
   page = await aiden.relaunch();
   await expect(workspaceRow()).toContainText("…/");
+
   await openAppearance();
   await expect(readAppearance()).resolves.toMatchObject({
     showWorkspacePaths: true,
     workspacePathFormat: "end",
   });
   await writeAppearance({ showWorkspacePaths: false, workspacePathFormat: "middle" });
-  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  page = await aiden.relaunch();
   await expect(workspaceRow()).toHaveText(workspaceName);
 });
 

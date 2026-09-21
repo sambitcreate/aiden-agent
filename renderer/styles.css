@@ -2072,7 +2072,7 @@ textarea {
   width: 100%;
   aspect-ratio: 1.52;
   place-items: center;
-  border: 1px solid var(--border-separator);
+  border: 0;
   border-radius: var(--radius-control);
   box-shadow: var(--elevation-control);
   font-size: 30px;

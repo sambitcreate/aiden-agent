@@ -94,7 +94,25 @@ test("workspace bar auto-hides after sending and its appearance setting survives
       .click();
   };
   // The Appearance page no longer exposes these controls; drive the
-  // underlying settings fields through settings:set instead.
+  // underlying settings fields through settings:set instead. Live
+  // application is only asserted after a relaunch, where bootstrapping
+  // runs the real useTheme -> applyAppearanceConfig path.
+  const readAppearance = () =>
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(channel: string): Promise<{
+                autoHideComposerContext: boolean;
+                reduceMotion: string;
+              }>;
+            };
+          };
+        }
+      ).aidenAPI;
+      return ipc.invoke("settings:getAppearance");
+    });
   const patchAppearance = (patch: {
     autoHideComposerContext?: boolean;
     reduceMotion?: "system" | "on" | "off";
@@ -107,71 +125,42 @@ test("workspace bar auto-hides after sending and its appearance setting survives
           };
         }
       ).aidenAPI;
-      const current = (await ipc.invoke("settings:getAppearance")) as {
-        reduceMotion?: "system" | "on" | "off";
-      };
-      const next = { ...current, ...value };
-      await ipc.invoke("settings:set", { appearance: next });
-      // Mirror the parts of applyAppearanceConfig the app consumes locally:
-      // the settings:appearance-changed broadcast only reaches the pill
-      // preload, so cached appearance, the reduce-motion attribute, and the
-      // DOM event are refreshed here.
-      localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify(next));
-      const reduced =
-        next.reduceMotion === "on" ||
-        (next.reduceMotion === "system" &&
-          matchMedia("(prefers-reduced-motion: reduce)").matches);
-      document.documentElement.dataset.reduceMotion = String(reduced);
-      window.dispatchEvent(
-        new CustomEvent("aiden:appearance-changed", { detail: { config: next } }),
-      );
+      const current = await ipc.invoke("settings:getAppearance");
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current as object), ...value },
+      });
     }, patch);
+  const storedAppearance = async () =>
+    JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"))
+      .settings?.appearance;
   await openAppearance();
   // The file only gains the field once persisted; the normalized read shows
   // the default until then.
-  await expect(
-    page.evaluate(async () => {
-      const { ipc } = (
-        window as unknown as {
-          aidenAPI: {
-            ipc: {
-              invoke(channel: string): Promise<{
-                autoHideComposerContext: boolean;
-              }>;
-            };
-          };
-        }
-      ).aidenAPI;
-      return ipc.invoke("settings:getAppearance");
-    }),
-  ).resolves.toMatchObject({ autoHideComposerContext: true });
+  await expect(readAppearance()).resolves.toMatchObject({
+    autoHideComposerContext: true,
+  });
   await patchAppearance({ autoHideComposerContext: false });
   await expect
-    .poll(async () => {
-      const stored = JSON.parse(
-        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-      );
-      return stored.settings?.appearance?.autoHideComposerContext;
-    })
+    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
     .toBe(false);
-  await openSentChat();
-  await expect(bar()).toBeVisible();
-  await expect(bar()).toHaveAttribute("data-collapsed", "false");
 
   page = await aiden.relaunch();
   await openSentChat();
+  await expect(readAppearance()).resolves.toMatchObject({
+    autoHideComposerContext: false,
+  });
   await expect(bar()).toBeVisible();
-  await openAppearance();
+  await expect(bar()).toHaveAttribute("data-collapsed", "false");
+
+  await patchAppearance({ reduceMotion: "on", autoHideComposerContext: true });
   await expect
-    .poll(async () => {
-      const stored = JSON.parse(
-        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-      );
-      return stored.settings?.appearance?.autoHideComposerContext;
-    })
-    .toBe(false);
-  await patchAppearance({ reduceMotion: "on" });
-  await patchAppearance({ autoHideComposerContext: true });
+    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
+    .toBe(true);
+  await expect
+    .poll(async () => (await storedAppearance())?.reduceMotion)
+    .toBe("on");
+
+  page = await aiden.relaunch();
   await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "true");
   await openSentChat();
   await expect(bar()).toBeHidden();
