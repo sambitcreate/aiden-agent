@@ -357,7 +357,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
-  assert.match(pane, /enabled: !draft && ready/u);
+  assert.match(pane, /enabled:\s*!draft &&\s*ready/u);
 });
 
 
