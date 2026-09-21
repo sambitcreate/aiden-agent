@@ -539,6 +539,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
 
+## 2026-09-17 — Cursor via fitchmultz/pi-cursor-sdk
+
+- Consume `pi-cursor-sdk` 0.3.7 (`discoverModels` / `streamCursorLazy`) as an Aiden-owned built-in. Do not load the package's default Pi extension (`dist/index.js`): that registers MCP bridging, slash commands, and `parseArgs(process.argv)` session scope.
+- Bind workspace cwd with the SDK session-scope `__testUtils.set` plus Aiden ALS, then globally serialize Cursor streams. The SDK cwd is process-global; per-session turn locks do not cover concurrent chats.
+- This agent environment's `npm install` against registry.npmjs.org failed with TLS `SSL_ERROR_SYSCALL` / `ECONNRESET`. GitHub HTTPS clone of the SDK succeeded. Do not add optional peer `@earendil-works/pi-coding-agent` just to satisfy the SDK: it ships a shrinkwrap and CI `npm ci` then demands that whole nested graph. Keep `package-lock.json` in sync for `pi-cursor-sdk` (exact `@hono/node-server@2.0.12`) and `@cursor/sdk` (`@connectrpc/connect-node` → `undici@5.29.0` → `@fastify/busboy@2.1.1`); unpack `@cursor/sdk`, `pi-cursor-sdk`, and `@connectrpc/**` from asar.
+
 - 2026-09-19 provider-streams: fresh worktree omits ignored `.memory`; read canonical checkout project context and will add a lane-specific note. Installed private node_modules with scripts disabled to avoid concurrent native/Electron builds.
 - 2026-09-19 provider-streams: explicit `git add` reported ignored `.papercuts` even while staging its tracked file; used explicit force-add for required lane artifacts.
 ## 2026-09-19 — upgrade compaction checkpoint recovery

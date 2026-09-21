@@ -79,6 +79,9 @@ export interface ResolvedModelRuntime {
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
+  workspaceRoot?: string;
+  workspaceTrusted?: boolean;
+  workspaceProjectTrusted?: boolean;
   /** Main-owned guarded credential handoff for isolated provider dispatch. */
   prepareIsolatedStream?: (
     model: Model<Api>,

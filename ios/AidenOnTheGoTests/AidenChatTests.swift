@@ -1188,6 +1188,7 @@ final class AidenChatTests: XCTestCase {
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "cursor"), "cursor")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "gemini"), "google")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "moonshot"), "moonshotai")
         XCTAssertEqual(

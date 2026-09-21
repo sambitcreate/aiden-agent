@@ -13,6 +13,7 @@ enum AidenProviderIconResolver {
         "cloudflare-ai-gateway",
         "cloudflare-workers-ai",
         "concentrate",
+        "cursor",
         "deepseek",
         "fireworks",
         "github-copilot",

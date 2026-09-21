@@ -17,6 +17,7 @@ import {
   type AssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
+import { CURSOR_PROVIDER_ID } from "../cursor-session-binding.js";
 import { writeDevLog } from "../dev-log.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import {
@@ -505,6 +506,9 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
       const startupRetryEnabled = firstIsolatedRequest;
       firstIsolatedRequest = false;
       return lazyStream(model, async () => {
+        if (model.provider === CURSOR_PROVIDER_ID) {
+          return runtime.streams.streamSimple(model, context, options);
+        }
         const diagnosticId = createSubagentDiagnosticId();
         let requestModel: Model<Api>;
         let requestOptions: ModelsSimpleStreamOptions;

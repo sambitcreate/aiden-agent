@@ -1,6 +1,7 @@
 // Pure policy shared by the Pi runtime. Keep this Electron-free so the
 // keyless-provider and terminal-error contracts have fast, deterministic tests.
 
+import { tmpdir } from "node:os";
 import type { AgentOptions } from "@earendil-works/pi-agent-core";
 import type {
   Api,
@@ -32,6 +33,11 @@ import {
 } from "../../renderer/shared/provider-deployment.js";
 import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
 import { piThinkingLevelsForModel } from "./pi-model-metadata.js";
+import {
+  CURSOR_PROVIDER_ID,
+  cursorSessionFileFor,
+  runWithCursorSession,
+} from "./cursor-session-binding.js";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -138,6 +144,9 @@ interface AgentRuntimeTransport {
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
+  workspaceRoot?: string;
+  workspaceTrusted?: boolean;
+  workspaceProjectTrusted?: boolean;
 }
 
 export interface GenerationCleanupEntry {
@@ -244,16 +253,29 @@ export function buildAgentRuntimeOptions(
   return {
     sessionId: chatId,
     getApiKey: () => runtime.apiKey,
-    streamFn: (model, context, options) =>
-      runtime.streams.streamSimple(model, context, {
-        ...options,
-        apiKey: options?.apiKey ?? runtime.apiKey,
-        // Runtime headers are last so a keyless provider cannot inherit an
-        // Authorization header from Pi's default client setup.
-        headers: runtime.headers
-          ? { ...options?.headers, ...runtime.headers }
-          : options?.headers,
-      }),
+    streamFn: (model, context, options) => {
+      const dispatch = () =>
+        runtime.streams.streamSimple(model, context, {
+          ...options,
+          apiKey: options?.apiKey ?? runtime.apiKey,
+          // Runtime headers are last so a keyless provider cannot inherit an
+          // Authorization header from Pi's default client setup.
+          headers: runtime.headers
+            ? { ...options?.headers, ...runtime.headers }
+            : options?.headers,
+        });
+      if (model.provider !== CURSOR_PROVIDER_ID) return dispatch();
+      const cwd = runtime.workspaceRoot?.trim();
+      return runWithCursorSession(
+        {
+          cwd: cwd && cwd.length > 0 ? cwd : tmpdir(),
+          sessionId: chatId,
+          sessionFile: cursorSessionFileFor(chatId),
+          projectTrusted: runtime.workspaceProjectTrusted === true && Boolean(cwd),
+        },
+        dispatch,
+      );
+    },
   };
 }
 

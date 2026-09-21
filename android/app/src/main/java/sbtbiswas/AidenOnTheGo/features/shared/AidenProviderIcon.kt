@@ -29,7 +29,7 @@ object AidenProviderIconResolver {
     val supportedSlugs = setOf(
         "amazon-bedrock", "ant-ling", "anthropic", "apple-foundation-models",
         "azure-openai-responses", "cerebras", "claude", "cloudflare-ai-gateway",
-        "cloudflare-workers-ai", "concentrate", "deepseek", "fireworks",
+        "cloudflare-workers-ai", "concentrate", "cursor", "deepseek", "fireworks",
         "github-copilot", "google", "google-vertex", "grok", "groq",
         "huggingface", "kimi-coding", "lmstudio", "minimax", "minimax-cn",
         "mistral", "moonshotai", "moonshotai-cn", "nvidia", "ollama",
