@@ -1,5 +1,5 @@
 {
-  "originHash" : "fb5fc1072fe083e92c2417e3131383d24de0f43da0c8fb892c71b4aaa6413e88",
+  "originHash" : "82f829a7222005055d332c983076241946ef46be7cdd1cc321d0b2e2ec0a9833",
   "pins" : [
     {
       "identity" : "keychainaccess",
@@ -35,6 +35,15 @@
       "state" : {
         "revision" : "5f613358148239d0292c0cef674a3c2314737f9e",
         "version" : "2.4.1"
+      }
+    },
+    {
+      "identity" : "thinkingorbs",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/haplollc/ThinkingOrbs.git",
+      "state" : {
+        "revision" : "e2c07bbdec4db797fb302300ef0159b1806a909f",
+        "version" : "1.1.0"
       }
     }
   ],

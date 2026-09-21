@@ -1,8 +1,13 @@
 # Third-party notices
 
-## thinking-orbs
+## thinking-orbs / ThinkingOrbs
 
-Copyright (c) 2026 Jakub Antalik
+The desktop app uses the `thinking-orbs` npm package. The iOS app uses the
+`ThinkingOrbs` Swift package (https://github.com/haplollc/ThinkingOrbs), Haplo
+LLC's SwiftUI port of the same designs and engine.
+
+Copyright (c) 2026 Jakub Antalik (the original thinking-orbs designs and engine)
+Copyright (c) 2026 Haplo LLC (the Swift port)
 
 MIT License
 

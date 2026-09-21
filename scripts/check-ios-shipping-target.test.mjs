@@ -69,16 +69,6 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Shared/AidenProviderIcon.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Core.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Lattice.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Morph.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/OrbSpec.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Orbits.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Presets.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Snapshot.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Strands.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/ThinkingOrb.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Web.swift",
   "AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift",
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
@@ -955,7 +945,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     scheduledTasks,
     /Picker\("Model"[\s\S]*?ForEach\(models\)[\s\S]*?Text\(candidate\.label\)\.tag/u,
   );
-  assert.match(chat, /ThinkingOrb\(state: activity\.orb, size: \.px20\)/u);
+  assert.match(chat, /ThinkingOrb\(activity\.orb, size: \.small\)/u);
   assert.match(
     chat,
     /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
@@ -1061,7 +1051,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
 
   assert.deepEqual(
     packages.pins.map((pin) => pin.identity),
-    ["keychainaccess", "networkimage", "swift-cmark", "swift-markdown-ui"],
+    ["keychainaccess", "networkimage", "swift-cmark", "swift-markdown-ui", "thinkingorbs"],
   );
   assert.deepEqual(
     packages.pins.map((pin) => [pin.identity, pin.state.version]),
@@ -1070,15 +1060,20 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
       ["networkimage", "6.0.1"],
       ["swift-cmark", "0.8.0"],
       ["swift-markdown-ui", "2.4.1"],
+      ["thinkingorbs", "1.1.0"],
     ],
   );
   assert.match(
     project,
-    /packageProductDependencies = \(\s*1A2B3C4D5E6F700000000098 \/\* KeychainAccess \*\/,\s*BADA00000000000000000003 \/\* MarkdownUI \*\/,[\s\S]*?\);/u,
+    /packageProductDependencies = \(\s*1A2B3C4D5E6F700000000098 \/\* KeychainAccess \*\/,\s*BADA00000000000000000003 \/\* MarkdownUI \*\/,\s*BADC00000000000000000003 \/\* ThinkingOrbs \*\/,[\s\S]*?\);/u,
   );
   assert.match(
     project,
     /repositoryURL = "https:\/\/github\.com\/gonzalezreal\/swift-markdown-ui\.git";/u,
+  );
+  assert.match(
+    project,
+    /repositoryURL = "https:\/\/github\.com\/haplollc\/ThinkingOrbs\.git";/u,
   );
   assert.doesNotMatch(project, /swift-eventsource|Splash|Highlightr|SwiftMath/u);
   assert.deepEqual(noticeFiles.sort(), [
@@ -1099,7 +1094,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   assert.match(notice, /MarkdownUI 2\.4\.1/u);
   assert.match(notice, /NetworkImage 6\.0\.1/u);
   assert.match(notice, /swift-cmark 0\.8\.0/u);
-  assert.match(notice, /Thinking Orbs 0\.3\.1/u);
+  assert.match(notice, /ThinkingOrbs 1\.1\.0 \(Swift package/u);
   assert.match(notice, /Provider logos/u);
   assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide/u);
 });

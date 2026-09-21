@@ -7,6 +7,7 @@ import Observation
 import Photos
 import PhotosUI
 import SwiftUI
+import ThinkingOrbs
 import UIKit
 import UniformTypeIdentifiers
 
@@ -4465,7 +4466,7 @@ private struct AidenLiveResponseView: View {
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
-    private var activity: (label: String, orb: OrbState) {
+    private var activity: (label: String, orb: OrbDesign) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
         }
@@ -4488,7 +4489,7 @@ private struct AidenLiveResponseView: View {
         VStack(alignment: .leading, spacing: 12) {
             if model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
-                    ThinkingOrb(state: activity.orb, size: .px20)
+                    ThinkingOrb(activity.orb, size: .small)
                     Text(activity.label)
                         .foregroundStyle(palette.secondary)
                 }
