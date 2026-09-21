@@ -1,5 +1,6 @@
 # Troubleshooting
 
+- 2026-09-21 PR #207 follow-up: `.memory/` is ignored even when its existing note is tracked; stage note updates with `git add -f` after checking the exact path.
 - 2026-09-17 release gate: do not run `npm test` and `npm run build` concurrently in one worktree. Both compile the universal `build/native/aiden-worktree-remover`, and `lipo` races its temporary output. Run build first, then the full suite serially.
 - 2026-09-17 release gate: removing the final Live voice-approval sender left `chat:approval-withdrawn` in the preload notification allowlist. Focused Live tests do not own the global sender/allowlist equality contract; run the full suite before publishing renderer IPC changes.
 - 2026-09-17 Live motion: do not key canvas layers by caption/action state; remounting restarts the animation and causes jumps. Kept stable duplex layers and separated visual activity from microphone activity so mic-off sessions retain Stop. Production macOS package must be rebuilt separately from the HTML review bundle.

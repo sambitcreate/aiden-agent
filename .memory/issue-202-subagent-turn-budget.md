@@ -9,8 +9,8 @@ request the wider turn budget.
 On a turn-limit stop, bounded assistant-authored text from settled messages is
 credential-filtered and returned as explicitly incomplete findings. Source paths
 remain useful to the parent; the persisted renderer snapshot gets its stricter
-path and environment redaction. Tool outputs and thinking are never used as a
-report. Other limits and cancellations remain
+path and environment redaction. Tool outputs, thinking, and aborted assistant
+messages are never used as a report. Other limits and cancellations remain
 fail-closed. OpenCode v2's task/session design (MIT, studied conceptually)
 retains child sessions for continuation and defaults to no step cap; Aiden
 retains explicit resource ceilings and does not copy its implementation.

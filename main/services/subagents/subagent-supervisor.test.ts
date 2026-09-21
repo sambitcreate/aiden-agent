@@ -2087,6 +2087,41 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.equal(turnControl.cancelCount, 1);
 });
 
+test("turn-limit partial findings exclude text from aborted assistant messages", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    const settled = assistant("Verified source path: /workspace/src/index.ts");
+    const aborted = { ...assistant("Unverified draft finding"), stopReason: "aborted" } as AssistantMessage;
+    await emit({ type: "turn_start" } as AgentEvent);
+    await emit({ type: "message_end", message: settled } as AgentEvent);
+    await emit({ type: "turn_end", message: settled, toolResults: [] } as AgentEvent);
+    await emit({ type: "turn_start" } as AgentEvent);
+    await emit({ type: "message_end", message: aborted } as AgentEvent);
+    await emit({ type: "turn_end", message: aborted, toolResults: [] } as AgentEvent);
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const result = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "aborted-turns",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Turns", task: "Use at most two turns." },
+    policy: { maxTurns: 2 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.warning ?? "", /turn limit/u);
+  assert.match(result.summary, /Verified source path: \/workspace\/src\/index\.ts/u);
+  assert.doesNotMatch(result.summary, /Unverified draft finding/u);
+});
+
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
   const streamedControl = fakeChild(async ({ emit }) => {
     const message = assistant("abcde");

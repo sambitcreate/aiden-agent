@@ -725,9 +725,10 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           if (error) {
             terminalError = message.stopReason === "error" ? SAFE_CHILD_PROVIDER_FAILURE : error;
           }
-          if (terminalGenerationWasAborted(message)) terminalAborted = true;
+          const messageWasAborted = terminalGenerationWasAborted(message);
+          if (messageWasAborted) terminalAborted = true;
           const exactOutput = terminalAssistantText(message);
-          if (exactOutput.trim()) {
+          if (!messageWasAborted && exactOutput.trim()) {
             partialReports.push(exactOutput.trim().slice(0, MAX_SUBAGENT_SUMMARY_CHARS));
             if (partialReports.length > 8) partialReports.shift();
           }
