@@ -939,8 +939,17 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(attachmentPicker, /expandedMaximumHeight: CGFloat = 700/u);
   assert.match(
     attachmentPicker,
-    /scaleEffect\(\s*picker\.isPresented \? 1 : 0\.06,\s*anchor: layout\.scaleAnchor\s*\)/u,
+    /scaleEffect\(\s*picker\.isPresented \? 1 : AidenAttachmentPickerPresentationMotion\.hiddenScale,\s*anchor: layout\.scaleAnchor\s*\)/u,
   );
+  assert.match(
+    attachmentPicker,
+    /\.offset\(y: picker\.isPresented \? 0 : AidenAttachmentPickerPresentationMotion\.hiddenVerticalOffset\)/u,
+  );
+  assert.match(
+    chat,
+    /AidenAttachmentPickerPresentationMotion\.transition\(\s*isPresented: attachmentPicker\.isPresented,\s*reduceMotion: reduceMotion\s*\)/u,
+  );
+  assert.match(attachmentPicker, /private func dismiss\(\) \{\s*picker\.dismiss\(\)\s*\}/u);
   assert.match(
     chat,
     /AidenAttachmentButtonCenterPreferenceKey[\s\S]*?frame\(in: \.named\(AidenChatAttachmentCoordinateSpace\.name\)\)[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,

@@ -2910,7 +2910,10 @@ struct AidenChatDetailView: View {
             attachmentButtonCenter = center
         }
         .animation(
-            reduceMotion ? nil : .spring(duration: 0.34, bounce: 0.08),
+            AidenAttachmentPickerPresentationMotion.transition(
+                isPresented: attachmentPicker.isPresented,
+                reduceMotion: reduceMotion
+            ),
             value: attachmentPicker.isPresented
         )
         .fileImporter(
@@ -3068,21 +3071,16 @@ struct AidenChatDetailView: View {
     private func toggleAttachmentPicker() {
         guard canToggleAttachmentPicker else { return }
         composerIsFocused = false
-        withAnimation(reduceMotion ? nil : .spring(duration: 0.34, bounce: 0.08)) {
-            if attachmentPicker.isPresented {
-                attachmentPicker.dismiss()
-            } else {
-                attachmentPicker.openMenu()
-            }
+        if attachmentPicker.isPresented {
+            attachmentPicker.dismiss()
+        } else {
+            attachmentPicker.openMenu()
         }
     }
 
     private func commitSelectedPhotos() {
         guard !attachmentControlsAreBusy else { return }
-        var commit: AidenAttachmentPhotoCommit?
-        withAnimation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.08)) {
-            commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
-        }
+        let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
         guard let commit else { return }
 
         let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(commit.assets)) { asset in
@@ -3105,9 +3103,7 @@ struct AidenChatDetailView: View {
     private func commitCapturedPhoto(_ data: Data) {
         guard !attachmentControlsAreBusy, attachmentCapacity > 0,
               model.acceptsImageAttachments else { return }
-        withAnimation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.08)) {
-            attachmentPicker.dismiss()
-        }
+        attachmentPicker.dismiss()
         model.prepareAttachments(.success([data])) { capturedData in
             try await AidenAttachmentPreparation.imageUploadAsync(
                 data: capturedData,

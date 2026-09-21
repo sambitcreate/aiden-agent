@@ -4014,6 +4014,25 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 3), "Add 3 Photos")
     }
 
+    func testAttachmentPickerPresentationIsSubtleAsymmetricAndReducedMotionAware() {
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.hiddenScale, 0.96, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.hiddenVerticalOffset, 8, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.entranceDuration, 0.2, accuracy: 0.001)
+        XCTAssertEqual(AidenAttachmentPickerPresentationMotion.exitDuration, 0.16, accuracy: 0.001)
+        XCTAssertLessThan(
+            AidenAttachmentPickerPresentationMotion.exitDuration,
+            AidenAttachmentPickerPresentationMotion.entranceDuration
+        )
+        XCTAssertNil(AidenAttachmentPickerPresentationMotion.transition(
+            isPresented: true,
+            reduceMotion: true
+        ))
+        XCTAssertNotNil(AidenAttachmentPickerPresentationMotion.transition(
+            isPresented: false,
+            reduceMotion: false
+        ))
+    }
+
     func testAttachmentLifecycleFenceRejectsLateWorkWithoutClearingANewerOperation() {
         var fence = AidenAttachmentLifecycleFence()
         let first = fence.begin()
@@ -4138,6 +4157,21 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(picker.mode, .photos)
         picker.markLibraryForRefresh()
         XCTAssertEqual(picker.libraryStatus, .loading)
+    }
+
+    @MainActor
+    func testAttachmentPickerDismissalImmediatelyInvalidatesLibraryLoad() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let generation = picker.markLibraryForRefresh()
+
+        picker.dismiss()
+
+        XCTAssertEqual(picker.mode, .closed)
+        XCTAssertFalse(picker.isPresented)
+        XCTAssertFalse(picker.isCurrentLibraryLoad(generation))
+        XCTAssertTrue(picker.selectedAssetIDs.isEmpty)
     }
 
     @MainActor

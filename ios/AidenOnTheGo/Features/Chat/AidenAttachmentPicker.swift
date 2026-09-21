@@ -49,6 +49,18 @@ enum AidenAttachmentPickerPolicy {
     }
 }
 
+enum AidenAttachmentPickerPresentationMotion {
+    static let hiddenScale: CGFloat = 0.96
+    static let hiddenVerticalOffset: CGFloat = 8
+    static let entranceDuration: TimeInterval = 0.2
+    static let exitDuration: TimeInterval = 0.16
+
+    static func transition(isPresented: Bool, reduceMotion: Bool) -> Animation? {
+        guard !reduceMotion else { return nil }
+        return .easeOut(duration: isPresented ? entranceDuration : exitDuration)
+    }
+}
+
 struct AidenAttachmentLifecycleFence {
     private(set) var activeID: UUID?
 
@@ -601,9 +613,10 @@ struct AidenAttachmentPickerOverlay: View {
                     .padding(.leading, layout.leadingPadding)
                     .padding(.bottom, layout.bottomPadding)
                     .scaleEffect(
-                        picker.isPresented ? 1 : 0.06,
+                        picker.isPresented ? 1 : AidenAttachmentPickerPresentationMotion.hiddenScale,
                         anchor: layout.scaleAnchor
                     )
+                    .offset(y: picker.isPresented ? 0 : AidenAttachmentPickerPresentationMotion.hiddenVerticalOffset)
                     .opacity(picker.isPresented ? 1 : 0)
             }
         }
@@ -911,7 +924,7 @@ struct AidenAttachmentPickerOverlay: View {
     }
 
     private func dismiss() {
-        animate { picker.dismiss() }
+        picker.dismiss()
     }
 
     private func animate(_ changes: () -> Void) {
