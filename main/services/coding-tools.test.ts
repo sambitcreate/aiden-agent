@@ -1367,6 +1367,9 @@ test("agent command PATH preserves inherited entries and non-macOS environments"
   assert.equal(mac.PATH?.split(":").filter((part) => part === "/Users/example/.local/bin").length, 1);
   assert.ok(mac.PATH?.startsWith(parent.PATH));
   assert.ok(agentCommandEnvironment({ HOME: "/Users/example" }, "darwin").PATH?.startsWith("/usr/bin:/bin:/usr/sbin:/sbin"));
+  const withEmptyEntries = ":/usr/bin::/bin:";
+  assert.ok(agentCommandEnvironment({ ...parent, PATH: withEmptyEntries }, "darwin").PATH?.startsWith(`${withEmptyEntries}:`));
+  assert.ok(agentCommandEnvironment({ ...parent, PATH: "" }, "darwin").PATH?.startsWith(":"));
   assert.deepEqual(agentCommandEnvironment(parent, "linux"), parent);
   assert.deepEqual(parent, { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" });
 });

@@ -15,9 +15,7 @@ export function agentCommandEnvironment(
     "/usr/local/bin",
     "/opt/local/bin",
   ];
-  const inherited = (parent.PATH || "/usr/bin:/bin:/usr/sbin:/sbin")
-    .split(path.delimiter)
-    .filter(Boolean);
+  const inherited = (parent.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(path.delimiter);
   const missing = candidates.filter((candidate) => !inherited.includes(candidate));
   env.PATH = [...inherited, ...missing].join(path.delimiter);
   return env;
