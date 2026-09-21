@@ -798,3 +798,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
 - Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
 - Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.
+
+## 2026-09-21: Issue 201
+
+- OpenCode Workers doctor passed, but the second worker also exited before editing: its launcher sent an unsupported `--dir` flag to `opencode run` v2.0.3. Use the direct CLI for requested review.
+- The Bot home has two persisted incarnation copies. Accepting a remount requires keeping receipt and manifest exactly consistent while comparing each to the live home under the owned-volume check.
+- `npm run test:bots` stops before tests because the native inbox writer links against the CLT macOS 27 SDK with unsupported `arm64e.x1`; `npm --ignore-scripts run test:bots` passes 446 TypeScript tests, but native-helper-dependent pretests remain unverified.
+- Deep OpenCode review exposed the receipt-written/manifest-unpublished crash window after remount: publishing the live device would disagree with the old receipt. Preserve the receipt token in the durable manifest and return a separately re-inspected live token.

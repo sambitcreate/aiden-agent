@@ -308,6 +308,14 @@ function sameIncarnation(
   return left.device === right.device && left.inode === right.inode;
 }
 
+/** The adapter proves the live home remains on its owned private volume. */
+function sameHomeAcrossRemount(
+  left: BotManagedWorkspaceIncarnation,
+  right: BotManagedWorkspaceIncarnation,
+): boolean {
+  return left.inode === right.inode;
+}
+
 function sameProvisioningReceipt(
   receipt: BotManagedHomeReceipt,
   expected: BotManagedHomeProvisioningReceipt,
@@ -403,7 +411,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     const receipt = parseBotManagedHomeReceipt(inspection.receipt);
     if (
       !sameReceipt(receipt, receiptFor(binding)) ||
-      !sameIncarnation(inspection.incarnation, binding.incarnation)
+      !sameHomeAcrossRemount(inspection.incarnation, binding.incarnation)
     ) {
       throw new BotManagedWorkspaceStateError(
         "This Bot's managed home does not match its private ownership record.",
@@ -412,7 +420,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     return {
       ...handleFor(binding),
       homePath: inspection.homePath,
-      incarnation: { ...binding.incarnation },
+      incarnation: { ...inspection.incarnation },
     };
   };
 
@@ -478,7 +486,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     const actualReceipt = parseBotManagedHomeReceipt(inspection.receipt);
     if (
       !sameProvisioningReceipt(actualReceipt, provisioningReceiptFor(requested)) ||
-      !sameIncarnation(actualReceipt.incarnation, inspection.incarnation)
+      !sameHomeAcrossRemount(actualReceipt.incarnation, inspection.incarnation)
     ) {
       throw new BotManagedWorkspaceStateError(
         "Bot managed home creation returned the wrong ownership receipt.",
@@ -486,7 +494,10 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     }
 
     const next = cloneDocument(document);
-    const published = { ...requested, incarnation: { ...inspection.incarnation } };
+    // Persist the receipt's exact token. Its device may predate a remount;
+    // writing the live device here would strand a reused receipt after a
+    // journal-recovered partial provision.
+    const published = { ...requested, incarnation: { ...actualReceipt.incarnation } };
     next.bindings.push(published);
     try {
       await options.storage.writeManifest(next);
@@ -503,11 +514,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       throw error;
     }
     await auditDocument(next);
-    return {
-      ...handleFor(published),
-      homePath: inspection.homePath,
-      incarnation: { ...published.incarnation },
-    };
+    return inspectBinding(published);
   };
 
   const reserve = (botId: string): BotManagedWorkspaceReservation => {
@@ -607,7 +614,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
         if (
           binding.workspaceId !== expected.workspaceId ||
           binding.createdAt !== expected.createdAt ||
-          !sameIncarnation(binding.incarnation, expectedIncarnation)
+          !sameHomeAcrossRemount(binding.incarnation, expectedIncarnation)
         ) {
           throw new BotManagedWorkspaceConflictError(
             "This Bot's managed home binding changed after it was resolved.",
@@ -675,7 +682,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
           const actualReceipt = parseBotManagedHomeReceipt(inspection.receipt);
           if (
             !sameProvisioningReceipt(actualReceipt, provisioningReceiptFor(expected)) ||
-            !sameIncarnation(actualReceipt.incarnation, inspection.incarnation)
+            !sameHomeAcrossRemount(actualReceipt.incarnation, inspection.incarnation)
           ) {
             throw new BotManagedWorkspaceRollbackError(
               "Aiden preserved this Bot's managed home because its ownership changed.",

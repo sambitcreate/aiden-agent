@@ -114,6 +114,88 @@ test("one private non-Git home is stable across chats, concurrency, and restart"
   }
 });
 
+test("a remounted volume keeps the same owned home without rewriting its receipt", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-remount-");
+  try {
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_A,
+    });
+    const first = await service.provision("bot-1");
+    const manifestPath = join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST);
+    const ownedReceiptPath = receiptPath(paths.root, WORKSPACE_A);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      bindings: Array<{ incarnation: { device: string; inode: string } }>;
+    };
+    const receipt = JSON.parse(await readFile(ownedReceiptPath, "utf8")) as {
+      incarnation: { device: string; inode: string };
+    };
+    const previousDevice = (BigInt(first.incarnation.device) + 1n).toString();
+    manifest.bindings[0]!.incarnation.device = previousDevice;
+    receipt.incarnation.device = previousDevice;
+    await writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    await writeFile(ownedReceiptPath, JSON.stringify(receipt), { mode: 0o600 });
+
+    const restarted = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_B,
+    });
+    assert.deepEqual(await restarted.listBindings(), [{
+      botId: "bot-1",
+      workspaceId: WORKSPACE_A,
+      createdAt: first.createdAt,
+    }]);
+    assert.deepEqual(await restarted.resolve("bot-1"), first);
+    assert.deepEqual(await restarted.revalidate(first), first);
+    assert.equal(
+      (JSON.parse(await readFile(ownedReceiptPath, "utf8")) as typeof receipt).incarnation.device,
+      previousDevice,
+      "remount handling does not rewrite ownership evidence",
+    );
+
+    manifest.bindings[0]!.incarnation.device = first.incarnation.device;
+    await writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    const inconsistent = createBotManagedWorkspaceService({ root: () => paths.root, mintWorkspaceId: () => WORKSPACE_B });
+    await assert.rejects(inconsistent.resolve("bot-1"), /does not match its private ownership record/u);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
+test("journal reconciliation after a remount publishes the receipt's durable token", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-remount-reconcile-");
+  try {
+    const reservation = { botId: "bot-1", workspaceId: WORKSPACE_A, createdAt: 42 };
+    const directoryName = botManagedHomeDirectoryName(WORKSPACE_A);
+    const storage = createFileBotManagedWorkspaceStorage({ root: () => paths.root });
+    const inspection = await storage.createHome(directoryName, {
+      version: BOT_MANAGED_WORKSPACE_VERSION,
+      directoryName,
+      ...reservation,
+    });
+    const ownedReceiptPath = receiptPath(paths.root, WORKSPACE_A);
+    const receipt = JSON.parse(await readFile(ownedReceiptPath, "utf8")) as {
+      incarnation: { device: string; inode: string };
+    };
+    receipt.incarnation.device = (BigInt(inspection.incarnation.device) + 1n).toString();
+    await writeFile(ownedReceiptPath, JSON.stringify(receipt), { mode: 0o600 });
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_B,
+    });
+    const recovered = await service.reconcileProvision(reservation);
+    assert.deepEqual(recovered.incarnation, inspection.incarnation);
+    const manifest = JSON.parse(await readFile(join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST), "utf8")) as {
+      bindings: Array<{ incarnation: { device: string; inode: string } }>;
+    };
+    assert.deepEqual(manifest.bindings[0]?.incarnation, receipt.incarnation);
+    assert.deepEqual(await service.resolve("bot-1"), recovered);
+    assert.deepEqual(await service.revalidate(recovered), recovered);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
 test("explicit journal reconciliation adopts only its exact reservation and stays idempotent", async () => {
   const paths = await temporaryRoot("aiden-bot-reconcile-");
   try {
