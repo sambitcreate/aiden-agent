@@ -9,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,10 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.config.*
@@ -312,24 +310,26 @@ fun AidenAppearanceSettingsScreen(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        AidenThemePresetID.entries.toList().chunked(3).forEach { rowPresets ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                rowPresets.forEach { preset ->
-                    AidenThemeTile(
-                        preset = preset,
-                        selected = currentConfig.preset == preset,
-                        onClick = { appearanceStore?.updatePreset(preset) },
-                        modifier = Modifier.weight(1f)
-                    )
+        Column(modifier = Modifier.selectableGroup()) {
+            AidenThemePresetID.entries.toList().chunked(3).forEach { rowPresets ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowPresets.forEach { preset ->
+                        AidenThemeTile(
+                            preset = preset,
+                            selected = currentConfig.preset == preset,
+                            onClick = { appearanceStore?.updatePreset(preset) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - rowPresets.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                 }
-                repeat(3 - rowPresets.size) {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
+                Spacer(modifier = Modifier.height(10.dp))
             }
-            Spacer(modifier = Modifier.height(10.dp))
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -355,16 +355,12 @@ private fun AidenThemeTile(
     val palette = AidenTheme.palette
     val preview = AidenThemeCatalog.palette(preset, preset.signatureIsDark)
     Column(
-        modifier = modifier
-            .tactilePress(onClick = onClick)
-            .semantics(mergeDescendants = true) {
-                role = Role.RadioButton
-                this.selected = selected
-                onClick(label = "Select ${preset.title} theme") {
-                    onClick()
-                    true
-                }
-            },
+        modifier = modifier.selectable(
+            selected = selected,
+            enabled = true,
+            role = Role.RadioButton,
+            onClick = onClick
+        ),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -374,6 +370,7 @@ private fun AidenThemeTile(
                     .aspectRatio(1.52f)
                     .clip(RoundedCornerShape(12.dp))
                     .background(preview.canvas)
+                    .tactilePress()
             ) {
                 Text(
                     text = "Aa",
