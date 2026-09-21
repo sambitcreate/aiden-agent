@@ -158,6 +158,65 @@ test("a remounted private volume keeps its Bot home without weakening live reval
   }
 });
 
+test("live root, homes, and receipts must remain on the same filesystem", async () => {
+  const paths = await temporaryRoot("aiden-bot-mount-guards-");
+  try {
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_A,
+    });
+    await service.provision("bot-1");
+    const canonicalRoot = await realpath(paths.root);
+    for (const directory of [BOT_MANAGED_HOMES_DIRECTORY, BOT_MANAGED_HOME_RECEIPTS_DIRECTORY]) {
+      const storage = createFileBotManagedWorkspaceStorage({
+        root: () => paths.root,
+        deviceForTest: (pathname, actual) =>
+          pathname === join(canonicalRoot, directory) ? actual + 1n : actual,
+      });
+      await assert.rejects(
+        storage.inspectHome(botManagedHomeDirectoryName(WORKSPACE_A)),
+        /directory is on another filesystem/u,
+      );
+    }
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
+test("live home device mismatch and a swapped homes mount fail closed", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-mount-guards-");
+  try {
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_A,
+    });
+    const home = await service.provision("bot-1");
+    const directoryName = botManagedHomeDirectoryName(WORKSPACE_A);
+    const canonicalHomes = join(await realpath(paths.root), BOT_MANAGED_HOMES_DIRECTORY);
+    const mismatchedHome = createFileBotManagedWorkspaceStorage({
+      root: () => paths.root,
+      deviceForTest: (pathname, actual) => pathname === home.homePath ? actual + 1n : actual,
+    });
+    await assert.rejects(mismatchedHome.inspectHome(directoryName), /not on its private filesystem/u);
+
+    let homesReads = 0;
+    const swappedHomes = createFileBotManagedWorkspaceStorage({
+      root: () => paths.root,
+      deviceForTest: (pathname, actual) => {
+        if (pathname === canonicalHomes) {
+          homesReads += 1;
+          return homesReads >= 4 ? actual + 1n : actual;
+        }
+        return pathname === home.homePath && homesReads >= 4 ? actual + 1n : actual;
+      },
+    });
+    await assert.rejects(swappedHomes.inspectHome(directoryName), /not on its private filesystem/u);
+    assert.equal(homesReads, 4, "the mount change was observed during incarnation capture");
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
 test("explicit journal reconciliation adopts only its exact reservation and stays idempotent", async () => {
   const paths = await temporaryRoot("aiden-bot-reconcile-");
   try {

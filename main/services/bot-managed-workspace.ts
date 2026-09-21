@@ -35,6 +35,8 @@ export interface FileBotManagedWorkspaceOptions {
   mintWorkspaceId?: () => string;
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
+  /** Test-only seam for simulating mount changes without mounting a filesystem. */
+  deviceForTest?(pathname: string, actual: bigint): bigint;
 }
 
 interface OwnedRoots {
@@ -42,6 +44,10 @@ interface OwnedRoots {
   homes: string;
   receipts: string;
   manifest: string;
+}
+
+interface OwnedRootsSnapshot extends OwnedRoots {
+  device: bigint;
 }
 
 function asError(error: unknown): Error {
@@ -131,8 +137,17 @@ async function parseJsonRegularFile(file: string, maxBytes: number): Promise<unk
   return JSON.parse(decodeUtf8(await readRegularFile(file, maxBytes))) as unknown;
 }
 
-async function captureHomeIncarnation(candidate: string): Promise<BotManagedWorkspaceIncarnation> {
-  const owned = await fs.lstat(path.dirname(candidate), { bigint: true });
+async function captureHomeIncarnation(
+  candidate: string,
+  owned: OwnedRootsSnapshot,
+  deviceForTest?: FileBotManagedWorkspaceOptions["deviceForTest"],
+): Promise<BotManagedWorkspaceIncarnation> {
+  const anchors = await Promise.all(
+    [owned.root, owned.homes, owned.receipts].map(async (pathname) => ({
+      pathname,
+      info: await fs.lstat(pathname, { bigint: true }),
+    })),
+  );
   const info = await fs.lstat(candidate, { bigint: true });
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error("Bot managed home is not an owned directory.");
@@ -147,13 +162,25 @@ async function captureHomeIncarnation(candidate: string): Promise<BotManagedWork
   if (info.ino <= 0n || info.dev < 0n) {
     throw new Error("Bot managed home has an invalid filesystem incarnation.");
   }
+  const homeDevice = deviceForTest?.(candidate, info.dev) ?? info.dev;
   // st_dev is assigned by the current mount, not a durable volume identity.
-  // A home must still be on the private homes filesystem: a separately mounted
-  // directory with a coincidentally matching inode cannot inherit its receipt.
-  if (owned.isSymbolicLink() || !owned.isDirectory() || info.dev !== owned.dev) {
+  // Tie this capture to the service root checked at operation admission. A
+  // swapped homes mount must not inherit a receipt via a coincident inode.
+  if (
+    path.dirname(candidate) !== owned.homes ||
+    anchors.some(({ pathname, info: anchor }) =>
+      anchor.isSymbolicLink() ||
+      !anchor.isDirectory() ||
+      (deviceForTest?.(pathname, anchor.dev) ?? anchor.dev) !== owned.device
+    ) ||
+    homeDevice !== owned.device
+  ) {
     throw new Error("Bot managed home is not on its private filesystem.");
   }
-  return { device: info.dev.toString(10), inode: info.ino.toString(10) };
+  return {
+    device: homeDevice.toString(10),
+    inode: info.ino.toString(10),
+  };
 }
 
 function samePersistedIncarnation(
@@ -180,7 +207,7 @@ function sameProvisioningReceipt(
 
 /** Node filesystem adapter with no Electron, renderer, or configStore dependency. */
 export function createFileBotManagedWorkspaceStorage(
-  options: Pick<FileBotManagedWorkspaceOptions, "root" | "onDurabilityWarning" | "syncDirectory">,
+  options: Pick<FileBotManagedWorkspaceOptions, "root" | "onDurabilityWarning" | "syncDirectory" | "deviceForTest">,
 ): BotManagedWorkspaceStorage {
   let rootsPromise: Promise<OwnedRoots> | undefined;
   const syncDirectory = options.syncDirectory ?? defaultSyncDirectory;
@@ -205,10 +232,10 @@ export function createFileBotManagedWorkspaceStorage(
     };
   };
 
-  const roots = async (): Promise<OwnedRoots> => {
+  const roots = async (): Promise<OwnedRootsSnapshot> => {
     rootsPromise ??= establishRoots();
     const owned = await rootsPromise;
-    let rootDevice: number | undefined;
+    let rootDevice: bigint | undefined;
     // Re-prove these anchors on every operation so replacement cannot redirect
     // a previously cached path outside the Bot service.
     for (const directory of [owned.root, owned.homes, owned.receipts]) {
@@ -216,8 +243,9 @@ export function createFileBotManagedWorkspaceStorage(
       if (info.isSymbolicLink() || !info.isDirectory()) {
         throw new Error("Bot managed workspace root changed or became unsafe.");
       }
-      rootDevice ??= info.dev;
-      if (info.dev !== rootDevice) {
+      const device = options.deviceForTest?.(directory, BigInt(info.dev)) ?? BigInt(info.dev);
+      rootDevice ??= device;
+      if (device !== rootDevice) {
         throw new Error("Bot managed workspace directory is on another filesystem.");
       }
       assertOwnedByCurrentUser(info, "Bot managed workspace directory");
@@ -228,7 +256,8 @@ export function createFileBotManagedWorkspaceStorage(
         await fs.chmod(directory, PRIVATE_DIRECTORY_MODE);
       }
     }
-    return owned;
+    if (rootDevice === undefined) throw new Error("Bot managed workspace root is missing.");
+    return { ...owned, device: rootDevice };
   };
 
   const homePath = async (directoryName: string): Promise<string> => {
@@ -248,6 +277,7 @@ export function createFileBotManagedWorkspaceStorage(
   };
 
   const inspectHome = async (directoryName: string): Promise<BotManagedHomeInspection | null> => {
+    const owned = await roots();
     const candidate = await homePath(directoryName);
     const ownedReceiptPath = await receiptPath(directoryName);
     const [info, receiptInfo] = await Promise.all([
@@ -286,7 +316,7 @@ export function createFileBotManagedWorkspaceStorage(
     const parsedReceipt = parseBotManagedHomeReceipt(receipt);
     // Capture last so the returned token represents the pathname as close as
     // possible to handoff. Effect code must still call service.revalidate().
-    const incarnation = await captureHomeIncarnation(candidate);
+    const incarnation = await captureHomeIncarnation(candidate, owned, options.deviceForTest);
     if (!samePersistedIncarnation(parsedReceipt.incarnation, incarnation)) {
       throw new Error("Bot managed home was replaced after its ownership receipt was issued.");
     }
@@ -375,6 +405,7 @@ export function createFileBotManagedWorkspaceStorage(
       directoryName: string,
       receipt: BotManagedHomeProvisioningReceipt,
     ): Promise<BotManagedHomeInspection> {
+      const owned = await roots();
       assertHomeDirectoryName(directoryName);
       const expectedReceipt = parseBotManagedHomeProvisioningReceipt(receipt);
       if (expectedReceipt.directoryName !== directoryName) {
@@ -420,7 +451,7 @@ export function createFileBotManagedWorkspaceStorage(
         throw new Error("Bot managed home recovery refused unexpected content.");
       }
 
-      const incarnation = await captureHomeIncarnation(candidate);
+      const incarnation = await captureHomeIncarnation(candidate, owned, options.deviceForTest);
       if (actualReceipt && !samePersistedIncarnation(actualReceipt.incarnation, incarnation)) {
         if (createdHome && (await fs.readdir(candidate)).length === 0) {
           await fs.rmdir(candidate).catch(() => undefined);
@@ -473,7 +504,7 @@ export function createFileBotManagedWorkspaceStorage(
       } catch (error) {
         await handle?.close().catch(() => undefined);
         const entries = await fs.readdir(candidate).catch(() => null);
-        const currentIncarnation = await captureHomeIncarnation(candidate).catch(() => null);
+        const currentIncarnation = await captureHomeIncarnation(candidate, owned, options.deviceForTest).catch(() => null);
         const stillCreatedHome = Boolean(
           currentIncarnation && samePersistedIncarnation(currentIncarnation, incarnation),
         );
@@ -494,6 +525,7 @@ export function createFileBotManagedWorkspaceStorage(
       directoryName: string,
       expectedReceipt: BotManagedHomeReceipt,
     ): Promise<boolean> {
+      const owned = await roots();
       const expected = parseBotManagedHomeReceipt(expectedReceipt);
       if (expected.directoryName !== directoryName) {
         throw new Error("Bot managed home rollback receipt targets another directory.");
@@ -529,7 +561,7 @@ export function createFileBotManagedWorkspaceStorage(
         if ((await fs.realpath(candidate)) !== candidate) {
           throw new Error("Bot managed home rollback target escaped its private root.");
         }
-        const incarnation = await captureHomeIncarnation(candidate);
+        const incarnation = await captureHomeIncarnation(candidate, owned, options.deviceForTest);
         if (!samePersistedIncarnation(expected.incarnation, incarnation)) {
           throw new Error("Bot managed home rollback refused a replaced directory.");
         }

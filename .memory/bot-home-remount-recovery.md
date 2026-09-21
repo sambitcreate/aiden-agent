@@ -6,4 +6,6 @@ The filesystem adapter now proves the live home, private homes directory, receip
 
 The existing managed-workspace test file covers remount recovery, unchanged on-disk records, mismatched records, and strict live revalidation. Installed app data and Keychain records were only read, never repaired or reset; a merged/released update and app restart are needed for production acceptance.
 
-Validation: managed-workspace tests 10/10; registered Bot TypeScript suite 446/446 (with npm lifecycle pretest suppressed); type-check, lint, and diff check pass. The native Bot pretest cannot link against the locally selected Command Line Tools macOS 27 SDK because its `libSystem.tbd` has an architecture unknown to Xcode 26.6. This is a local toolchain gate, not a hosted CI or production acceptance result.
+PR review found a mount race between operation admission and home-incarnation capture. Capture now rechecks root, homes, receipts, and home against the device observed for the service root at admission. A test-only device seam covers cross-device homes/receipts, a foreign home, and a homes mount changing during capture without requiring privileged mounts.
+
+Validation: managed-workspace tests 12/12; registered Bot TypeScript suite 448/448 (with npm lifecycle pretest suppressed); type-check and focused lint pass. The native Bot pretest cannot link against the locally selected Command Line Tools macOS 27 SDK because its `libSystem.tbd` has an architecture unknown to Xcode 26.6. This is a local toolchain gate, not a hosted CI or production acceptance result.
