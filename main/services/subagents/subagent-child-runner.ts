@@ -37,6 +37,7 @@ import {
   type SubagentContextMode,
 } from "./forked-context.js";
 import { normalizeSubagentModelText } from "./model-text.js";
+import { sanitizeCredentialText } from "../../../renderer/shared/subagent-safe-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
@@ -64,6 +65,7 @@ export const MAX_SUBAGENT_CHILD_EVENTS = 512;
 export const MAX_SUBAGENT_CHILD_OUTPUT_CHARS = 120_000;
 export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
+const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -629,6 +631,8 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
 
     let currentTurnOutput = "";
     let terminalOutput = "";
+    // Only assistant-authored text from settled messages, never tool results or thinking.
+    const partialReports: string[] = [];
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -694,7 +698,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         }
       } else if (event.type === "turn_start") {
         if (turns >= policy.maxTurns) {
-          stopForLimit("The child reached its turn limit.");
+          stopForLimit(CHILD_TURN_LIMIT_WARNING);
           return;
         }
         turns += 1;
@@ -723,6 +727,10 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           }
           if (terminalGenerationWasAborted(message)) terminalAborted = true;
           const exactOutput = terminalAssistantText(message);
+          if (exactOutput.trim()) {
+            partialReports.push(exactOutput.trim().slice(0, MAX_SUBAGENT_SUMMARY_CHARS));
+            if (partialReports.length > 8) partialReports.shift();
+          }
           const additionalObserved = currentTurnHadTextDelta
             ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
             : exactOutput.length;
@@ -782,7 +790,22 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       return timedOutResult(input.request);
     }
     throwIfParentAborted(input.signal);
-    if (limitWarning) return safeFailure(input.request, limitWarning);
+    if (limitWarning) {
+      if (limitWarning !== CHILD_TURN_LIMIT_WARNING || partialReports.length === 0) {
+        return safeFailure(input.request, limitWarning);
+      }
+      // Keep source paths useful to the parent; the renderer projector applies its
+      // stricter snapshot/path policy separately.
+      const partial = sanitizeCredentialText(partialReports.join("\n\n"))
+        .trim();
+      return {
+        role: input.request.role,
+        label: input.request.label,
+        status: "failed",
+        ...projectSubagentCompletedSummary(partial),
+        warning: "The child reached its turn limit. These are incomplete, unverified partial findings.",
+      };
+    }
     if (outcome.kind === "failed") {
       return safeFailure(input.request);
     }

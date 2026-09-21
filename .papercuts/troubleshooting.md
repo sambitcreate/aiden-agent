@@ -798,3 +798,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
 - Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
 - Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.
+
+## 2026-09-21: Issues 202 and 201
+
+- 2026-09-21: OpenCode Workers doctor passed, but the worker exited immediately because its launcher sends `--dir` to `opencode run` v2.0.3, which rejects that flag. Use a direct CLI review until the wrapper is updated.
+- 2026-09-21: Fresh isolated worktree lacked `node_modules`; installed with `npm ci` before validation.
+- 2026-09-21: `npm run test:subagents` pretest stops in native worktree-remover linking: CLT's `MacOSX.sdk` targets 27.0 and libSystem.tbd declares unsupported `arm64e.x1`. The build script supplies a restricted environment, so setting SDKROOT externally does not select Xcode's SDK. Run focused TS tests independently; full native gate remains unverified.

@@ -9,6 +9,7 @@ export const MAX_SUBAGENT_LABEL_CHARS = 120;
 export const MAX_SUBAGENT_TASK_CHARS = 8_000;
 export const MAX_SUBAGENT_SUMMARY_CHARS = 8_000;
 export const MAX_SUBAGENT_TOOL_RESULT_CHARS = 24_000;
+export const MAX_SUBAGENT_REQUESTED_TURNS = 128;
 export const MAX_SUBAGENT_REQUESTED_MCP_SERVERS = 16;
 export const MAX_SUBAGENT_REQUESTED_MCP_TOOLS_PER_SERVER = 32;
 export const SUBAGENT_SAFE_LABEL_PATTERN =
@@ -37,6 +38,8 @@ export interface SubagentTaskRequest {
   role: SubagentRole;
   label: string;
   task: string;
+  /** Explicit budget for a read-only investigation; omission keeps the default. */
+  maxTurns?: number;
   /** Optional strict subset of the root request; omission inherits the root request. */
   capabilities?: SubagentRequestedCapabilities;
 }
@@ -324,15 +327,21 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
   const parsedTasks = request.tasks.map((entry) => {
-    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities"]);
+    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns"]);
     if (!task) throw new Error("Invalid subagent task fields.");
     if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
       throw new Error("Unknown subagent role.");
+    }
+    if (task.maxTurns !== undefined &&
+      (!Number.isInteger(task.maxTurns) || (task.maxTurns as number) < 1 ||
+        (task.maxTurns as number) > MAX_SUBAGENT_REQUESTED_TURNS)) {
+      throw new Error("Invalid subagent turn budget.");
     }
     return {
       role: task.role,
       label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
       task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+      maxTurns: task.maxTurns as number | undefined,
       capabilities:
         task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities),
     };
@@ -354,10 +363,17 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       if (taskCapabilities) {
         assertTaskCapabilitiesNarrowRoot(rootCapabilities, taskCapabilities);
       }
+      const effective = taskCapabilities ?? rootCapabilities;
+      if (task.maxTurns !== undefined &&
+        (effective.workspaceWrite || effective.shell === true || effective.delegate === true ||
+          (effective.mcpMutations?.length ?? 0) > 0)) {
+        throw new Error("An explicit subagent turn budget requires read-only capabilities.");
+      }
       return {
         role: task.role,
         label: task.label,
         task: task.task,
+        ...(task.maxTurns === undefined ? {} : { maxTurns: task.maxTurns }),
         ...(taskCapabilities ? { capabilities: taskCapabilities } : {}),
       };
     }),

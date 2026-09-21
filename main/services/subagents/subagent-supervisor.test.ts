@@ -241,6 +241,27 @@ test("subagent model arguments are exact, bounded, and role constrained", () => 
     ...request(["One", "Two"]),
   });
   assert.equal(parseSubagentToolRequest({ ...request(), context: "fork" }).context, "fork");
+  const extended = { tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }] };
+  assert.equal(parseSubagentToolRequest(extended).tasks[0]?.maxTurns, 72);
+  for (const maxTurns of [0, 129, 1.5, "72", null]) {
+    assert.throws(() => parseSubagentToolRequest({
+      tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns }],
+    }), /turn budget/u);
+  }
+  assert.throws(() => parseSubagentToolRequest({
+    capabilities: { workspaceRead: true, workspaceWrite: true, web: false, mcp: [] },
+    tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
+  }), /read-only/u);
+  for (const restricted of [
+    { shell: true },
+    { delegate: true },
+    { mcpMutations: [{ serverId: "docs", tools: ["publish"] }] },
+  ]) {
+    assert.throws(() => parseSubagentToolRequest({
+      capabilities: { workspaceRead: true, web: false, mcp: [], ...restricted },
+      tasks: [{ role: "scout", label: "Survey", task: "Survey repository", maxTurns: 72 }],
+    }), /read-only/u);
+  }
   for (const invalid of [
     {},
     { tasks: [] },
@@ -445,6 +466,28 @@ test("an expired tree deadline launches no children and returns ordered timeouts
   assert.deepEqual(health.terminals, ["timed_out", "timed_out"]);
   await assert.rejects(supervisor.execute(request(["Third", "Fourth"])), /tree deadline elapsed/u);
   assert.equal(supervisor.launchesUsed, 0);
+});
+
+test("supervisor passes a requested read-only turn ceiling to its child", async () => {
+  const policies: Array<number | undefined> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "read-only-turn-budget",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: async ({ request: task, policy }) => {
+      policies.push(policy?.maxTurns);
+      return completed(task.label);
+    },
+  });
+  await supervisor.execute({ tasks: [
+    { role: "scout", label: "Survey", task: "Survey source.", maxTurns: 72 },
+    { role: "scout", label: "Default", task: "Check a narrow source." },
+  ] });
+  assert.deepEqual(policies.sort((a, b) => (a ?? 0) - (b ?? 0)), [24, 72]);
 });
 
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
@@ -2013,8 +2056,9 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.equal(outputControl.cancelCount, 1);
 
   const turnControl = fakeChild(async ({ emit }) => {
-    const message = assistant("turn");
+    const message = assistant("Found /workspace/src/index.ts. token=secret-value-here");
     await emit({ type: "turn_start" } as AgentEvent);
+    await emit({ type: "message_end", message } as AgentEvent);
     await emit({ type: "turn_end", message, toolResults: [] } as AgentEvent);
     await emit({ type: "turn_start" } as AgentEvent);
   });
@@ -2037,6 +2081,9 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   });
   assert.equal(turnLimited.status, "failed");
   assert.match(turnLimited.warning ?? "", /turn limit/);
+  assert.match(turnLimited.summary, /Found \/workspace\/src\/index\.ts/u);
+  assert.doesNotMatch(turnLimited.summary, /secret-value-here/u);
+  assert.match(turnLimited.summary, /REDACTED/u);
   assert.equal(turnControl.cancelCount, 1);
 });
 
