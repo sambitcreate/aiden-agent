@@ -109,41 +109,66 @@ test("workspace paths default hidden, change live, and survive relaunch", async 
       .click();
   };
   await openAppearance();
-  const showPaths = () => page.getByRole("switch", { name: "Show workspace folder paths" });
-  const format = () => page.getByRole("combobox", { name: "Workspace path format" });
-  await expect(showPaths()).not.toBeChecked();
-  await expect(format()).toBeDisabled();
-  await showPaths().click();
-  await format().click();
-  await page.getByRole("option", { name: /Last folders/u }).click();
-  // Wait for main-process persistence, not merely the optimistic preview.
-  await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const { ipc } = (
-          window as unknown as {
-            aidenAPI: {
-              ipc: {
-                invoke(channel: string): Promise<{
-                  appearance: { showWorkspacePaths: boolean; workspacePathFormat: string };
-                }>;
-              };
+  // The Appearance page no longer exposes workspace-path controls; the
+  // underlying settings fields still round-trip through settings:set.
+  const readAppearance = () =>
+    page.evaluate(async () => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: {
+              invoke(
+                channel: string,
+                patch?: unknown,
+              ): Promise<{
+                appearance: {
+                  showWorkspacePaths: boolean;
+                  workspacePathFormat: string;
+                };
+              }>;
             };
-          }
-        ).aidenAPI;
-        return (await ipc.invoke("settings:get")).appearance;
-      }),
-    )
-    .toMatchObject({ showWorkspacePaths: true, workspacePathFormat: "end" });
+          };
+        }
+      ).aidenAPI;
+      return (await ipc.invoke("settings:get")).appearance;
+    });
+  const writeAppearance = (patch: {
+    showWorkspacePaths: boolean;
+    workspacePathFormat: "middle" | "end" | "start";
+  }) =>
+    page.evaluate(async (value) => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: { invoke(channel: string, patch?: unknown): Promise<unknown> };
+          };
+        }
+      ).aidenAPI;
+      const current = (await ipc.invoke("settings:get")) as { appearance: unknown };
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current.appearance as object), ...value },
+      });
+    }, patch);
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: false,
+    workspacePathFormat: "middle",
+  });
+  await writeAppearance({ showWorkspacePaths: true, workspacePathFormat: "end" });
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: true,
+    workspacePathFormat: "end",
+  });
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(workspaceRow()).toContainText("…/");
 
   page = await aiden.relaunch();
   await expect(workspaceRow()).toContainText("…/");
   await openAppearance();
-  await expect(showPaths()).toBeChecked();
-  await expect(format()).toContainText("Last folders");
-  await showPaths().click();
+  await expect(readAppearance()).resolves.toMatchObject({
+    showWorkspacePaths: true,
+    workspacePathFormat: "end",
+  });
+  await writeAppearance({ showWorkspacePaths: false, workspacePathFormat: "middle" });
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(workspaceRow()).toHaveText(workspaceName);
 });

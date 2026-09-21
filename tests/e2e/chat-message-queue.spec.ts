@@ -93,10 +93,35 @@ test("workspace bar auto-hides after sending and its appearance setting survives
       .getByRole("button", { name: /^Deterministic E2E response/u })
       .click();
   };
+  // The Appearance page no longer exposes these controls; drive the
+  // underlying settings fields through settings:set instead.
+  const patchAppearance = (patch: {
+    autoHideComposerContext?: boolean;
+    reduceMotion?: "system" | "on" | "off";
+  }) =>
+    page.evaluate(async (value) => {
+      const { ipc } = (
+        window as unknown as {
+          aidenAPI: {
+            ipc: { invoke(channel: string, patch?: unknown): Promise<unknown> };
+          };
+        }
+      ).aidenAPI;
+      const current = (await ipc.invoke("settings:get")) as { appearance: unknown };
+      await ipc.invoke("settings:set", {
+        appearance: { ...(current.appearance as object), ...value },
+      });
+    }, patch);
   await openAppearance();
-  const toggle = page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true });
-  await expect(toggle).toBeChecked();
-  await toggle.click();
+  await expect
+    .poll(async () => {
+      const stored = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      );
+      return stored.settings?.appearance?.autoHideComposerContext;
+    })
+    .toBe(true);
+  await patchAppearance({ autoHideComposerContext: false });
   await expect
     .poll(async () => {
       const stored = JSON.parse(
@@ -113,14 +138,16 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   await openSentChat();
   await expect(bar()).toBeVisible();
   await openAppearance();
-  await expect(
-    page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }),
-  ).not.toBeChecked();
-  await page
-    .getByRole("radiogroup", { name: "Reduce motion", exact: true })
-    .getByRole("radio", { name: "On", exact: true })
-    .click();
-  await page.getByRole("switch", { name: "Auto-hide workspace bar", exact: true }).click();
+  await expect
+    .poll(async () => {
+      const stored = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      );
+      return stored.settings?.appearance?.autoHideComposerContext;
+    })
+    .toBe(false);
+  await patchAppearance({ reduceMotion: "on" });
+  await patchAppearance({ autoHideComposerContext: true });
   await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "true");
   await openSentChat();
   await expect(bar()).toBeHidden();

@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 class AidenBotPrototypeSnapshotTest {
     @Test
     fun testAllPresetThemePalettesAreDefined() {
-        assertEquals(4, AidenThemePresetID.values().size)
+        assertEquals(9, AidenThemePresetID.values().size)
 
         for (preset in AidenThemePresetID.values()) {
             val lightPalette = AidenThemeCatalog.palette(preset, false)

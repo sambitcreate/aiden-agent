@@ -32,7 +32,6 @@ test('polish contracts preserve focus, targets, numeric stability, and text scal
  assert.doesNotMatch(source('./settings/dictation-shortcut-settings.tsx'),/rounded-control border border-field/u);
  for(const p of ['./subagent-detail.tsx','./settings/remote-access-settings.tsx']) assert.match(source(p),/tabular-nums/u);
  assert.match(css,/\.model-pad-browser-count \{[^}]*font-size: var\(--text-mini\)/u);
- assert.match(css,/\.appearance-color-control > input \{[^}]*font-size: var\(--text-small\)/u);
  assert.doesNotMatch(source('./activity-feed.tsx'),/key=\{newest.id\}/u);
  assert.match(source('./settings/appearance-settings.tsx'),/previewStyle\(config\[scheme\], scheme\)/u);
 });

@@ -422,7 +422,7 @@ const featureBentos: FeatureBento[] = [
     id: "themes",
     group: "control",
     title: "Themes & Accessibility",
-    description: "Tune light or dark themes, fonts, contrast, motion, and diff markers.",
+    description: "Pick a theme and follow the system, light, or dark appearance.",
     icon: Palette,
     imageUrl: FEATURE_ILLUSTRATIONS.themes,
     size: "wide",

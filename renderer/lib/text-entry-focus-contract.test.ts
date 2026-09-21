@@ -38,22 +38,6 @@ test("search and shortcut text-entry wrappers do not recolor their border on foc
   }
 });
 
-test("Appearance text fields retain their resting border while focused", () => {
-  const styles = source("../styles.css");
-  const colorControlFocus = between(styles, ".appearance-color-control:focus-within {", "}");
-  const numberControlFocus = between(
-    styles,
-    ".appearance-number-control input:focus-visible {",
-    "}",
-  );
-
-  for (const control of [colorControlFocus, numberControlFocus]) {
-    assert.match(control, /background: var\(--surface-input\)/u);
-    assert.doesNotMatch(control, /border|outline|box-shadow/u);
-  }
-});
-
-
 test("direct question and follow-up textareas visibly tint their containing field", () => {
   for (const component of ["ask-user-question-composer", "btw-card"]) {
     assert.match(source(`../components/${component}.tsx`), /text-entry-shell/u);

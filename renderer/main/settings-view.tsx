@@ -109,7 +109,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
-  appearance: "Shape Aiden’s light and dark interfaces independently. Changes apply live.",
+  appearance: "Pick a theme and choose when Aiden uses its light or dark look.",
   about: "App information, updates, and diagnostics.",
 };
 
