@@ -69,6 +69,44 @@ export const MAX_SUBAGENT_CHILD_OUTPUT_CHARS = 120_000;
 export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
+const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
+
+function sanitizePartialFindingsForParent(report: string): string {
+  const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
+  const safeLines = lines.map((line) => {
+    const directSafe = sanitizeCredentialText(line);
+    return containsHighConfidenceSecretIncludingEncodings(directSafe)
+      ? REDACTED_CREDENTIAL
+      : directSafe;
+  });
+  // A sensitive assignment key can be split across lines or settled messages.
+  // Find the shortest unsafe adjacent span so unrelated source-path lines stay.
+  if (containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))) {
+    // A hostile report can consist of thousands of one-character lines. Keep
+    // the local span search bounded; the whole-report fallback remains closed.
+    if (safeLines.length > 256) return REDACTED_CREDENTIAL;
+    const redacted = new Set<number>();
+    for (let width = 2; width <= Math.min(8, lines.length); width += 1) {
+      for (let start = 0; start + width <= lines.length; start += 1) {
+        const indices = Array.from({ length: width }, (_value, offset) => start + offset);
+        if (indices.some((index) => redacted.has(index))) continue;
+        if (containsHighConfidenceSecretIncludingEncodings(
+          safeLines.slice(start, start + width).join(""),
+        )) {
+          for (const index of indices) redacted.add(index);
+        }
+      }
+    }
+    for (const index of redacted) safeLines[index] = REDACTED_CREDENTIAL;
+  }
+  const partial = safeLines.join("\n").trim();
+  // Arbitrarily fragmented or encoded material beyond the local span limit
+  // cannot be reconstructed safely; fail closed before the parent sees it.
+  return containsHighConfidenceSecretIncludingEncodings(partial) ||
+    containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))
+    ? REDACTED_CREDENTIAL
+    : partial;
+}
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -800,17 +838,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       }
       // Keep source paths useful to the parent; the renderer projector applies its
       // stricter snapshot/path policy separately.
-      const partial = partialReports.join("\n\n").split("\n").map((line) => {
-        const directSafe = sanitizeCredentialText(line);
-        return containsHighConfidenceSecretIncludingEncodings(directSafe)
-          ? "[REDACTED CREDENTIAL]"
-          : directSafe;
-      }).join("\n").trim();
-      // Encoded or split material may cross a line boundary. Fail closed on
-      // the complete report while keeping unaffected source-path lines useful.
-      const modelSafePartial = containsHighConfidenceSecretIncludingEncodings(partial)
-        ? "[REDACTED CREDENTIAL]"
-        : partial;
+      const modelSafePartial = sanitizePartialFindingsForParent(partialReports.join("\n\n"));
       return {
         role: input.request.role,
         label: input.request.label,
