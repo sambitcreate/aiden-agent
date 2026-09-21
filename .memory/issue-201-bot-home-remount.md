@@ -38,15 +38,19 @@ regression names it.
   receipt that identify the home live inside that same root, so a substituting
   actor already controls every record that could identify it.
 - Still rejected, each with coverage: inode changes, symlinked roots, foreign
-  or unowned directories, non-private permissions, non-canonical home paths,
-  mismatched persisted copies, and resolve-to-effect directory swaps.
+  or unowned directories, non-canonical home paths, mismatched persisted
+  copies, and resolve-to-effect directory swaps. Widened modes on owned
+  directories and metadata files are repaired to private permissions before
+  use; resolution fails if that repair fails.
 - Follow-up to restore detection: a remount-stable volume identity, i.e. the
   `statfs` `f_fsid` field or the APFS volume UUID. Node's `fs.statfs` exposes
   only type/bsize/blocks/bfree/bavail/files/ffree, so this needs a native probe
   following the existing helper pattern, or a `diskutil info -plist`
   subprocess; both exceed a patch release's intended scope.
-- Native path verified for this fix: the bot inbox writer still receives the
-  live token through `BotInboundAttachmentHomeLease`, and that lease revalidates
-  the live token immediately before each effect, so the writer's `st_dev` and
-  `st_ino` fence keeps passing after a remount and Issue 201 stays fixed end to
-  end.
+- Code-path review only: a freshly acquired `BotInboundAttachmentHomeLease`
+  carries the live device/inode token to the native inbox writer, and the inbox
+  flow revalidates before invoking and after completing that writer. A remount
+  after lease acquisition changes that live token and fails closed; the caller
+  must acquire a fresh lease. TypeScript tests synthesize prior-mount metadata,
+  but native-dependent pretests and a real remount end-to-end remain unverified
+  on this host.
