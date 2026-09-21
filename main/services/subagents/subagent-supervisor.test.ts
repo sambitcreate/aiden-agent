@@ -2268,11 +2268,12 @@ test("turn-limit findings redact line-split assignment keys before parent format
   assert.doesNotMatch(parentFacing, /split-secret-value|OPENAI_API_|KEY=/u);
 });
 
-test("turn-limit findings fail closed after an earlier report is evicted", async () => {
+test("turn-limit findings retain safe reports beyond eight while filtering split credentials", async () => {
   const control = fakeChild(async ({ emit }) => {
     const reports = [
       "OPENAI_API_",
-      ...Array.from({ length: 7 }, (_value, index) => `Safe finding ${index}`),
+      ...Array.from({ length: 7 }, (_value, index) =>
+        `Safe finding ${index}: /workspace/src/finding-${index}.ts`),
       "KEY=evicted-prefix-secret",
     ];
     for (const report of reports) {
@@ -2305,7 +2306,9 @@ test("turn-limit findings fail closed after an earlier report is evicted", async
   ] });
   assert.match(parentFacing, /Status: failed/u);
   assert.match(parentFacing, /\[REDACTED CREDENTIAL\]/u);
-  assert.doesNotMatch(parentFacing, /evicted-prefix-secret|KEY=|Safe finding/u);
+  assert.match(parentFacing, /Safe finding 0: \/workspace\/src\/finding-0\.ts/u);
+  assert.match(parentFacing, /Safe finding 6: \/workspace\/src\/finding-6\.ts/u);
+  assert.doesNotMatch(parentFacing, /evicted-prefix-secret|KEY=/u);
 });
 
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {

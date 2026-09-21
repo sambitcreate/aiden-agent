@@ -12,9 +12,10 @@ remain useful to the parent; the persisted renderer snapshot gets its stricter
 path and environment redaction. Tool outputs, thinking, and aborted assistant
 messages are never used as a report. Model-facing partials filter raw and
 obfuscated/encoded credentials, including keys split across lines or settled
-messages, while retaining unaffected source paths. If the bounded eight-report
-window evicts older text, the partial fails closed because the discarded text
-could be a sensitive prefix of a retained value.
+messages, while retaining unaffected source paths. The full settled text stays
+within the child output budget until sanitization, so later reports cannot
+outlive an identifying prefix; report-boundary checks protect even non-adjacent
+fragments without discarding unrelated findings.
 Mixed V2 batches add accepted child ceilings to a generation-wide turn ledger,
 bounded at 512 turns, so a default sibling cannot truncate an extended scout.
 Other limits and cancellations remain

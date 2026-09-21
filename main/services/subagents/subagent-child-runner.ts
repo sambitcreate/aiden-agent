@@ -70,8 +70,35 @@ export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
 const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
+const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
 
-function sanitizePartialFindingsForParent(report: string): string {
+function sanitizePartialFindingsForParent(reports: readonly string[]): string {
+  const rawReports = reports.map((entry) => entry.split(/\r\n|[\n\r\u2028\u2029]/u));
+  const safeReports = rawReports.map((lines) => [...lines]);
+  const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
+  let comparisons = 0;
+  for (const [reportIndex, lines] of rawReports.entries()) {
+    for (const [lineIndex, line] of lines.entries()) {
+      for (const tail of earlierReportTails) {
+        // Non-adjacent reports can still carry a key prefix and its value.
+        // Bound pair checks by the same fail-closed policy as local spans.
+        if (++comparisons > MAX_PARTIAL_BOUNDARY_COMPARISONS) return REDACTED_CREDENTIAL;
+        if (containsHighConfidenceSecretIncludingEncodings(tail.text + line)) {
+          safeReports[reportIndex]![lineIndex] = REDACTED_CREDENTIAL;
+          safeReports[tail.reportIndex]![tail.lineIndex] = REDACTED_CREDENTIAL;
+          break;
+        }
+      }
+    }
+    let lineIndex = lines.length - 1;
+    while (lineIndex >= 0 && !lines[lineIndex]!.trim()) lineIndex -= 1;
+    if (lineIndex >= 0) earlierReportTails.push({
+      text: lines[lineIndex]!.slice(-128),
+      reportIndex,
+      lineIndex,
+    });
+  }
+  const report = safeReports.map((lines) => lines.join("\n")).join("\n\n");
   const lines = report.split(/\r\n|[\n\r\u2028\u2029]/u);
   const safeLines = lines.map((line) => {
     const directSafe = sanitizeCredentialText(line);
@@ -672,9 +699,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
 
     let currentTurnOutput = "";
     let terminalOutput = "";
-    // Only assistant-authored text from settled messages, never tool results or thinking.
+    // Keep the complete, output-budget-bounded assistant history so sanitizing
+    // the final partial never loses an earlier credential-key prefix.
     const partialReports: string[] = [];
-    let partialReportsTruncated = false;
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -770,17 +797,18 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           const messageWasAborted = terminalGenerationWasAborted(message);
           if (messageWasAborted) terminalAborted = true;
           const exactOutput = terminalAssistantText(message);
-          if (!messageWasAborted && exactOutput.trim()) {
-            partialReports.push(exactOutput.trim().slice(0, MAX_SUBAGENT_SUMMARY_CHARS));
-            if (partialReports.length > 8) {
-              partialReports.shift();
-              partialReportsTruncated = true;
-            }
-          }
           const additionalObserved = currentTurnHadTextDelta
             ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
             : exactOutput.length;
           observedOutputChars += additionalObserved;
+          if (
+            !messageWasAborted &&
+            observedOutputChars <= policy.maxOutputChars &&
+            exactOutput.length <= policy.maxOutputChars &&
+            exactOutput.trim()
+          ) {
+            partialReports.push(exactOutput.trim());
+          }
           input.telemetry?.textReconciled(additionalObserved);
           const exactProtocolChars = assistantProtocolChars(message);
           observedProtocolChars += Math.max(0, exactProtocolChars - currentTurnProtocolDeltaChars);
@@ -842,12 +870,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       }
       // Keep source paths useful to the parent; the renderer projector applies its
       // stricter snapshot/path policy separately.
-      // Once an older report is evicted, its discarded prefix could identify
-      // a credential value that remains in the retained suffix. No retained
-      // fragment can be proved safe in isolation at that boundary.
-      const modelSafePartial = partialReportsTruncated
-        ? REDACTED_CREDENTIAL
-        : sanitizePartialFindingsForParent(partialReports.join("\n\n"));
+      const modelSafePartial = sanitizePartialFindingsForParent(partialReports);
       return {
         role: input.request.role,
         label: input.request.label,
