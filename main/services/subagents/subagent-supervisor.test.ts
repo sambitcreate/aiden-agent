@@ -2068,6 +2068,44 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.equal(partialControl.cancelCount, 1);
 });
 
+test("turn-limit partial notes keep only the last four completed turns within the summary bound", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    for (let index = 1; index <= 5; index += 1) {
+      await emit({ type: "turn_start" } as AgentEvent);
+      await emit({
+        type: "message_end",
+        message: { ...assistant(`note-${index}: ${String(index).repeat(2_500)}`), stopReason: "toolUse" },
+      } as AgentEvent);
+    }
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const result = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "bounded-partial-turns",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Bounded notes", task: "Investigate." },
+    policy: { maxTurns: 5 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.summaryTruncated, true);
+  assert.equal(result.summary.length, MAX_SUBAGENT_SUMMARY_CHARS);
+  assert.equal(result.summary.includes("note-1:"), false, "the oldest note is evicted");
+  assert.match(result.summary, /^note-2:/u);
+  assert.match(result.summary, /note-5:/u);
+  assert.match(result.warning ?? "", /incomplete and unverified/u);
+  assert.equal(control.cancelCount, 1);
+});
+
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
   const streamedControl = fakeChild(async ({ emit }) => {
     const message = assistant("abcde");
