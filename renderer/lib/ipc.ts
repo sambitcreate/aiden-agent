@@ -1075,6 +1075,11 @@ export interface GenerationHandle {
   cancel: (origin: "lifecycle" | "user_stop") => void;
 }
 
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
+}
+
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
 
 export interface StreamCallbacks {
