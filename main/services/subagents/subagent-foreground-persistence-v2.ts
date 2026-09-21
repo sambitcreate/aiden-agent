@@ -174,6 +174,7 @@ export function createForegroundSubagentPersistenceV2(
     contextMode: "fresh" | "fork",
     contextRevision: string,
     deadlineMs: number,
+    maxTurns: number,
     requestedCapabilities: SubagentRequestedCapabilities,
     parentAuthority?: SubagentAuthorityV2,
   ): SubagentAuthorityV2 {
@@ -291,7 +292,7 @@ export function createForegroundSubagentPersistenceV2(
       capabilities,
       budgets: {
         deadlineMs,
-        maxTurns: MAX_SUBAGENT_CHILD_TURNS,
+        maxTurns: Math.min(maxTurns, parentAuthority?.budgets.maxTurns ?? maxTurns),
         maxToolCalls: MAX_SUBAGENT_CHILD_TOOL_CALLS,
         maxOutputChars: Math.max(
           MAX_SUBAGENT_SUMMARY_CHARS,
@@ -491,6 +492,7 @@ export function createForegroundSubagentPersistenceV2(
             value.contextMode,
             value.contextRevision,
             value.deadlineMs,
+            value.task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
             requestedCapabilities,
             value.parentAuthority,
           );
