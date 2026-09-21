@@ -60,6 +60,20 @@ test("cumulative token budgets are separate from one-request context capacity", 
   assert.equal(cumulativeSubagentTokenBudget(undefined), 4_000_000);
 });
 
+test("foreground authority uses a bounded explicit read-only turn budget", async () => {
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v2", [])));
+  const prepared = await persistence.prepareRun({
+    identity: { runId: "run-budget", groupId: "group-budget", childId: "child-budget" },
+    task: { role: "scout", label: "Survey", task: "Survey source.", maxTurns: 72 },
+    contextMode: "fresh",
+    contextRevision: "a".repeat(64),
+    deadlineMs: 5_000,
+    stop: () => {},
+  });
+  assert.equal(prepared.authority?.budgets.maxTurns, 72);
+  await prepared.abortPreparation();
+});
+
 function store(
   selection: "v1" | "v2",
   writes: Array<{ snapshot: unknown; manifest: unknown }>,
@@ -717,7 +731,7 @@ test("Phase 6B mints one fresh depth-2 authority from an exact live parent and p
       groupId: "group-tree",
       childId: "child-nested",
     },
-    task: { role: "scout", label: "Check", task: "Check one narrow fact." },
+    task: { role: "scout", label: "Check", task: "Check one narrow fact.", maxTurns: 72 },
     contextMode: "fresh",
     contextRevision: "2".repeat(64),
     deadlineMs: 4_000,
@@ -732,6 +746,7 @@ test("Phase 6B mints one fresh depth-2 authority from an exact live parent and p
     stop: () => {},
   });
   assert.equal(nested.authority?.depth, 2);
+  assert.equal(nested.authority?.budgets.maxTurns, parent.authority?.budgets.maxTurns);
   assert.equal(nested.authority?.parentRunId, "run-parent");
   assert.equal(nested.authority?.treeRootId, parent.authority?.treeRootId);
   assert.equal(nested.authority?.capabilities.delegation, false);
