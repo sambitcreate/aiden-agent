@@ -32,6 +32,7 @@ import {
   ManagedWorktreeSnapshotError,
   type ManagedWorktreeRestoreJournal,
   persistManagedWorktreeSnapshot,
+  readManagedWorktreeRestoreJournal,
   readManagedWorktreeSnapshot,
   requireReadyManagedWorktreeSnapshot,
   restoreProvisionedFiles,
@@ -666,6 +667,85 @@ test("restore converges after a crash between checkout creation and journal upda
   assert.equal(again.worktree.path, canonicalPlanned);
   const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
   assert.equal(worktrees.match(/^worktree /gm)?.length, 2);
+});
+
+test("the first restore journal is published atomically and keeps its exclusive claim", async (t) => {
+  const snapshotRoot = await temporaryDirectory(t);
+  const snapshotId = randomUUID();
+  const directory = path.join(snapshotRoot, snapshotId);
+  const target = path.join(directory, "restore.json");
+  const journal: ManagedWorktreeRestoreJournal = {
+    version: 1,
+    phase: "checkout_planned",
+    snapshotId,
+    workspaceId: "workspace-atomic",
+    worktreePath: path.join(snapshotRoot, "planned"),
+  };
+
+  await createManagedWorktreeRestoreJournal(snapshotRoot, journal);
+
+  // The published journal is complete, and the temporary publication name is
+  // gone: a crash can no longer leave a truncated journal at the final path.
+  const published = await fs.readFile(target, "utf8");
+  const reread = await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId);
+  assert.equal(reread?.phase, "checkout_planned");
+  assert.equal(reread?.worktreePath, journal.worktreePath);
+  assert.deepEqual(
+    (await fs.readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
+    [],
+  );
+
+  // A competing planner still cannot replace the first writer's claim, and the
+  // rejected attempt leaves neither a changed journal nor a stray temp file.
+  await assert.rejects(
+    createManagedWorktreeRestoreJournal(snapshotRoot, {
+      ...journal,
+      worktreePath: path.join(snapshotRoot, "competing"),
+    }),
+    { code: "EEXIST" },
+  );
+  assert.equal(await fs.readFile(target, "utf8"), published);
+  assert.deepEqual(
+    (await fs.readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
+    [],
+  );
+});
+
+test("a failed first publication leaves no partial journal at the final path", async (t) => {
+  const snapshotRoot = await temporaryDirectory(t);
+  const snapshotId = randomUUID();
+  const directory = path.join(snapshotRoot, snapshotId);
+  const target = path.join(directory, "restore.json");
+  const journal: ManagedWorktreeRestoreJournal = {
+    version: 1,
+    phase: "checkout_planned",
+    snapshotId,
+    workspaceId: "workspace-atomic",
+    worktreePath: path.join(snapshotRoot, "planned"),
+  };
+
+  // Fault injection: serialization fails after the destination would have been
+  // claimed. Publishing the first journal through a temporary file must leave
+  // the final path absent, so the retry still plans a checkout instead of
+  // rejecting a truncated journal as invalid.
+  const unserializable = {
+    ...journal,
+    worktreePath: {
+      toJSON: () => {
+        throw new Error("cannot serialize journal");
+      },
+    },
+  } as unknown as ManagedWorktreeRestoreJournal;
+
+  await assert.rejects(
+    createManagedWorktreeRestoreJournal(snapshotRoot, unserializable),
+    /cannot serialize journal/u,
+  );
+  await assert.rejects(fs.lstat(target), { code: "ENOENT" });
+  assert.deepEqual(
+    (await fs.readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
+    [],
+  );
 });
 
 test("restore fails closed on branch conflicts and existing destinations", async (t) => {

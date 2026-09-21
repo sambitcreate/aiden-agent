@@ -149,7 +149,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
 });
 
 
-test("dirty removal snapshots before deletion and passes the lifecycle to git", async (t) => {
+test("dirty removal snapshots before deletion, admits Git objects on the object store volume, and lets force skip the advisory ignored scan", async (t) => {
   const { mkdtemp, mkdir, readFile, writeFile } = await import("node:fs/promises");
   const os = await import("node:os");
   const nodePath = await import("node:path");
@@ -164,6 +164,9 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
   await writeFile(nodePath.join(worktreePath, ".env"), "SECRET=1\n");
 
   const events: string[] = [];
+  const capacityPaths: string[] = [];
+  let expandedCalls = 0;
+  let failExpansion = false;
   let dirty = { head: "b".repeat(40), uncommitted: 1, ignored: 1, ignoredPaths: [".env"] };
   let lifecycleSeen: unknown;
   const managed: Workspace = {
@@ -201,14 +204,22 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
     ensureSnapshotRoot: async () => snapshotRoot,
     checkoutBytes: async () => 0,
     checkCreateCapacity: async () => undefined,
-    checkSnapshotCapacity: async () => undefined,
+    checkSnapshotCapacity: async (dir) => {
+      capacityPaths.push(dir);
+      return undefined;
+    },
     provisionIncludedFiles: async () => [],
     repositoryPaths: async (folderPath) => ({
       topLevel: folderPath,
       commonDir: `${folderPath}/.git`,
     }),
     dirtyState: async () => dirty,
-    expandIgnoredPaths: async (_repo, _worktree, ignoredPaths) => ignoredPaths.slice(),
+    expandIgnoredPaths: async (_repo, _worktree, ignoredPaths) => {
+      expandedCalls += 1;
+      // Mirrors a large ignored tree exceeding Git's bounded output buffer.
+      if (failExpansion) throw new Error("git output limit exceeded");
+      return ignoredPaths.slice();
+    },
     snapshotContentBytes: async () => 0,
     captureWorktreeSnapshot: async (_repo, _wt, snapshotId) => {
       events.push("capture");
@@ -263,6 +274,12 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
   const removed = await service.remove(owner, managed.id);
   assert.equal(removed.branchDeleted, true);
   assert.deepEqual(events, ["capture", "delete-git", "remove", "finalize"]);
+  // The safe path classifies ignored records before deleting.
+  assert.equal(expandedCalls, 1);
+  // Git objects are written through the repository's common directory, so the
+  // object-byte share is admitted against that filesystem, not the checkout's.
+  assert.ok(capacityPaths.includes(`${repositoryPath}/.git`));
+  assert.ok(!capacityPaths.includes(repositoryPath));
 
   const lifecycle = lifecycleSeen as {
     snapshot: { id: string; ref: string; tree: string };
@@ -296,9 +313,14 @@ test("dirty removal snapshots before deletion and passes the lifecycle to git", 
   );
   assert.equal(lifecycleSeen, undefined);
 
-  // Force still snapshots when it can.
+  // Force still snapshots when it can, and it must not run the advisory
+  // ignored-path expansion at all: a confirmed destructive removal cannot be
+  // blocked by a scan whose failure mode is an output-limit error.
   dirty = { head: "b".repeat(40), uncommitted: 1, ignored: 1, ignoredPaths: ["unknown.env"] };
+  const expansionsBeforeForce = expandedCalls;
+  failExpansion = true;
   await service.remove(owner, managed.id, undefined, { force: true });
+  assert.equal(expandedCalls, expansionsBeforeForce);
   const forced = lifecycleSeen as { force?: boolean; snapshot?: unknown } | undefined;
   assert.equal(forced?.force, true);
   assert.ok(forced?.snapshot);

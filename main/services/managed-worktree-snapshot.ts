@@ -547,6 +547,12 @@ export async function writeManagedWorktreeRestoreJournal(
  * Publish the first restore journal atomically: fails with EEXIST when a
  * journal already exists so two concurrent restores cannot plan divergent
  * checkouts for the same snapshot.
+ *
+ * The journal is written and fsynced under a temporary name and then linked to
+ * its final name. `link` publishes a complete file in one step and still fails
+ * with EEXIST when a competing planner won the claim, so a crash can only leave
+ * no readable journal or one complete journal, never a truncated one that the
+ * retry would reject as invalid.
  */
 export async function createManagedWorktreeRestoreJournal(
   root: string,
@@ -554,14 +560,23 @@ export async function createManagedWorktreeRestoreJournal(
 ): Promise<void> {
   const dir = snapshotDir(root, journal.snapshotId);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const handle = await fs.open(restoreJournalPath(dir), "wx", 0o600);
+  const target = restoreJournalPath(dir);
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  let handle: fs.FileHandle | undefined;
   try {
+    handle = await fs.open(temporary, "wx", 0o600);
     await handle.writeFile(JSON.stringify({ ...journal, version: 1 }), "utf8");
     await handle.sync();
-  } finally {
     await handle.close();
+    handle = undefined;
+    await fs.link(temporary, target);
+    await syncDirectory(dir);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    // The temporary name is never the published journal; the target link keeps
+    // the bytes alive when the claim succeeded.
+    await fs.unlink(temporary).catch(() => undefined);
   }
-  await syncDirectory(dir);
 }
 
 /** Remove a completed restore journal; absent journals are already clean. */

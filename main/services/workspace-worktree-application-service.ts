@@ -281,8 +281,12 @@ export function createWorkspaceWorktreeApplicationService(
             );
             // Status collapses ignored directories to `dir/` records while the
             // allowlist names provisioned files — expand to file granularity.
+            // An explicit force skips recoverability classification entirely (the
+            // Git layer does the same for its own policy), so a confirmed
+            // destructive removal must not be blocked here by an advisory scan
+            // that a large ignored tree can push past Git's output-buffer cap.
             let unknownIgnored = dirty.ignored > dirty.ignoredPaths.length;
-            if (!unknownIgnored) {
+            if (!unknownIgnored && options?.force !== true) {
               const expanded = await dependencies.expandIgnoredPaths(
                 managed.repositoryPath,
                 managed.worktreePath,
@@ -312,22 +316,28 @@ export function createWorkspaceWorktreeApplicationService(
               // The snapshot writes to three filesystems: content-addressed
               // blobs in the snapshot dir, loose objects in the repository's
               // Git dir, and an isolated index in the OS temp dir. Admit only
-              // when each volume can hold its share.
-              const [objectBytes, indexBytes] = await Promise.all([
-                dependencies.snapshotContentBytes(
-                  managed.repositoryPath,
-                  managed.worktreePath,
-                ),
-                managed.worktreeGitDir === undefined
-                  ? Promise.resolve(64 * 1024)
-                  : fs
-                      .lstat(path.join(managed.worktreeGitDir, "index"))
-                      .then((stat) => stat.size)
-                      .catch(() => 64 * 1024),
+              // when each volume can hold its share. Git objects go to the
+              // repository's common directory, which can sit on a different
+              // volume than the checkout, so admit against the object store's
+              // own filesystem instead of `repositoryPath`.
+              const [{ commonDir }, [objectBytes, indexBytes]] = await Promise.all([
+                dependencies.repositoryPaths(managed.repositoryPath),
+                Promise.all([
+                  dependencies.snapshotContentBytes(
+                    managed.repositoryPath,
+                    managed.worktreePath,
+                  ),
+                  managed.worktreeGitDir === undefined
+                    ? Promise.resolve(64 * 1024)
+                    : fs
+                        .lstat(path.join(managed.worktreeGitDir, "index"))
+                        .then((stat) => stat.size)
+                        .catch(() => 64 * 1024),
+                ]),
               ]);
               await Promise.all([
                 dependencies.checkSnapshotCapacity(snapshotRoot, blobBytes),
-                dependencies.checkSnapshotCapacity(managed.repositoryPath, objectBytes),
+                dependencies.checkSnapshotCapacity(commonDir, objectBytes),
                 dependencies.checkSnapshotCapacity(
                   os.tmpdir(),
                   indexBytes + 64 * 1024,
