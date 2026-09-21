@@ -3079,13 +3079,13 @@ struct AidenChatDetailView: View {
 
     private func commitSelectedPhotos() {
         guard !attachmentControlsAreBusy else { return }
-        var assets: [PHAsset] = []
+        var commit: AidenAttachmentPhotoCommit?
         withAnimation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.08)) {
-            assets = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
+            commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
         }
-        guard !assets.isEmpty else { return }
+        guard let commit else { return }
 
-        let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(assets)) { asset in
+        let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(commit.assets)) { asset in
             let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
             return try await AidenAttachmentPreparation.imageUploadAsync(
                 data: picked.data,
@@ -3093,12 +3093,12 @@ struct AidenChatDetailView: View {
             )
         }
         guard let preparation else {
-            attachmentPicker.finishCommit()
+            attachmentPicker.finishCommit(commit.id)
             return
         }
         Task { @MainActor in
             await preparation.value
-            attachmentPicker.finishCommit()
+            attachmentPicker.finishCommit(commit.id)
         }
     }
 

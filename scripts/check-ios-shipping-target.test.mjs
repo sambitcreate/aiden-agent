@@ -945,6 +945,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
   assert.match(chat, /private var canToggleAttachmentPicker: Bool \{\s*AidenAttachmentPickerPolicy\.canPresent/u);
   assert.match(attachmentPicker, /committingAssets/u);
+  assert.match(
+    attachmentPicker,
+    /withTaskCancellationHandler[\s\S]*?cancelImageRequest\(id\)/u,
+  );
+  assert.match(chat, /finishCommit\(commit\.id\)/u);
   assert.match(attachmentCamera, /AVCaptureSession\(\)/u);
   assert.match(attachmentCamera, /AVCapturePhotoOutput\(\)/u);
   assert.match(attachmentCamera, /AVCaptureDevice\.requestAccess\(for: \.video\)/u);
@@ -952,6 +957,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(attachmentCamera, /session\.stopRunning\(\)/u);
   assert.match(attachmentCamera, /AVCaptureDevice\.RotationCoordinator/u);
   assert.match(attachmentCamera, /photo\.fileDataRepresentation\(\)/u);
+  assert.match(
+    attachmentCamera,
+    /captureFence\.invalidate\(\)[\s\S]*?captureGenerationsBySettingsID\.removeAll\(\)/u,
+  );
+  assert.match(attachmentCamera, /captureFence\.consume\(generation\)/u);
   assert.doesNotMatch(attachmentCamera, /UIImagePickerController/u);
   assert.match(chat, /\.fileImporter\(/u);
   assert.match(

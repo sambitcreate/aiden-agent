@@ -43,6 +43,8 @@ final class AidenAttachmentCameraController: NSObject, ObservableObject, @unchec
     private var activeToken: UUID?
     private var captureRotationAngle: CGFloat = 0
     private var captureCompletion: ((Result<Data, Error>) -> Void)?
+    private var captureFence = AidenAttachmentLifecycleFence()
+    private var captureGenerationsBySettingsID: [Int64: UUID] = [:]
     private var notificationTokens: [NSObjectProtocol] = []
 
     override init() {
@@ -85,9 +87,12 @@ final class AidenAttachmentCameraController: NSObject, ObservableObject, @unchec
     }
 
     func stop() {
+        captureFence.invalidate()
+        captureCompletion = nil
         sessionQueue.async { [weak self] in
             guard let self else { return }
             self.activeToken = nil
+            self.captureGenerationsBySettingsID.removeAll()
             if self.session.isRunning {
                 self.session.stopRunning()
             }
@@ -104,11 +109,15 @@ final class AidenAttachmentCameraController: NSObject, ObservableObject, @unchec
         guard status == .ready else { return }
         status = .capturing
         captureErrorMessage = nil
+        let captureGeneration = captureFence.begin()
         captureCompletion = completion
 
         sessionQueue.async { [weak self] in
             guard let self, self.session.isRunning else {
-                self?.completeCapture(.failure(AidenAttachmentCameraError.sessionUnavailable))
+                self?.completeCapture(
+                    .failure(AidenAttachmentCameraError.sessionUnavailable),
+                    generation: captureGeneration
+                )
                 return
             }
 
@@ -126,6 +135,7 @@ final class AidenAttachmentCameraController: NSObject, ObservableObject, @unchec
                connection.isVideoRotationAngleSupported(self.captureRotationAngle) {
                 connection.videoRotationAngle = self.captureRotationAngle
             }
+            self.captureGenerationsBySettingsID[settings.uniqueID] = captureGeneration
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
     }
@@ -280,9 +290,10 @@ final class AidenAttachmentCameraController: NSObject, ObservableObject, @unchec
         DispatchQueue.main.async { [weak self] in self?.captureErrorMessage = message }
     }
 
-    private func completeCapture(_ result: Result<Data, Error>) {
+    private func completeCapture(_ result: Result<Data, Error>, generation: UUID) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            guard self.captureFence.consume(generation) else { return }
             self.status = .ready
             if case .failure = result {
                 self.captureErrorMessage = "Photo capture failed. Try again."
@@ -300,12 +311,20 @@ extension AidenAttachmentCameraController: AVCapturePhotoCaptureDelegate {
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
+        let result: Result<Data, Error>
         if let error {
-            completeCapture(.failure(error))
+            result = .failure(error)
         } else if let data = photo.fileDataRepresentation(), !data.isEmpty {
-            completeCapture(.success(data))
+            result = .success(data)
         } else {
-            completeCapture(.failure(AidenAttachmentCameraError.missingPhotoData))
+            result = .failure(AidenAttachmentCameraError.missingPhotoData)
+        }
+        let settingsID = photo.resolvedSettings.uniqueID
+        sessionQueue.async { [weak self] in
+            guard let self,
+                  let generation = self.captureGenerationsBySettingsID.removeValue(forKey: settingsID)
+            else { return }
+            self.completeCapture(result, generation: generation)
         }
     }
 }

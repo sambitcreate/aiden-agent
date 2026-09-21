@@ -3966,6 +3966,18 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentPickerPolicy.confirmationLabel(count: 3), "Add 3 Photos")
     }
 
+    func testAttachmentLifecycleFenceRejectsLateWorkWithoutClearingANewerOperation() {
+        var fence = AidenAttachmentLifecycleFence()
+        let first = fence.begin()
+        fence.invalidate()
+        let second = fence.begin()
+
+        XCTAssertFalse(fence.consume(first))
+        XCTAssertEqual(fence.activeID, second)
+        XCTAssertTrue(fence.consume(second))
+        XCTAssertNil(fence.activeID)
+    }
+
     func testAttachmentPickerRespectsReadOnlyAndBusyStates() {
         XCTAssertTrue(AidenAttachmentPickerPolicy.canPresent(
             isReadOnly: false,

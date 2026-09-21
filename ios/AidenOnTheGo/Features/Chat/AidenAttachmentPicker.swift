@@ -45,6 +45,31 @@ enum AidenAttachmentPickerPolicy {
     }
 }
 
+struct AidenAttachmentLifecycleFence {
+    private(set) var activeID: UUID?
+
+    mutating func begin() -> UUID {
+        let id = UUID()
+        activeID = id
+        return id
+    }
+
+    mutating func invalidate() {
+        activeID = nil
+    }
+
+    mutating func consume(_ id: UUID) -> Bool {
+        guard activeID == id else { return false }
+        activeID = nil
+        return true
+    }
+}
+
+struct AidenAttachmentPhotoCommit {
+    let id: UUID
+    let assets: [PHAsset]
+}
+
 struct AidenChatReadableLayout {
     static let landscapeWidthFraction: CGFloat = 0.5
 
@@ -238,6 +263,7 @@ final class AidenAttachmentPickerState {
     private(set) var committingAssets: [PHAsset] = []
     private(set) var committingPendingPrefixCount = 0
     private(set) var selectionFeedbackSequence = 0
+    private var commitFence = AidenAttachmentLifecycleFence()
 
     var isPresented: Bool { mode != .closed }
 
@@ -285,18 +311,20 @@ final class AidenAttachmentPickerState {
         selectedAssetIDs.firstIndex(of: asset.localIdentifier).map { $0 + 1 }
     }
 
-    func beginCommit(pendingCount: Int) -> [PHAsset] {
+    func beginCommit(pendingCount: Int) -> AidenAttachmentPhotoCommit? {
         let byID = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
         let selected = selectedAssetIDs.compactMap { byID[$0] }
-        guard !selected.isEmpty else { return [] }
+        guard !selected.isEmpty else { return nil }
+        let commitID = commitFence.begin()
         committingPendingPrefixCount = pendingCount
         committingAssets = selected
         selectedAssetIDs = []
         mode = .closed
-        return selected
+        return AidenAttachmentPhotoCommit(id: commitID, assets: selected)
     }
 
-    func finishCommit() {
+    func finishCommit(_ id: UUID) {
+        guard commitFence.consume(id) else { return }
         committingAssets = []
         committingPendingPrefixCount = 0
     }
@@ -306,6 +334,7 @@ final class AidenAttachmentPickerState {
         selectedAssetIDs = []
         committingAssets = []
         committingPendingPrefixCount = 0
+        commitFence.invalidate()
     }
 
     func loadLibrary() async {
@@ -343,23 +372,97 @@ enum AidenPhotoLibraryImageLoader {
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = true
         options.version = .current
+        let request = AidenPhotoLibraryImageRequest()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            PHImageManager.default().requestImageDataAndOrientation(
-                for: asset,
-                options: options
-            ) { data, _, _, info in
-                if let error = info?[PHImageErrorKey] as? Error {
-                    continuation.resume(throwing: error)
-                } else if (info?[PHImageCancelledKey] as? Bool) == true {
-                    continuation.resume(throwing: CancellationError())
-                } else if let data, !data.isEmpty {
-                    continuation.resume(returning: PickedImage(data: data, name: name))
-                } else {
-                    continuation.resume(throwing: AidenAttachmentPreparationError.invalidImage)
-                }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                request.start(
+                    asset: asset,
+                    name: name,
+                    options: options,
+                    continuation: continuation
+                )
             }
+        } onCancel: {
+            request.cancel()
         }
+    }
+}
+
+private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
+    private let manager = PHImageManager.default()
+    private let lock = NSLock()
+    private var requestID = PHInvalidImageRequestID
+    private var continuation: CheckedContinuation<AidenPhotoLibraryImageLoader.PickedImage, Error>?
+    private var isFinished = false
+
+    func start(
+        asset: PHAsset,
+        name: String,
+        options: PHImageRequestOptions,
+        continuation: CheckedContinuation<AidenPhotoLibraryImageLoader.PickedImage, Error>
+    ) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+
+        let id = manager.requestImageDataAndOrientation(
+            for: asset,
+            options: options
+        ) { [weak self] data, _, _, info in
+            let result: Result<AidenPhotoLibraryImageLoader.PickedImage, Error>
+            if let error = info?[PHImageErrorKey] as? Error {
+                result = .failure(error)
+            } else if (info?[PHImageCancelledKey] as? Bool) == true {
+                result = .failure(CancellationError())
+            } else if let data, !data.isEmpty {
+                result = .success(.init(data: data, name: name))
+            } else {
+                result = .failure(AidenAttachmentPreparationError.invalidImage)
+            }
+            self?.finish(result)
+        }
+
+        lock.lock()
+        if isFinished {
+            lock.unlock()
+            manager.cancelImageRequest(id)
+        } else {
+            requestID = id
+            lock.unlock()
+        }
+    }
+
+    func cancel() {
+        finish(.failure(CancellationError()), cancellingRequest: true)
+    }
+
+    private func finish(
+        _ result: Result<AidenPhotoLibraryImageLoader.PickedImage, Error>,
+        cancellingRequest: Bool = false
+    ) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let id = requestID
+        requestID = PHInvalidImageRequestID
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        if cancellingRequest, id != PHInvalidImageRequestID {
+            manager.cancelImageRequest(id)
+        }
+        continuation?.resume(with: result)
     }
 }
 
