@@ -30,6 +30,10 @@ enum AidenAttachmentPickerPolicy {
         return selected + [id]
     }
 
+    static func visibleSelection(_ selected: [String], visibleIDs: Set<String>) -> [String] {
+        selected.filter(visibleIDs.contains)
+    }
+
     static func confirmationLabel(count: Int) -> String {
         count == 1 ? "Add 1 Photo" : "Add \(count) Photos"
     }
@@ -312,9 +316,10 @@ final class AidenAttachmentPickerState {
     }
 
     func beginCommit(pendingCount: Int) -> AidenAttachmentPhotoCommit? {
+        guard case .ready = libraryStatus else { return nil }
         let byID = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
         let selected = selectedAssetIDs.compactMap { byID[$0] }
-        guard !selected.isEmpty else { return nil }
+        guard !selected.isEmpty, selected.count == selectedAssetIDs.count else { return nil }
         let commitID = commitFence.begin()
         committingPendingPrefixCount = pendingCount
         committingAssets = selected
@@ -337,14 +342,19 @@ final class AidenAttachmentPickerState {
         commitFence.invalidate()
     }
 
-    func loadLibrary() async {
+    func markLibraryForRefresh() {
         libraryStatus = .loading
+    }
+
+    func loadLibrary() async {
+        markLibraryForRefresh()
         var authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if authorization == .notDetermined {
             authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         }
         guard authorization == .authorized || authorization == .limited else {
             assets = []
+            selectedAssetIDs = []
             libraryStatus = .denied
             return
         }
@@ -356,6 +366,10 @@ final class AidenAttachmentPickerState {
         var loaded: [PHAsset] = []
         loaded.reserveCapacity(result.count)
         result.enumerateObjects { asset, _, _ in loaded.append(asset) }
+        selectedAssetIDs = AidenAttachmentPickerPolicy.visibleSelection(
+            selectedAssetIDs,
+            visibleIDs: Set(loaded.map(\.localIdentifier))
+        )
         assets = loaded
         libraryStatus = loaded.isEmpty ? .empty : .ready(limited: authorization == .limited)
     }
@@ -467,6 +481,7 @@ private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
 }
 
 struct AidenAttachmentPickerOverlay: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -493,13 +508,15 @@ struct AidenAttachmentPickerOverlay: View {
             )
 
             ZStack(alignment: .bottomLeading) {
-                Color.black.opacity(
-                    picker.isPresented ? (picker.mode == .menu ? 0.08 : 0.2) : 0
-                )
+                Button(action: dismiss) {
+                    Color.black.opacity(
+                        picker.isPresented ? (picker.mode == .menu ? 0.08 : 0.2) : 0
+                    )
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
-                    .onTapGesture { dismiss() }
-                    .accessibilityHidden(true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close attachment picker")
 
                 panel(size: layout.panelSize)
                     .padding(.leading, layout.leadingPadding)
@@ -513,6 +530,12 @@ struct AidenAttachmentPickerOverlay: View {
         }
         .sensoryFeedback(.selection, trigger: picker.selectionFeedbackSequence)
         .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape, dismiss)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, picker.mode == .photos else { return }
+            picker.markLibraryForRefresh()
+            Task { await picker.loadLibrary() }
+        }
     }
 
     private func panel(size: CGSize) -> some View {
@@ -649,7 +672,7 @@ struct AidenAttachmentPickerOverlay: View {
                         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: confirmLabel)
                 }
                 .buttonStyle(.plain)
-                .disabled(picker.selectedAssetIDs.isEmpty || isBusy)
+                .disabled(picker.selectedAssetIDs.isEmpty || isBusy || picker.libraryStatus == .loading)
             }
             .padding(.horizontal, 25)
             .padding(.bottom, 25)

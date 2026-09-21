@@ -337,6 +337,7 @@ private enum AidenAttachmentCameraError: Error {
 
 struct AidenAttachmentCameraPanel: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
     @ObservedObject var controller: AidenAttachmentCameraController
     let onBack: () -> Void
@@ -365,6 +366,7 @@ struct AidenAttachmentCameraPanel: View {
 
             controls
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.captureDevice != nil)
         .onAppear {
             if scenePhase == .active { controller.start() }
         }

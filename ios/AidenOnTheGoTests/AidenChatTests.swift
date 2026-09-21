@@ -3958,6 +3958,15 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(selected, ["photo-1"])
     }
 
+    func testAttachmentPickerRefreshDropsInaccessibleSelectionAndKeepsOrder() {
+        let selected = ["first", "removed", "last"]
+        XCTAssertEqual(
+            AidenAttachmentPickerPolicy.visibleSelection(selected, visibleIDs: ["last", "first"]),
+            ["first", "last"]
+        )
+        XCTAssertTrue(AidenAttachmentPickerPolicy.visibleSelection(selected, visibleIDs: []).isEmpty)
+    }
+
     func testAttachmentPickerCapacityAndConfirmationCopyAreBounded() {
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 0), 10)
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 9), 1)
@@ -4071,6 +4080,8 @@ final class AidenAppearanceTests: XCTestCase {
         picker.backToMenu()
         picker.beginShowingPhotos()
         XCTAssertEqual(picker.mode, .photos)
+        picker.markLibraryForRefresh()
+        XCTAssertEqual(picker.libraryStatus, .loading)
     }
 
     func testCameraAuthorizationPolicyMapsEveryKnownState() {
