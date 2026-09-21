@@ -77,6 +77,12 @@ export interface WorkspaceWorktreeApplicationDependencies {
     signal?: AbortSignal,
   ): Promise<ManagedWorktreeSnapshotCapture>;
   snapshotRefCommit(repositoryPath: string, snapshotId: string): Promise<string | undefined>;
+  /** Remove a published snapshot ref while it still points at `expectedCommit`. */
+  deleteSnapshotRef(
+    repositoryPath: string,
+    snapshotId: string,
+    expectedCommit: string,
+  ): Promise<boolean>;
   restoreManagedCheckout(
     repositoryPath: string,
     root: string,
@@ -368,21 +374,34 @@ export function createWorkspaceWorktreeApplicationService(
                 path.isAbsolute(relativeWorkspace)
                   ? ""
                   : relativeWorkspace;
-              await persistManagedWorktreeSnapshot(snapshotRoot, {
-                id: snapshotId,
-                workspaceId,
-                repositoryPath: managed.repositoryPath,
-                worktreePath: managed.worktreePath,
-                workspaceSubpath,
-                branch: managed.branch,
-                originalHead: capture.head,
-                snapshotRef: capture.ref,
-                snapshotCommit: capture.commit,
-                snapshotTree: capture.tree,
-                createdAt: dependencies.now(),
-                provisionedFiles: provisioned,
-                state: "ready",
-              });
+              try {
+                await persistManagedWorktreeSnapshot(snapshotRoot, {
+                  id: snapshotId,
+                  workspaceId,
+                  repositoryPath: managed.repositoryPath,
+                  worktreePath: managed.worktreePath,
+                  workspaceSubpath,
+                  branch: managed.branch,
+                  originalHead: capture.head,
+                  snapshotRef: capture.ref,
+                  snapshotCommit: capture.commit,
+                  snapshotTree: capture.tree,
+                  createdAt: dependencies.now(),
+                  provisionedFiles: provisioned,
+                  state: "ready",
+                });
+              } catch (error) {
+                // A snapshot without its manifest is unusable, so a failed
+                // publication must not leak the synthetic ref and private
+                // blobs this attempt already wrote.
+                await dependencies
+                  .deleteSnapshotRef(managed.repositoryPath, snapshotId, capture.commit)
+                  .catch(() => undefined);
+                await fs
+                  .rm(path.join(snapshotRoot, snapshotId), { recursive: true, force: true })
+                  .catch(() => undefined);
+                throw error;
+              }
               return {
                 id: snapshotId,
                 ref: capture.ref,

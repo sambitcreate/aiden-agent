@@ -197,6 +197,56 @@ test("snapshot-aware deletion removes a dirty managed worktree and journals it",
   assert.equal(persisted.phase, "filesystem_complete");
 });
 
+test("safe deletion fails closed when the snapshot anchor disappeared after capture", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: removeAfterAuthorize,
+  });
+  const created = await service.createWorktree(repository, root, "codex/anchor-loss");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n");
+
+  const snapshotId = randomUUID();
+  const capture = await service.captureManagedWorktreeSnapshot(
+    repository,
+    created.path,
+    snapshotId,
+  );
+  // Another Git process removes the durable anchor after capture. The captured
+  // tree is still reachable in the object store, but nothing keeps it alive, so
+  // a safe deletion can no longer promise a restorable result.
+  await git(repository, ["update-ref", "-d", capture.ref]);
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+      {
+        snapshot: {
+          id: snapshotId,
+          ref: capture.ref,
+          commit: capture.commit,
+          tree: capture.tree,
+        },
+        provisionedIgnored: [],
+      },
+    ),
+    (error: unknown) =>
+      error instanceof GitServiceError && error.code === "dirty_worktree",
+  );
+  // The recoverable checkout is preserved rather than silently discarded.
+  assert.equal((await fs.lstat(created.path)).isDirectory(), true);
+});
+
 test("an unknown ignored file blocks safe deletion even with a snapshot", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
@@ -944,6 +994,43 @@ test("provisioned blob storage captures bytes, verifies digests, and restores id
     (error: unknown) =>
       error instanceof ManagedWorktreeSnapshotError && error.code === "blob_missing",
   );
+});
+
+test("provisioned-file restore never follows a snapshot-materialized symlink ancestor", async (t) => {
+  const snapshotRoot = await temporaryDirectory(t);
+  const worktree = await temporaryDirectory(t);
+  const outside = await temporaryDirectory(t);
+  const snapshotId = randomUUID();
+  const snapshotDir = path.join(snapshotRoot, snapshotId);
+  await fs.mkdir(path.join(snapshotDir, "files"), { recursive: true });
+  const source = path.join(worktree, "payload.txt");
+  await fs.writeFile(source, "PAYLOAD=1\n", { mode: 0o600 });
+  const entry = await captureProvisionedFile(snapshotDir, worktree, "payload.txt");
+  await fs.unlink(source);
+
+  // Applying the captured Git tree can recreate a symlink at an ancestor of a
+  // provisioned descendant. Restore must refuse it instead of removing the
+  // inflight sibling, reading, or chmodding the file it resolves to.
+  const victim = path.join(outside, "payload.txt");
+  await fs.writeFile(victim, "PAYLOAD=1\n", { mode: 0o644 });
+  await fs.chmod(victim, 0o644);
+  const victimInflight = `${victim}.aiden-restore-inflight`;
+  await fs.writeFile(victimInflight, "crashed\n", { mode: 0o600 });
+  await fs.symlink(outside, path.join(worktree, "escape"));
+
+  await assert.rejects(
+    restoreProvisionedFiles(
+      snapshotDir,
+      [{ ...entry, relativePath: "escape/payload.txt" }],
+      worktree,
+    ),
+    (error: unknown) =>
+      error instanceof ManagedWorktreeSnapshotError && error.code === "snapshot_invalid",
+  );
+  // Nothing outside the worktree was removed, rewritten, or chmodded.
+  assert.equal(await fs.readFile(victim, "utf8"), "PAYLOAD=1\n");
+  assert.equal((await fs.lstat(victim)).mode & 0o777, 0o644);
+  assert.equal(await fs.readFile(victimInflight, "utf8"), "crashed\n");
 });
 
 test("snapshot manifests round-trip and reject incomplete or corrupt records", async (t) => {

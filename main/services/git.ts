@@ -4674,6 +4674,23 @@ export class GitService {
             // recompute the captured checkout and require equality so content
             // changed after the snapshot can never be silently discarded.
             if (activePolicy.mode === "safe" && activePolicy.snapshotTree !== null) {
+              // The snapshot ref is the durable Git anchor that keeps the
+              // captured commit reachable. If another Git process removed or
+              // moved it after capture, this deletion would still pass the tree
+              // comparison below while leaving nothing to restore from, so
+              // verify the anchor before discarding recoverable state.
+              if (
+                activePolicy.snapshotId !== null &&
+                (await this.managedWorktreeSnapshotAnchorTree(
+                  repo.cwd,
+                  activePolicy.snapshotId,
+                )) !== activePolicy.snapshotTree
+              ) {
+                throw new GitServiceError(
+                  "dirty_worktree",
+                  "The managed worktree's snapshot anchor no longer describes its captured tree. Keep the worktree or confirm a force deletion.",
+                );
+              }
               await this.temporaryIndexPath(async (indexPath) => {
                 const currentTree = await this.captureWorktreeTreeOid(repo.cwd, {
                   gitDir: adminRemovalPath!,
@@ -5245,6 +5262,23 @@ export class GitService {
               "Remove, commit, stash, or discard every uncommitted, untracked, and ignored file before deleting this worktree.",
             );
           }
+          // A safe deletion promises a restorable snapshot, so prove the durable
+          // Git anchor that keeps the captured commit reachable still describes
+          // the captured tree before anything is quarantined or removed.
+          if (
+            lifecyclePolicy.mode === "safe" &&
+            lifecyclePolicy.snapshotId !== null &&
+            lifecyclePolicy.snapshotTree !== null &&
+            (await this.managedWorktreeSnapshotAnchorTree(
+              repo.cwd,
+              lifecyclePolicy.snapshotId,
+            )) !== lifecyclePolicy.snapshotTree
+          ) {
+            throw new GitServiceError(
+              "dirty_worktree",
+              "This managed worktree's snapshot anchor no longer describes its captured tree. Keep this worktree or confirm a force deletion.",
+            );
+          }
           // Re-check the checkout itself at the destructive boundary. Git's
           // registration and Aiden's administrative marker can both remain valid
           // after the original directory is renamed and an unrelated replacement
@@ -5751,6 +5785,26 @@ export class GitService {
     ]);
     const commit = result.stdout.trim();
     return GIT_OBJECT_ID.test(commit) ? commit : undefined;
+  }
+
+  /**
+   * The captured tree the snapshot ref still anchors, or undefined when the ref
+   * no longer resolves. Used to prove a safe deletion remains restorable.
+   */
+  private async managedWorktreeSnapshotAnchorTree(
+    cwd: string,
+    snapshotId: string,
+  ): Promise<string | undefined> {
+    const commit = await this.managedWorktreeSnapshotCommit(cwd, snapshotId);
+    if (commit === undefined) return undefined;
+    const repo = this.requireRepository(await this.repository(cwd));
+    const result = await this.run(repo.cwd, [
+      "rev-parse",
+      "--verify",
+      `${commit}^{tree}`,
+    ]);
+    const tree = result.stdout.trim();
+    return GIT_OBJECT_ID.test(tree) ? tree : undefined;
   }
 
   /** CAS-delete a snapshot ref; a mismatched commit fails closed. */

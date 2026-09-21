@@ -7,6 +7,7 @@ import {
   gitCaptureManagedWorktreeSnapshot,
   gitCreateWorktree,
   gitDeleteManagedWorktree,
+  gitDeleteManagedWorktreeSnapshotRef,
   gitFinalizeManagedWorktreeDeletion,
   gitListFiles,
   gitManagedWorktreeCheckoutBytes,
@@ -92,6 +93,8 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   snapshotContentBytes: gitManagedWorktreeDirtyBytes,
   captureWorktreeSnapshot: gitCaptureManagedWorktreeSnapshot,
   snapshotRefCommit: gitManagedWorktreeSnapshotCommit,
+  deleteSnapshotRef: (repositoryPath, snapshotId, expectedCommit) =>
+    gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
   resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>

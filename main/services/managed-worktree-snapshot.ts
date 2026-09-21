@@ -412,6 +412,46 @@ export async function verifyProvisionedFileBlobs(
 }
 
 /**
+ * Prove that `target` and every existing ancestor it traverses stay inside
+ * `canonicalRoot`, returning the canonical path of the nearest existing
+ * ancestor. A restored Git tree can materialize a symlink at an ancestor of a
+ * provisioned path, so lexical containment cannot authorize a filesystem
+ * operation; this runs immediately before each mutation instead.
+ */
+async function verifiedContainedAncestor(
+  canonicalRoot: string,
+  target: string,
+): Promise<string> {
+  let current = target;
+  for (;;) {
+    if (await pathExists(current)) {
+      // A dangling symlink ancestor also fails closed: realpath cannot resolve it.
+      const canonical = await fs.realpath(current).catch(() => undefined);
+      if (canonical === undefined || !isInsideCanonicalRoot(canonicalRoot, canonical)) {
+        throw new ManagedWorktreeSnapshotError(
+          "snapshot_invalid",
+          "A provisioned-file destination escapes the restored worktree.",
+        );
+      }
+      return canonical;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new ManagedWorktreeSnapshotError(
+        "snapshot_invalid",
+        "A provisioned-file destination escapes the restored worktree.",
+      );
+    }
+    current = parent;
+  }
+}
+
+function isInsideCanonicalRoot(canonicalRoot: string, candidate: string): boolean {
+  const relative = path.relative(canonicalRoot, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
  * Write captured blobs back into a restored worktree. Idempotent so a crashed
  * restore can resume: an existing destination is kept only when its bytes
  * already match the captured blob; anything else fails closed.
@@ -428,29 +468,36 @@ export async function restoreProvisionedFiles(
     // platform symlinked ancestors (e.g. /var on macOS).
     const destination = path.join(canonicalWorktree, file.relativePath);
     const resolved = path.resolve(destination);
-    if (
-      path.relative(canonicalWorktree, resolved).startsWith("..") ||
-      path.isAbsolute(path.relative(canonicalWorktree, resolved))
-    ) {
+    if (!isInsideCanonicalRoot(canonicalWorktree, resolved)) {
       throw new ManagedWorktreeSnapshotError(
         "snapshot_invalid",
         "A provisioned-file destination escapes the restored worktree.",
       );
     }
     const bytes = await fs.readFile(path.join(snapshotDirPath, file.blobPath));
+    // The lexical check above does not authorize writing or removing anything:
+    // the applied snapshot tree may have materialized a symlink ancestor that
+    // redirects outside the worktree. Prove every existing ancestor first, then
+    // create the parent chain, then prove the canonical parent again — all
+    // before the first mutation of the destination or its inflight sibling.
+    const parent = path.dirname(resolved);
+    await verifiedContainedAncestor(canonicalWorktree, resolved);
+    await fs.mkdir(parent, { recursive: true });
+    await verifiedContainedAncestor(canonicalWorktree, parent);
+
     // A crash may have left our own inflight temp or, on older runs, a partial
     // destination; discard the temp so retries converge.
-    const inflight = `${destination}.aiden-restore-inflight`;
+    const inflight = `${resolved}.aiden-restore-inflight`;
     await fs.rm(inflight, { force: true });
-    if (await pathExists(destination)) {
-      const existing = await fs.lstat(destination);
+    if (await pathExists(resolved)) {
+      const existing = await fs.lstat(resolved);
       const matches =
         existing.isFile() &&
         !existing.isSymbolicLink() &&
-        createHash("sha256").update(await fs.readFile(destination)).digest("hex") ===
+        createHash("sha256").update(await fs.readFile(resolved)).digest("hex") ===
           file.digest;
       if (matches) {
-        await fs.chmod(destination, file.mode & 0o777).catch(() => undefined);
+        await fs.chmod(resolved, file.mode & 0o777).catch(() => undefined);
         continue;
       }
       throw new ManagedWorktreeSnapshotError(
@@ -458,23 +505,12 @@ export async function restoreProvisionedFiles(
         "A provisioned-file destination already exists in the restored worktree.",
       );
     }
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    // A pre-existing ancestor symlink could redirect outside the worktree;
-    // verify the real parent after mkdir, immediately before writing.
-    const canonicalParent = await fs.realpath(path.dirname(destination));
-    const parentRelative = path.relative(canonicalWorktree, canonicalParent);
-    if (parentRelative.startsWith("..") || path.isAbsolute(parentRelative)) {
-      throw new ManagedWorktreeSnapshotError(
-        "snapshot_invalid",
-        "A provisioned-file destination escapes the restored worktree.",
-      );
-    }
     // Write to a sibling temp and rename so a crash mid-write leaves either
     // the inflight file (discarded above) or a complete destination — never a
     // truncated file wedged behind the destination_exists check.
     await fs.writeFile(inflight, bytes, { mode: 0o600 });
     await fs.chmod(inflight, file.mode & 0o777).catch(() => undefined);
-    await fs.rename(inflight, destination);
+    await fs.rename(inflight, resolved);
   }
 }
 

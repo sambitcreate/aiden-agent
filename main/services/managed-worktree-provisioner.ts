@@ -222,34 +222,70 @@ export async function provisionWorktreeIncludedFiles(
       );
     }
     try {
-      await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+      // Bind the copy to the verified filesystem object. A pathname-based copy
+      // re-resolves `source` after the identity check, so a concurrently
+      // mutable checkout could swap the file or an ancestor for a symlink,
+      // restore it before the post-copy lstat, and still have the wrong bytes
+      // provisioned. Opening without O_NOFOLLOW and reading through that
+      // descriptor closes the window. Whole-file reads match the snapshot
+      // capture path and stay inside the same provisioned-size budget.
+      const sourceHandle = await fs.open(
+        source,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+      );
+      try {
+        const opened = await sourceHandle.stat();
+        if (
+          !opened.isFile() ||
+          opened.dev !== before.dev ||
+          opened.ino !== before.ino ||
+          opened.size !== before.size
+        ) {
+          throw new ManagedWorktreeProvisionerError(
+            "source_changed",
+            "A provisioned file changed while Aiden was copying it.",
+          );
+        }
+        const bytes = await sourceHandle.readFile();
+        // The descriptor still refers to the verified inode, so a same-inode
+        // rewrite during the read is the remaining change this can detect.
+        const settled = await sourceHandle.stat();
+        if (
+          settled.size !== before.size ||
+          settled.mtimeMs !== before.mtimeMs ||
+          bytes.byteLength !== before.size
+        ) {
+          throw new ManagedWorktreeProvisionerError(
+            "source_changed",
+            "A provisioned file changed while Aiden was copying it.",
+          );
+        }
+        await fs.writeFile(destination, bytes, {
+          flag: "wx",
+          mode: before.mode & 0o777,
+        });
+      } finally {
+        await sourceHandle.close().catch(() => undefined);
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
         throw new ManagedWorktreeProvisionerError(
           "destination_exists",
           "A provisioned file would overwrite an existing worktree file.",
           error,
         );
       }
+      // ELOOP means the pathname became a symlink and ENOENT means it vanished;
+      // neither can be provisioned from the verified object any more.
+      if (code === "ELOOP" || code === "ENOENT") {
+        throw new ManagedWorktreeProvisionerError(
+          "source_changed",
+          "A provisioned file changed while Aiden was copying it.",
+          error,
+        );
+      }
       throw error;
-    }
-    // The source must not have changed between the pre-copy lstat and now.
-    const after = await fs.lstat(source);
-    const copied = await fs.lstat(destination);
-    if (
-      !after.isFile() ||
-      after.isSymbolicLink() ||
-      after.ino !== before.ino ||
-      after.dev !== before.dev ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      copied.size !== before.size
-    ) {
-      await fs.unlink(destination).catch(() => undefined);
-      throw new ManagedWorktreeProvisionerError(
-        "source_changed",
-        "A provisioned file changed while Aiden was copying it.",
-      );
     }
     await fs.chmod(destination, before.mode & 0o777).catch(() => undefined);
     provisioned.push(relativePath);

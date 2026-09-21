@@ -58,6 +58,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
       throw new Error("unexpected snapshot");
     },
     snapshotRefCommit: async () => undefined,
+    deleteSnapshotRef: async () => true,
     restoreManagedCheckout: async () => {
       throw new Error("unexpected restore");
     },
@@ -150,7 +151,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
 
 
 test("dirty removal snapshots before deletion, admits Git objects on the object store volume, and lets force skip the advisory ignored scan", async (t) => {
-  const { mkdtemp, mkdir, readFile, writeFile } = await import("node:fs/promises");
+  const { mkdtemp, mkdir, readdir, readFile, writeFile } = await import("node:fs/promises");
   const os = await import("node:os");
   const nodePath = await import("node:path");
   const base = await mkdtemp(nodePath.join(os.tmpdir(), "aiden-svc-test-"));
@@ -165,8 +166,10 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
 
   const events: string[] = [];
   const capacityPaths: string[] = [];
+  const deletedRefs: Array<{ snapshotId: string; expectedCommit: string }> = [];
   let expandedCalls = 0;
   let failExpansion = false;
+  let failClock = false;
   let dirty = { head: "b".repeat(40), uncommitted: 1, ignored: 1, ignoredPaths: [".env"] };
   let lifecycleSeen: unknown;
   const managed: Workspace = {
@@ -231,6 +234,10 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
       };
     },
     snapshotRefCommit: async () => undefined,
+    deleteSnapshotRef: async (_repositoryPath, snapshotId, expectedCommit) => {
+      deletedRefs.push({ snapshotId, expectedCommit });
+      return true;
+    },
     restoreManagedCheckout: async () => {
       throw new Error("unexpected restore");
     },
@@ -266,7 +273,13 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     cancelWorkspaceSchedules: async () => undefined,
     resumeWorkspaceSchedules: async () => undefined,
     createWorkspaceId: () => "workspace-restored",
-    now: () => 4,
+    // Fault injection: the removal path reads the clock exactly once, for the
+    // snapshot manifest's `createdAt`, so failing that read fails manifest
+    // publication after the synthetic ref and private blobs already exist.
+    now: () => {
+      if (failClock) throw new Error("clock unavailable");
+      return 4;
+    },
     notifyChanged: () => undefined,
     logError: () => undefined,
   });
@@ -324,4 +337,19 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
   const forced = lifecycleSeen as { force?: boolean; snapshot?: unknown } | undefined;
   assert.equal(forced?.force, true);
   assert.ok(forced?.snapshot);
+
+  // A snapshot that cannot publish its manifest must not leave the synthetic ref
+  // or its private blobs behind.
+  dirty = { head: "b".repeat(40), uncommitted: 1, ignored: 1, ignoredPaths: [".env"] };
+  failExpansion = false;
+  deletedRefs.length = 0;
+  const snapshotsBefore = new Set(await readdir(snapshotRoot));
+  failClock = true;
+  await assert.rejects(service.remove(owner, managed.id), /clock unavailable/u);
+  assert.equal(deletedRefs.length, 1);
+  assert.equal(deletedRefs[0]?.expectedCommit, "c".repeat(40));
+  assert.deepEqual(
+    (await readdir(snapshotRoot)).filter((entry) => !snapshotsBefore.has(entry)),
+    [],
+  );
 });
