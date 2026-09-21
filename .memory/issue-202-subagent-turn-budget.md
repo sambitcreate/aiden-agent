@@ -16,6 +16,9 @@ messages, while retaining unaffected source paths. The full settled text stays
 within the child output budget until sanitization, so later reports cannot
 outlive an identifying prefix; report-boundary checks protect even non-adjacent
 fragments without discarding unrelated findings.
+When the bounded cross-report comparison scan is exhausted, only its fully
+checked prefix reaches the parent after the ordinary credential sanitizer;
+later, unclassified lines are omitted with an explicit safety-scan notice.
 Mixed V2 batches add accepted child ceilings to a generation-wide turn ledger,
 bounded at 512 turns, so a default sibling cannot truncate an extended scout.
 Other limits and cancellations remain

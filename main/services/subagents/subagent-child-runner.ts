@@ -71,18 +71,26 @@ const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this tas
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
 const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
 const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
+const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after safety scan limit.]";
 
 function sanitizePartialFindingsForParent(reports: readonly string[]): string {
   const rawReports = reports.map((entry) => entry.split(/\r\n|[\n\r\u2028\u2029]/u));
   const safeReports = rawReports.map((lines) => [...lines]);
   const earlierReportTails: Array<{ text: string; reportIndex: number; lineIndex: number }> = [];
   let comparisons = 0;
-  for (const [reportIndex, lines] of rawReports.entries()) {
+  let scanLimitReached = false;
+  reportScan: for (const [reportIndex, lines] of rawReports.entries()) {
     for (const [lineIndex, line] of lines.entries()) {
       for (const tail of earlierReportTails) {
         // Non-adjacent reports can still carry a key prefix and its value.
-        // Bound pair checks by the same fail-closed policy as local spans.
-        if (++comparisons > MAX_PARTIAL_BOUNDARY_COMPARISONS) return REDACTED_CREDENTIAL;
+        // Only already-checked lines may reach the parent when this scan cap
+        // is exhausted. The current and later lines remain unclassified.
+        if (++comparisons > MAX_PARTIAL_BOUNDARY_COMPARISONS) {
+          safeReports.length = reportIndex + 1;
+          safeReports[reportIndex]!.length = lineIndex;
+          scanLimitReached = true;
+          break reportScan;
+        }
         if (containsHighConfidenceSecretIncludingEncodings(tail.text + line)) {
           safeReports[reportIndex]![lineIndex] = REDACTED_CREDENTIAL;
           safeReports[tail.reportIndex]![tail.lineIndex] = REDACTED_CREDENTIAL;
@@ -129,10 +137,10 @@ function sanitizePartialFindingsForParent(reports: readonly string[]): string {
   const partial = safeLines.join("\n").trim();
   // Arbitrarily fragmented or encoded material beyond the local span limit
   // cannot be reconstructed safely; fail closed before the parent sees it.
-  return containsHighConfidenceSecretIncludingEncodings(partial) ||
+  if (containsHighConfidenceSecretIncludingEncodings(partial) ||
     containsHighConfidenceSecretIncludingEncodings(safeLines.join(""))
-    ? REDACTED_CREDENTIAL
-    : partial;
+  ) return REDACTED_CREDENTIAL;
+  return scanLimitReached ? `${partial}\n${PARTIAL_SCAN_LIMIT_NOTICE}`.trim() : partial;
 }
 
 export interface SubagentChildRunnerPolicy {

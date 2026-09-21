@@ -2311,6 +2311,44 @@ test("turn-limit findings retain safe reports beyond eight while filtering split
   assert.doesNotMatch(parentFacing, /evicted-prefix-secret|KEY=/u);
 });
 
+test("turn-limit findings retain checked safe lines when cross-report scanning is exhausted", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    for (let reportIndex = 0; reportIndex < 128; reportIndex += 1) {
+      const lines = Array.from({ length: 8 }, () => "ok");
+      if (reportIndex === 0) lines[0] = "Verified source path: /workspace/src/index.ts";
+      if (reportIndex === 110) lines[7] = "OPENAI_API_";
+      if (reportIndex === 127) lines[0] = "KEY=split-secret-after-scan-limit";
+      const message = assistant(lines.join("\n"));
+      await emit({ type: "turn_start" } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+      await emit({ type: "turn_end", message, toolResults: [] } as AgentEvent);
+    }
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const result = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "partial-comparison-cap",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Bounded", task: "Investigate." },
+    policy: { maxTurns: 128 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.warning ?? "", /turn limit/u);
+  assert.match(result.summary, /Verified source path: \/workspace\/src\/index\.ts/u);
+  assert.match(result.summary, /Additional partial findings omitted after safety scan limit/u);
+  assert.doesNotMatch(result.summary, /split-secret-after-scan-limit|KEY=/u);
+});
+
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
   const streamedControl = fakeChild(async ({ emit }) => {
     const message = assistant("abcde");
