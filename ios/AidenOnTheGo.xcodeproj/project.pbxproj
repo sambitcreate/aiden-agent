@@ -43,6 +43,7 @@
 		10CA110C0DE000000000B004 /* AppShortcuts.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 10CA110C0DE000000000B005 /* AppShortcuts.xcstrings */; };
 		1A2B3C4D5E6F700000000008 /* KeychainAccess in Frameworks */ = {isa = PBXBuildFile; productRef = 1A2B3C4D5E6F700000000098 /* KeychainAccess */; };
 		BADA00000000000000000001 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BADA00000000000000000003 /* MarkdownUI */; };
+		BADC00000000000000000001 /* ThinkingOrbs in Frameworks */ = {isa = PBXBuildFile; productRef = BADC00000000000000000003 /* ThinkingOrbs */; };
 		1A2B3C4D5E6F7000000000A0 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B0 /* KeychainStore.swift */; };
 		1A2B3C4D5E6F7000000000F8 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F9 /* AppConfig.swift */; };
 		1A2B3C4D5E6F70000000300 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000301 /* PrivacyInfo.xcprivacy */; };
@@ -75,16 +76,6 @@
 		B07C00000000000000000001 /* AidenBotGeneratedAvatarLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */; };
 		B07C00000000000000000002 /* AidenBotGeneratedAvatarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */; };
 		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
-		A0E000000000000000000001 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000011 /* Core.swift */; };
-		A0E000000000000000000002 /* Lattice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000012 /* Lattice.swift */; };
-		A0E000000000000000000003 /* Morph.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000013 /* Morph.swift */; };
-		A0E000000000000000000004 /* OrbSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000014 /* OrbSpec.swift */; };
-		A0E000000000000000000005 /* Orbits.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000015 /* Orbits.swift */; };
-		A0E000000000000000000006 /* Presets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000016 /* Presets.swift */; };
-		A0E000000000000000000007 /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000017 /* Snapshot.swift */; };
-		A0E000000000000000000008 /* Strands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000018 /* Strands.swift */; };
-		A0E000000000000000000009 /* ThinkingOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000019 /* ThinkingOrb.swift */; };
-		A0E00000000000000000000A /* Web.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E00000000000000000001A /* Web.swift */; };
 		A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F000000000000000000011 /* AidenProviderIcon.swift */; };
 		B07100000000000000000001 /* BotFirstPrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07100000000000000000011 /* BotFirstPrototype.swift */; };
 /* End PBXBuildFile section */
@@ -190,16 +181,6 @@
 		A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteLiveActivityManager.swift; sourceTree = "<group>"; };
 		A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNativeIntegrationTests.swift; sourceTree = "<group>"; };
 		B07200000000000000000011 /* AidenBotPrototypeSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPrototypeSnapshotTests.swift; sourceTree = "<group>"; };
-		A0E000000000000000000011 /* Core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core.swift; sourceTree = "<group>"; };
-		A0E000000000000000000012 /* Lattice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lattice.swift; sourceTree = "<group>"; };
-		A0E000000000000000000013 /* Morph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Morph.swift; sourceTree = "<group>"; };
-		A0E000000000000000000014 /* OrbSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbSpec.swift; sourceTree = "<group>"; };
-		A0E000000000000000000015 /* Orbits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Orbits.swift; sourceTree = "<group>"; };
-		A0E000000000000000000016 /* Presets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Presets.swift; sourceTree = "<group>"; };
-		A0E000000000000000000017 /* Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
-		A0E000000000000000000018 /* Strands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Strands.swift; sourceTree = "<group>"; };
-		A0E000000000000000000019 /* ThinkingOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingOrb.swift; sourceTree = "<group>"; };
-		A0E00000000000000000001A /* Web.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Web.swift; sourceTree = "<group>"; };
 		A0F000000000000000000011 /* AidenProviderIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProviderIcon.swift; sourceTree = "<group>"; };
 		B07100000000000000000011 /* BotFirstPrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotFirstPrototype.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -211,6 +192,7 @@
 			files = (
 				1A2B3C4D5E6F700000000008 /* KeychainAccess in Frameworks */,
 				BADA00000000000000000001 /* MarkdownUI in Frameworks */,
+				BADC00000000000000000001 /* ThinkingOrbs in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -404,26 +386,8 @@
 			isa = PBXGroup;
 			children = (
 				A0F000000000000000000011 /* AidenProviderIcon.swift */,
-				A0E000000000000000000020 /* ThinkingOrbsKit */,
 			);
 			path = Shared;
-			sourceTree = "<group>";
-		};
-		A0E000000000000000000020 /* ThinkingOrbsKit */ = {
-			isa = PBXGroup;
-			children = (
-				A0E000000000000000000011 /* Core.swift */,
-				A0E000000000000000000012 /* Lattice.swift */,
-				A0E000000000000000000013 /* Morph.swift */,
-				A0E000000000000000000014 /* OrbSpec.swift */,
-				A0E000000000000000000015 /* Orbits.swift */,
-				A0E000000000000000000016 /* Presets.swift */,
-				A0E000000000000000000017 /* Snapshot.swift */,
-				A0E000000000000000000018 /* Strands.swift */,
-				A0E000000000000000000019 /* ThinkingOrb.swift */,
-				A0E00000000000000000001A /* Web.swift */,
-			);
-			path = ThinkingOrbsKit;
 			sourceTree = "<group>";
 		};
 		1A2B3C4D5E6F7000000000C5 /* SessionList */ = {
@@ -539,6 +503,7 @@
 			packageProductDependencies = (
 				1A2B3C4D5E6F700000000098 /* KeychainAccess */,
 				BADA00000000000000000003 /* MarkdownUI */,
+				BADC00000000000000000003 /* ThinkingOrbs */,
 			);
 			productName = AidenOnTheGo;
 			productReference = 1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */;
@@ -632,6 +597,7 @@
 			packageReferences = (
 				1A2B3C4D5E6F700000000099 /* XCRemoteSwiftPackageReference "KeychainAccess" */,
 				BADA00000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+				BADC00000000000000000002 /* XCRemoteSwiftPackageReference "ThinkingOrbs" */,
 			);
 			productRefGroup = 1A2B3C4D5E6F700000000032 /* Products */;
 			projectDirPath = "";
@@ -696,16 +662,6 @@
 				B07400000000000000000001 /* AidenProductShellView.swift in Sources */,
 				B07300000000000000000001 /* AidenBot.swift in Sources */,
 				B07100000000000000000001 /* BotFirstPrototype.swift in Sources */,
-				A0E000000000000000000001 /* Core.swift in Sources */,
-				A0E000000000000000000002 /* Lattice.swift in Sources */,
-				A0E000000000000000000003 /* Morph.swift in Sources */,
-				A0E000000000000000000004 /* OrbSpec.swift in Sources */,
-				A0E000000000000000000005 /* Orbits.swift in Sources */,
-				A0E000000000000000000006 /* Presets.swift in Sources */,
-				A0E000000000000000000007 /* Snapshot.swift in Sources */,
-				A0E000000000000000000008 /* Strands.swift in Sources */,
-				A0E000000000000000000009 /* ThinkingOrb.swift in Sources */,
-				A0E00000000000000000000A /* Web.swift in Sources */,
 				A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */,
 				1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */,
 				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
@@ -1125,6 +1081,14 @@
 				minimumVersion = 2.4.1;
 			};
 		};
+		BADC00000000000000000002 /* XCRemoteSwiftPackageReference "ThinkingOrbs" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/haplollc/ThinkingOrbs.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1137,6 +1101,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BADA00000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
+		};
+		BADC00000000000000000003 /* ThinkingOrbs */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BADC00000000000000000002 /* XCRemoteSwiftPackageReference "ThinkingOrbs" */;
+			productName = ThinkingOrbs;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

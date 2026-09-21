@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replaced the vendored ThinkingOrbsKit Swift port with the published ThinkingOrbs 1.1.0 Swift package (Haplo LLC's faithful SwiftUI port of thinking-orbs); chat activity orbs now resolve through the package's `ThinkingOrb`/`OrbDesign` API.
 - Converted the imported SwiftUI foundation into the Aiden On The Go product identity and signed application shell.
 - Added canonical Aiden Remote pairing, pinned transport, multiple installations, Keychain credential isolation, workspace CRUD, and approved-root browsing foundations.
 - Removed the imported Hermes WebUI product surface and compatibility configuration from the build.
