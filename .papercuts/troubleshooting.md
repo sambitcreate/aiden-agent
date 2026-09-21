@@ -798,3 +798,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Final Pullfrog ownership boundary: a command without its own native start can time out after a newer same-URL or different-URL load starts. The old +1 generation allowance stops that newer load. Native regressions must delay the command start, retain the newer held response, then crash its actual renderer; URL matching cannot prove command ownership.
 - Native controls reject a synchronous-start ownership shortcut: direct, redirected, and beforeunload loads all emit their start after loadURL returns. Use explicit command intent invalidated by renderer/user/popup entry paths; native request-count fixtures must exclude favicon requests.
 - Replace the new native fixtures' 500ms deadlines with controlled command deadlines released after HTTP admission. Otherwise slow CI can fail an ownership assertion before Chromium starts the request.
+
+# Agent CLI PATH diagnosis (2026-09-21)
+
+- The warning lived in a chat transcript, not the structured app log; inspect both when a user quotes agent output as a log.
+- zsh's unmatched globs aborted broad source searches; use `rg --glob` for optional file patterns.
+- Fresh-worktree Git cleanup tests require the native remover; its build script pins a minimal environment, and this host's default Command Line Tools SDK has an incompatible `arm64e.x1` stub. An explicit Xcode `-isysroot` compiles the helper, but the script still fails until that SDK selection is repaired.
+- `.memory/` ignores new files; append this work's context to a tracked memory note so it reaches the PR.
+- `git add` rejected paths inside ignored `.memory/` and `.papercuts/` even though their files are tracked; use `git add -u` for those updates.

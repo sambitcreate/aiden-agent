@@ -12,6 +12,7 @@ import {
   summarizeToolCall,
 } from "./coding-tools.js";
 import { createShareImageTool } from "./share-image-tool.js";
+import { agentCommandEnvironment } from "./agent-command-environment.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1319,6 +1320,55 @@ test("run_command cancellation kills the shell process group", async () => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("agent commands find user CLIs from a macOS GUI launch PATH", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agent-path-"));
+  try {
+    const localBin = path.join(home, ".local", "bin");
+    await fs.mkdir(localBin, { recursive: true });
+    await fs.writeFile(path.join(localBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const env = agentCommandEnvironment({ HOME: home, PATH: "/usr/bin:/bin" }, "darwin");
+    const result = await execFileAsync("/bin/sh", ["-c", "command -v gh"], { env });
+    assert.equal(result.stdout.trim(), path.join(localBin, "gh"));
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("run_command applies the macOS agent PATH to its spawned shell", async () => {
+  if (process.platform !== "darwin") return;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-run-command-path-"));
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
+  try {
+    const localBin = path.join(home, ".local", "bin");
+    await fs.mkdir(localBin, { recursive: true });
+    await fs.writeFile(path.join(localBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.HOME = home;
+    process.env.PATH = "/usr/bin:/bin";
+    const runCommand = buildCodingTools(home).find((tool) => tool.name === "run_command");
+    assert.ok(runCommand);
+    const result = await runCommand.execute("test", { command: "command -v gh" });
+    assert.equal(result.content[0]?.type, "text");
+    assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(localBin));
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("agent command PATH preserves inherited entries and non-macOS environments", () => {
+  const parent = { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" };
+  const mac = agentCommandEnvironment(parent, "darwin");
+  assert.equal(mac.PATH?.split(":").filter((part) => part === "/Users/example/.local/bin").length, 1);
+  assert.ok(mac.PATH?.startsWith(parent.PATH));
+  assert.ok(agentCommandEnvironment({ HOME: "/Users/example" }, "darwin").PATH?.startsWith("/usr/bin:/bin:/usr/sbin:/sbin"));
+  assert.deepEqual(agentCommandEnvironment(parent, "linux"), parent);
+  assert.deepEqual(parent, { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" });
 });
 
 test("parent write and edit tools cannot commit after cancellation", async () => {
