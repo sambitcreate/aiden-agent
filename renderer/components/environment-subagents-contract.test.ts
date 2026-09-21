@@ -582,10 +582,10 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /detachedGenerationDraining\s+\? "Response continues in the background…"/u);
+  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s+\? "Response continues in the background…"/u);
   assert.match(
     pane,
-    /messages\[messages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
+    /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
   );
   assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
