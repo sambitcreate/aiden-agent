@@ -2106,6 +2106,40 @@ test("turn-limit partial notes keep only the last four completed turns within th
   assert.equal(control.cancelCount, 1);
 });
 
+test("evicting a short completed note still marks turn-limit evidence as truncated", async () => {
+  const control = fakeChild(async ({ emit }) => {
+    for (let index = 1; index <= 5; index += 1) {
+      await emit({ type: "turn_start" } as AgentEvent);
+      await emit({
+        type: "message_end",
+        message: { ...assistant(`short-note-${index}`), stopReason: "toolUse" },
+      } as AgentEvent);
+    }
+    await emit({ type: "turn_start" } as AgentEvent);
+  });
+  const result = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "short-partial-turns",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Short notes", task: "Investigate." },
+    policy: { maxTurns: 5 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.summary, "short-note-2\n\nshort-note-3\n\nshort-note-4\n\nshort-note-5");
+  assert.ok(result.summary.length < MAX_SUBAGENT_SUMMARY_CHARS);
+  assert.equal(result.summaryTruncated, true, "count eviction is disclosed independently of character truncation");
+});
+
 test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
   const streamedControl = fakeChild(async ({ emit }) => {
     const message = assistant("abcde");

@@ -630,6 +630,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     let currentTurnOutput = "";
     let terminalOutput = "";
     const completedPartialNotes: string[] = [];
+    let omittedCompletedNotes = false;
     let observedOutputChars = 0;
     let observedProtocolChars = 0;
     let currentTurnTextDeltaChars = 0;
@@ -754,7 +755,10 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
             // tool result, can accompany a turn-budget failure. Keep a small
             // tail; it is evidence of progress, not a successful child report.
             completedPartialNotes.push(exactOutput.trim());
-            if (completedPartialNotes.length > 4) completedPartialNotes.shift();
+            if (completedPartialNotes.length > 4) {
+              completedPartialNotes.shift();
+              omittedCompletedNotes = true;
+            }
           }
         }
       }
@@ -794,6 +798,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         return {
           ...safeFailure(input.request, `${limitWarning} The notes below are incomplete and unverified.`),
           ...projectSubagentCompletedSummary(completedPartialNotes.join("\n\n")),
+          ...(omittedCompletedNotes ? { summaryTruncated: true } : {}),
         };
       }
       return safeFailure(input.request, limitWarning);
