@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Photos
 import SwiftUI
 import UIKit
 import XCTest
@@ -3992,6 +3993,19 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertTrue(jpeg.starts(with: [0xFF, 0xD8]))
     }
 
+    func testPhotoLibraryTerminalCallbacksAreNotDiscardedAsDegraded() {
+        let degraded: [AnyHashable: Any] = [PHImageResultIsDegradedKey: true]
+        XCTAssertTrue(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult(degraded))
+        XCTAssertFalse(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult([
+            PHImageResultIsDegradedKey: true,
+            PHImageCancelledKey: true,
+        ]))
+        XCTAssertFalse(AidenPhotoLibraryImageLoader.isNonterminalDegradedResult([
+            PHImageResultIsDegradedKey: true,
+            PHImageErrorKey: NSError(domain: "PhotoKitTest", code: 1),
+        ]))
+    }
+
     func testAttachmentPickerCapacityAndConfirmationCopyAreBounded() {
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 0), 10)
         XCTAssertEqual(AidenAttachmentPickerPolicy.availableCapacity(pendingCount: 9), 1)
@@ -4133,14 +4147,19 @@ final class AidenAppearanceTests: XCTestCase {
         picker.beginShowingPhotos()
         let first = picker.markLibraryForRefresh()
         let second = picker.markLibraryForRefresh()
-        XCTAssertFalse(picker.isCurrentLibraryLoad(first))
-        XCTAssertTrue(picker.isCurrentLibraryLoad(second))
+        picker.applyLibraryResult([], authorization: .denied, generation: first)
+        XCTAssertEqual(picker.libraryStatus, .loading)
+        picker.applyLibraryResult([], authorization: .authorized, generation: second)
+        XCTAssertEqual(picker.libraryStatus, .empty)
 
         picker.dismiss()
-        XCTAssertFalse(picker.isCurrentLibraryLoad(second))
         picker.openMenu()
         picker.beginShowingPhotos()
-        XCTAssertFalse(picker.isCurrentLibraryLoad(second))
+        let reopened = picker.markLibraryForRefresh()
+        picker.applyLibraryResult([], authorization: .denied, generation: second)
+        XCTAssertEqual(picker.libraryStatus, .loading)
+        picker.applyLibraryResult([], authorization: .denied, generation: reopened)
+        XCTAssertEqual(picker.libraryStatus, .denied)
     }
 
     func testCameraAuthorizationPolicyMapsEveryKnownState() {

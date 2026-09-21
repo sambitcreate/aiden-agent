@@ -385,9 +385,7 @@ final class AidenAttachmentPickerState {
         }
         guard isCurrentLibraryLoad(generation), !Task.isCancelled else { return }
         guard authorization == .authorized || authorization == .limited else {
-            assets = []
-            selectedAssetIDs = []
-            libraryStatus = .denied
+            applyLibraryResult([], authorization: authorization, generation: generation)
             return
         }
 
@@ -398,6 +396,21 @@ final class AidenAttachmentPickerState {
         var loaded: [PHAsset] = []
         loaded.reserveCapacity(result.count)
         result.enumerateObjects { asset, _, _ in loaded.append(asset) }
+        applyLibraryResult(loaded, authorization: authorization, generation: generation)
+    }
+
+    func applyLibraryResult(
+        _ loaded: [PHAsset],
+        authorization: PHAuthorizationStatus,
+        generation: Int
+    ) {
+        guard isCurrentLibraryLoad(generation), !Task.isCancelled else { return }
+        guard authorization == .authorized || authorization == .limited else {
+            assets = []
+            selectedAssetIDs = []
+            libraryStatus = .denied
+            return
+        }
         selectedAssetIDs = AidenAttachmentPickerPolicy.visibleSelection(
             selectedAssetIDs,
             visibleIDs: Set(loaded.map(\.localIdentifier))
@@ -449,6 +462,12 @@ enum AidenPhotoLibraryImageLoader {
         }
         return data
     }
+
+    static func isNonterminalDegradedResult(_ info: [AnyHashable: Any]?) -> Bool {
+        (info?[PHImageResultIsDegradedKey] as? Bool) == true
+            && info?[PHImageErrorKey] == nil
+            && (info?[PHImageCancelledKey] as? Bool) != true
+    }
 }
 
 private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
@@ -484,12 +503,13 @@ private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
             contentMode: .aspectFit,
             options: options
         ) { [weak self] image, info in
-            if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
             let result: Result<AidenPhotoLibraryImageLoader.PickedImage, Error>
             if let error = info?[PHImageErrorKey] as? Error {
                 result = .failure(error)
             } else if (info?[PHImageCancelledKey] as? Bool) == true {
                 result = .failure(CancellationError())
+            } else if AidenPhotoLibraryImageLoader.isNonterminalDegradedResult(info) {
+                return
             } else if let image {
                 result = Result {
                     try .init(data: AidenPhotoLibraryImageLoader.encodedData(from: image), name: name)
