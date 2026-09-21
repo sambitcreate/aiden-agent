@@ -318,6 +318,20 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
+test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
+  assert.match(pane, /detachedGenerationDraining && !detachedProjection\s*\? "Response continues in the background/u);
+  assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(detachedProjection\)\}/u);
+  assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(detachedProjection\)\) && !isStoppingGeneration\}/u);
+  assert.match(pane, /canSteer=\{ready && \(\(isGenerating && canStopGeneration\) \|\| Boolean\(detachedProjection\)\)/u);
+  assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
+  assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
+  assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
+  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+});
+
 test("root recovery reconciles missed detached terminals against authoritative activity", () => {
   const root = source("./root-view.tsx");
   const recovery = between(

@@ -40,6 +40,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -278,7 +279,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining
+        : detachedGenerationDraining && !detachedProjection
           ? "Response continues in the background…"
           : undefined;
   const botReadinessMessage = chat.data?.botId
@@ -1311,11 +1312,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
+    if (detachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = detachedProjection;
+      setIsStoppingGeneration(true);
+      void stopDetachedGeneration(streamId).then((cancelled) => {
+        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+      }).catch((error: unknown) => {
+        if (chatIdRef.current === chatId) {
+          setIsStoppingGeneration(false);
+          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+        }
+      });
+      return;
+    }
     if (!generationRef.current || !canStopGeneration) return;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration]);
+  }, [canStopGeneration, chatId, detachedProjection, isStoppingGeneration]);
+
+  React.useEffect(() => {
+    // Detached Stop has no pane-owned terminal callback. The shell clears its
+    // exact stream after authoritative settlement; release the local stop UI.
+    if (!detachedGenerationDraining && !generationRef.current) setIsStoppingGeneration(false);
+  }, [detachedGenerationDraining, detachedProjection]);
 
   const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
     chatId,
@@ -2104,17 +2124,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onQueue={draft ? undefined : queueMessage}
             hasQueuedMessages={queuedState.messages.length > 0}
             queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
-              canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
+              canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(detachedProjection)) && !isStoppingGeneration}
               returnFocus={() => composerRef.current}
               onSteer={(id) => {
-                if (!canStopGeneration || isStoppingGeneration) return;
+                if (!(canStopGeneration || detachedProjection) || isStoppingGeneration) return;
                 messageQueue.move(id, 0);
                 messageQueue.resume();
                 handleStop();
               }} />}
             onStop={() => { messageQueue.pause(); handleStop(); }}
-            isGenerating={isGenerating || isStartingGeneration}
-            canStopGeneration={canStopGeneration}
+            isGenerating={isGenerating || isStartingGeneration || Boolean(detachedProjection)}
+            canStopGeneration={(canStopGeneration || Boolean(detachedProjection)) && !isStoppingGeneration}
             configurationBusy={thinkingSaving}
             inputRef={composerRef}
             workspace={effectiveWorkspace}
