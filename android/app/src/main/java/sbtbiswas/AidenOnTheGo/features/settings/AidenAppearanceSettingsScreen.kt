@@ -25,6 +25,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.config.*
@@ -350,7 +355,16 @@ private fun AidenThemeTile(
     val palette = AidenTheme.palette
     val preview = AidenThemeCatalog.palette(preset, preset.signatureIsDark)
     Column(
-        modifier = modifier.tactilePress(onClick = onClick),
+        modifier = modifier
+            .tactilePress(onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                role = Role.RadioButton
+                this.selected = selected
+                onClick(label = "Select ${preset.title} theme") {
+                    onClick()
+                    true
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -360,7 +374,6 @@ private fun AidenThemeTile(
                     .aspectRatio(1.52f)
                     .clip(RoundedCornerShape(12.dp))
                     .background(preview.canvas)
-                    .border(0.5.dp, palette.foreground.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
             ) {
                 Text(
                     text = "Aa",

@@ -426,6 +426,11 @@ final class AidenAppearanceStore {
             .applyingContrast(Self.clamp(requested, to: 0...100), baseline: baseline)
     }
 
+    func selectTheme(_ preset: AidenThemePresetID) {
+        lightPreset = preset
+        darkPreset = preset
+    }
+
     func uiFont(for scheme: ColorScheme) -> AidenUIFontID { scheme == .dark ? darkUIFont : lightUIFont }
     func codeFont(for scheme: ColorScheme) -> AidenCodeFontID { scheme == .dark ? darkCodeFont : lightCodeFont }
     func translucentSidebar(for scheme: ColorScheme) -> Bool { scheme == .dark ? darkTranslucentSidebar : lightTranslucentSidebar }
@@ -582,8 +587,7 @@ struct AidenAppearanceSettingsView: View {
         let preview = AidenThemeCatalog.palette(preset: preset, scheme: preset.tileSignatureScheme)
         let selected = preset == selectedPreset
         return Button {
-            appearance.lightPreset = preset
-            appearance.darkPreset = preset
+            appearance.selectTheme(preset)
         } label: {
             VStack(spacing: 7) {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -600,10 +604,6 @@ struct AidenAppearanceSettingsView: View {
                             .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
                             .frame(width: 11, height: 11)
                             .padding(8)
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(palette.foreground.opacity(0.12), lineWidth: 0.5)
                     }
                     .overlay(alignment: .topTrailing) {
                         if selected {
@@ -630,7 +630,7 @@ struct AidenAppearanceSettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(preset.title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     }
 }
 
