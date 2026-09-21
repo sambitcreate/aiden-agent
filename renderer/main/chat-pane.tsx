@@ -203,6 +203,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
+  // A durable terminal message can reach the cache before detached ownership is
+  // cleared. During that handoff there is no longer a response to stop or steer.
+  const cachedMessages = chat.data?.messages;
+  const visibleDetachedProjection =
+    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -279,7 +284,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining && !detachedProjection
+        : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
   const botReadinessMessage = chat.data?.botId
@@ -600,8 +605,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId, Boolean(draft)]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
-  const visibleDetachedProjection =
-    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
   React.useEffect(() => {
@@ -1312,8 +1315,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
-    if (detachedProjection && !generationRef.current && !isStoppingGeneration) {
-      const { streamId } = detachedProjection;
+    if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = visibleDetachedProjection;
       setIsStoppingGeneration(true);
       void stopDetachedGeneration(streamId).then((cancelled) => {
         if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
@@ -1329,7 +1332,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration, chatId, detachedProjection, isStoppingGeneration]);
+  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
     // Detached Stop has no pane-owned terminal callback. The shell clears its
@@ -2124,17 +2127,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onQueue={draft ? undefined : queueMessage}
             hasQueuedMessages={queuedState.messages.length > 0}
             queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
-              canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(detachedProjection)) && !isStoppingGeneration}
+              canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
               returnFocus={() => composerRef.current}
               onSteer={(id) => {
-                if (!(canStopGeneration || detachedProjection) || isStoppingGeneration) return;
+                if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
                 messageQueue.move(id, 0);
                 messageQueue.resume();
                 handleStop();
               }} />}
             onStop={() => { messageQueue.pause(); handleStop(); }}
-            isGenerating={isGenerating || isStartingGeneration || Boolean(detachedProjection)}
-            canStopGeneration={(canStopGeneration || Boolean(detachedProjection)) && !isStoppingGeneration}
+            isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
+            canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
             configurationBusy={thinkingSaving}
             inputRef={composerRef}
             workspace={effectiveWorkspace}

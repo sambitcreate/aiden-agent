@@ -75,6 +75,7 @@ function subagent(
 
 test("a revisited chat retains and advances its detached answer and subagent projection", async () => {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  let cachedTerminalChat: Chat | undefined;
   let settleCache!: () => void;
   const cacheSettlement = new Promise<void>((resolve) => {
     settleCache = resolve;
@@ -86,7 +87,10 @@ test("a revisited chat retains and advances its detached answer and subagent pro
       listeners.set(channel, handlers);
       return () => handlers.delete(handler);
     },
-    () => cacheSettlement,
+    (updated) => {
+      cachedTerminalChat = updated;
+      return cacheSettlement;
+    },
   );
   const owner = detached("stream-projection");
   rememberDetachedLifecycleStream(owner, {
@@ -121,6 +125,9 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   for (const handler of listeners.get("chat:done") ?? []) {
     handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });
   }
+  assert.equal(cachedTerminalChat?.messages[cachedTerminalChat.messages.length - 1]?.role, "assistant");
+  // The pane must mask Stop/steer using the durable cache while this raw
+  // projection remains retained until terminal reconciliation finishes.
   assert.notEqual(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
   settleCache();
   await new Promise<void>((resolve) => setImmediate(resolve));
