@@ -227,7 +227,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
     const deadline = Date.now() + 5_000;
     while (pid <= 1 && Date.now() < deadline) {
       try {
-        pid = Number.parseInt(await readFile(marker, "utf8"), 10);
+        const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+        if (candidate > 1) pid = candidate;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
