@@ -132,6 +132,7 @@ async function parseJsonRegularFile(file: string, maxBytes: number): Promise<unk
 }
 
 async function captureHomeIncarnation(candidate: string): Promise<BotManagedWorkspaceIncarnation> {
+  const owned = await fs.lstat(path.dirname(candidate), { bigint: true });
   const info = await fs.lstat(candidate, { bigint: true });
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error("Bot managed home is not an owned directory.");
@@ -146,14 +147,22 @@ async function captureHomeIncarnation(candidate: string): Promise<BotManagedWork
   if (info.ino <= 0n || info.dev < 0n) {
     throw new Error("Bot managed home has an invalid filesystem incarnation.");
   }
+  // st_dev is assigned by the current mount, not a durable volume identity.
+  // A home must still be on the private homes filesystem: a separately mounted
+  // directory with a coincidentally matching inode cannot inherit its receipt.
+  if (owned.isSymbolicLink() || !owned.isDirectory() || info.dev !== owned.dev) {
+    throw new Error("Bot managed home is not on its private filesystem.");
+  }
   return { device: info.dev.toString(10), inode: info.ino.toString(10) };
 }
 
-function sameIncarnation(
+function samePersistedIncarnation(
   left: BotManagedWorkspaceIncarnation,
   right: BotManagedWorkspaceIncarnation,
 ): boolean {
-  return left.device === right.device && left.inode === right.inode;
+  // The adapter checks the current filesystem above. Persisted st_dev may
+  // differ after a remount; the private receipt still pins the home inode.
+  return left.inode === right.inode;
 }
 
 function sameProvisioningReceipt(
@@ -199,12 +208,17 @@ export function createFileBotManagedWorkspaceStorage(
   const roots = async (): Promise<OwnedRoots> => {
     rootsPromise ??= establishRoots();
     const owned = await rootsPromise;
+    let rootDevice: number | undefined;
     // Re-prove these anchors on every operation so replacement cannot redirect
     // a previously cached path outside the Bot service.
     for (const directory of [owned.root, owned.homes, owned.receipts]) {
       const info = await fs.lstat(directory);
       if (info.isSymbolicLink() || !info.isDirectory()) {
         throw new Error("Bot managed workspace root changed or became unsafe.");
+      }
+      rootDevice ??= info.dev;
+      if (info.dev !== rootDevice) {
+        throw new Error("Bot managed workspace directory is on another filesystem.");
       }
       assertOwnedByCurrentUser(info, "Bot managed workspace directory");
       if ((await fs.realpath(directory)) !== directory) {
@@ -273,7 +287,7 @@ export function createFileBotManagedWorkspaceStorage(
     // Capture last so the returned token represents the pathname as close as
     // possible to handoff. Effect code must still call service.revalidate().
     const incarnation = await captureHomeIncarnation(candidate);
-    if (!sameIncarnation(parsedReceipt.incarnation, incarnation)) {
+    if (!samePersistedIncarnation(parsedReceipt.incarnation, incarnation)) {
       throw new Error("Bot managed home was replaced after its ownership receipt was issued.");
     }
     return {
@@ -407,7 +421,7 @@ export function createFileBotManagedWorkspaceStorage(
       }
 
       const incarnation = await captureHomeIncarnation(candidate);
-      if (actualReceipt && !sameIncarnation(actualReceipt.incarnation, incarnation)) {
+      if (actualReceipt && !samePersistedIncarnation(actualReceipt.incarnation, incarnation)) {
         if (createdHome && (await fs.readdir(candidate)).length === 0) {
           await fs.rmdir(candidate).catch(() => undefined);
         }
@@ -461,7 +475,7 @@ export function createFileBotManagedWorkspaceStorage(
         const entries = await fs.readdir(candidate).catch(() => null);
         const currentIncarnation = await captureHomeIncarnation(candidate).catch(() => null);
         const stillCreatedHome = Boolean(
-          currentIncarnation && sameIncarnation(currentIncarnation, incarnation),
+          currentIncarnation && samePersistedIncarnation(currentIncarnation, incarnation),
         );
         if (!existingReceiptInfo && entries?.length === 0 && stillCreatedHome) {
           await fs.rm(ownedReceiptPath, { force: true }).catch(() => undefined);
@@ -516,7 +530,7 @@ export function createFileBotManagedWorkspaceStorage(
           throw new Error("Bot managed home rollback target escaped its private root.");
         }
         const incarnation = await captureHomeIncarnation(candidate);
-        if (!sameIncarnation(expected.incarnation, incarnation)) {
+        if (!samePersistedIncarnation(expected.incarnation, incarnation)) {
           throw new Error("Bot managed home rollback refused a replaced directory.");
         }
         if ((await fs.readdir(candidate)).length !== 0) return false;

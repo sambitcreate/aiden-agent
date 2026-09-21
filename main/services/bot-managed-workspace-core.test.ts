@@ -114,6 +114,50 @@ test("one private non-Git home is stable across chats, concurrency, and restart"
   }
 });
 
+test("a remounted private volume keeps its Bot home without weakening live revalidation", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-remount-");
+  try {
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_A,
+    });
+    const original = await service.provision("bot-1");
+    const manifestPath = join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST);
+    const ownershipPath = receiptPath(paths.root, WORKSPACE_A);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const receipt = JSON.parse(await readFile(ownershipPath, "utf8"));
+    const oldDevice = original.incarnation.device === "1" ? "2" : "1";
+    manifest.bindings[0].incarnation.device = oldDevice;
+    receipt.incarnation.device = oldDevice;
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await writeFile(ownershipPath, `${JSON.stringify(receipt)}\n`);
+
+    const restarted = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_B,
+    });
+    await restarted.audit();
+    const resolved = await restarted.resolve("bot-1");
+    assert.deepEqual(resolved, original, "runtime tokens use the live device");
+    assert.deepEqual(await restarted.revalidate(resolved), resolved);
+    await assert.rejects(
+      restarted.revalidate({ ...resolved, incarnation: { ...resolved.incarnation, device: oldDevice } }),
+      /changed after it was resolved/u,
+    );
+    assert.equal(
+      JSON.parse(await readFile(ownershipPath, "utf8")).incarnation.device,
+      oldDevice,
+      "recovery never silently rewrites the ownership receipt",
+    );
+
+    receipt.incarnation.device = "3";
+    await writeFile(ownershipPath, `${JSON.stringify(receipt)}\n`);
+    await assert.rejects(restarted.audit(), /does not match its private ownership record/u);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
 test("explicit journal reconciliation adopts only its exact reservation and stays idempotent", async () => {
   const paths = await temporaryRoot("aiden-bot-reconcile-");
   try {
