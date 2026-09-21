@@ -48,6 +48,7 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
@@ -1269,7 +1270,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           throw appendError;
         }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
+        await installAppendedChatSnapshot(qc, chatId, updated);
         if (firstDraft) finishChatDraftSend(chatId, true);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (

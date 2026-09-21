@@ -6,6 +6,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { QueryClient } from "@tanstack/react-query";
+import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
+import type { Chat } from "../lib/types.js";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -335,6 +338,41 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
 });
 
+test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
+  const start = send.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(install >= 0 && start > install);
+
+  const queryClient = new QueryClient();
+  const chatId = "chat-read-race";
+  const assistantTail = {
+    id: chatId,
+    messages: [{ id: "previous", role: "assistant", content: "Previous answer", createdAt: 1 }],
+  } as Chat;
+  const appendedTurn = {
+    ...assistantTail,
+    messages: [
+      ...assistantTail.messages,
+      { id: "current", role: "user", content: "Current prompt", createdAt: 2 },
+    ],
+  } as Chat;
+  let resolveOldRead!: (chat: Chat) => void;
+  const oldRead = queryClient.fetchQuery({
+    queryKey: queryKeys.chat(chatId),
+    queryFn: () => new Promise<Chat>((resolve) => { resolveOldRead = resolve; }),
+  });
+
+  await Promise.resolve();
+  await installAppendedChatSnapshot(queryClient, chatId, appendedTurn);
+  resolveOldRead(assistantTail);
+  await assert.rejects(oldRead);
+  const cached = queryClient.getQueryData<Chat>(queryKeys.chat(chatId));
+  assert.equal(cached?.messages[cached.messages.length - 1]?.role, "user");
+  queryClient.clear();
+});
+
 test("root recovery reconciles missed detached terminals against authoritative activity", () => {
   const root = source("./root-view.tsx");
   const recovery = between(
@@ -367,7 +405,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   assert.match(pane, /useChat\(draft \? undefined : chatId\)/u);
   assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
-  const seed = send.indexOf("qc.setQueryData(queryKeys.chat(chatId), updated)");
+  const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
   const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
   const start = send.indexOf("await runGeneration(messageTurnId)");
