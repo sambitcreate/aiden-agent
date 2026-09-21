@@ -217,6 +217,25 @@ function normalizeWorkspace(w: Workspace): Workspace {
               ? { worktreeInode: w.managedWorktree.worktreeInode }
               : {}),
             createdFromHead: w.managedWorktree.createdFromHead,
+            ...(Array.isArray(w.managedWorktree.provisionedFiles)
+              ? {
+                  provisionedFiles: w.managedWorktree.provisionedFiles
+                    .filter(
+                      (entry): entry is string =>
+                        typeof entry === "string" &&
+                        entry.length > 0 &&
+                        entry.length <= 512 &&
+                        !path.isAbsolute(entry) &&
+                        !entry.includes("\\") &&
+                        !entry.includes("\u0000") &&
+                        path.posix.normalize(entry) === entry &&
+                        entry !== "." &&
+                        !entry.startsWith("../") &&
+                        entry !== "..",
+                    )
+                    .slice(0, 4_096),
+                }
+              : {}),
           }
         : undefined,
     folderPath:

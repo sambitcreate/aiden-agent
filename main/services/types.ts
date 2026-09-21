@@ -114,6 +114,12 @@ export interface ManagedWorktree {
   worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
+  /**
+   * Worktree-relative ignored paths Aiden provisioned at create time. This is
+   * the authoritative allowlist for snapshot/deletion classification; the
+   * `.worktreeinclude` file is never re-read for lifecycle decisions.
+   */
+  provisionedFiles?: string[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */
