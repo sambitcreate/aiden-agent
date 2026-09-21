@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
+import { startGeneration, stopDetachedGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
 import {
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
@@ -16,6 +16,7 @@ function installFakeBridge(
   options: {
     rejectStart?: boolean;
     startResponse?: { accepted: boolean; started: boolean; error?: string };
+    cancelResponse?: boolean;
   } = {},
 ): {
   bridge: FakeBridge;
@@ -34,6 +35,7 @@ function installFakeBridge(
           if (channel === "chat:start" && options.rejectStart) {
             throw new Error("Generation start rejected.");
           }
+          if (channel === "chat:cancel") return options.cancelResponse;
           return channel === "chat:start"
             ? {
                 streamId: args[0],
@@ -65,6 +67,18 @@ function installFakeBridge(
     },
   };
 }
+
+test("revisited Stop targets the exact retained stream and reports main's cancellation result", async () => {
+  const { bridge, restore } = installFakeBridge({ cancelResponse: true });
+  try {
+    assert.equal(await stopDetachedGeneration("stream-revisited"), true);
+    assert.deepEqual(bridge.invokes, [
+      { channel: "chat:cancel", args: ["stream-revisited", "user_stop"] },
+    ]);
+  } finally {
+    restore();
+  }
+});
 
 function callbacks(): StreamCallbacks {
   return {

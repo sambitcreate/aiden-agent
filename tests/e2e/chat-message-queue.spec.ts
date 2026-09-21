@@ -298,6 +298,53 @@ test("switching chats retains the queue without delivering it into another conve
   expect(JSON.stringify(request?.body)).not.toContain("New chat draft");
 });
 
+test("revisiting a running chat can queue, steer, and stop its exact response", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Revisited active response");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await page.locator("[data-sidebar]")
+    .getByRole("button", { name: /^Revisited active response/u }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await composer.fill("Steer after revisiting");
+  await composer.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued messages", exact: true });
+  await expect(queue).toContainText("Steer after revisiting");
+  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Steer after revisiting"))
+    .toHaveLength(0);
+  await queue.getByRole("button", { name: "Steer with queued message 1", exact: true }).click();
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === "Steer after revisiting",
+  ).length).toBe(1);
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+});
+
+test("Stop after revisiting cancels the detached response and permits a new message", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  lmStudio.holdCompletions!();
+  const composer = page.locator("textarea");
+  await composer.fill("Stop after returning to this chat");
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await page.locator("[data-sidebar]")
+    .getByRole("button", { name: /^Stop after returning to this chat/u }).click();
+  await page.getByRole("button", { name: "Stop generating" }).click();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+  await composer.fill("Fresh turn after returning and stopping");
+  await composer.press("Enter");
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === "Fresh turn after returning and stopping",
+  ).length).toBe(1);
+});
+
 test("queue keeps image attachments, pauses on Stop, and resumes FIFO exactly once", async ({
   aiden,
 }) => {
