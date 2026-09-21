@@ -193,6 +193,7 @@ test("snapshot-aware deletion removes a dirty managed worktree and journals it",
   assert.equal(persisted.deletionMode, "safe");
   assert.equal(persisted.snapshotId, snapshotId);
   assert.equal(persisted.snapshotRef, capture.ref);
+  assert.equal(persisted.snapshotCommit, capture.commit);
   assert.equal(persisted.snapshotTree, capture.tree);
   assert.equal(persisted.phase, "filesystem_complete");
 });
@@ -245,6 +246,35 @@ test("safe deletion fails closed when the snapshot anchor disappeared after capt
   );
   // The recoverable checkout is preserved rather than silently discarded.
   assert.equal((await fs.lstat(created.path)).isDirectory(), true);
+});
+
+test("safe deletion rejects a snapshot ref moved to another commit with the same tree", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: removeAfterAuthorize,
+  });
+  const created = await service.createWorktree(repository, root, "codex/same-tree-ref");
+  await fs.writeFile(path.join(created.path, "README.md"), "dirty\n");
+  const snapshotId = randomUUID();
+  const capture = await service.captureManagedWorktreeSnapshot(repository, created.path, snapshotId);
+  const replacement = await git(repository, ["commit-tree", capture.tree, "-p", capture.head, "-m", "same tree, different commit"]);
+  assert.notEqual(replacement, capture.commit);
+  await git(repository, ["update-ref", capture.ref, replacement, capture.commit]);
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository, created.path, created.branch, created.createdFromHead,
+      undefined, created.worktreeGitDir, created.ownershipToken,
+      created.worktreeDevice, created.worktreeInode, true,
+      { snapshot: { id: snapshotId, ref: capture.ref, commit: capture.commit, tree: capture.tree },
+        provisionedIgnored: [] },
+    ),
+    (error: unknown) => error instanceof GitServiceError && error.code === "dirty_worktree",
+  );
+  assert.ok((await fs.lstat(created.path)).isDirectory());
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "dirty\n");
 });
 
 test("an unknown ignored file blocks safe deletion even with a snapshot", async (t) => {

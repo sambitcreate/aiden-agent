@@ -8,7 +8,7 @@ crash-recovery machinery.
 
 ## Status
 
-P0 (phases 1–9) implemented:
+P0 (phases 1–9) implemented in PR #185; merge and release acceptance remain open:
 
 - Managed `worktree add` runs with hooks disabled via a per-command
   `core.hooksPath=/dev/null` config override; no persistent repo config changes.

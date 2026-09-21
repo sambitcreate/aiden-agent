@@ -228,6 +228,7 @@ interface GitWorktreeRemovalJournal {
   /** Version 4: durable snapshot persisted before quarantine begins. */
   snapshotId?: string | null;
   snapshotRef?: string | null;
+  snapshotCommit?: string | null;
   snapshotTree?: string | null;
   /** Version 4: worktree-relative ignored paths Aiden itself provisioned. */
   provisionedIgnored?: string[];
@@ -267,6 +268,7 @@ interface ManagedWorktreeDeletionPolicy {
   mode: "safe" | "force";
   snapshotId: string | null;
   snapshotRef: string | null;
+  snapshotCommit: string | null;
   snapshotTree: string | null;
   allowedIgnored: ReadonlySet<string>;
 }
@@ -337,6 +339,7 @@ function normalizedDeletionPolicy(
     mode: lifecycle?.force === true ? "force" : "safe",
     snapshotId: snapshot?.id ?? null,
     snapshotRef: snapshot?.ref ?? null,
+    snapshotCommit: snapshot?.commit ?? null,
     snapshotTree: snapshot?.tree ?? null,
     allowedIgnored,
   };
@@ -349,6 +352,7 @@ function deletionPolicyFromJournal(
     mode: journal.deletionMode === "force" ? "force" : "safe",
     snapshotId: journal.snapshotId ?? null,
     snapshotRef: journal.snapshotRef ?? null,
+    snapshotCommit: journal.snapshotCommit ?? null,
     snapshotTree: journal.snapshotTree ?? null,
     allowedIgnored: new Set(journal.provisionedIgnored ?? []),
   };
@@ -3698,11 +3702,13 @@ export class GitService {
       "repositoryPath",
       "version",
     ].sort();
-    const lifecycleKeys = [...baseKeys, "deletionMode", "provisionedIgnored", "snapshotId", "snapshotRef", "snapshotTree"].sort();
+    const legacyLifecycleKeys = [...baseKeys, "deletionMode", "provisionedIgnored", "snapshotId", "snapshotRef", "snapshotTree"].sort();
+    const lifecycleKeys = [...legacyLifecycleKeys, "snapshotCommit"].sort();
     const keyShape =
       JSON.stringify(keys) === JSON.stringify(baseKeys) && journal.version === 3
         ? 3
-        : JSON.stringify(keys) === JSON.stringify(lifecycleKeys) && journal.version === 4
+        : (JSON.stringify(keys) === JSON.stringify(lifecycleKeys) ||
+            JSON.stringify(keys) === JSON.stringify(legacyLifecycleKeys)) && journal.version === 4
           ? 4
           : 0;
     if (
@@ -3755,6 +3761,7 @@ export class GitService {
     if (keyShape === 4) {
       const snapshotConsistent =
         (journal.snapshotId === null) === (journal.snapshotRef === null) &&
+        (journal.snapshotId === null) === (journal.snapshotCommit == null) &&
         (journal.snapshotId === null) === (journal.snapshotTree === null);
       if (
         !snapshotConsistent ||
@@ -3770,6 +3777,8 @@ export class GitService {
             !MANAGED_WORKTREE_SNAPSHOT_ID.test(journal.snapshotId) ||
             typeof journal.snapshotRef !== "string" ||
             journal.snapshotRef !== managedWorktreeSnapshotRef(journal.snapshotId) ||
+            typeof journal.snapshotCommit !== "string" ||
+            !GIT_OBJECT_ID.test(journal.snapshotCommit) ||
             typeof journal.snapshotTree !== "string" ||
             !GIT_OBJECT_ID.test(journal.snapshotTree)))
       ) {
@@ -4362,6 +4371,7 @@ export class GitService {
         deletionMode: activePolicy.mode,
         snapshotId: activePolicy.snapshotId,
         snapshotRef: activePolicy.snapshotRef,
+        snapshotCommit: activePolicy.snapshotCommit,
         snapshotTree: activePolicy.snapshotTree,
         provisionedIgnored: [...activePolicy.allowedIgnored].sort(),
       };
@@ -4684,6 +4694,7 @@ export class GitService {
                 (await this.managedWorktreeSnapshotAnchorTree(
                   repo.cwd,
                   activePolicy.snapshotId,
+                  activePolicy.snapshotCommit,
                 )) !== activePolicy.snapshotTree
               ) {
                 throw new GitServiceError(
@@ -5272,6 +5283,7 @@ export class GitService {
             (await this.managedWorktreeSnapshotAnchorTree(
               repo.cwd,
               lifecyclePolicy.snapshotId,
+              lifecyclePolicy.snapshotCommit,
             )) !== lifecyclePolicy.snapshotTree
           ) {
             throw new GitServiceError(
@@ -5794,9 +5806,11 @@ export class GitService {
   private async managedWorktreeSnapshotAnchorTree(
     cwd: string,
     snapshotId: string,
+    expectedCommit: string | null,
   ): Promise<string | undefined> {
+    if (expectedCommit === null) return undefined;
     const commit = await this.managedWorktreeSnapshotCommit(cwd, snapshotId);
-    if (commit === undefined) return undefined;
+    if (commit !== expectedCommit) return undefined;
     const repo = this.requireRepository(await this.repository(cwd));
     const result = await this.run(repo.cwd, [
       "rev-parse",

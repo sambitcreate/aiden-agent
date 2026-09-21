@@ -151,7 +151,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
 
 
 test("dirty removal snapshots before deletion, admits Git objects on the object store volume, and lets force skip the advisory ignored scan", async (t) => {
-  const { mkdtemp, mkdir, readdir, readFile, writeFile } = await import("node:fs/promises");
+  const { mkdtemp, mkdir, readdir, readFile, stat, writeFile } = await import("node:fs/promises");
   const os = await import("node:os");
   const nodePath = await import("node:path");
   const base = await mkdtemp(nodePath.join(os.tmpdir(), "aiden-svc-test-"));
@@ -163,6 +163,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
   await mkdir(worktreePath);
   await mkdir(snapshotRoot);
   await writeFile(nodePath.join(worktreePath, ".env"), "SECRET=1\n");
+  const worktreeIdentity = await stat(worktreePath);
 
   const events: string[] = [];
   const capacityPaths: string[] = [];
@@ -170,6 +171,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
   let expandedCalls = 0;
   let failExpansion = false;
   let failClock = false;
+  let failRefDelete = false;
   let dirty = { head: "b".repeat(40), uncommitted: 1, ignored: 1, ignoredPaths: [".env"] };
   let lifecycleSeen: unknown;
   const managed: Workspace = {
@@ -185,8 +187,8 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
       worktreeGitDir: nodePath.join(repositoryPath, ".git", "worktrees", "managed"),
       branch: "codex/managed",
       ownershipToken: "a".repeat(64),
-      worktreeDevice: 1,
-      worktreeInode: 2,
+      worktreeDevice: worktreeIdentity.dev,
+      worktreeInode: worktreeIdentity.ino,
       createdFromHead: "b".repeat(40),
       provisionedFiles: [".env"],
     },
@@ -236,7 +238,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     snapshotRefCommit: async () => undefined,
     deleteSnapshotRef: async (_repositoryPath, snapshotId, expectedCommit) => {
       deletedRefs.push({ snapshotId, expectedCommit });
-      return true;
+      return !failRefDelete;
     },
     restoreManagedCheckout: async () => {
       throw new Error("unexpected restore");
@@ -352,4 +354,15 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     (await readdir(snapshotRoot)).filter((entry) => !snapshotsBefore.has(entry)),
     [],
   );
+
+  // A failed CAS rollback preserves the private directory and stops even a
+  // forced deletion, so an orphaned ref cannot be mistaken for a clean retry.
+  const deletionsBefore = events.filter((event) => event === "delete-git").length;
+  failRefDelete = true;
+  await assert.rejects(
+    service.remove(owner, managed.id, undefined, { force: true }),
+    /left artifacts requiring review/u,
+  );
+  assert.equal(events.filter((event) => event === "delete-git").length, deletionsBefore);
+  assert.equal((await readdir(snapshotRoot)).length, snapshotsBefore.size + 1);
 });

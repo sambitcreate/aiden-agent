@@ -2,9 +2,9 @@
 // files from the source checkout into a freshly created managed worktree.
 // Git performs the pattern matching; this module performs the safe copies.
 
-import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { captureManagedWorktreeRootIdentity, ManagedWorktreeFileIoError, transferManagedWorktreeFile } from "./managed-worktree-file-io.js";
 
 const INCLUDE_FILE = ".worktreeinclude";
 const MAX_INCLUDE_BYTES = 64 * 1024;
@@ -77,45 +77,6 @@ export async function readWorktreeInclude(repositoryRoot: string): Promise<strin
   return candidate;
 }
 
-async function realDirectory(target: string): Promise<boolean> {
-  try {
-    const stat = await fs.lstat(target);
-    return stat.isDirectory() && !stat.isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Verify every ancestor of `relativePath` under `root` is a real directory —
- * never a symlink — so the walk cannot be redirected outside the root.
- */
-async function assertContainedAncestors(root: string, relativePath: string): Promise<void> {
-  const parts = relativePath.split("/").slice(0, -1);
-  let current = root;
-  for (const part of parts) {
-    current = path.join(current, part);
-    if (!(await realDirectory(current))) {
-      throw new ManagedWorktreeProvisionerError(
-        "unsafe_source",
-        "A provisioned file path traverses a symlinked or missing directory.",
-      );
-    }
-  }
-}
-
-async function assertContainedFile(root: string, relativePath: string): Promise<import("node:fs").Stats> {
-  await assertContainedAncestors(root, relativePath);
-  const stat = await fs.lstat(path.join(root, relativePath));
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new ManagedWorktreeProvisionerError(
-      "unsafe_source",
-      "A provisioned file is not a regular file.",
-    );
-  }
-  return stat;
-}
-
 function pathsEqual(a: string, b: string): boolean {
   return path.resolve(a) === path.resolve(b);
 }
@@ -142,6 +103,13 @@ export async function provisionWorktreeIncludedFiles(
 
   const canonicalSource = await fs.realpath(options.sourceRoot);
   const canonicalWorktree = await fs.realpath(options.worktreePath);
+  const sourceIdentity = await captureManagedWorktreeRootIdentity(canonicalSource);
+  const destinationIdentity = await captureManagedWorktreeRootIdentity(canonicalWorktree);
+  if (sourceIdentity.path !== canonicalSource || destinationIdentity.path !== canonicalWorktree) {
+    throw new ManagedWorktreeProvisionerError(
+      "unsafe_source", "A managed worktree root changed while provisioning was starting.",
+    );
+  }
   if (pathsEqual(canonicalSource, canonicalWorktree)) {
     throw new ManagedWorktreeProvisionerError(
       "unsafe_source",
@@ -198,96 +166,37 @@ export async function provisionWorktreeIncludedFiles(
         "A provisioned file path could not be verified.",
       );
     }
-    const source = path.join(canonicalSource, relativePath);
-    const before = await assertContainedFile(canonicalSource, relativePath);
-    totalBytes += before.size;
-    if (totalBytes > MAX_PROVISIONED_BYTES) {
-      throw new ManagedWorktreeProvisionerError(
-        "too_many_bytes",
-        ".worktreeinclude selects more bytes than Aiden can safely provision.",
-      );
-    }
-
-    const destination = path.join(canonicalWorktree, relativePath);
-    const parent = path.dirname(destination);
-    await fs.mkdir(parent, { recursive: true });
-    // mkdir -p may reuse an ancestor that is a symlink; verify the real parent
-    // stays inside the managed worktree before writing into it.
-    const canonicalParent = await fs.realpath(parent);
-    const parentRelative = path.relative(canonicalWorktree, canonicalParent);
-    if (parentRelative.startsWith("..") || path.isAbsolute(parentRelative)) {
-      throw new ManagedWorktreeProvisionerError(
-        "unsafe_source",
-        "A provisioned file destination escapes the managed worktree.",
-      );
-    }
     try {
-      // Bind the copy to the verified filesystem object. A pathname-based copy
-      // re-resolves `source` after the identity check, so a concurrently
-      // mutable checkout could swap the file or an ancestor for a symlink,
-      // restore it before the post-copy lstat, and still have the wrong bytes
-      // provisioned. Opening without O_NOFOLLOW and reading through that
-      // descriptor closes the window. Whole-file reads match the snapshot
-      // capture path and stay inside the same provisioned-size budget.
-      const sourceHandle = await fs.open(
-        source,
-        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-      );
-      try {
-        const opened = await sourceHandle.stat();
-        if (
-          !opened.isFile() ||
-          opened.dev !== before.dev ||
-          opened.ino !== before.ino ||
-          opened.size !== before.size
-        ) {
-          throw new ManagedWorktreeProvisionerError(
-            "source_changed",
-            "A provisioned file changed while Aiden was copying it.",
-          );
-        }
-        const bytes = await sourceHandle.readFile();
-        // The descriptor still refers to the verified inode, so a same-inode
-        // rewrite during the read is the remaining change this can detect.
-        const settled = await sourceHandle.stat();
-        if (
-          settled.size !== before.size ||
-          settled.mtimeMs !== before.mtimeMs ||
-          bytes.byteLength !== before.size
-        ) {
-          throw new ManagedWorktreeProvisionerError(
-            "source_changed",
-            "A provisioned file changed while Aiden was copying it.",
-          );
-        }
-        await fs.writeFile(destination, bytes, {
-          flag: "wx",
-          mode: before.mode & 0o777,
-        });
-      } finally {
-        await sourceHandle.close().catch(() => undefined);
-      }
+      const copied = await transferManagedWorktreeFile({
+        operation: "copy",
+        sourceRoot: canonicalSource,
+        sourceIdentity,
+        sourceRelativePath: relativePath,
+        destinationRoot: canonicalWorktree,
+        destinationIdentity,
+        destinationRelativePath: relativePath,
+        byteLimit: MAX_PROVISIONED_BYTES - totalBytes,
+        mode: "source",
+      });
+      totalBytes += copied.size;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST") {
+      if (error instanceof ManagedWorktreeFileIoError) {
+        const code = error.code === "destination_exists" ? "destination_exists"
+          : error.code === "too_many_bytes" ? "too_many_bytes"
+          : error.code === "source_changed" ? "source_changed"
+          : error.code === "unsafe_source" ? "unsafe_source"
+          : error.code === "invalid_input" ? "unsafe_source"
+          : "unsafe_source";
         throw new ManagedWorktreeProvisionerError(
-          "destination_exists",
-          "A provisioned file would overwrite an existing worktree file.",
-          error,
-        );
-      }
-      // ELOOP means the pathname became a symlink and ENOENT means it vanished;
-      // neither can be provisioned from the verified object any more.
-      if (code === "ELOOP" || code === "ENOENT") {
-        throw new ManagedWorktreeProvisionerError(
-          "source_changed",
-          "A provisioned file changed while Aiden was copying it.",
+          code,
+          code === "destination_exists"
+            ? "A provisioned file would overwrite an existing worktree file."
+            : "A provisioned file could not be copied safely.",
           error,
         );
       }
       throw error;
     }
-    await fs.chmod(destination, before.mode & 0o777).catch(() => undefined);
     provisioned.push(relativePath);
     options.onProvisioned?.(relativePath);
   }

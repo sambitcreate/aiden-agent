@@ -254,6 +254,11 @@ export async function restoreManagedWorktreeSnapshot(
       snapshotDirPath,
       snapshot.provisionedFiles,
       journal.worktreePath,
+      {
+        path: journal.worktreePath,
+        device: String(journal.worktreeDevice),
+        inode: String(journal.worktreeInode),
+      },
     );
     journal = { ...journal, phase: "complete" };
     await writeManagedWorktreeRestoreJournal(snapshotRoot, journal);

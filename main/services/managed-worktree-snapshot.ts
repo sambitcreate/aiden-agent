@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { ManagedWorktreeFileIoError, transferManagedWorktreeFile, type ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
 
 const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const GIT_OBJECT_ID = /^[0-9a-f]{40}$/u;
@@ -325,6 +326,7 @@ export async function captureProvisionedFile(
   snapshotDirPath: string,
   worktreePath: string,
   relativePath: string,
+  worktreeIdentity?: ManagedWorktreeRootIdentity,
 ): Promise<ProvisionedFileSnapshot> {
   const normalized = normalizedRelativePath(relativePath);
   if (normalized === undefined) {
@@ -333,51 +335,50 @@ export async function captureProvisionedFile(
       "A provisioned file path could not be verified.",
     );
   }
-  const source = path.join(worktreePath, normalized);
-  const stat = await fs.lstat(source);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
+  const tempRelative = path.posix.join("files", `${randomUUID()}.tmp`);
+  const temp = path.join(snapshotDirPath, tempRelative);
+  let copied;
+  try {
+    copied = await transferManagedWorktreeFile({
+      operation: "copy",
+      sourceRoot: worktreePath,
+      sourceIdentity: worktreeIdentity,
+      sourceRelativePath: normalized,
+      destinationRoot: snapshotDirPath,
+      destinationRelativePath: tempRelative,
+      byteLimit: MAX_PROVISIONED_BLOB_BYTES,
+      mode: 0o600,
+    });
+  } catch (error) {
     throw new ManagedWorktreeSnapshotError(
       "snapshot_invalid",
-      "A provisioned file is no longer a regular file.",
+      "A provisioned file could not be captured safely.",
+      error,
     );
   }
-  if (stat.size > MAX_PROVISIONED_BLOB_BYTES) {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_invalid",
-      "A provisioned file grew past the snapshot size limit.",
-    );
-  }
-  const bytes = await fs.readFile(source);
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const blobPath = path.posix.join("files", digest);
+  const blobPath = path.posix.join("files", copied.digest);
   const blobTarget = path.join(snapshotDirPath, blobPath);
-  // Content-addressed: an identical blob already captured is left in place;
-  // a digest collision with different bytes is impossible to distinguish, so
-  // refuse rather than silently reuse.
-  if (await pathExists(blobTarget)) {
-    const existing = createHash("sha256").update(await fs.readFile(blobTarget)).digest("hex");
-    if (existing !== digest) {
-      throw new ManagedWorktreeSnapshotError(
-        "blob_corrupt",
-        "A provisioned-file snapshot blob failed verification.",
-      );
-    }
-  } else {
-    const temp = `${blobTarget}.${randomUUID()}.tmp`;
-    await fs.writeFile(temp, bytes, { mode: 0o600 });
-    try {
+  try {
+    if (await pathExists(blobTarget)) {
+      const existing = createHash("sha256").update(await fs.readFile(blobTarget)).digest("hex");
+      if (existing !== copied.digest) {
+        throw new ManagedWorktreeSnapshotError(
+          "blob_corrupt",
+          "A provisioned-file snapshot blob failed verification.",
+        );
+      }
+    } else {
       await fs.rename(temp, blobTarget);
       await syncDirectory(path.dirname(blobTarget));
-    } catch (error) {
-      await fs.unlink(temp).catch(() => undefined);
-      throw error;
     }
+  } finally {
+    await fs.unlink(temp).catch(() => undefined);
   }
   return {
     relativePath: normalized,
-    mode: stat.mode & 0o777,
-    size: bytes.length,
-    digest,
+    mode: copied.sourceMode,
+    size: copied.size,
+    digest: copied.digest,
     blobPath,
   };
 }
@@ -411,106 +412,42 @@ export async function verifyProvisionedFileBlobs(
   }
 }
 
-/**
- * Prove that `target` and every existing ancestor it traverses stay inside
- * `canonicalRoot`, returning the canonical path of the nearest existing
- * ancestor. A restored Git tree can materialize a symlink at an ancestor of a
- * provisioned path, so lexical containment cannot authorize a filesystem
- * operation; this runs immediately before each mutation instead.
- */
-async function verifiedContainedAncestor(
-  canonicalRoot: string,
-  target: string,
-): Promise<string> {
-  let current = target;
-  for (;;) {
-    if (await pathExists(current)) {
-      // A dangling symlink ancestor also fails closed: realpath cannot resolve it.
-      const canonical = await fs.realpath(current).catch(() => undefined);
-      if (canonical === undefined || !isInsideCanonicalRoot(canonicalRoot, canonical)) {
-        throw new ManagedWorktreeSnapshotError(
-          "snapshot_invalid",
-          "A provisioned-file destination escapes the restored worktree.",
-        );
-      }
-      return canonical;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new ManagedWorktreeSnapshotError(
-        "snapshot_invalid",
-        "A provisioned-file destination escapes the restored worktree.",
-      );
-    }
-    current = parent;
-  }
-}
-
-function isInsideCanonicalRoot(canonicalRoot: string, candidate: string): boolean {
-  const relative = path.relative(canonicalRoot, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-/**
- * Write captured blobs back into a restored worktree. Idempotent so a crashed
- * restore can resume: an existing destination is kept only when its bytes
- * already match the captured blob; anything else fails closed.
- */
+/** Restore each verified blob through descriptor-relative no-follow traversal. */
 export async function restoreProvisionedFiles(
   snapshotDirPath: string,
   provisionedFiles: readonly ProvisionedFileSnapshot[],
   worktreePath: string,
+  worktreeIdentity?: ManagedWorktreeRootIdentity,
 ): Promise<void> {
-  const canonicalWorktree = await fs.realpath(worktreePath);
   await verifyProvisionedFileBlobs(snapshotDirPath, provisionedFiles);
   for (const file of provisionedFiles) {
-    // Join under the canonical worktree: the requested path may traverse
-    // platform symlinked ancestors (e.g. /var on macOS).
-    const destination = path.join(canonicalWorktree, file.relativePath);
-    const resolved = path.resolve(destination);
-    if (!isInsideCanonicalRoot(canonicalWorktree, resolved)) {
+    if (normalizedRelativePath(file.relativePath) !== file.relativePath ||
+        normalizedRelativePath(file.blobPath) !== file.blobPath) {
       throw new ManagedWorktreeSnapshotError(
-        "snapshot_invalid",
-        "A provisioned-file destination escapes the restored worktree.",
+        "snapshot_invalid", "A provisioned-file snapshot entry could not be verified.",
       );
     }
-    const bytes = await fs.readFile(path.join(snapshotDirPath, file.blobPath));
-    // The lexical check above does not authorize writing or removing anything:
-    // the applied snapshot tree may have materialized a symlink ancestor that
-    // redirects outside the worktree. Prove every existing ancestor first, then
-    // create the parent chain, then prove the canonical parent again — all
-    // before the first mutation of the destination or its inflight sibling.
-    const parent = path.dirname(resolved);
-    await verifiedContainedAncestor(canonicalWorktree, resolved);
-    await fs.mkdir(parent, { recursive: true });
-    await verifiedContainedAncestor(canonicalWorktree, parent);
-
-    // A crash may have left our own inflight temp or, on older runs, a partial
-    // destination; discard the temp so retries converge.
-    const inflight = `${resolved}.aiden-restore-inflight`;
-    await fs.rm(inflight, { force: true });
-    if (await pathExists(resolved)) {
-      const existing = await fs.lstat(resolved);
-      const matches =
-        existing.isFile() &&
-        !existing.isSymbolicLink() &&
-        createHash("sha256").update(await fs.readFile(resolved)).digest("hex") ===
-          file.digest;
-      if (matches) {
-        await fs.chmod(resolved, file.mode & 0o777).catch(() => undefined);
-        continue;
-      }
+    try {
+      await transferManagedWorktreeFile({
+        operation: "restore",
+        sourceRoot: snapshotDirPath,
+        sourceRelativePath: file.blobPath,
+        destinationRoot: worktreePath,
+        destinationIdentity: worktreeIdentity,
+        destinationRelativePath: file.relativePath,
+        byteLimit: file.size,
+        digest: file.digest,
+        mode: file.mode & 0o777,
+      });
+    } catch (error) {
+      const code = error instanceof ManagedWorktreeFileIoError ? error.code : undefined;
       throw new ManagedWorktreeSnapshotError(
-        "destination_exists",
-        "A provisioned-file destination already exists in the restored worktree.",
+        code === "destination_exists" ? "destination_exists"
+          : code === "blob_corrupt" ? "blob_corrupt" : "snapshot_invalid",
+        "A provisioned-file destination could not be restored safely.",
+        error,
       );
     }
-    // Write to a sibling temp and rename so a crash mid-write leaves either
-    // the inflight file (discarded above) or a complete destination — never a
-    // truncated file wedged behind the destination_exists check.
-    await fs.writeFile(inflight, bytes, { mode: 0o600 });
-    await fs.chmod(inflight, file.mode & 0o777).catch(() => undefined);
-    await fs.rename(inflight, resolved);
   }
 }
 

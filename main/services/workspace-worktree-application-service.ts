@@ -136,6 +136,15 @@ async function fileExists(target: string): Promise<boolean> {
   }
 }
 
+class ManagedWorktreeSnapshotCleanupError extends Error {
+  declare readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("A failed managed worktree snapshot left artifacts requiring review; deletion was stopped.");
+    this.name = "ManagedWorktreeSnapshotCleanupError";
+    this.cause = cause;
+  }
+}
+
 /**
  * Shared renderer/remote orchestration for Aiden-owned Git worktrees. All
  * filesystem and Git-admin identity is reloaded from persisted Mac state.
@@ -356,7 +365,16 @@ export function createWorkspaceWorktreeApplicationService(
               for (const relativePath of provisionedIgnored) {
                 if (!(await fileExists(path.join(managed.worktreePath, relativePath)))) continue;
                 provisioned.push(
-                  await captureProvisionedFile(snapshotDir, managed.worktreePath, relativePath),
+                  await captureProvisionedFile(
+                    snapshotDir,
+                    managed.worktreePath,
+                    relativePath,
+                    {
+                      path: managed.worktreePath,
+                      device: String(managed.worktreeDevice),
+                      inode: String(managed.worktreeInode),
+                    },
+                  ),
                 );
               }
               const capture = await dependencies.captureWorktreeSnapshot(
@@ -394,12 +412,22 @@ export function createWorkspaceWorktreeApplicationService(
                 // A snapshot without its manifest is unusable, so a failed
                 // publication must not leak the synthetic ref and private
                 // blobs this attempt already wrote.
-                await dependencies
-                  .deleteSnapshotRef(managed.repositoryPath, snapshotId, capture.commit)
-                  .catch(() => undefined);
-                await fs
-                  .rm(path.join(snapshotRoot, snapshotId), { recursive: true, force: true })
-                  .catch(() => undefined);
+                let refDeleted = false;
+                try {
+                  refDeleted = await dependencies.deleteSnapshotRef(
+                    managed.repositoryPath,
+                    snapshotId,
+                    capture.commit,
+                  );
+                } catch (cleanupError) {
+                  throw new ManagedWorktreeSnapshotCleanupError(cleanupError);
+                }
+                if (!refDeleted) throw new ManagedWorktreeSnapshotCleanupError(error);
+                try {
+                  await fs.rm(path.join(snapshotRoot, snapshotId), { recursive: true });
+                } catch (cleanupError) {
+                  throw new ManagedWorktreeSnapshotCleanupError(cleanupError);
+                }
                 throw error;
               }
               return {
@@ -420,6 +448,7 @@ export function createWorkspaceWorktreeApplicationService(
                 try {
                   lifecycle.snapshot = await snapshotWorktree();
                 } catch (error) {
+                  if (error instanceof ManagedWorktreeSnapshotCleanupError) throw error;
                   dependencies.logError(
                     "git",
                     "A forced managed worktree deletion could not preserve a snapshot.",
