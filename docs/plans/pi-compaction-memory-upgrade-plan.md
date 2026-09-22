@@ -292,3 +292,7 @@ This plan is complete only when:
 4. Aiden runs the audited current Pi compaction primitives without legacy checkpoint translation;
 5. durable memory is scoped, bounded, searchable, approval-controlled, and demonstrably separate from compaction;
 6. automated gates and the credentialed/installed operator matrix pass without an unresolved P0/P1 review finding.
+
+## 2026-09-22 small-context budget follow-up
+
+A separate bounded fix applies the existing VCC reserve/retained-tail bounds to LLM settings only when their pair cannot fit the selected model context. This prevents negative automatic thresholds and unnecessary child/restart checkpoints while preserving feasible Pi defaults and the pinned runtime. Boundary, manual/automatic restart and child regressions pass locally. See [implementation and remaining scope](../../.memory/upgrade-pi-small-context-budgets.md); PR/CI review is tracked separately. Persisted user-defined compaction-policy overrides remain unimplemented; custom model context/output limits already ship. No rollout or operator-acceptance stage advances.

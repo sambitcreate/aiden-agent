@@ -852,3 +852,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — Small-context semantic budgets
+
+- Default Pi reserve/tail values can exceed a custom model window even though generation preflight is safe. Apply the already-used VCC bounds only to infeasible pairs; keep feasible and exact-fit defaults.
+- A retained-tail regression using one enormous first user entry cannot prove target-budget enforcement: Pi deliberately retains whole cut-point groups. Use several complete turns to prove prefix reduction without changing upstream pairing/cut semantics.
+- The child compatibility test expected a needless final compaction checkpoint after active-output projection. Update it to assert exactly two provider requests and no checkpoint, preserving bounded output before the second inference.

@@ -147,7 +147,15 @@ export class PiCompactionCoordinator {
       ...DEFAULT_COMPACTION_SETTINGS,
       ...options.settings,
     };
-    if (options.engine === "vcc") {
+    // Preserve Pi's defaults when both budgets fit. Small custom/local models
+    // otherwise get a non-positive trigger or retain their entire input while
+    // repeatedly adding summary checkpoints. Use the existing VCC bounds for
+    // those infeasible pairs across every coordinator surface.
+    if (
+      options.engine === "vcc" ||
+      this.settings.reserveTokens >= options.model.contextWindow ||
+      this.settings.keepRecentTokens > options.model.contextWindow - this.settings.reserveTokens
+    ) {
       this.settings.reserveTokens = Math.min(
         this.settings.reserveTokens,
         Math.floor(options.model.contextWindow / 4),
@@ -156,6 +164,9 @@ export class PiCompactionCoordinator {
         this.settings.keepRecentTokens,
         Math.floor((options.model.contextWindow - this.settings.reserveTokens) / 2),
       );
+    }
+    if (this.settings.enabled && this.settings.reserveTokens < 2) {
+      throw new Error("The selected model has insufficient output reserve for compaction.");
     }
   }
 
