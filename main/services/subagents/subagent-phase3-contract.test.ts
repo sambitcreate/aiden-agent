@@ -142,9 +142,11 @@ test("chat removal deletes private child history before the chat can disappear",
     completeDeletion,
   );
   const releaseAdmission = applicationService.indexOf(
-    "if (releaseAdmission) finishDeletion()",
+    "if (releaseAdmission) {",
     completeDeletion,
   );
+  assert.match(applicationService.slice(releaseAdmission),
+    /if \(releaseAdmission\) \{\s*finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
