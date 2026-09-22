@@ -21,6 +21,7 @@ import {
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
   assertPackagedSubagentInferenceWorkerEntries,
+  assertPackagedParakeetWorkerEntries,
   assertPackagedNodePtyHelperEntries,
   assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
@@ -30,7 +31,10 @@ import {
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
   verifyPackagedSubagentInferenceWorker,
+  verifyPackagedParakeetWorker,
+  verifyPackagedVccWorker,
   verifyPackagedNodePtyResources,
+  verifyPackagedGenerativeUiLibraries,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
 
@@ -78,6 +82,34 @@ test("package verifier rejects symlinked Computer Use resources", async () => {
     await symlink(reviewed, substituted);
     await assert.doesNotReject(assertRegularFile(reviewed));
     await assert.rejects(assertRegularFile(substituted), /regular non-symlinked package file/);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires regular non-empty Generative UI host libraries", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-generative-ui-package-"));
+  const root = await realpath(temporaryRoot);
+  const app = path.join(root, "Aiden Agent.app");
+  const directory = path.join(app, "Contents", "Resources", "generative-ui");
+  const filenames = ["chart.umd.min.js", "plotly.min.js", "katex.min.js", "katex.min.css"];
+  try {
+    await mkdir(directory, { recursive: true });
+    await Promise.all(
+      filenames.map((filename) => writeFile(path.join(directory, filename), filename)),
+    );
+    await assert.doesNotReject(verifyPackagedGenerativeUiLibraries(app));
+
+    await writeFile(path.join(directory, "plotly.min.js"), "");
+    await assert.rejects(verifyPackagedGenerativeUiLibraries(app), /library is empty/iu);
+    await writeFile(path.join(directory, "plotly.min.js"), "plotly");
+
+    await unlink(path.join(directory, "katex.min.js"));
+    await symlink(path.join(directory, "plotly.min.js"), path.join(directory, "katex.min.js"));
+    await assert.rejects(
+      verifyPackagedGenerativeUiLibraries(app),
+      /regular non-symlinked package file/iu,
+    );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -201,6 +233,26 @@ test("package verifier requires a bounded packed subagent inference worker", asy
       verifyPackagedSubagentInferenceWorker(unpackedAsar),
       /bounded packed regular file/u,
     );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires a packed on-device transcription worker", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedParakeetWorkerEntries(["/build/main/parakeet-worker.js"]),
+  );
+  assert.throws(() => assertPackagedParakeetWorkerEntries([]), /transcription worker/u);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-parakeet-worker-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const workerDirectory = path.join(source, "build", "main");
+  try {
+    await mkdir(workerDirectory, { recursive: true });
+    await writeFile(path.join(workerDirectory, "parakeet-worker.js"), "export {};\n");
+    const packedAsar = path.join(root, "packed.asar");
+    await createPackage(source, packedAsar);
+    await assert.doesNotReject(verifyPackagedParakeetWorker(packedAsar));
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -448,8 +500,12 @@ test("package verifier checks the broker's Mach-O deployment target, not only In
   );
 });
 
-test("package verifier requires the exact universal architecture set for both private helpers", () => {
-  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+test("package verifier requires the exact universal architecture set for private helpers", () => {
+  for (const target of [
+    "Managed worktree remover",
+    "Bot inbox writer",
+    "Private subagent run store",
+  ]) {
     assert.doesNotThrow(() => assertExactUniversalArchitectures("x86_64 arm64\n", target));
     assert.doesNotThrow(() => assertExactUniversalArchitectures("arm64 x86_64\n", target));
     assert.throws(
@@ -472,7 +528,11 @@ test("package verifier requires the exact universal architecture set for both pr
 });
 
 test("package verifier checks each architecture deployment floor independently", () => {
-  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+  for (const target of [
+    "Managed worktree remover",
+    "Bot inbox writer",
+    "Private subagent run store",
+  ]) {
     for (const architecture of ["arm64", "x86_64"]) {
       assert.doesNotThrow(() =>
         assertMacOSArchitectureMinimum(
@@ -581,4 +641,25 @@ test("package verifier requires inherited microphone access on Electron helpers"
       ),
     /pinned inherited set/u,
   );
+});
+
+test("package verifier requires the local VCC worker and pinned attribution", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-vcc-worker-asar-")));
+  const source = path.join(root, "source");
+  try {
+    await mkdir(path.join(source, "build/main"), { recursive: true });
+    await writeFile(path.join(source, "build/main/pi-vcc-worker.js"), "export {};\n");
+    await writeFile(
+      path.join(source, "THIRD_PARTY_NOTICES.md"),
+      "## pi-vcc\n1f1575b6e0a07df51e0a9ea8413394ccac3714ae\n",
+    );
+    const packed = path.join(root, "packed.asar");
+    await createPackage(source, packed);
+    await assert.doesNotReject(verifyPackagedVccWorker(packed));
+    await writeFile(path.join(source, "THIRD_PARTY_NOTICES.md"), "Missing notice");
+    await createPackage(source, path.join(root, "invalid.asar"));
+    await assert.rejects(verifyPackagedVccWorker(path.join(root, "invalid.asar")), /attribution/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

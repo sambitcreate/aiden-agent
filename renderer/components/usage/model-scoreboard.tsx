@@ -14,7 +14,7 @@ import {
   usageModelScore,
   type UsageScoreMetric,
 } from "../../lib/usage-profile-data";
-import type { UsageModelSummary } from "../../lib/types";
+import type { Provider, UsageModelSummary } from "../../lib/types";
 import { ProviderIcon } from "../provider-icon";
 
 function compactNumber(value: number): string {
@@ -32,7 +32,13 @@ function modelScoreLabel(model: UsageModelSummary, metric: UsageScoreMetric): st
   return formatTrackedUsd(model.hostedCostUsd);
 }
 
-export function ModelScoreboard({ models }: { models: UsageModelSummary[] }) {
+export function ModelScoreboard({
+  models,
+  providers = [],
+}: {
+  models: UsageModelSummary[];
+  providers?: Provider[];
+}) {
   const [metric, setMetric] = React.useState<UsageScoreMetric>("requests");
   const ranked = React.useMemo(() => rankUsageModels(models, metric), [metric, models]);
   const visible = ranked.slice(0, 10);
@@ -97,6 +103,7 @@ export function ModelScoreboard({ models }: { models: UsageModelSummary[] }) {
                     providerId={model.providerId}
                     providerLabel={model.providerLabel}
                     modelId={model.modelId}
+                    artwork={providers.find((provider) => provider.id === model.providerId)?.artwork}
                     className="mt-0.5 size-4 text-tertiary"
                   />
                   <div className="min-w-0 flex-1">

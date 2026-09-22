@@ -1,3 +1,7 @@
+import { beginChatDraftSend, createChatDraft, discardChatDraft, finishChatDraftSend, getChatDraft, retainChatDraft, subscribeChatDrafts, updateChatDraft } from "../lib/chat-draft";
+import { QueuedMessages } from "../components/queued-messages";
+import { chatMessageQueue } from "../lib/chat-message-queue";
+import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 // The active chat: transcript (ScrollArea) + composer. Generation runs inline
 // against a concrete chatId in the active workspace, streams tokens via
 // startGeneration, and surfaces tool-approval prompts when the workspace is in
@@ -7,13 +11,18 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
+import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
+import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
@@ -27,9 +36,11 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  aidenRemoteApi,
   createChatTurnId,
   settingsApi,
   startGeneration,
+  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -37,19 +48,29 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
+  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { useModelSelection } from "../lib/use-model-selection";
+import {
+  isModelSelectionReadyForNewWork,
+  resolveVisibleModelSelection,
+  useModelSelection,
+} from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
-import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import {
+  EnvironmentPanelToggle,
+  QuickViewToggle,
+  useEnvironmentPanel,
+} from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -60,9 +81,19 @@ import {
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
-import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import {
+  resolveAgentActivity,
+  resolveVisibleAgentActivity,
+  type ToolActivity,
+} from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
-import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
+import {
+  hasActiveToolStep,
+  latestActiveAgentStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
   CODEX_THINKING_LEVELS,
@@ -79,16 +110,24 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
+import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../shared/generation-thinking";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
+  detachedTextStreamingRemaining,
+  detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
 } from "../lib/chat-terminal-sync";
 import {
+  ASSISTANT_WORKSPACE_ID,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
@@ -96,8 +135,23 @@ import {
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import type {
+  AskUserQuestionPromptV1,
+  AskUserQuestionResponseV1,
+} from "../shared/ask-user-question";
+import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
+import type { BtwEventV1 } from "../shared/btw";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+
+/**
+ * How long after the last text delta the activity row may keep saying
+ * "Responding…". Beyond this the model is reasoning or writing tool-call
+ * arguments, and the row should shimmer instead of going static; wide enough
+ * that bursty providers do not flap the label mid-prose.
+ */
+const TEXT_STREAMING_IDLE_MS = 2_000;
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -115,7 +169,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const navigate = useNavigate();
   const providers = useProviders();
   const documentAppendReconciliationRequired = useAppendReconciliationRequired();
-  const chat = useChat(chatId);
+  const draft = React.useSyncExternalStore(subscribeChatDrafts, () => getChatDraft(chatId));
+  const persistedChat = useChat(draft ? undefined : chatId);
+  // Draft projection stays out of the query cache and every persisted chat list.
+  const chat = draft
+    ? { ...persistedChat, data: draft.chat, isLoading: false, isError: false }
+    : persistedChat;
+  React.useEffect(() => retainChatDraft(chatId), [chatId]);
+  const bot = useBot(chat.data?.botId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
@@ -126,11 +187,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  const sideQuestionBlockedReason = draft
+    ? "Send the first message before asking a side question."
+    : chat.data?.botId || bot.data
+    ? "Side questions are not available in Bot chats."
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+      ? "Side questions are not available in Assistant chats."
+      : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
     () => false,
   );
+  const detachedProjection = React.useSyncExternalStore(
+    subscribeDetachedLifecycleStreams,
+    () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
+    () => null,
+  );
+  // A durable terminal message can reach the cache before detached ownership is
+  // cleared. During that handoff there is no longer a response to stop or steer.
+  const cachedMessages = chat.data?.messages;
+  const visibleDetachedProjection =
+    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -141,12 +219,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(providers.data);
+  const { providerId, model, select } = useModelSelection(
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+    settings.data !== undefined,
+  );
+  const hasMessages = (chat.data?.messages.length ?? 0) > 0;
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
-    model &&
-    selectedProvider.models.includes(model) &&
+    isModelSelectionReadyForNewWork(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+      hasMessages,
+    ) &&
     (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
   const modelReadinessMessage = React.useMemo(() => {
@@ -167,8 +254,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     if (!model || !selectedProvider.models.includes(model))
       return `Choose a model from ${selectedProvider.label}.`;
+    if (
+      !hasMessages &&
+      settings.data !== undefined &&
+      isModelHidden(settings.data.hiddenModelsByProvider, providerId, model)
+    ) {
+      return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
+    }
     return undefined;
-  }, [model, providerId, providers.isLoading, selectedProvider]);
+  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -187,14 +281,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ? "Loading chat…"
     : chat.isError
       ? "This chat could not be loaded. Try again."
+      : !chat.data
+        ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining
-          ? "Finishing the previous response…"
+        : detachedGenerationDraining && !visibleDetachedProjection
+          ? "Response continues in the background…"
           : undefined;
-  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+  const botReadinessMessage = chat.data?.botId
+    ? bot.isLoading
+      ? "Loading bot…"
+      : !bot.data
+        ? "This bot is no longer available."
+        : bot.data.archivedAt
+          ? "Restore this bot before continuing the conversation."
+          : undefined
+    : undefined;
+  const ready =
+    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
+    chatReadinessMessage ??
+    botReadinessMessage ??
+    modelReadinessMessage ??
+    computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -252,6 +361,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     anthropicThinkingLevels,
     storedAnthropicThinkingLevel,
   );
+  const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    const declared = thinkingMetadata?.thinkingLevels;
+    return declared?.filter(isGenerationThinkingLevel) ?? [];
+  }, [thinkingMetadata?.thinkingLevels]);
+  const providerThinkingSupported =
+    selectedProvider?.isBuiltin === true &&
+    providerId !== GOOGLE_PROVIDER_ID &&
+    providerId !== OPENAI_CODEX_PROVIDER_ID &&
+    providerId !== ANTHROPIC_PROVIDER_ID &&
+    Boolean(model) &&
+    modelInfo.data?.[model]?.reasoning === true &&
+    providerThinkingLevels.length > 0;
+  const storedProviderThinkingLevel = model
+    ? settings.data?.providerThinkingByModel?.[providerId]?.[model]
+    : undefined;
+  const providerThinkingLevel = normalizeProviderThinkingLevel(
+    providerThinkingLevels,
+    storedProviderThinkingLevel,
+  );
   const localReasoningVisibilitySupported = Boolean(
     selectedProvider && isLocalProviderDeployment(selectedProvider),
   );
@@ -266,11 +394,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     if (!chat.data || effectiveWorkspace) return;
     if (terminal.open) terminal.toggle();
-    environmentPanel.close();
-  }, [chat.data, effectiveWorkspace, environmentPanel.close, terminal.open, terminal.toggle]);
+    environmentPanel.closeAll();
+  }, [chat.data, effectiveWorkspace, environmentPanel.closeAll, terminal.open, terminal.toggle]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
+  const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
@@ -283,6 +412,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  const [questionnaire, setQuestionnaire] = React.useState<AskUserQuestionPromptV1 | null>(null);
+  const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  const [btwView, setBtwView] = React.useState<BtwLiveView | null>(null);
+  const [todoSnapshot, setTodoSnapshot] = React.useState<TodoSnapshotViewV1 | null>(null);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
@@ -290,23 +423,101 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
+  const visualizeTurnRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
+  const todoSnapshotReadFenceRef = React.useRef<TodoSnapshotReadFence | null>(null);
+  const todoSnapshotReadFence =
+    todoSnapshotReadFenceRef.current ??= new TodoSnapshotReadFence();
+  const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
+  const remoteApprovalRefreshRef = React.useRef(0);
   const pendingDeltaRef = React.useRef("");
   const pendingReasoningDeltaRef = React.useRef("");
   const streamedTextRef = React.useRef("");
   const streamedReasoningRef = React.useRef("");
+  const streamingArtifactsRef = React.useRef<ChatArtifactV1[]>([]);
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
+  // Prose from an earlier turn must not pin the activity row to a static
+  // "Responding…" while the model reasons or writes tool arguments, so the
+  // row keys "responding" off deltas that are still arriving.
+  const [textStreaming, setTextStreaming] = React.useState(false);
+  const textStreamingTimerRef = React.useRef<number | null>(null);
+  const markTextStreaming = React.useCallback(() => {
+    setTextStreaming(true);
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+    }
+    textStreamingTimerRef.current = window.setTimeout(() => {
+      textStreamingTimerRef.current = null;
+      setTextStreaming(false);
+    }, TEXT_STREAMING_IDLE_MS);
+  }, []);
+  const clearTextStreaming = React.useCallback(() => {
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    setTextStreaming(false);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (textStreamingTimerRef.current !== null) {
+        window.clearTimeout(textStreamingTimerRef.current);
+      }
+    },
+    [],
+  );
 
   chatIdRef.current = chatId;
+  React.useEffect(() => {
+    btwViewRef.current = btwView;
+  }, [btwView]);
+
+  React.useEffect(
+    () =>
+      chatsApi.onBtwEvent((event: BtwEventV1) => {
+        if (event.chatId !== chatIdRef.current) return;
+        setBtwView((current) => reduceBtwView(current, event));
+      }),
+    [],
+  );
+
+  React.useEffect(() => {
+    if (draft) return;
+    let active = true;
+    const refresh = async () => {
+      const requestId = ++remoteApprovalRefreshRef.current;
+      try {
+        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        if (
+          !active ||
+          chatIdRef.current !== chatId ||
+          !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
+        )
+          return;
+        setApprovals((current) => mergeRemoteApproval(current, remote));
+      } catch {
+        // Remote chat infrastructure is lazy; absence before first pairing is expected.
+      }
+    };
+    void refresh();
+    const unsubscribe = aidenRemoteApi.onApprovalChanged(({ chatId: changedChatId }) => {
+      if (changedChatId === chatId) void refresh();
+    });
+    return () => {
+      active = false;
+      remoteApprovalRefreshRef.current += 1;
+      unsubscribe();
+    };
+  }, [chatId, Boolean(draft)]);
 
   // Detach only the generation owned by the departing chat. The main process
   // keeps that operation alive and reconciles its durable terminal state.
@@ -321,12 +532,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
         generationRef.current = null;
         generationChatIdRef.current = null;
       }
+      const sideQuestion = btwViewRef.current;
+      if (
+        sideQuestion &&
+        sideQuestion.requestId !== "pending" &&
+        (sideQuestion.status === "starting" || sideQuestion.status === "running")
+      ) {
+        void chatsApi.btwCancel(departingChatId, sideQuestion.requestId);
+      }
       if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
       streamedTextRef.current = "";
       streamedReasoningRef.current = "";
+      streamingArtifactsRef.current = [];
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
     };
@@ -336,8 +556,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // the incoming chatId never paints a frame carrying the outgoing chat's
   // stream, timeline, or approvals.
   React.useLayoutEffect(() => {
+    todoSnapshotReadFence.reset(chatId);
     setStreamingText(null);
     setStreamingReasoning(null);
+    clearTextStreaming();
+    setStreamingArtifacts([]);
+    streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -349,11 +573,89 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setLiveSubagents([]);
     setError(null);
     setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
+    setBtwView(null);
+    setTodoSnapshot(null);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, [chatId]);
 
+  React.useEffect(() => {
+    if (draft) return;
+    let current = true;
+    const ticket = todoSnapshotReadFence.beginInitialRead(chatId);
+    void chatsApi.todoSnapshot(chatId).then(
+      (snapshot) => {
+        if (
+          current &&
+          chatIdRef.current === chatId &&
+          todoSnapshotReadFence.canApplyInitial(ticket)
+        ) {
+          setTodoSnapshot(snapshot);
+        }
+      },
+      () => {
+        // The chat remains usable. A verified corrupt journal is represented by
+        // an explicit unavailable snapshot; transport/lifecycle failures stay quiet.
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [chatId, Boolean(draft)]);
+
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
+  const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
+  const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
+  React.useEffect(() => {
+    if (!visibleDetachedStreamId) return;
+    const remaining = detachedTextStreamingRemaining(
+      detachedLastTextDeltaAt,
+      Date.now(),
+      TEXT_STREAMING_IDLE_MS,
+    );
+    if (textStreamingTimerRef.current !== null) {
+      window.clearTimeout(textStreamingTimerRef.current);
+      textStreamingTimerRef.current = null;
+    }
+    if (remaining === 0) {
+      setTextStreaming(false);
+      return;
+    }
+    setTextStreaming(true);
+    const timer = window.setTimeout(() => {
+      if (textStreamingTimerRef.current === timer) {
+        textStreamingTimerRef.current = null;
+        setTextStreaming(false);
+      }
+    }, remaining);
+    textStreamingTimerRef.current = timer;
+    return () => {
+      if (textStreamingTimerRef.current === timer) {
+        window.clearTimeout(timer);
+        textStreamingTimerRef.current = null;
+      }
+    };
+  }, [detachedLastTextDeltaAt, visibleDetachedStreamId]);
+  const displayedStreamingText = streamingText ?? visibleDetachedProjection?.content ?? null;
+  const displayedStreamingReasoning =
+    streamingReasoning ??
+    (visibleDetachedProjection?.reasoning.trim() ? visibleDetachedProjection.reasoning : null);
+  const displayedStreamingArtifacts =
+    streamingArtifacts.length > 0
+      ? streamingArtifacts
+      : (visibleDetachedProjection?.artifacts ?? []);
+  const displayedGenerationTimeline =
+    generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
+  const displayedLiveSubagents = React.useMemo(
+    () =>
+      mergeSubagentSnapshots(liveSubagents, visibleDetachedProjection?.subagents ?? [], {
+        chatId,
+        workspaceId: effectiveWorkspaceId,
+      }),
+    [chatId, effectiveWorkspaceId, liveSubagents, visibleDetachedProjection?.subagents],
+  );
   const latestAssistantResponse = React.useMemo(
     () =>
       [...messages]
@@ -365,12 +667,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
-  const hasMessages = messages.length > 0;
+  const imageArtifactRecoveryPending =
+    hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
+  const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
-  const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+  const isNewChat = !chat.isLoading && !hasMessages && displayedStreamingText === null;
+
+  React.useEffect(() => {
+    if (!isNewChat || settings.data === undefined) return;
+    const next = resolveVisibleModelSelection(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+    );
+    if (next && (next.providerId !== providerId || next.model !== model)) {
+      select(next.providerId, next.model);
+    }
+  }, [isNewChat, model, providerId, providers.data, select, settings.data]);
 
   const renameChat = React.useCallback(
     async (title: string) => {
+      if (getChatDraft(chatId)) { updateChatDraft(chatId, { title }); return; }
       await chatsApi.rename(chatId, title);
       qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
         current ? { ...current, title } : current,
@@ -382,8 +699,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const copyChat = React.useCallback(
     async (throughAssistantMessageId?: string) => {
+      if (getChatDraft(chatId)) throw new Error("Send the first message before copying this chat.");
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before copying this chat.");
+      }
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
+        );
+      }
+      if (imageArtifactRecoveryPending) {
+        throw new Error(
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
+        );
       }
       if (isGenerating || isStartingGeneration || approvals.length > 0) {
         throw new Error("Finish the current response or approval before copying this chat.");
@@ -420,6 +748,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       approvals.length,
       chatId,
       documentAppendReconciliationRequired,
+      imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
       isGenerating,
       isStartingGeneration,
       navigate,
@@ -429,6 +759,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const exportChat = React.useCallback(async () => {
+    if (getChatDraft(chatId)) throw new Error("Send the first message before exporting this chat.");
     const result = await chatsApi.export(chatId);
     return result.status;
   }, [chatId]);
@@ -467,20 +798,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   React.useLayoutEffect(() => {
     if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
-    environmentPanel.syncSubagents(chatId, effectiveWorkspaceId, subagentReferences, liveSubagents);
+    environmentPanel.syncSubagents(
+      chatId,
+      effectiveWorkspaceId,
+      subagentReferences,
+      displayedLiveSubagents,
+    );
   }, [
     chatId,
     effectiveWorkspaceId,
     environmentPanel.subagentsEnabled,
     environmentPanel.syncSubagents,
-    liveSubagents,
+    displayedLiveSubagents,
     subagentReferences,
   ]);
 
   React.useLayoutEffect(() => {
-    environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
+    environmentPanel.setAgentBusy(
+      isGenerating || isStartingGeneration || detachedGenerationDraining,
+    );
     return () => environmentPanel.setAgentBusy(false);
-  }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
+  }, [
+    detachedGenerationDraining,
+    environmentPanel.setAgentBusy,
+    isGenerating,
+    isStartingGeneration,
+  ]);
 
   const waitForStreamHandoff = React.useCallback(async (hasContent: boolean) => {
     const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
@@ -509,6 +852,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
+      clearTextStreaming();
+      setStreamingArtifacts([]);
+      streamingArtifactsRef.current = [];
       setStreamComplete(false);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -520,6 +866,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       generationTimelineRef.current = null;
       setLiveSubagents([]);
       setApprovals([]);
+      setQuestionnaire(null);
+      setQuestionnaireSubmitting(false);
       const scheduleStreamFlush = () => {
         if (deltaFrameRef.current !== null) return;
         deltaFrameRef.current = window.requestAnimationFrame(() => {
@@ -532,6 +880,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (pendingDelta) {
             streamedTextRef.current += pendingDelta;
             setStreamingText(streamedTextRef.current);
+            markTextStreaming();
           }
           if (pendingReasoningDelta) {
             streamedReasoningRef.current += pendingReasoningDelta;
@@ -539,19 +888,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
         });
       };
+      const visualize = visualizeTurnRef.current === true;
+      visualizeTurnRef.current = false;
       const handle = startGeneration(
         {
           chatId,
           workspaceId: effectiveWorkspaceId,
           providerId,
           model,
+          ...(visualize ? { visualize: true as const } : {}),
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
               ? codexThinkingLevel
               : anthropicThinkingSupported
                 ? anthropicThinkingLevel
-                : undefined,
+                : providerThinkingSupported
+                  ? providerThinkingLevel
+                  : undefined,
         },
         {
           onDelta: (delta) => {
@@ -573,7 +927,42 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = "";
             setStreamingText("");
             setStreamingReasoning(null);
+            clearTextStreaming();
             setStreamComplete(false);
+          },
+          onArtifactEvent: (event) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            if (event.operation === "reset") {
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
+              return;
+            }
+            const { artifact } = event;
+            setIsModelLoading(false);
+            if (artifact.kind === "html") {
+              const index = streamingArtifactsRef.current.findIndex(
+                (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
+              );
+              if (index >= 0) {
+                streamingArtifactsRef.current = streamingArtifactsRef.current.map((candidate, i) =>
+                  i === index ? artifact : candidate,
+                );
+              } else {
+                streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+              }
+              setStreamingArtifacts(streamingArtifactsRef.current);
+              return;
+            }
+            if (
+              streamingArtifactsRef.current.some(
+                (candidate) =>
+                  candidate.kind === "image" && candidate.attachment.id === artifact.attachment.id,
+              )
+            ) {
+              return;
+            }
+            streamingArtifactsRef.current = [...streamingArtifactsRef.current, artifact];
+            setStreamingArtifacts(streamingArtifactsRef.current);
           },
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
@@ -619,6 +1008,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals((prev) => [...prev, prompt]);
             }
           },
+          onQuestionnaire: (prompt) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              setQuestionnaireSubmitting(false);
+              setQuestionnaire(prompt);
+            }
+          },
+          onTodo: (snapshot) => {
+            if (
+              mountedRef.current &&
+              generationIntentRef.current === generationIntent &&
+              snapshot.chatId === chatId
+            ) {
+              todoSnapshotReadFence.markLive(snapshot.chatId);
+              setTodoSnapshot(snapshot);
+            }
+          },
           onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
@@ -632,6 +1037,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
             setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
+            clearTextStreaming();
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -647,6 +1053,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setLiveSubagents([]);
               setStreamingText(null);
               setStreamingReasoning(null);
+              setStreamingArtifacts([]);
+              streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
               setStreamComplete(false);
@@ -655,9 +1063,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
+              setQuestionnaire(null);
+              setQuestionnaireSubmitting(false);
             }
           },
           onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
+            chatMessageQueue(chatId).pause();
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -677,6 +1088,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
               setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              clearTextStreaming();
               setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
@@ -705,7 +1117,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   streamedReasoningRef.current = "";
                   setStreamComplete(false);
                 }
-                setHasUnpersistedResponse(Boolean(partial && !updatedChat));
+                const hasUnpersistedArtifact = streamingArtifactsRef.current.length > 0;
+                setHasUnpersistedResponse(
+                  Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
+                );
+                if (updatedChat) {
+                  setStreamingArtifacts([]);
+                  streamingArtifactsRef.current = [];
+                }
                 setIsStoppingGeneration(false);
                 setIsModelLoading(false);
                 if (!partial || updatedChat) {
@@ -713,11 +1132,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
+                setQuestionnaire(null);
+                setQuestionnaireSubmitting(false);
                 const persistedFailure =
-                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
-                    "assistant" &&
-                  updatedChat.messages[updatedChat.messages.length - 1]
-                    ?.providerFailure;
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
                 setError(
                   persistedFailure
                     ? null
@@ -737,13 +1156,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
+      anthropicThinkingLevel,
+      anthropicThinkingSupported,
+      clearTextStreaming,
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
       environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
+      markTextStreaming,
       providerId,
+      providerThinkingLevel,
+      providerThinkingSupported,
       model,
       qc,
       waitForStreamHandoff,
@@ -751,13 +1176,59 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleSend = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { visualize?: boolean; btw?: boolean },
+    ) => {
+      if (options?.btw) {
+        if (getChatDraft(chatId)) throw new Error("Send the first message before asking a side question.");
+        if (attachments.length > 0 || skillInvocation) {
+          throw new Error("Side questions do not accept attachments or skills.");
+        }
+        const question = text.trim();
+        setBtwView({
+          requestId: "pending",
+          question,
+          answer: "",
+          status: "starting",
+          hasHistory: btwViewRef.current?.hasHistory ?? false,
+          contextTrimmed: false,
+          sequence: -1,
+        });
+        try {
+          const receipt = await chatsApi.btwStart(chatId, question);
+          setBtwView((current) =>
+            current?.requestId === "pending"
+              ? { ...current, requestId: receipt.requestId }
+              : current,
+          );
+        } catch (error) {
+          setBtwView((current) => current?.requestId === "pending" ? null : current);
+          throw error;
+        }
+        return;
+      }
+      if (chatMessageQueue(chatId).getSnapshot().messages.length === 0) chatMessageQueue(chatId).resume();
+      visualizeTurnRef.current = options?.visualize === true;
+      if (imageArtifactRecoveryUnavailable) {
+        throw new Error(
+          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
+        );
+      }
+      if (imageArtifactRecoveryPending) {
+        throw new Error(
+          "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
+        );
+      }
       if (computerUseSaving) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
+      const firstDraft = getChatDraft(chatId) ? beginChatDraftSend(chatId) : undefined;
       const generationIntent = ++generationIntentRef.current;
       const messageTurnId = createChatTurnId();
       setIsStoppingGeneration(false);
@@ -765,7 +1236,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         let updated: Chat;
         try {
-          updated = await chatsApi.appendMessage(
+          updated = firstDraft
+            ? await chatsApi.createWithFirstMessage({
+                draftId: chatId,
+                title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
+                workspaceId: firstDraft.chat.workspaceId!,
+                providerId,
+                model,
+                computerUseEnabled: firstDraft.chat.computerUseEnabled,
+                turnId: messageTurnId,
+                message: { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
+                skillInvocation,
+              })
+            : await chatsApi.appendMessage(
             chatId,
             {
               role: "user",
@@ -783,13 +1266,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         } catch (appendError) {
           if (isAppendReconciliationRequired(appendError)) {
             setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
-            void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+            if (!firstDraft) void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
           }
           throw appendError;
         }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
+        await installAppendedChatSnapshot(qc, chatId, updated);
+        if (firstDraft) finishChatDraftSend(chatId, true);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
-        if (generationIntentRef.current !== generationIntent) {
+        if (
+          generationIntentRef.current !== generationIntent ||
+          (firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))
+        ) {
           try {
             await chatsApi.abandonTurn(chatId, messageTurnId);
           } catch (error) {
@@ -805,6 +1292,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // that committed message back into an unsent composer payload.
         if (!started.ok && mountedRef.current) setError(started.error.message);
       } finally {
+        if (firstDraft) finishChatDraftSend(chatId, false);
         if (
           mountedRef.current &&
           chatIdRef.current === chatId &&
@@ -814,15 +1302,67 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       }
     },
-    [chatId, computerUseSaving, detachedGenerationDraining, providerId, model, qc, runGeneration],
+    [
+      chatId,
+      computerUseSaving,
+      detachedGenerationDraining,
+      imageArtifactRecoveryPending,
+      imageArtifactRecoveryUnavailable,
+      providerId,
+      model,
+      qc,
+      runGeneration,
+    ],
   );
 
   const handleStop = React.useCallback(() => {
+    if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = visibleDetachedProjection;
+      setIsStoppingGeneration(true);
+      void stopDetachedGeneration(streamId).then((cancelled) => {
+        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+      }).catch((error: unknown) => {
+        if (chatIdRef.current === chatId) {
+          setIsStoppingGeneration(false);
+          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+        }
+      });
+      return;
+    }
     if (!generationRef.current || !canStopGeneration) return;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration]);
+  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
+
+  React.useEffect(() => {
+    // Detached Stop has no pane-owned terminal callback. The shell clears its
+    // exact stream after authoritative settlement; release the local stop UI.
+    if (!detachedGenerationDraining && !generationRef.current) setIsStoppingGeneration(false);
+  }, [detachedGenerationDraining, detachedProjection]);
+
+  const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
+    chatId,
+    contextKey: JSON.stringify([providerId, model, effectiveWorkspaceId, effectiveWorkspace?.permission]),
+    enabled: !draft && ready && !isGenerating && !isStartingGeneration && !isStoppingGeneration &&
+      !detachedGenerationDraining && !thinkingSaving && !computerUseSaving &&
+      !environmentPanel.gitOperationBusy && !imageArtifactRecoveryPending &&
+      !imageArtifactRecoveryUnavailable && !questionnaire && approvals.length === 0,
+    send: (message) => {
+      if (visionSupported === false && message.attachments.some((attachment) => attachment.kind === "image")) {
+        return Promise.reject(new Error("Switch to a vision-capable model before resuming these queued images."));
+      }
+      return handleSend(message.text, message.attachments, message.skillInvocation, message.options);
+    },
+  });
+
+  const queueMessage = React.useCallback(async (
+    text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean; btw?: boolean },
+  ) => {
+    messageQueue.add({ id: createChatTurnId(), text, attachments, skillInvocation,
+      options: options?.visualize ? { visualize: true } : undefined });
+  }, [messageQueue]);
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -835,10 +1375,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingReasoningDeltaRef.current = "";
     streamedTextRef.current = "";
     streamedReasoningRef.current = "";
+    streamingArtifactsRef.current = [];
     streamHandoffRef.current?.();
     streamHandoffRef.current = null;
     setStreamingText(null);
     setStreamingReasoning(null);
+    setStreamingArtifacts([]);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -848,6 +1390,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationTimelineRef.current = null;
     setLiveSubagents([]);
     setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, []);
@@ -864,13 +1408,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
-        await chatsApi.approve(prompt.approvalId, decision);
+        if (prompt.source === "remote") {
+          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+        } else {
+          await chatsApi.approve(prompt.approvalId, decision);
+        }
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
+        if (prompt.source === "remote") {
+          setApprovals((prev) =>
+            prev.filter((approval) => approval.approvalId !== prompt.approvalId),
+          );
+        }
         toast.error(
           approvalError instanceof Error
             ? approvalError.message
@@ -886,6 +1439,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [chatId],
   );
 
+  const answerQuestionnaire = React.useCallback(
+    async (response: AskUserQuestionResponseV1) => {
+      if (!questionnaire || questionnaireSubmitting) return;
+      setQuestionnaireSubmitting(true);
+      try {
+        await chatsApi.answerQuestionnaire(questionnaire.promptId, response);
+        if (chatIdRef.current === chatId) setQuestionnaire(null);
+      } catch (questionError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(
+          questionError instanceof Error ? questionError.message : "Couldn't send that answer.",
+        );
+      } finally {
+        if (chatIdRef.current === chatId) setQuestionnaireSubmitting(false);
+      }
+    },
+    [chatId, questionnaire, questionnaireSubmitting],
+  );
+
   const openFolder = React.useCallback(() => {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
@@ -893,6 +1465,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
       if (!effectiveWorkspace) return;
+      if (getChatDraft(chatId)?.sending) throw new Error("Wait for the first message to finish saving.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
           "Wait for the current Git operation to finish before changing workspace access.",
@@ -913,6 +1486,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ]);
     },
     [
+      chatId,
       effectiveWorkspace,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
@@ -928,6 +1502,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (computerUseSaving || isStartingGeneration || isGenerating) return;
       setComputerUseSaving(true);
       try {
+        if (getChatDraft(chatId)) { updateChatDraft(chatId, { computerUseEnabled: enabled }); return; }
         const updated = await chatsApi.setComputerUse(chatId, enabled);
         qc.setQueryData(queryKeys.chat(chatId), updated);
       } catch (changeError) {
@@ -1027,6 +1602,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
+  const changeProviderThinking = React.useCallback(
+    async (level: GenerationThinkingLevel) => {
+      if (
+        !model ||
+        !providerThinkingSupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      )
+        return;
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.setProviderThinking(providerId, model, level);
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save this model's thinking level.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      isGenerating,
+      isStartingGeneration,
+      model,
+      providerId,
+      providerThinkingSupported,
+      qc,
+      thinkingSaving,
+    ],
+  );
+
   const changeLocalReasoningVisibility = React.useCallback(
     async (visible: boolean) => {
       if (
@@ -1039,7 +1649,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       setThinkingSaving(true);
       try {
-        const updated = await settingsApi.set({ showLocalModelReasoning: visible });
+        const updated = await settingsApi.set({
+          showLocalModelReasoning: visible,
+        });
         qc.setQueryData(queryKeys.settings, updated);
       } catch (changeError) {
         toast.error(
@@ -1051,13 +1663,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      isGenerating,
-      isStartingGeneration,
-      localReasoningVisibilitySupported,
-      qc,
-      thinkingSaving,
-    ],
+    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -1078,6 +1684,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Save or discard the open file's edits before switching workspaces.");
       }
       if (workspaceId === effectiveWorkspaceId) return;
+      if (getChatDraft(chatId)) {
+        updateChatDraft(chatId, { workspaceId });
+        selectWorkspace(workspaceId);
+        return;
+      }
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
       qc.setQueryData(queryKeys.chat(chatId), updated);
       selectWorkspace(workspaceId);
@@ -1160,41 +1771,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         return;
       }
-      let created: Chat;
-      try {
-        created = await chatsApi.create({ workspaceId: workspace.id });
-      } catch (error) {
-        toast.info(
-          error instanceof Error
-            ? `The worktree was created, but its chat could not be created: ${error.message}`
-            : "The worktree was created, but its chat could not be created.",
-        );
-        return;
-      }
-      qc.setQueryData(queryKeys.chat(created.id), created);
-      qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(workspace.id), (current) => [
-        {
-          id: created.id,
-          title: created.title,
-          workspaceId: workspace.id,
-          providerId: created.providerId,
-          model: created.model,
-          createdAt: created.createdAt,
-          updatedAt: created.updatedAt,
-        },
-        ...(current ?? []).filter((entry) => entry.id !== created.id),
-      ]);
-      if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
+      const created = createChatDraft(workspace.id).chat;
       selectWorkspace(workspace.id);
-      void qc.invalidateQueries({ queryKey: queryKeys.chats });
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
         requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
       } catch {
+        discardChatDraft(created.id);
         selectWorkspace(effectiveWorkspace.id);
-        toast.info(
-          "The worktree and chat were created, but Aiden could not open them automatically.",
-        );
+        toast.info("The worktree was created, but Aiden could not open its new chat.");
       }
     },
     [
@@ -1250,7 +1835,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
-  const activeStep = latestActiveAgentStep(generationTimeline);
+  const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
+  const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
         state: "running",
@@ -1262,15 +1848,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
-    streamingText: canStopGeneration || isStoppingGeneration ? streamingText : null,
+    streamingText:
+      canStopGeneration || isStoppingGeneration || detachedGenerationDraining
+        ? displayedStreamingText
+        : null,
+    textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  const visibleAgentActivity =
-    streamingReasoning &&
-    (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
-      ? null
-      : agentActivity;
+  // The reasoning disclosure owns exposed reasoning for the whole turn, even
+  // after its timeline step settles. Visualizing owns only the live artifact
+  // render window; detached projections hide that block and keep narration.
+  const visualizingBlockVisible =
+    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    !streamComplete &&
+    !visibleDetachedProjection;
+  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
+    reasoningVisible: Boolean(displayedStreamingReasoning),
+    visualizingVisible: visualizingBlockVisible,
+  });
 
   React.useEffect(() => {
     if (!pending) return;
@@ -1292,9 +1888,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [pending]);
 
   return (
+    <>
     <ScrollArea
       className="h-full min-h-0"
-      title={chat.data?.title ?? "New agent"}
+      title={
+        bot.data ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <BotAvatar
+              botId={bot.data.id}
+              avatar={bot.data.avatar}
+              name={bot.data.name}
+              photoLoading="immediate"
+              size="small"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <span className="truncate">{bot.data.name}</span>
+                <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
+                  Bot
+                </span>
+              </span>
+              <span className="block truncate text-small font-normal text-secondary">
+                {chat.data?.title ?? "New conversation"}
+              </span>
+            </span>
+          </span>
+        ) : (
+          (chat.data?.title ?? "New agent")
+        )
+      }
       actions={
         <>
           <OpenInEditorPicker
@@ -1302,6 +1924,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             folderPath={effectiveWorkspace?.folderPath}
           />
           <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+          <QuickViewToggle disabled={!effectiveWorkspace} />
           <Button
             iconOnly
             variant="toolbar"
@@ -1321,13 +1944,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollToBottom
       autoScrollDeps={[
         messages.length,
-        streamingText,
-        streamingReasoning,
-        generationTimeline,
+        displayedStreamingText,
+        displayedStreamingReasoning,
+        displayedGenerationTimeline,
         agentActivity?.phase,
         approvals.length,
+        questionnaire?.promptId,
+        displayedStreamingArtifacts.length,
       ]}
       showScrollToBottomButton
+      scrollToBottomButtonOffset={todoPanelHasVisibleChrome(todoSnapshot) ? 44 : 0}
       footer={
         <>
           <EventPresence
@@ -1348,7 +1974,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   className="rounded-card bg-popover p-3 shadow-popover"
                 >
                   <div className="flex items-start gap-2.5">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
                       <ShieldQuestion className="size-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -1382,15 +2008,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       </Text>
                     </div>
                   </div>
-                  {invalidPendingPrivilegedApproval ? (
+                  {!pendingCanAllow ? (
                     <Text
                       variant="small"
                       as="p"
                       id={`approval-summary-${pending.approvalId}`}
                       className="mt-2.5 rounded-control bg-well px-3 py-2"
                     >
-                      Aiden could not verify the exact target, arguments, or safety profile for this
-                      request.
+                      Aiden cannot safely authorize this action from this view. Deny it here or
+                      review the exact action on the Mac that owns this chat.
                     </Text>
                   ) : pendingWorkspaceWrite ? (
                     <SubagentWorkspaceWriteApproval
@@ -1427,7 +2053,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     >
                       Deny
                     </Button>
-                    {invalidPendingPrivilegedApproval ? null : (
+                    {pendingCanAllow ? (
                       <Button
                         variant="accent"
                         size="small"
@@ -1440,25 +2066,79 @@ export function ChatPane({ chatId }: { chatId: string }) {
                             ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                             : "Allow once"}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </div>
             ) : null}
           </EventPresence>
-          <Composer
+          <TodoPanel snapshot={todoSnapshot} />
+          {btwView ? (
+            <BtwCard
+              view={btwView}
+              onAsk={(question) => handleSend(question, [], undefined, { btw: true })}
+              onCancel={async () => {
+                if (btwView.requestId !== "pending") {
+                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                }
+              }}
+              onClear={async () => {
+                await chatsApi.btwClear(chatId);
+                setBtwView(null);
+              }}
+              onClose={async () => {
+                if (
+                  btwView.requestId !== "pending" &&
+                  (btwView.status === "starting" || btwView.status === "running")
+                ) {
+                  await chatsApi.btwCancel(chatId, btwView.requestId);
+                }
+                setBtwView(null);
+              }}
+            />
+          ) : null}
+          {questionnaire ? (
+            <AskUserQuestionComposer
+              key={questionnaire.promptId}
+              prompt={questionnaire}
+              submitting={questionnaireSubmitting}
+              onRespond={answerQuestionnaire}
+            />
+          ) : (
+            <Composer
             // Keyed so the draft and attachments stay scoped to one chat. The
             // route no longer remounts the pane, and Composer owns that text
             // without a chatId reset of its own.
             key={chatId}
-            ready={ready}
-            readinessMessage={readinessMessage}
+            ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
+            readinessSettingsSection={!chatReadinessMessage && !botReadinessMessage ? (modelReadinessMessage ? "providers" : computerUseReadinessMessage ? "computerUse" : undefined) : undefined}
+            readinessMessage={
+              imageArtifactRecoveryUnavailable
+                ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                : imageArtifactRecoveryPending
+                  ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
+                  : readinessMessage
+            }
             hasMessages={hasMessages}
             chatId={chatId}
+            initialText={draft?.initialText}
             onSend={handleSend}
-            onStop={handleStop}
-            isGenerating={isGenerating}
-            canStopGeneration={canStopGeneration}
+            freezeWhileSending={Boolean(draft)}
+            firstMessageSaving={draft?.sending === true}
+            onQueue={draft ? undefined : queueMessage}
+            hasQueuedMessages={queuedState.messages.length > 0}
+            queuedMessages={<QueuedMessages key={chatId} queue={messageQueue}
+              canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
+              returnFocus={() => composerRef.current}
+              onSteer={(id) => {
+                if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
+                messageQueue.move(id, 0);
+                messageQueue.resume();
+                handleStop();
+              }} />}
+            onStop={() => { messageQueue.pause(); handleStop(); }}
+            isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
+            canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
             configurationBusy={thinkingSaving}
             inputRef={composerRef}
             workspace={effectiveWorkspace}
@@ -1501,10 +2181,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
             currentChatTitle={chat.data?.title}
             latestAssistantResponse={latestAssistantResponse}
             slashNavigationBlockedReason={settingsBlockedReason}
+            sideQuestionBlockedReason={sideQuestionBlockedReason}
             slashSessionBlockedReason={
               documentAppendReconciliationRequired
                 ? "Reload Aiden before copying this chat."
-                : undefined
+                : imageArtifactRecoveryUnavailable
+                  ? "Open Settings → About → Diagnostics and choose Reveal to locate the image staging file that needs repair."
+                  : imageArtifactRecoveryPending
+                    ? "Delete this chat to discard the unrecovered visual artifact before copying."
+                    : undefined
             }
             slashPaletteBlocked={Boolean(pending)}
             slashActionBusy={isGenerating || isStartingGeneration}
@@ -1516,11 +2201,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             onRenameChat={renameChat}
             onOpenReview={() => environmentPanel.openReview("changes")}
-            sessionChat={chat.data ?? undefined}
+            sessionChat={draft ? undefined : chat.data ?? undefined}
             authenticatedProviders={authenticatedProviders}
             onCloneChat={() => copyChat()}
             onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
             onExportChat={exportChat}
+            onCompactChat={draft ? undefined : (engine) => chatsApi.compact(chatId, engine)}
+            onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
             onLogoutProvider={logoutProvider}
             thinkingControl={
               googleThinkingSupported ? (
@@ -1548,6 +2235,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
                 />
+              ) : providerThinkingSupported ? (
+                <ThinkingControl
+                  providerLabel={selectedProvider?.label ?? "Model"}
+                  level={providerThinkingLevel}
+                  levels={providerThinkingLevels}
+                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                  onChange={(level) => void changeProviderThinking(level)}
+                />
               ) : localReasoningVisibilitySupported ? (
                 <ReasoningVisibilityControl
                   visible={showLocalModelReasoning}
@@ -1558,15 +2254,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             modelPicker={
               <ModelPicker
-                providers={providers.data ?? []}
+                providers={settings.data ? (providers.data ?? []) : []}
                 providerId={providerId}
                 model={model}
-                onChange={select}
-                disabled={isGenerating || thinkingSaving}
+                onChange={(nextProviderId, nextModel) => {
+                  if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                }}
+                disabled={isGenerating || isStartingGeneration || thinkingSaving}
                 settingsBlockedReason={settingsBlockedReason}
+                hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
               />
             }
           />
+          )}
         </>
       }
     >
@@ -1579,7 +2279,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             Loading…
           </Text>
         </div>
-      ) : messages.length === 0 && streamingText === null ? (
+      ) : messages.length === 0 && displayedStreamingText === null ? (
         <div className="flex min-h-full items-center justify-center">
           <EmptyState
             title="What would you like to work on?"
@@ -1592,19 +2292,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </div>
       ) : (
         <MessageList
+          key={chatId}
+          chatId={chatId}
           messages={messages}
-          streamingText={streamingText}
-          streamingReasoning={streamingReasoning}
-          streamComplete={streamComplete}
+          streamingText={displayedStreamingText}
+          streamingReasoning={displayedStreamingReasoning}
+          streamingArtifacts={displayedStreamingArtifacts}
+          streamComplete={streamComplete || visibleDetachedProjection !== null}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-          timeline={generationTimeline}
-          liveSubagents={liveSubagents}
+          timeline={displayedGenerationTimeline}
+          liveSubagents={displayedLiveSubagents}
           subagentsEnabled={environmentPanel.subagentsEnabled}
           onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
-          error={error}
+          error={
+            error ??
+            (imageArtifactRecoveryUnavailable
+              ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+              : imageArtifactRecoveryPending
+                ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                : null)
+          }
         />
       )}
     </ScrollArea>
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import { resolveProviderIconSlug, type ProviderIconSlug } from "../lib/pi-provider-display";
 import { cn } from "../lib/ui-utils";
+import { providerArtworkDataUrl, type ProviderArtwork } from "../shared/provider-artwork";
 
 const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
   "amazon-bedrock": new URL("../assets/provider-logos/amazon-bedrock.svg", import.meta.url).href,
@@ -23,6 +24,7 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
     "../assets/provider-logos/cloudflare-workers-ai.svg",
     import.meta.url,
   ).href,
+  concentrate: new URL("../assets/provider-logos/concentrate.svg", import.meta.url).href,
   deepseek: new URL("../assets/provider-logos/deepseek.svg", import.meta.url).href,
   fireworks: new URL("../assets/provider-logos/fireworks.svg", import.meta.url).href,
   "github-copilot": new URL("../assets/provider-logos/github-copilot.svg", import.meta.url).href,
@@ -76,21 +78,68 @@ const MULTICOLOR_PROVIDER_ICON_SLUGS = new Set<ProviderIconSlug>([
   "zai-coding-cn",
 ]);
 
+const THEMED_MARK_STYLE = {
+  backgroundColor: "currentColor",
+  WebkitMaskPosition: "center",
+  maskPosition: "center",
+  WebkitMaskRepeat: "no-repeat",
+  maskRepeat: "no-repeat",
+  WebkitMaskSize: "contain",
+  maskSize: "contain",
+} as const;
+
+function ThemedProviderMark({
+  iconUrl,
+  mark,
+  className,
+}: {
+  iconUrl: string;
+  mark: string;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-provider-icon={mark}
+      className={cn("inline-block shrink-0", className)}
+      style={{
+        ...THEMED_MARK_STYLE,
+        WebkitMaskImage: `url("${iconUrl}")`,
+        maskImage: `url("${iconUrl}")`,
+      }}
+    />
+  );
+}
+
 export function ProviderIcon({
   providerId,
   providerLabel,
   modelId,
+  artwork,
   className,
 }: {
   providerId: string;
   providerLabel: string;
   modelId?: string;
+  artwork?: ProviderArtwork;
   className?: string;
 }) {
+  if (artwork) {
+    return (
+      <img
+        alt=""
+        aria-hidden="true"
+        data-provider-icon="custom"
+        draggable={false}
+        src={providerArtworkDataUrl(artwork)}
+        className={cn("shrink-0 object-contain", className)}
+      />
+    );
+  }
   const slug = resolveProviderIconSlug(providerId, modelId);
   const iconUrl = slug ? PROVIDER_ICON_URLS[slug] : undefined;
 
-  if (!iconUrl) {
+  if (!slug || !iconUrl) {
     const initial = providerLabel.trim().charAt(0).toLocaleUpperCase() || "?";
     return (
       <span
@@ -119,22 +168,5 @@ export function ProviderIcon({
     );
   }
 
-  return (
-    <span
-      aria-hidden="true"
-      data-provider-icon={slug}
-      className={cn("inline-block shrink-0", className)}
-      style={{
-        backgroundColor: "currentColor",
-        WebkitMaskImage: `url("${iconUrl}")`,
-        maskImage: `url("${iconUrl}")`,
-        WebkitMaskPosition: "center",
-        maskPosition: "center",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-        WebkitMaskSize: "contain",
-        maskSize: "contain",
-      }}
-    />
-  );
+  return <ThemedProviderMark iconUrl={iconUrl} mark={slug} className={className} />;
 }

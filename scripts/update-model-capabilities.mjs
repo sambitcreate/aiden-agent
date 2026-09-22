@@ -67,8 +67,11 @@ async function fetchModelsDev(fetchImpl, timeoutMs) {
   });
   const request = (async () => {
     const response = await fetchImpl(MODELS_DEV_ENDPOINT, {
+      method: "GET",
       headers: { accept: "application/json" },
       redirect: "error",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
       signal: controller.signal,
     });
     const body = await readBoundedBody(response, controller.signal);

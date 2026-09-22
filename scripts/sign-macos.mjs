@@ -26,10 +26,12 @@ export const COMPUTER_USE_ENTITLEMENTS = path.resolve(
 );
 
 const MINIMAL_ENTITLEMENT_HELPERS = Object.freeze([
+  "aiden-bot-inbox-writer",
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",
   "aiden-subagent-run-store",
   "aiden-worktree-remover",
+  "aiden-worktree-file-io",
 ]);
 
 function minimalEntitlementHelperPaths(app) {

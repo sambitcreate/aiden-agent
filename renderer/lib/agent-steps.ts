@@ -32,6 +32,22 @@ const VERBS: Record<string, VerbPair> = {
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using Mac", complete: "Used Mac" },
+  browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
+  browser_status: { active: "Checking browser", complete: "Checked browser" },
+  browser_open: { active: "Opening browser", complete: "Opened browser" },
+  browser_navigate: { active: "Navigating browser", complete: "Navigated browser" },
+  browser_resize: { active: "Resizing browser", complete: "Resized browser" },
+  browser_set_appearance: { active: "Setting browser appearance", complete: "Set browser appearance" },
+  browser_snapshot: { active: "Inspecting browser", complete: "Inspected browser" },
+  browser_click: { active: "Clicking in browser", complete: "Clicked in browser" },
+  browser_type: { active: "Typing in browser", complete: "Typed in browser" },
+  browser_press: { active: "Pressing browser keys", complete: "Pressed browser keys" },
+  browser_scroll: { active: "Scrolling browser", complete: "Scrolled browser" },
+  browser_evaluate: { active: "Evaluating page", complete: "Evaluated page" },
+  browser_wait_for: { active: "Waiting for page", complete: "Waited for page" },
+  browser_recording_start: { active: "Starting browser recording", complete: "Started browser recording" },
+  browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
+  vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
 };
 
@@ -53,6 +69,19 @@ export function formatThinkingDuration(durationMs: number | undefined): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return remainder ? `for ${minutes}m ${remainder}s` : `for ${minutes}m`;
+}
+
+/** Label for the one reasoning disclosure that owns both live and settled thought state. */
+export function reasoningActivityLabel(
+  timeline: GenerationTimeline | null | undefined,
+  active: boolean,
+): string {
+  if (active) return "Thinking";
+  const durationMs = timeline?.steps.reduce(
+    (total, step) => (isToolStep(step) ? total : total + (step.durationMs ?? 0)),
+    0,
+  );
+  return `Thought ${formatThinkingDuration(durationMs || undefined)}`;
 }
 
 /** The object a tool acted on: a pattern, a query, or a workspace-relative path. */

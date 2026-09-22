@@ -166,3 +166,9 @@ Release gates intentionally not executed:
 
 - No real-key Gemini text-to-image/reference acceptance or minimal live batch was submitted. Each remains potentially billable and requires explicit, per-run user authorization in the app.
 - The development package is signed, but notarization was intentionally skipped. The first notarized opt-in preview, update from the prior release, populated-storage migration, and minimum-hardware release matrix remain Phase 3/7 release operations.
+
+## Performance integration — 2026-09-22
+
+PR #37 is updated against current main. Active-run publications are throttled to100ms and avoid full history reads; structural/terminal changes retain authoritative snapshots. Subscription gaps resynchronize with bounded retries and buffered revision fences. The existing100-run history window is preserved; terminal projection cache is additionally bounded to8MiB/64 workflows. Adaptive annotation renditions never decode originals on thumbnail failure. Gemini already reuses a provider per execution and disposes request timers; no MCP connection-cache changes are included.
+
+Two independent Sol-medium reviews identified and drove fixes for buffered subscription rollback/resubscribe loops, dirty-workflow navigation side effects, and current-main browser favicon compatibility. Existing onboarding assets and native contract boundaries are unchanged. Local final checks, exact-head review and hosted CI remain in progress; release gates above remain open. See `.memory/create-images-performance.md` for evidence and exact blockers.

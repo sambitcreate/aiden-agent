@@ -1,3 +1,4 @@
+import type { CompactionEngine } from "../shared/compaction";
 import type { CommandId } from "../shared/keybindings";
 import type { SettingsSection } from "../shared/settings-section";
 import type { SlashCommandDefinition } from "../shared/slash-commands";
@@ -9,6 +10,7 @@ export interface SlashCommandActionContext {
   hasLatestAssistantResponse: boolean;
   hasAuthenticatedProvider?: boolean;
   hasWorkspace: boolean;
+  hasWorkspaceArtifactAccess?: boolean;
   hasManagedWorktreeFlow?: boolean;
   idle: boolean;
   idleBlockedReason?: string;
@@ -16,6 +18,7 @@ export interface SlashCommandActionContext {
   composerControlBlockedReason?: string;
   environmentBlockedReason?: string;
   sessionActionBlockedReason?: string;
+  sideQuestionBlockedReason?: string;
   chatCloneBlockedReason?: string;
   worktreeBlockedReason?: string;
   payloadAfterToken: boolean;
@@ -43,9 +46,14 @@ export interface SlashCommandActionHandlers {
   openFork?: () => void;
   cloneChat?: () => void | Promise<void>;
   exportChat?: () => void | Promise<void>;
+  compactChat?: (engine?: CompactionEngine) => void | Promise<void>;
   openSessionDetails?: () => void;
   openLogout?: () => void;
   openWorktree?: (branchName?: string) => void | Promise<void>;
+  submitComposerInstruction?: (
+    instruction: "visualize" | "btw",
+    prompt: string,
+  ) => boolean | Promise<boolean>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -79,6 +87,13 @@ export function slashCommandAvailability(
     case "idle-chat-session":
       if (!context.hasChat) return unavailable("Open a chat first.");
       if (
+        command.action.kind === "composer-instruction" &&
+        command.action.instruction === "btw" &&
+        !context.hasCompletedTurn
+      ) {
+        return unavailable("Complete an assistant turn before asking a side question.");
+      }
+      if (
         command.action.kind === "session" &&
         command.action.action === "fork" &&
         !context.hasCompletedTurn
@@ -93,7 +108,9 @@ export function slashCommandAvailability(
         return unavailable(context.chatCloneBlockedReason);
       }
       if (!context.idle) {
-        return unavailable(context.idleBlockedReason ?? "Finish the current response or approval first.");
+        return unavailable(
+          context.idleBlockedReason ?? "Finish the current response or approval first.",
+        );
       }
       if (context.sessionActionBlockedReason) {
         return unavailable(context.sessionActionBlockedReason);
@@ -110,6 +127,13 @@ export function slashCommandAvailability(
     case "workspace-worktree":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
       break;
+    case "idle-workspace":
+      if (!context.hasWorkspace) return unavailable("Open a workspace first.");
+      if (!context.hasChat) return unavailable("Open a chat first.");
+      if (!context.idle) {
+        return unavailable(context.idleBlockedReason ?? "Finish the current response first.");
+      }
+      break;
     case "always":
       break;
   }
@@ -118,8 +142,31 @@ export function slashCommandAvailability(
     return unavailable(context.composerControlBlockedReason);
   }
   if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "visualize" &&
+    context.hasWorkspaceArtifactAccess === false
+  ) {
+    return unavailable("Allow workspace access before creating an interactive artifact.");
+  }
+  if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "btw" &&
+    context.sideQuestionBlockedReason
+  ) {
+    return unavailable(context.sideQuestionBlockedReason);
+  }
+  if (
+    command.action.kind === "composer-instruction" &&
+    command.action.instruction === "btw" &&
+    context.hasAttachmentsOrSelectedSkill
+  ) {
+    return unavailable("Remove attachments and the selected skill before asking a side question.");
+  }
+  if (
     (command.action.kind === "environment" ||
-      (command.action.kind === "command" && command.action.commandId === "environment.toggle")) &&
+      (command.action.kind === "command" &&
+        (command.action.commandId === "environment.toggle" ||
+          command.action.commandId === "quick-view.toggle"))) &&
     context.environmentBlockedReason
   ) {
     return unavailable(context.environmentBlockedReason);
@@ -158,6 +205,15 @@ export function validateSlashCommandArgument(
   if (command.argument === "none") return { valid: true };
   const value = argument.trim();
   if (!value) return { valid: true };
+  if (command.argument === "optional-prompt") {
+    if (value.length > 4000 || /[\p{Cc}\p{Cf}]/u.test(value)) {
+      return {
+        valid: false,
+        reason: "Enter a short prompt without control characters.",
+      };
+    }
+    return { valid: true, value };
+  }
   if (command.argument === "optional-title") {
     if (!/[\p{Cc}\p{Cf}]/u.test(value) && Array.from(value).length <= 120) {
       return { valid: true, value };
@@ -232,6 +288,11 @@ export function executeSlashCommandAction(
           const result = handlers.exportChat();
           return result instanceof Promise ? result.then(() => true) : true;
         }
+        case "compact": {
+          if (!handlers.compactChat) return false;
+          const result = handlers.compactChat(command.action.engine);
+          return result instanceof Promise ? result.then(() => true) : true;
+        }
         case "details":
           if (!handlers.openSessionDetails) return false;
           handlers.openSessionDetails();
@@ -247,6 +308,11 @@ export function executeSlashCommandAction(
           return result instanceof Promise ? result.then(() => true) : true;
         }
       }
+      return false;
+    case "composer-instruction": {
+      if (!handlers.submitComposerInstruction) return false;
+      return handlers.submitComposerInstruction(command.action.instruction, argument.trim());
+    }
   }
 }
 

@@ -105,6 +105,58 @@ test("legacy calls keep the workspace-read-only default", () => {
   );
 });
 
+test("omitted root capabilities infer the exact mixed child lanes", () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [
+      {
+        role: "scout",
+        label: "Research upstream",
+        task: "Research one public project.",
+        capabilities: { workspaceRead: false, web: true, mcp: [] },
+      },
+      {
+        role: "scout",
+        label: "Map workspace",
+        task: "Inspect the current integration.",
+        capabilities: { workspaceRead: true, web: false, mcp: [] },
+      },
+    ],
+  });
+  assert.deepEqual(parsed.capabilities, {
+    workspaceRead: true,
+    workspaceWrite: false,
+    shell: false,
+    delegate: false,
+    web: true,
+    mcp: [],
+  });
+  assert.equal(parsed.tasks[0]?.capabilities?.web, true);
+  assert.equal(parsed.tasks[1]?.capabilities?.workspaceRead, true);
+});
+
+test("capability inference pins omitted siblings to the legacy read-only lane", () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [
+      {
+        role: "scout",
+        label: "Research upstream",
+        task: "Research one public project.",
+        capabilities: { workspaceRead: false, web: true, mcp: [] },
+      },
+      { role: "reviewer", label: "Review workspace", task: "Review local files." },
+    ],
+  });
+  assert.equal(parsed.capabilities?.web, true);
+  assert.deepEqual(parsed.tasks[1]?.capabilities, {
+    workspaceRead: true,
+    workspaceWrite: false,
+    shell: false,
+    delegate: false,
+    web: false,
+    mcp: [],
+  });
+});
+
 test("read and mutation requests for one server merge into one exact authority scope", () => {
   const resolved = resolveRequestedSubagentCapabilitiesV2(
     {

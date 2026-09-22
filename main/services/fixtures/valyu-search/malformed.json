@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "tx_id": "valyu_fixture_malformed",
+  "query": "malformed",
+  "results": { "not": "an-array" },
+  "results_by_source": {},
+  "total_deduction_dollars": 0,
+  "total_characters": 0
+}

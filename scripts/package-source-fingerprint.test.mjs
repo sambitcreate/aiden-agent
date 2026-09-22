@@ -33,7 +33,7 @@ test("package and acceptance contracts embed and verify the build-time fingerpri
   const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(
     packageJson.scripts.package,
-    /computer-use:vendor && npm run package:fingerprint && npm run build:native/u,
+    /computer-use:vendor && npm run generative-ui:vendor && npm run package:fingerprint && npm run build:native/u,
   );
   assert.match(
     packageJson.scripts.package,

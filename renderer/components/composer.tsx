@@ -1,3 +1,4 @@
+import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in Finder. Git workspaces also show the
 // current branch. The input
@@ -10,11 +11,8 @@ import {
   Button,
   Dialog,
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
   Textarea,
@@ -27,6 +25,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  ListPlus,
   Loader2,
   Lock,
   Mic,
@@ -35,14 +34,22 @@ import {
   OctagonAlert,
   Plus,
   ShieldQuestion,
-  Sparkles,
   Square,
   X,
 } from "lucide-react";
+import { AidenIcon } from "./aiden-icon";
+import { ComposerContextBar } from "./composer-context-bar";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
-import { attachmentsApi } from "../lib/ipc";
+import {
+  GEMINI_RECORDED_RETRY_DESCRIPTION,
+  GEMINI_RECORDED_RETRY_TITLE,
+} from "../lib/gemini-recorded-retry";
+import { attachmentsApi, browserApi } from "../lib/ipc";
+import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import type { BrowserAnnotation } from "../shared/browser";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -51,11 +58,17 @@ import {
   shouldShowComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../lib/computer-use-notice";
+import {
+  ComposerAttachmentOperation,
+  acceptComposerAttachments,
+} from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
   deriveSlashSession,
+  failedSendAttachments,
+  failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
   rankSlashResults,
@@ -63,17 +76,18 @@ import {
   slashActionDraftCommitIsCurrent,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
+  type SelectedSkillInvocation,
   type SlashResult,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
-  successfulSendAttachmentRemainder,
 } from "../lib/slash-command-core";
 import {
   attemptSlashCommandAction,
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
+import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -107,20 +121,31 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  readinessSettingsSection?: SettingsSection;
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
+  /** Initial text for an explicitly seeded renderer-only chat draft. */
+  initialText?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
+    options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
+  onQueue?: ComposerProps["onSend"];
+  queuedMessages?: React.ReactNode;
+  hasQueuedMessages?: boolean;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
+  /** New-agent drafts cannot accept edits while their first message commits. */
+  freezeWhileSending?: boolean;
+  /** Survives navigating away and reopening a draft whose commit is pending. */
+  firstMessageSaving?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
@@ -158,6 +183,7 @@ interface ComposerProps {
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
   slashSessionBlockedReason?: string;
+  sideQuestionBlockedReason?: string;
   onOpenSettings?: (section?: SettingsSection) => void;
   onRenameChat?: (title: string) => void | Promise<void>;
   onOpenReview?: () => void;
@@ -166,6 +192,28 @@ interface ComposerProps {
   onCloneChat?: () => Promise<void>;
   onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
   onExportChat?: () => Promise<"saved" | "cancelled">;
+  onCompactChat?: (engine?: CompactionEngine) => Promise<
+    | {
+        compacted: true;
+        engine?: CompactionEngine;
+        durationMs?: number;
+        tokensBefore?: number;
+        estimatedTokensAfter?: number;
+      }
+    | {
+        compacted: false;
+        reason:
+          | "already_compact"
+          | "busy"
+          | "archived"
+          | "not_canonical"
+          | "provider_unavailable"
+          | "context_metadata_invalid"
+          | "cancelled"
+          | "compaction_failed";
+      }
+  >;
+  onCancelCompact?: () => Promise<boolean>;
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
@@ -174,30 +222,27 @@ const PERMISSION_META: Record<
   WorkspacePermission,
   {
     label: string;
-    description: string;
     icon: React.ComponentType<{ className?: string }>;
     className: string;
   }
 > = {
   full: {
     label: "Full access",
-    description: "Read and edit files, and run commands without asking.",
     icon: OctagonAlert,
     className: "text-support-warning",
   },
   ask: {
     label: "Ask first",
-    description: "Read freely; confirm every edit and command.",
     icon: ShieldQuestion,
     className: "text-secondary",
   },
   none: {
     label: "No access",
-    description: "Keep workspace files and commands unavailable.",
     icon: Lock,
     className: "text-tertiary",
   },
 };
+const PERMISSION_ORDER: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
 function skillSourceLabel(source: SkillSource): string {
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
@@ -235,13 +280,20 @@ function composerDraftReducer(
 export function Composer({
   ready,
   readinessMessage,
+  readinessSettingsSection,
   hasMessages,
   chatId,
+  initialText = "",
   onSend,
   onStop,
+  onQueue,
+  queuedMessages,
+  hasQueuedMessages = false,
   isGenerating,
   canStopGeneration = isGenerating,
   configurationBusy = false,
+  freezeWhileSending = false,
+  firstMessageSaving = false,
   inputRef,
   workspace,
   gitBranch,
@@ -268,6 +320,7 @@ export function Composer({
   latestAssistantResponse,
   slashNavigationBlockedReason,
   slashSessionBlockedReason,
+  sideQuestionBlockedReason,
   onOpenSettings,
   onRenameChat,
   onOpenReview,
@@ -276,19 +329,22 @@ export function Composer({
   onCloneChat,
   onForkChat,
   onExportChat,
+  onCompactChat,
+  onCancelCompact,
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
 }: ComposerProps) {
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: "",
-    slashTracker: { epoch: 0, active: false },
+    text: initialText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, initialText),
   });
   const { text, slashTracker } = draft;
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+  const firstSendPendingRef = React.useRef(false);
   const slashActionPendingRef = React.useRef(false);
   const sessionCommandBusyRef = React.useRef(false);
   const slashPaletteBlockedRef = React.useRef(slashPaletteBlocked);
@@ -299,15 +355,27 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
   }, []);
   const setText = React.useCallback((value: React.SetStateAction<string>) => {
+    const current = draftRef.current;
+    const text = typeof value === "function" ? value(current.text) : value;
+    draftRef.current = {
+      text,
+      slashTracker: updateSlashSessionTracker(current.slashTracker, text),
+    };
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
-    dispatchDraft({ type: "update", value });
+    dispatchDraft({ type: "update", value: text });
   }, []);
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const attachmentsRef = React.useRef<Attachment[]>([]);
+  const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
+    const next = typeof value === "function" ? value(attachmentsRef.current) : value;
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }, []);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
@@ -315,12 +383,52 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
-  const attachmentOperationRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (!workspace?.id) return;
+    const available = () => {
+      const input = inputRef?.current;
+      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+    };
+    const receive = (annotation: BrowserAnnotation) => {
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
+      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const comment = annotation.comment.trim();
+      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      if (result.attachments.length) {
+        attachmentRevisionRef.current += 1;
+        updateAttachments((current) => [...current, ...result.attachments]);
+      }
+      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
+    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+    });
+    return () => { unregister(); unsubscribe(); };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
+  const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
+  const attachmentVisionRef = React.useRef(visionSupported);
+  React.useLayoutEffect(() => {
+    attachmentVisionRef.current = visionSupported;
+  }, [visionSupported]);
+  React.useLayoutEffect(() => {
+    const operation = attachmentOperationRef.current;
+    return () => operation.cancel();
+  }, []);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
+  const sendPendingRef = React.useRef(false);
+  const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
+  firstSendPendingRef.current = firstSendPending;
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
+  const permissionOptionsId = React.useId();
+  const permissionControlRef = React.useRef<HTMLButtonElement>(null);
   const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
   const [renameTitle, setRenameTitle] = React.useState("");
   const [renaming, setRenaming] = React.useState(false);
@@ -336,6 +444,7 @@ export function Composer({
   }>();
   const [sessionCommandStatus, setSessionCommandStatus] = React.useState<string | null>(null);
   const sessionCommandBusy = sessionCommandStatus !== null;
+  const [compactionBusy, setCompactionBusy] = React.useState(false);
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
   const [composing, setComposing] = React.useState(false);
@@ -363,7 +472,7 @@ export function Composer({
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
-      isGenerating,
+      isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
@@ -371,6 +480,7 @@ export function Composer({
       attaching,
     }) &&
     !configurationBusy &&
+    !firstMessageSaving &&
     !sessionCommandBusy;
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
@@ -395,12 +505,16 @@ export function Composer({
   const canSend =
     (text.trim().length > 0 || attachments.length > 0) &&
     submissionAllowed &&
+    !composing &&
     (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
+    (transcript) => {
+      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    },
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
+      model: settings.data?.voiceModel,
     },
   );
 
@@ -469,6 +583,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
+      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),
@@ -487,6 +602,7 @@ export function Composer({
           : undefined,
       navigationBlockedReason: slashNavigationBlockedReason,
       sessionActionBlockedReason: slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -534,6 +650,7 @@ export function Composer({
       slashActionBusy,
       slashNavigationBlockedReason,
       slashSessionBlockedReason,
+      sideQuestionBlockedReason,
       slashSession,
       selectedSkill,
       text,
@@ -605,6 +722,48 @@ export function Composer({
     }
   }, [inputRef, onExportChat, sessionCommandBusy]);
 
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      if (!onCompactChat || sessionCommandBusy) return;
+      sessionCommandBusyRef.current = true;
+      setCompactionBusy(true);
+      setSessionCommandStatus(
+        engine ? `Compacting with ${compactionEngineLabel(engine)}…` : "Compacting chat…",
+      );
+      try {
+        const result = await onCompactChat(engine);
+        if (result.compacted) {
+          const label = compactionEngineLabel(result.engine ?? engine ?? "llm");
+          const size =
+            result.tokensBefore !== undefined && result.estimatedTokensAfter !== undefined
+              ? ` · about ${result.tokensBefore.toLocaleString()} → ${result.estimatedTokensAfter.toLocaleString()} tokens`
+              : "";
+          const duration =
+            result.durationMs !== undefined ? ` · ${(result.durationMs / 1000).toFixed(1)}s` : "";
+          toast.success(`${label} compaction complete${duration}${size}`);
+        } else {
+          const copy = {
+            already_compact: "This chat is already compact enough.",
+            busy: "Finish the current response or approval first.",
+            archived: "This chat is archived or unavailable.",
+            not_canonical: "This legacy Bot conversation is read-only.",
+            provider_unavailable: "The saved provider is unavailable.",
+            context_metadata_invalid: "The saved model context is invalid.",
+            cancelled: "Compaction was cancelled.",
+            compaction_failed: "Compaction failed.",
+          } as const;
+          toast.info(copy[result.reason]);
+        }
+      } finally {
+        sessionCommandBusyRef.current = false;
+        setCompactionBusy(false);
+        setSessionCommandStatus(null);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+      }
+    },
+    [inputRef, onCompactChat, sessionCommandBusy],
+  );
+
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
       if (!branchName) {
@@ -672,9 +831,91 @@ export function Composer({
     }
   }, [logoutProvider, onLogoutProvider, sessionCommandBusy]);
 
+  const sendComposerPayload = React.useCallback(
+    async (payload: {
+      draftText: string;
+      sendText: string;
+      attachments: Attachment[];
+      selectedSkill?: SelectedSkillInvocation;
+      skillRevision: number;
+      visualize?: boolean;
+      btw?: boolean;
+    }): Promise<boolean> => {
+      // React state does not close the same-tick Enter + click window. Claim
+      // the send synchronously before making any optimistic UI changes.
+      if (sendPendingRef.current || firstSendPendingRef.current) return false;
+      sendPendingRef.current = true;
+      firstSendPendingRef.current = freezeWhileSending;
+      setSending(true);
+
+      setText("");
+      const optimisticTextRevision = textRevisionRef.current;
+      attachmentRevisionRef.current += 1;
+      const optimisticAttachmentRevision = attachmentRevisionRef.current;
+      updateAttachments([]);
+      const optimisticSkillRevision = payload.skillRevision + 1;
+      dispatchSkillSelection({
+        type: "send-started",
+        submittedRevision: payload.skillRevision,
+      });
+
+      try {
+        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        await submit(
+          payload.sendText,
+          payload.attachments,
+          payload.selectedSkill?.invocation,
+          payload.visualize || payload.btw
+            ? { visualize: payload.visualize, btw: payload.btw }
+            : undefined,
+        );
+        return true;
+      } catch (error) {
+        // An unknown append result may already be durable. ChatPane blocks
+        // another send until reload, so restoring it here would invite a
+        // duplicate message with a new turn identity.
+        if (!isAppendReconciliationRequired(error)) {
+          const currentDraft = draftRef.current.text;
+          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+          if (
+            textRevisionRef.current === optimisticTextRevision ||
+            restoredDraft !== currentDraft
+          ) {
+            setText(restoredDraft);
+          }
+
+          const currentAttachments = attachmentsRef.current;
+          const restoredAttachments = failedSendAttachments(
+            payload.attachments,
+            currentAttachments,
+          );
+          if (
+            attachmentRevisionRef.current === optimisticAttachmentRevision ||
+            restoredAttachments.length !== currentAttachments.length
+          ) {
+            attachmentRevisionRef.current += 1;
+            updateAttachments(restoredAttachments);
+          }
+          dispatchSkillSelection({
+            type: "send-failed",
+            optimisticRevision: optimisticSkillRevision,
+            submitted: payload.selectedSkill,
+          });
+        }
+        throw error;
+      } finally {
+        sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
+        setSending(false);
+      }
+    },
+    [onSend, onQueue, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+  );
+
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
       if (
+        firstSendPendingRef.current ||
         slashActionPendingRef.current ||
         !slashSession ||
         result.kind !== slashSession.kind ||
@@ -736,16 +977,59 @@ export function Composer({
           toast.success("Latest response copied");
         },
         openReview: () => onOpenReview?.(),
-        openAccess: () => setPermissionMenuOpen(true),
+        openAccess: () => {
+          setPermissionMenuOpen(true);
+          requestAnimationFrame(() => permissionControlRef.current?.focus());
+        },
         openFork: () => {
           setForkQuery("");
           setForkDialogOpen(true);
         },
         cloneChat,
         exportChat,
+        compactChat,
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        submitComposerInstruction: async (instruction, prompt) => {
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const missingPromptMessage =
+            instruction === "btw"
+              ? "Add a question after /btw, then send."
+              : "Add what to visualize after /visualize, then send.";
+          if (!nextPrompt) {
+            toast.info(missingPromptMessage);
+            return false;
+          }
+          if (instruction === "btw" && (attachments.length > 0 || selectedSkill)) {
+            toast.info("Remove attachments and the selected skill before asking a side question.");
+            return false;
+          }
+          if (selectedSkillState && selectedSkillState.state !== "valid") {
+            toast.info(selectedSkillState.reason);
+            return false;
+          }
+          const submittedAttachments = attachments;
+          const submittedSkillRevision = skillSelection.revision;
+          if (instruction === "visualize") {
+            return sendComposerPayload({
+              draftText: text,
+              sendText: nextPrompt,
+              attachments: submittedAttachments,
+              selectedSkill,
+              skillRevision: submittedSkillRevision,
+              visualize: true,
+            });
+          }
+          return sendComposerPayload({
+            draftText: text,
+            sendText: nextPrompt,
+            attachments: submittedAttachments,
+            selectedSkill,
+            skillRevision: submittedSkillRevision,
+            btw: true,
+          });
+        },
       });
       const asyncAction = attempted.kind === "async";
       if (asyncAction) slashActionPendingRef.current = true;
@@ -763,12 +1047,17 @@ export function Composer({
         toast.info("That app action is unavailable right now.");
         return;
       }
-      if (
-        asyncAction &&
-        !(result.command.action.kind === "session" &&
+      // Composer instructions own their optimistic clear and guarded rollback.
+      // A generic late slash-token commit would overwrite the next-turn draft.
+      if (result.command.action.kind === "composer-instruction") return;
+      const usesDraftOnlyCommit =
+        result.command.action.kind === "session" &&
         (result.command.action.action === "clone" ||
           result.command.action.action === "export" ||
-          result.command.action.action === "worktree")
+          result.command.action.action === "worktree");
+      if (
+        asyncAction &&
+        !(usesDraftOnlyCommit
           ? slashActionDraftCommitIsCurrent(expectedCommit, {
               draft: draftRef.current.text,
               epoch: draftRef.current.slashTracker.epoch,
@@ -802,8 +1091,14 @@ export function Composer({
       cloneChat,
       createWorktreeFromSlash,
       exportChat,
+      compactChat,
       onOpenReview,
       onOpenSettings,
+      sendComposerPayload,
+      attachments,
+      selectedSkill,
+      selectedSkillState,
+      skillSelection.revision,
       requestRename,
       slashResultSelectable,
       slashSession,
@@ -827,38 +1122,50 @@ export function Composer({
     }
   }, [onRenameChat, renameTitle, renaming]);
 
-  const beginAttachmentRead = (status: string): boolean => {
+  const beginAttachmentRead = (status: string): number | null => {
+    if (firstSendPendingRef.current) return null;
+    if (sendPendingRef.current) {
+      toast.info("Wait for the current message to finish sending before attaching files.");
+      return null;
+    }
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
-      return false;
+      return null;
     }
-    if (attachmentOperationRef.current) {
+    if (attachmentOperationRef.current.isBusy) {
       toast.info("Wait for the current attachments to finish loading.");
-      return false;
+      return null;
     }
-    attachmentOperationRef.current = true;
+    const token = attachmentOperationRef.current.begin();
     setAttaching(true);
     setAttachmentStatus(status);
-    return true;
+    return token;
   };
 
-  const finishAttachmentRead = () => {
-    attachmentOperationRef.current = false;
+  const finishAttachmentRead = (token: number) => {
+    if (!attachmentOperationRef.current.isCurrent(token)) return;
+    attachmentOperationRef.current.finish(token);
     setAttaching(false);
-    requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      if (attachmentOperationRef.current.isCurrent(token)) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+    });
   };
 
   const acceptReadAttachments = (added: Attachment[], emptyStatus: string): number => {
-    if (visionSupported === false && added.some((attachment) => attachment.kind === "image")) {
-      added = added.filter((attachment) => attachment.kind !== "image");
-      toast.info("The selected model can't read images — image attachments were skipped.");
-    }
+    const accepted = acceptComposerAttachments(
+      attachmentsRef.current,
+      added,
+      attachmentVisionRef.current !== false,
+    );
+    added = accepted;
     if (added.length === 0) {
       setAttachmentStatus(emptyStatus);
       return 0;
     }
     attachmentRevisionRef.current += 1;
-    setAttachments((current) => [...current, ...added]);
+    updateAttachments((current) => [...current, ...added]);
     setAttachmentStatus(
       `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
     );
@@ -866,17 +1173,18 @@ export function Composer({
   };
 
   const handleAttach = async () => {
-    if (!beginAttachmentRead("Attachment picker open. Selected files will load before sending.")) {
-      return;
-    }
+    const token = beginAttachmentRead(
+      "Attachment picker open. Selected files will load before sending.",
+    );
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
       if (remainingSlots <= 0) {
         setAttachmentStatus("The attachment count limit has been reached.");
         toast.info(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`);
         return;
       }
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingInlineBytes <= 0) {
         setAttachmentStatus("The attachment data limit has been reached.");
         toast.info("This message has reached the attachment data limit.");
@@ -887,25 +1195,32 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
-      if (picked.skipped > 0) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
+      const accepted = acceptReadAttachments(
+        picked.attachments,
+        "No compatible attachments were added.",
+      );
+      const skipped = picked.skipped + picked.attachments.length - accepted;
+      if (skipped > 0) {
         toast.info(
-          `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+          `${skipped} selected ${skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
         );
       }
-      acceptReadAttachments(picked.attachments, "No compatible attachments were added.");
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Attachments could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readDroppedAttachments = async (files: File[]) => {
-    if (!beginAttachmentRead("Dropped files are loading before sending.")) return;
+    const token = beginAttachmentRead("Dropped files are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingSlots <= 0 || remainingInlineBytes <= 0) {
         toast.info("This message has reached its attachment limit.");
         setAttachmentStatus("The attachment limit has been reached.");
@@ -917,6 +1232,7 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No compatible dropped files were added.");
       if (accepted < files.length) {
         toast.info(
@@ -924,18 +1240,20 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Dropped files could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that dropped file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readClipboardImages = async (files: File[]) => {
-    if (!beginAttachmentRead("Clipboard images are loading before sending.")) return;
+    const token = beginAttachmentRead("Clipboard images are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       const eligible: File[] = [];
       let plannedBytes = 0;
       for (const file of files) {
@@ -962,11 +1280,13 @@ export function Composer({
           bytes: new Uint8Array(await file.arrayBuffer()),
         })),
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const added = await attachmentsApi.readClipboardImages(
         payload,
         remainingSlots,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No clipboard images were added.");
       if (accepted < files.length) {
         toast.info(
@@ -974,10 +1294,11 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Clipboard images could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that clipboard image.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
@@ -993,6 +1314,7 @@ export function Composer({
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (firstSendPendingRef.current) { event.preventDefault(); return; }
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1019,12 +1341,14 @@ export function Composer({
   };
 
   const removeAttachment = (id: string) => {
+    if (firstSendPendingRef.current) return;
     attachmentRevisionRef.current += 1;
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
   const submit = async () => {
-    if (attachmentOperationRef.current || attaching) {
+    if (sendPendingRef.current || composing) return;
+    if (attachmentOperationRef.current.isBusy || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
     }
@@ -1049,29 +1373,16 @@ export function Composer({
       toast.info("Switch to a vision-capable model before sending these images.");
       return;
     }
-    const submittedTextRevision = textRevisionRef.current;
-    const submittedAttachmentRevision = attachmentRevisionRef.current;
-    const submittedSkillRevision = skillSelection.revision;
-    const submittedSkill = selectedSkill?.invocation;
-    setSending(true);
     try {
-      await onSend(trimmed, attachments, submittedSkill);
-      if (textRevisionRef.current === submittedTextRevision) setText("");
-      setAttachments((current) =>
-        successfulSendAttachmentRemainder(
-          current,
-          attachments,
-          attachmentRevisionRef.current === submittedAttachmentRevision,
-        ),
-      );
-      dispatchSkillSelection({
-        type: "send-succeeded",
-        submittedRevision: submittedSkillRevision,
+      await sendComposerPayload({
+        draftText: text,
+        sendText: trimmed,
+        attachments,
+        selectedSkill,
+        skillRevision: skillSelection.revision,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
-    } finally {
-      setSending(false);
     }
   };
 
@@ -1146,8 +1457,7 @@ export function Composer({
   };
 
   const permission = workspace?.permission ?? "ask";
-  const perm = PERMISSION_META[permission];
-  const PermIcon = perm.icon;
+  const PermissionIcon = PERMISSION_META[permission].icon;
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
@@ -1195,6 +1505,7 @@ export function Composer({
     )
       return;
     if (nextPermission === "full") {
+      setPermissionMenuOpen(false);
       setConfirmFullAccess(true);
       return;
     }
@@ -1203,8 +1514,9 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        <div className="composer-responsive pointer-events-auto relative isolate">
+      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1242,7 +1554,7 @@ export function Composer({
           {showComputerUseNotice ? (
             <aside
               aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
+              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
             >
               <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
               <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
@@ -1273,7 +1585,9 @@ export function Composer({
               </DropdownMenu>
             </aside>
           ) : null}
+          {queuedMessages}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
@@ -1349,9 +1663,9 @@ export function Composer({
               />
             ) : null}
           </div>
-
+          </ComposerContextBar>
           <div
-            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
+            className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -1363,12 +1677,12 @@ export function Composer({
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
                   className={cn(
-                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-small",
+                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-small",
                     selectedSkillState?.state === "valid"
-                      ? "border-accent/25 bg-accent/10 text-primary"
+                      ? "bg-status-accent-surface text-primary"
                       : selectedSkillState?.state === "checking"
-                        ? "border-field bg-control text-secondary"
-                        : "border-support-warning/35 bg-support-warning/10 text-primary",
+                        ? "bg-control text-secondary"
+                        : "bg-status-warning-surface text-primary",
                   )}
                   title={
                     selectedSkillState?.state === "valid"
@@ -1379,7 +1693,7 @@ export function Composer({
                   {selectedSkillState?.state === "checking" ? (
                     <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
                   ) : (
-                    <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+                    <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
                   )}
                   <span className="truncate font-medium">
                     {selectedSkill.invocation.displayName}
@@ -1401,7 +1715,7 @@ export function Composer({
                       );
                     }}
                     aria-label={`Remove ${selectedSkill.invocation.displayName} skill from message`}
-                    className="-mr-1 rounded-full p-0.5 text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
+                    className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
                   >
                     <X aria-hidden="true" className="size-3.5" />
                   </button>
@@ -1418,7 +1732,7 @@ export function Composer({
                 {attachments.map((a) => (
                   <div
                     key={a.id}
-                    className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
+                    className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
                   >
                     {a.kind === "image" && a.data ? (
                       <img
@@ -1435,7 +1749,7 @@ export function Composer({
                       disabled={sessionCommandBusy}
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
+                      className="grid size-10 shrink-0 place-items-center rounded-control text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -1446,9 +1760,10 @@ export function Composer({
             <Textarea
               ref={inputRef}
               value={text}
-              readOnly={sessionCommandBusy}
-              aria-busy={sessionCommandBusy || undefined}
+              readOnly={sessionCommandBusy || firstSendPending}
+              aria-busy={sessionCommandBusy || firstSendPending || undefined}
               onChange={(event) => {
+                if (firstSendPendingRef.current) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
@@ -1493,20 +1808,33 @@ export function Composer({
               rows={1}
             />
             {sessionCommandStatus ? (
-              <Text
-                as="p"
-                role="status"
-                aria-live="polite"
-                variant="small"
-                color="tertiary"
-                className="px-1.5 pb-1"
-              >
-                {sessionCommandStatus}
-              </Text>
+              <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
+                <Text as="p" role="status" aria-live="polite" variant="small" color="tertiary">
+                  {sessionCommandStatus}
+                </Text>
+                {compactionBusy && onCancelCompact ? (
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    onClick={() => void onCancelCompact()}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
-            {!ready && readinessMessage && text.trim().length > 0 ? (
+            {voice.lastError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
+                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
+                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+              </div>
+            ) : null}
+            {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
@@ -1518,7 +1846,7 @@ export function Composer({
                   className="rounded-full"
                   onClick={handleAttach}
                   disabled={
-                    attaching || isGenerating || sending || gitOperationBusy || sessionCommandBusy
+                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || sessionCommandBusy
                   }
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
@@ -1530,86 +1858,139 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
-                <DropdownMenu
-                  open={permissionMenuOpen}
-                  onOpenChange={(open) => {
-                    setPermissionMenuOpen(open);
-                    if (open) {
-                      dismissSlash();
+                <div
+                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                  data-open={permissionMenuOpen || undefined}
+                  onPointerEnter={() => {
+                    dismissSlash();
+                    setPermissionMenuOpen(true);
+                  }}
+                  onPointerLeave={(event) => {
+                    if (!event.currentTarget.contains(document.activeElement)) setPermissionMenuOpen(false);
+                  }}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) {
+                      setPermissionMenuOpen(false);
                     }
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    setPermissionMenuOpen(false);
+                    inputRef?.current?.focus();
+                  }}
                 >
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="transparent"
-                      size="small"
-                      className={cn(
-                        "composer-permission-control h-7 gap-1.5 px-2 max-[520px]:size-7 max-[520px]:px-0",
-                        perm.className,
-                      )}
-                      disabled={
+                  <button
+                    type="button"
+                    aria-label={`Workspace access: ${PERMISSION_META[permission].label}. Show access options.`}
+                    aria-expanded={permissionMenuOpen}
+                    aria-controls={permissionOptionsId}
+                    onFocus={() => setPermissionMenuOpen(true)}
+                    onClick={() => setPermissionMenuOpen(true)}
+                    onKeyDown={(event) => {
+                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(true);
+                      requestAnimationFrame(() => permissionControlRef.current?.focus());
+                    }}
+                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
+                  >
+                    <PermissionIcon
+                      className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
+                    />
+                    <span className="truncate max-[520px]:sr-only">
+                      {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
+                    </span>
+                  </button>
+                  <div
+                    id={permissionOptionsId}
+                    role="radiogroup"
+                    aria-label="Workspace access"
+                    aria-disabled={
+                      !workspace ||
+                      permissionSaving ||
+                      isGenerating ||
+                      sending ||
+                      gitOperationBusy ||
+                      Boolean(workspaceChangeBlockedReason) ||
+                      undefined
+                    }
+                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                  >
+                    {PERMISSION_ORDER.map((value, index) => {
+                      const meta = PERMISSION_META[value];
+                      const Icon = meta.icon;
+                      const selected = value === permission;
+                      const disabled =
                         !workspace ||
                         permissionSaving ||
                         isGenerating ||
                         sending ||
                         gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      aria-label={
-                        workspaceChangeBlockedReason
-                          ? `Workspace access: ${perm.label}. ${workspaceChangeBlockedReason}.`
-                          : isGenerating || sending
-                            ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
-                            : `Workspace access: ${perm.label}`
-                      }
-                    >
-                      <PermIcon className="size-4 shrink-0" />
-                      <span className="composer-permission-label max-[520px]:hidden">
-                        {permissionSaving ? "Updating…" : perm.label}
-                      </span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuLabel>Workspace access</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "full"}
-                      sublabel={PERMISSION_META.full.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("full")}
-                    >
-                      Full access
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "ask"}
-                      sublabel={PERMISSION_META.ask.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("ask")}
-                    >
-                      Ask first
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={permission === "none"}
-                      sublabel={PERMISSION_META.none.description}
-                      disabled={
-                        permissionSaving ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason)
-                      }
-                      onCheckedChange={(checked) => checked && requestPermission("none")}
-                    >
-                      No access
-                    </DropdownMenuCheckboxItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                        Boolean(workspaceChangeBlockedReason);
+                      return (
+                        <button
+                          ref={selected ? permissionControlRef : undefined}
+                          key={value}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={
+                            workspaceChangeBlockedReason
+                              ? `Workspace access: ${meta.label}. ${workspaceChangeBlockedReason}.`
+                              : isGenerating || sending
+                                ? `Workspace access: ${meta.label}. Finish or stop the current response to change access.`
+                                : `Workspace access: ${meta.label}`
+                          }
+                          tabIndex={selected ? 0 : -1}
+                          aria-disabled={disabled || undefined}
+                          onClick={(event) => {
+                            if (disabled) return;
+                            requestPermission(value);
+                            if (event.detail > 0 && (value !== "full" || value === permission)) {
+                              setPermissionMenuOpen(false);
+                              inputRef?.current?.focus({ preventScroll: true });
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (disabled) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              if (value !== permission) requestPermission(value);
+                              return;
+                            }
+                            let nextIndex: number | undefined;
+                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                              nextIndex = (index + 1) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                              nextIndex =
+                                (index - 1 + PERMISSION_ORDER.length) % PERMISSION_ORDER.length;
+                            }
+                            if (event.key === "Home") nextIndex = 0;
+                            if (event.key === "End") nextIndex = PERMISSION_ORDER.length - 1;
+                            if (nextIndex === undefined) return;
+                            event.preventDefault();
+                            const radios =
+                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                '[role="radio"]',
+                              );
+                            radios?.[nextIndex]?.focus();
+                          }}
+                          className={cn(
+                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            selected
+                              ? "bg-popover shadow-control"
+                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                          )}
+                        >
+                          <Icon className={cn("size-4 shrink-0", meta.className)} />
+                          <span className="truncate">{meta.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 {computerUse && onChangeComputerUse ? (
                   <Button
                     variant={computerUse.enabled ? "muted" : "transparent"}
@@ -1655,13 +2036,25 @@ export function Composer({
                   thinkingControl && "composer-action-row max-[520px]:w-full",
                 )}
               >
+                {voice.recording &&
+                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
+                  <span
+                    className="max-w-56 truncate text-small"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Live transcription"
+                  >
+                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
+                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
+                  </span>
+                ) : null}
                 {thinkingControl}
                 {modelPicker}
                 <Button
                   variant={voice.recording ? "destructive" : "transparent"}
                   size="small"
                   iconOnly
-                  disabled={voice.transcribing || isGenerating || sending || sessionCommandBusy}
+                  disabled={voice.transcribing || (isGenerating && !onQueue) || sending || sessionCommandBusy}
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -1671,12 +2064,19 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating && canStopGeneration ? (
+                {onQueue && isGenerating ? (
+                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
+                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
+                    <ListPlus />
+                  </Button>
+                ) : null}
+                {isGenerating ? (
                   <Button
                     variant="filled"
                     size="small"
                     iconOnly
                     onClick={onStop}
+                    disabled={!canStopGeneration}
                     aria-label="Stop generating"
                   >
                     <Square className="fill-current" />
@@ -1688,9 +2088,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label="Send message"
+                    aria-label={hasQueuedMessages ? "Queue message" : "Send message"}
                   >
-                    <ArrowUp />
+                    {hasQueuedMessages ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>
@@ -1698,6 +2098,17 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={voice.awaitingRecordedRetryConsent}
+        onOpenChange={(open) => {
+          if (!open) voice.resolveRecordedRetryConsent(false);
+        }}
+        title={GEMINI_RECORDED_RETRY_TITLE}
+        description={GEMINI_RECORDED_RETRY_DESCRIPTION}
+        confirmLabel="Retry with recording"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => voice.resolveRecordedRetryConsent(true)}
+      />
       <AlertDialog
         open={confirmFullAccess}
         onOpenChange={setConfirmFullAccess}

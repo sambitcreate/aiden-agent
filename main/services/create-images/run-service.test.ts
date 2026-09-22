@@ -2999,3 +2999,34 @@ test("annotation rasterization remains main-owned and publishes one immutable PN
     sourceAssetId: DURABLE_ASSET_ID,
   });
 });
+
+test("active projections do not read history or workflow storage under a progress burst", async (t) => {
+  const context = await harness(t, { script: { nodes: { "generate-1": [{
+    outcome: "success", delayMs: 60_000, width: 8, height: 8, seed: 4,
+  }] } } });
+  const started = await context.service.start(
+    { workflowId: "workflow-1", expectedRevision: 1, scope: { kind: "all" } }, () => true,
+  );
+  assert.equal(started.status, "started");
+  if (started.status !== "started") return;
+  await waitForJournal(context.journals, started.run.runId, (journal) =>
+    journal.events.some((event) => event.type === "node-submission-accepted"));
+  let reads = 0;
+  const originalHistory = context.journals.terminalHistory.bind(context.journals);
+  const originalWorkflow = context.workflows.get.bind(context.workflows);
+  context.journals.terminalHistory = async () => { reads += 1; return originalHistory(); };
+  context.workflows.get = async (...args) => { reads += 1; return originalWorkflow(...args); };
+  const begin = performance.now();
+  for (let i = 0; i < 1000; i += 1) {
+    const projection = context.service.activeProjection("workflow-1");
+    assert.equal(projection?.runId, started.run.runId);
+    assert.equal("events" in projection!, false);
+    assert.equal("workflowSnapshot" in projection!, false);
+  }
+  t.diagnostic(`1000 volatile projections: ${(performance.now() - begin).toFixed(1)}ms; history/workflow reads: ${reads}`);
+  assert.equal(reads, 0);
+  assert.equal(context.service.activeProjection("other-workflow"), undefined);
+  await context.service.stop("workflow-1", started.run.runId, "user");
+  await waitForTerminal(context.journals, started.run.runId);
+  await waitFor(() => context.service.activeProjection("workflow-1") === undefined);
+});

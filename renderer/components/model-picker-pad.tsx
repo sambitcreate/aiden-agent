@@ -1,29 +1,24 @@
 import * as React from "react";
 import {
   findDirectionalModel,
-  modelGridSize,
   modelOptionId,
   nearestModel,
   type ModelDirection,
   type ModelPoint,
   type PositionedModel,
 } from "../lib/model-picker-data";
+import {
+  MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_RANGE_PERCENT,
+  modelPadLeftPercent,
+  modelPadTopPercent,
+} from "../lib/model-pad-layout";
 import { cn } from "../lib/ui-utils";
-
-const PAD_INSET_PERCENT = 7;
-const PAD_RANGE_PERCENT = 100 - PAD_INSET_PERCENT * 2;
-
-function padLeft(x: number): number {
-  return PAD_INSET_PERCENT + x * PAD_RANGE_PERCENT;
-}
-
-function padTop(y: number): number {
-  return PAD_INSET_PERCENT + (1 - y) * PAD_RANGE_PERCENT;
-}
+import { ProviderIcon } from "./provider-icon";
 
 function pointFromPointer(event: React.PointerEvent<HTMLDivElement>, rect: DOMRect): ModelPoint {
-  const inset = PAD_INSET_PERCENT / 100;
-  const range = PAD_RANGE_PERCENT / 100;
+  const inset = MODEL_PAD_INSET_PERCENT / 100;
+  const range = MODEL_PAD_RANGE_PERCENT / 100;
   const rawX = (event.clientX - rect.left) / rect.width;
   const rawY = (event.clientY - rect.top) / rect.height;
   return {
@@ -42,6 +37,7 @@ function directionForKey(key: string): ModelDirection | null {
 
 interface ModelPickerPadProps {
   models: PositionedModel[];
+  gridSize: number;
   selectedValue?: string;
   previewValue?: string;
   onPreview: (value: string | undefined) => void;
@@ -50,6 +46,7 @@ interface ModelPickerPadProps {
 
 export function ModelPickerPad({
   models,
+  gridSize,
   selectedValue,
   previewValue,
   onPreview,
@@ -63,9 +60,10 @@ export function ModelPickerPad({
   const draggingRef = React.useRef(false);
   const [dragging, setDragging] = React.useState(false);
   const [confirmedValue, setConfirmedValue] = React.useState<string>();
-  const gridSize = modelGridSize(models.length);
 
-  activeValueRef.current = previewValue ?? selectedValue;
+  React.useEffect(() => {
+    activeValueRef.current = previewValue ?? selectedValue;
+  }, [previewValue, selectedValue]);
 
   const selected = models.find((model) => model.value === selectedValue);
   const preview = models.find((model) => model.value === (previewValue ?? selectedValue));
@@ -217,12 +215,12 @@ export function ModelPickerPad({
       <div
         role="listbox"
         tabIndex={0}
-        aria-label="Model pad. Faster models are to the left and more capable models are toward the top."
+        aria-label={`Model pad with ${gridSize} rows and ${gridSize} columns. Faster models are to the left and more capable models are toward the top.`}
         aria-roledescription="two-dimensional model picker"
         aria-describedby={helpId}
         aria-activedescendant={active ? modelOptionId(active.value) : undefined}
         data-dragging={dragging ? "true" : "false"}
-        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none focus-visible:bg-list-selection focus-visible:outline-none"
+        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -249,8 +247,8 @@ export function ModelPickerPad({
                 highlighted ? "bg-primary/50" : "bg-primary/16",
               )}
               style={{
-                left: `${PAD_INSET_PERCENT + (column / (gridSize - 1)) * PAD_RANGE_PERCENT}%`,
-                top: `${PAD_INSET_PERCENT + (row / (gridSize - 1)) * PAD_RANGE_PERCENT}%`,
+                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
+                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
               }}
             />
           );
@@ -269,13 +267,16 @@ export function ModelPickerPad({
               className={cn(
                 "model-pad-model absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/45 ring-1 ring-popover/55",
                 model.confidence === "personal" && "bg-accent",
-                model.confidence === "suggested" && "bg-accent/65 ring-accent/40",
+                model.confidence === "suggested" && "bg-accent/65",
                 model.confidence === "benchmark" && "bg-accent",
                 model.confidence === "unranked" && "bg-transparent ring-primary/35",
                 isSelected && !isPreview && "size-2 bg-transparent ring-2 ring-primary/45",
                 isPreview && !isSelected && "size-2 bg-accent ring-2 ring-popover",
               )}
-              style={{ left: `${padLeft(model.x)}%`, top: `${padTop(model.y)}%` }}
+              style={{
+                left: `${modelPadLeftPercent(model.x)}%`,
+                top: `${modelPadTopPercent(model.y)}%`,
+              }}
             />
           );
         })}
@@ -284,9 +285,20 @@ export function ModelPickerPad({
           <span
             aria-hidden="true"
             data-confirmed={confirmedValue === puckPoint.value ? "true" : "false"}
-            className="model-pad-knob absolute z-10 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-popover ring-1 ring-black/20"
-            style={{ left: `${padLeft(puckPoint.x)}%`, top: `${padTop(puckPoint.y)}%` }}
-          />
+            className="model-pad-knob absolute z-10 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-popover ring-1 ring-black/20"
+            style={{
+              left: `${modelPadLeftPercent(puckPoint.x)}%`,
+              top: `${modelPadTopPercent(puckPoint.y)}%`,
+            }}
+          >
+            <ProviderIcon
+              providerId={puckPoint.providerId}
+              providerLabel={puckPoint.providerLabel}
+              modelId={puckPoint.model}
+              artwork={puckPoint.providerArtwork}
+              className="size-3.5"
+            />
+          </span>
         ) : null}
       </div>
       <p id={helpId} className="sr-only">

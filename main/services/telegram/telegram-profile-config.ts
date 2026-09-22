@@ -18,6 +18,22 @@ export function telegramProfileTokenKey(profile: string): string {
   return profile === DEFAULT_TELEGRAM_PROFILE ? "telegram" : `telegram:${profile}`;
 }
 
+/**
+ * Main-only stable principal for the Full Access notice. Pairing a different
+ * Telegram owner produces a different audience even when the profile name is
+ * reused; reset/delete explicitly revoke the old audience as well.
+ */
+export function telegramBotNoticeAudienceId(
+  profile: string,
+  ownerUserId: number,
+): string {
+  const normalized = normalizeTelegramProfileName(profile);
+  if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) {
+    throw new Error("Telegram Bot access requires a paired owner.");
+  }
+  return `telegram:${normalized}:owner:${ownerUserId}`;
+}
+
 export function telegramProfileRuntimeFile(profile: string): string {
   return profile === DEFAULT_TELEGRAM_PROFILE
     ? "telegram-runtime.json"

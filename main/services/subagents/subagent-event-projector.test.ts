@@ -18,6 +18,7 @@ import {
   containsHighConfidenceSecret,
   containsHighConfidenceSecretIncludingEncodings,
   sanitizeSubagentSnapshotText,
+  sanitizeSubagentSnapshotTextWithFacts,
 } from "../../../renderer/shared/subagent-safe-text.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
 
@@ -157,6 +158,7 @@ test("projector emits only bounded safe lifecycle snapshots with monotonic revis
   assert.match(final.latestText ?? "", /\[REDACTED ABSOLUTE PATH\]/u);
   assert.doesNotMatch(final.latestText ?? "", /\t/u);
   assert.match(final.terminalMarkdown ?? "", /\[REDACTED ABSOLUTE PATH\]/u);
+  assert.deepEqual(final.projectionNotices, ["display_filtered"]);
   assert.equal(emitted.length, 6);
   assert.ok(
     emitted.every(
@@ -192,6 +194,195 @@ test("long task previews remain renderer-safe after privacy-sensitive truncation
   assert.ok(parseSubagentRunSnapshotV1(snapshot));
   assert.ok(snapshot.taskPreview.length <= 240);
   assert.equal(sanitizeSubagentSnapshotText(snapshot.taskPreview), snapshot.taskPreview);
+  assert.match(snapshot.taskPreview, /\.\.\. \[task preview truncated\]$/u);
+  assert.deepEqual(snapshot.projectionNotices, ["task_truncated"]);
+});
+
+test("literal projection-marker prose does not claim producer transformations", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-literal-markers",
+    chatId: "chat-literal-markers",
+    workspaceId: "workspace-literal-markers",
+    modelId: "model-literal-markers",
+    now: () => 1,
+  });
+  projector.begin(
+    {
+      runId: "run-literal-markers",
+      groupId: "generation-literal-markers:group-1",
+      childId: "child-literal-markers",
+    },
+    {
+      role: "reviewer",
+      label: "Review marker docs",
+      task: "Document ... [task preview truncated] and [REDACTED ENCODED TEXT] literally.",
+    },
+  );
+  projector.finish("run-literal-markers", {
+    role: "reviewer",
+    label: "Review marker docs",
+    status: "completed",
+    summary: "Literal examples: ... [report truncated] and [REDACTED CREDENTIAL].",
+  });
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.equal(snapshot.projectionNotices, undefined);
+  assert.match(snapshot.taskPreview, /\[task preview truncated\]/u);
+  assert.match(snapshot.terminalMarkdown ?? "", /\[REDACTED CREDENTIAL\]/u);
+});
+
+test("producer summary truncation is explicit and literal report markers remain inert", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-producer-summary-truncation",
+    chatId: "chat-producer-summary-truncation",
+    workspaceId: "workspace-producer-summary-truncation",
+    modelId: "model-producer-summary-truncation",
+    now: () => 1,
+  });
+  projector.begin(
+    {
+      runId: "run-producer-summary-truncation",
+      groupId: "generation-producer-summary-truncation:group-1",
+      childId: "child-producer-summary-truncation",
+    },
+    { role: "reviewer", label: "Review summary", task: "Review safe documentation" },
+  );
+  const summary = "Literal ... [middle of child summary truncated] ... marker.";
+  projector.finish("run-producer-summary-truncation", {
+    role: "reviewer",
+    label: "Review summary",
+    status: "completed",
+    summary,
+    summaryTruncated: true,
+  });
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.equal(snapshot.terminalMarkdown, summary);
+  assert.deepEqual(snapshot.projectionNotices, ["report_truncated"]);
+});
+
+test("label and model privacy projection contributes explicit display provenance", () => {
+  const cases = [
+    {
+      expectedLabel: "token=[REDACTED]",
+      expectedModel: "safe-model",
+      label: "token=actual-secret-value",
+      modelId: "safe-model",
+    },
+    {
+      expectedLabel: "Safe label",
+      expectedModel: "token=[REDACTED]",
+      label: "Safe label",
+      modelId: "token=actual-secret-value",
+    },
+  ];
+
+  for (const [index, current] of cases.entries()) {
+    const projector = new SubagentEventProjector({
+      generationId: `generation-label-model-filter-${index}`,
+      chatId: `chat-label-model-filter-${index}`,
+      workspaceId: `workspace-label-model-filter-${index}`,
+      modelId: current.modelId,
+      now: () => 1,
+    });
+    projector.begin(
+      {
+        runId: `run-label-model-filter-${index}`,
+        groupId: `generation-label-model-filter-${index}:group-1`,
+        childId: `child-label-model-filter-${index}`,
+      },
+      { role: "reviewer", label: current.label, task: "Review safe documentation" },
+    );
+    const snapshot = projector.snapshot()[0]!;
+    assert.equal(snapshot.label, current.expectedLabel);
+    assert.equal(snapshot.modelId, current.expectedModel);
+    assert.deepEqual(snapshot.projectionNotices, ["display_filtered"]);
+  }
+
+  const literalProjector = new SubagentEventProjector({
+    generationId: "generation-literal-label-model",
+    chatId: "chat-literal-label-model",
+    workspaceId: "workspace-literal-label-model",
+    modelId: "model [REDACTED ENCODED TEXT] literal",
+    now: () => 1,
+  });
+  literalProjector.begin(
+    {
+      runId: "run-literal-label-model",
+      groupId: "generation-literal-label-model:group-1",
+      childId: "child-literal-label-model",
+    },
+    {
+      role: "reviewer",
+      label: "Label [REDACTED] literal",
+      task: "Review safe documentation",
+    },
+  );
+  assert.equal(literalProjector.snapshot()[0]?.projectionNotices, undefined);
+});
+
+test("privacy provenance survives literal markers beside generated replacements", () => {
+  const encodedSecret = Buffer.from("OPENAI_API_KEY=actual-secret-value").toString("base64");
+  const cases = [
+    {
+      expected: "Literal [REDACTED] token=[REDACTED]",
+      task: "Literal [REDACTED] token=actual-secret-value",
+    },
+    {
+      expected: "[REDACTED ENCODED TEXT]",
+      task: `Literal [REDACTED ENCODED TEXT] ${encodedSecret}`,
+    },
+  ];
+
+  for (const [index, current] of cases.entries()) {
+    const projector = new SubagentEventProjector({
+      generationId: `generation-mixed-marker-${index}`,
+      chatId: `chat-mixed-marker-${index}`,
+      workspaceId: `workspace-mixed-marker-${index}`,
+      modelId: "model-mixed-marker",
+      now: () => 1,
+    });
+    projector.begin(
+      {
+        runId: `run-mixed-marker-${index}`,
+        groupId: `generation-mixed-marker-${index}:group-1`,
+        childId: `child-mixed-marker-${index}`,
+      },
+      { role: "reviewer", label: "Review marker docs", task: current.task },
+    );
+
+    const sanitized = sanitizeSubagentSnapshotTextWithFacts(current.task);
+    assert.equal(sanitized.text, current.expected);
+    assert.equal(sanitized.privacyReplacement, true);
+    const snapshot = projector.snapshot()[0]!;
+    assert.equal(snapshot.taskPreview, current.expected);
+    assert.deepEqual(snapshot.projectionNotices, ["display_filtered"]);
+  }
+
+  const resultProjector = new SubagentEventProjector({
+    generationId: "generation-mixed-result-marker",
+    chatId: "chat-mixed-result-marker",
+    workspaceId: "workspace-mixed-result-marker",
+    modelId: "model-mixed-marker",
+    now: () => 1,
+  });
+  resultProjector.begin(
+    {
+      runId: "run-mixed-result-marker",
+      groupId: "generation-mixed-result-marker:group-1",
+      childId: "child-mixed-result-marker",
+    },
+    { role: "reviewer", label: "Review marker docs", task: "Review safe documentation" },
+  );
+  resultProjector.finish("run-mixed-result-marker", {
+    role: "reviewer",
+    label: "Review marker docs",
+    status: "completed",
+    summary: "Literal [REDACTED] token=actual-secret-value",
+  });
+  const terminal = resultProjector.snapshot()[0]!;
+  assert.equal(terminal.terminalMarkdown, "Literal [REDACTED] token=[REDACTED]");
+  assert.deepEqual(terminal.projectionNotices, ["display_filtered"]);
 });
 
 test("multiline provider failures produce valid single-line warnings and errors", () => {
@@ -275,6 +466,8 @@ test("long terminal summaries remain renderer-safe after both display cuts", () 
     sanitizeSubagentSnapshotText(snapshot.terminalMarkdown ?? ""),
     snapshot.terminalMarkdown,
   );
+  assert.match(snapshot.terminalMarkdown ?? "", /\.\.\. \[report truncated\]$/u);
+  assert.deepEqual(snapshot.projectionNotices, ["report_truncated"]);
 });
 
 test("snapshot parser rejects raw secrets, absolute paths, unknown fields, and invalid terminal state", () => {
@@ -292,6 +485,28 @@ test("snapshot parser rejects raw secrets, absolute paths, unknown fields, and i
   );
   const valid = projector.snapshot()[0]!;
   assert.ok(parseSubagentRunSnapshotV1(valid));
+  const noticeInput = ["task_truncated", "display_filtered"] as const;
+  const withProjectionNotices = parseSubagentRunSnapshotV1({
+    ...valid,
+    projectionNotices: noticeInput,
+  });
+  assert.deepEqual(withProjectionNotices?.projectionNotices, [
+    "task_truncated",
+    "display_filtered",
+  ]);
+  assert.notEqual(withProjectionNotices?.projectionNotices, noticeInput);
+  assert.equal(parseSubagentRunSnapshotV1({ ...valid, projectionNotices: ["unknown"] }), undefined);
+  assert.equal(
+    parseSubagentRunSnapshotV1({
+      ...valid,
+      projectionNotices: ["task_truncated", "task_truncated"],
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseSubagentRunSnapshotV1({ ...valid, projectionNotices: ["report_truncated"] }),
+    undefined,
+  );
   assert.equal(
     parseSubagentRunSnapshotV1({
       ...valid,

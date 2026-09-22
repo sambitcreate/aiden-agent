@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GenerationTimelineProjector, safeToolDescriptor } from "./generation-timeline.js";
+import {
+  GenerationTimelineProjector,
+  safeToolDescriptor,
+  safeToolIssueDetails,
+} from "./generation-timeline.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -22,7 +26,10 @@ test("keeps tool order stable when parallel calls finish out of order", () => {
   );
 
   projector.toolStarted("call-a", "read_file", { path: "src/a.ts" });
-  projector.toolStarted("call-b", "grep", { path: "src", query: "secret-search-value" });
+  projector.toolStarted("call-b", "grep", {
+    path: "src",
+    query: "secret-search-value",
+  });
   projector.toolRunning("call-a");
   projector.toolRunning("call-b");
   projector.toolFinished("call-b", "completed");
@@ -105,6 +112,53 @@ test("projects only safe completed file line changes", () => {
   assert.doesNotMatch(JSON.stringify(projector.snapshot()), /privateContent|must not cross/u);
 });
 
+test("projects only allowlisted actionable terminal tool issues", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("budget", "subagent", {});
+  projector.toolFinished(
+    "budget",
+    "failed",
+    safeToolIssueDetails("subagent", "failed", {
+      content: [
+        {
+          type: "text",
+          text: "Subagent tree tokens budget exhausted (181,132 attempted; 128,000 allowed). Start a new parent turn with narrower tasks.",
+        },
+      ],
+    }),
+  );
+  projector.toolStarted("approval", "share_image", {});
+  projector.toolFinished(
+    "approval",
+    "blocked",
+    safeToolIssueDetails("share_image", "blocked", {
+      content: [
+        {
+          type: "text",
+          text: "Approval is unavailable while this response continues in the background. Return to the chat and retry the action.",
+        },
+      ],
+    }),
+  );
+  projector.toolStarted("private", "subagent", {});
+  projector.toolFinished(
+    "private",
+    "failed",
+    safeToolIssueDetails("subagent", "failed", {
+      content: [{ type: "text", text: "Provider leaked /Users/alice/private and secret-token" }],
+    }),
+  );
+
+  const [budget, approval, privateFailure] = toolSteps(projector.snapshot());
+  assert.equal(budget?.detail, "budget exhausted; start a new parent turn with narrower tasks");
+  assert.equal(
+    approval?.detail,
+    "approval unavailable while the response continues in the background",
+  );
+  assert.equal(privateFailure?.detail, undefined);
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /alice|secret-token/u);
+});
+
 test("does not expose raw command, search, content, or absolute path arguments", () => {
   const snapshots: GenerationTimeline[] = [];
   const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
@@ -129,6 +183,21 @@ test("does not expose raw command, search, content, or absolute path arguments",
   assert.equal(serialized.includes("../outside"), false);
 });
 
+test("projects display_image as a safe relative GUI artifact action", () => {
+  assert.deepEqual(safeToolDescriptor("display_image", { path: "previews/page.png" }), {
+    label: "Display image",
+    target: "previews/page.png",
+  });
+  assert.deepEqual(safeToolDescriptor("render_artifact", { title: "Dependencies" }), {
+    label: "Render artifact",
+    detail: "Dependencies",
+  });
+  assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
+    label: "Display image",
+    target: undefined,
+  });
+});
+
 test("terminal cancellation settles active steps", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
@@ -139,13 +208,13 @@ test("terminal cancellation settles active steps", () => {
   assert.equal(final.cancellationOrigin, "user_stop");
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(final))), final);
   assert.equal(
-    parseGenerationTimeline({ ...final, cancellationOrigin: "renderer_lifecycle" }),
+    parseGenerationTimeline({
+      ...final,
+      cancellationOrigin: "renderer_lifecycle",
+    }),
     undefined,
   );
-  assert.equal(
-    parseGenerationTimeline({ ...final, status: "completed" }),
-    undefined,
-  );
+  assert.equal(parseGenerationTimeline({ ...final, status: "completed" }), undefined);
   assert.equal(toolSteps(final)[0]?.status, "cancelled");
   assert.equal(typeof final.finishedAt, "number");
   assert.equal(typeof final.steps[0]?.finishedAt, "number");
@@ -153,7 +222,9 @@ test("terminal cancellation settles active steps", () => {
 
 test("explicit tool cancellation remains cancelled at generation settlement", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
-  projector.toolStarted("provider-call-id", "run_command", { command: "long private command" });
+  projector.toolStarted("provider-call-id", "run_command", {
+    command: "long private command",
+  });
   projector.toolRunning("provider-call-id");
   projector.toolFinished("provider-call-id", "cancelled");
 
@@ -195,6 +266,10 @@ test("safe tool descriptors retain only relative targets", () => {
     label: "Run command",
     detail: undefined,
   });
+  assert.deepEqual(safeToolDescriptor("share_image", { path: "/Users/person/Result.png" }), {
+    label: "Share image",
+    target: undefined,
+  });
   assert.deepEqual(safeToolDescriptor("read_file", { path: "/tmp/private.txt" }), {
     label: "Read file",
     target: undefined,
@@ -213,7 +288,10 @@ test("a command's detail is the model's description, never the command", () => {
 
 test("displayable details survive while unsafe ones are collapsed or dropped", () => {
   assert.equal(
-    safeToolDescriptor("grep", { path: "services", pattern: "export (const|class)" }).detail,
+    safeToolDescriptor("grep", {
+      path: "services",
+      pattern: "export (const|class)",
+    }).detail,
     "export (const|class)",
   );
   assert.equal(safeToolDescriptor("glob", { pattern: "  src/**/*.ts\n\n" }).detail, "src/**/*.ts");
@@ -256,6 +334,77 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   // finish() settles reasoning that was still open when the turn ended.
   assert.equal(trailing?.kind === "thinking" && trailing.durationMs, 500);
   assert.equal(typeof trailing?.finishedAt, "number");
+});
+
+test("a reopened merged thinking step reads open again on the live timeline", () => {
+  let now = 1_000;
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    (timeline) => snapshots.push(timeline),
+    () => (now += 500),
+  );
+
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  const settled = snapshots[snapshots.length - 1];
+  const settledStep = settled?.steps[0];
+  assert.equal(settledStep?.kind === "thinking" && settledStep.finishedAt, 2_500);
+  assert.equal(settledStep?.kind === "thinking" && settledStep.durationMs, 500);
+
+  projector.thinkingStarted();
+  const reopened = snapshots[snapshots.length - 1];
+  assert.equal(reopened?.steps.length, 1);
+  assert.equal(reopened?.steps[0]?.finishedAt, undefined);
+
+  projector.thinkingEnded();
+  const final = projector.finish("completed");
+  const finalStep = final.steps[0];
+  assert.equal(finalStep?.kind === "thinking" && finalStep.finishedAt, 3_500);
+  assert.equal(finalStep?.kind === "thinking" && finalStep.durationMs, 1_000);
+});
+
+test("an early toolcall_start step upgrades instead of duplicating", () => {
+  let now = 100;
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => ++now,
+  );
+
+  // toolcall_start fires before arguments resolve, so args are empty.
+  projector.toolStarted("call-a", "render_artifact", {});
+  const early = projector.snapshot();
+  assert.equal(early.steps.length, 1);
+  assert.equal(toolSteps(early)[0]?.status, "pending");
+  assert.equal(toolSteps(early)[0]?.detail, undefined);
+
+  // beforeToolCall / tool_execution_start repeat the id with real args.
+  projector.toolStarted("call-a", "render_artifact", { title: "Coverage", html: "<p>x</p>" });
+  projector.toolRunning("call-a");
+  projector.toolFinished("call-a", "completed");
+
+  const final = projector.finish("completed");
+  const steps = toolSteps(final);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0]?.status, "completed");
+  assert.equal(steps[0]?.label, "Render artifact");
+  assert.equal(steps[0]?.detail, "Coverage");
+  // The raw HTML argument never crosses the timeline boundary.
+  assert.equal(JSON.stringify(final).includes("<p>x</p>"), false);
+});
+
+test("terminal tool steps ignore late repeated toolStarted calls", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("call-a", "read_file", { path: "README.md" });
+  projector.toolFinished("call-a", "failed");
+  projector.toolStarted("call-a", "read_file", { path: "secret-path" });
+
+  const final = projector.finish("completed");
+  const steps = toolSteps(final);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0]?.status, "failed");
+  assert.equal(steps[0]?.target, "README.md");
 });
 
 test("reasoning steps replay only from the current version", () => {
@@ -468,4 +617,64 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     }),
     undefined,
   );
+});
+
+test("streaming tool updates do not republish a timeline whose visible status is unchanged", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
+    snapshots.push(timeline),
+  );
+  projector.toolStarted("call-a", "run_command", { description: "install deps" });
+  const afterStart = snapshots.length;
+  projector.toolRunning("call-a");
+  const afterFirstRunning = snapshots.length;
+  assert.equal(afterFirstRunning, afterStart + 1);
+  assert.equal(toolSteps(snapshots[afterFirstRunning - 1]!)[0]?.status, "running");
+
+  for (let index = 0; index < 2_000; index += 1) {
+    projector.toolRunning("call-a");
+  }
+  assert.equal(snapshots.length, afterFirstRunning);
+
+  const serialized = JSON.stringify(projector.snapshot());
+  const budgetBytes = 4_096;
+  assert.ok(
+    Buffer.byteLength(serialized, "utf8") < budgetBytes,
+    `one-line tool timeline exceeded ${budgetBytes} bytes: ${Buffer.byteLength(serialized, "utf8")}`,
+  );
+
+  projector.toolFinished("call-a", "completed");
+  assert.equal(snapshots.length, afterFirstRunning + 1);
+  assert.equal(toolSteps(snapshots[snapshots.length - 1]!)[0]?.status, "completed");
+});
+
+test("history recall activity never projects queries or recalled excerpts", () => {
+  assert.deepEqual(
+    safeToolDescriptor("vcc_recall", { query: "private query", reference: "private-entry" }),
+    {
+      label: "Recall chat history",
+    },
+  );
+});
+
+test("automatic compaction publishes bounded engine metrics without summary content", () => {
+  const projector = new GenerationTimelineProjector(
+    "metrics",
+    () => {},
+    () => 100,
+  );
+  const id = projector.compactionStarted();
+  const result = {
+    engine: "vcc" as const,
+    durationMs: 400,
+    tokensBefore: 25900,
+    estimatedTokensAfter: 6758,
+    summary: "PRIVATE SUMMARY",
+    retainedTail: [{ content: "PRIVATE TOOL OUTPUT" }],
+  };
+  projector.compactionFinished(id, "completed", result);
+  const snapshot = projector.snapshot();
+  assert.equal(toolSteps(snapshot)[0].detail, "pi-vcc · 0.4s · ~25900 → 6758 tokens");
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });

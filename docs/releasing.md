@@ -4,15 +4,39 @@ Aiden publishes its source, signed release binaries, and updater metadata from
 `sambitcreate/aiden-agent`. The repository must be public before the first release so website
 visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
+The locked electron-builder 26.15.3 signing implementation receives a guarded
+postinstall backport of [upstream #10101](https://github.com/electron-userland/electron-builder/pull/10101).
+It uses the temporary keychain password for partition access while retaining
+each certificate password for import. The stable v26 packages inspected during
+the 0.38.1 release still lacked this fix. Remove the backport only after an
+explicit builder upgrade includes it; the branding suite checks both password
+paths, idempotence, and rejection of unexpected source/version changes.
+
+## Model catalog refreshes
+
+`resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
+runtime limits and request admission. `npm run dist` refreshes and validates it before every
+package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
+tracked file, runs `npm run test:model-catalog`, and commits a changed snapshot with the GitHub
+Actions bot. A failed fetch leaves the known-good snapshot untouched; a non-fast-forward push is
+allowed to fail so the newer `main` run remains authoritative.
+
+The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
+Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,
+same-app-version, device-local display cache. It cannot add selectable models or alter routing,
+context windows, output limits, or active turns. Provider inventory remains a separate Pi/provider
+authority. Ordinary model reads and application startup remain offline.
+
 ## Release behavior
 
 - `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub's `macos-26` image.
 - `.github/workflows/release.yml` is considered enabled only when the source repository variable
   `RELEASES_ENABLED` is exactly `true`.
-- Each enabled push to `main` derives a monotonically increasing version from the workflow run
-  number. The beta line starts at `0.27.0`; the base `package.json` version supplies that release
-  line, so `0.27.0` plus run `41` produces `0.27.41` without committing a version-bump loop to
-  `main`.
+- A release uses the complete SemVer declared in `package.json` exactly. For example, `0.35.0`
+  publishes only as `v0.35.0`; workflow run numbers never become application versions.
+- If the exact declared tag already exists, an enabled push to `main` completes the release job as
+  a green no-op. Publishing another build requires an explicit reviewed version change in both
+  `package.json` and `package-lock.json`.
 - The release job runs the full TypeScript, lint, JavaScript/TypeScript, Rust, Swift, and build
   gates before preparing signing material.
 - GitHub-hosted macOS VMs do not enforce Aiden's live kernel launch constraint. CI still verifies
@@ -20,6 +44,9 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   checks remain mandatory on a physical Mac during packaged acceptance.
 - `npm run dist` refreshes only the approved release-time model snapshot, builds the app and
   native helpers, signs with Developer ID, notarizes, staples, and verifies the app, DMG, and ZIP.
+- Before publication, the signed app must launch from a disposable profile whose committed
+  V1-to-V2 subagent migration has identical source bytes but a deliberately stale native file
+  generation. This covers the APFS device-identifier churn observed after a reboot.
 - Automatic-update builds also generate `latest-mac.yml`. macOS archive names are restricted to
   stable GitHub-safe characters, and release verification requires the manifest URL and path to
   equal the exact ZIP basename. Verification also recomputes the ZIP's SHA-512 digest and requires
@@ -44,11 +71,29 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   retry, and ready states. A two-minute no-progress stall is cancelled and retried with bounded
   backoff. Installation starts only after the package and macOS updater handoff are ready, and
   never interrupts an open workspace or bypasses the existing quit barriers.
-- A failed or rerun job refuses to overwrite an existing tag. Recovery is a new `main` commit,
-  which receives a higher version.
+- A failed or rerun job refuses to overwrite an existing tag. If no tag or draft was created, rerun
+  the same declared version. If a partial draft exists, inspect and remove only that exact failed
+  draft before retrying. Never manufacture a version from a workflow run number.
 
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
+
+## A signed app that never opens on macOS 27 beta
+
+On macOS 27 beta, a valid Developer ID app can be held before its first instruction executes.
+The visible symptoms are a Dock icon with no window, no new Aiden diagnostic events, a process
+sample containing only `_dyld_start`, and `vmmap -summary <pid>` reporting that the process is
+`launched-suspended`. `spctl`, strict deep code-sign verification, notarization, and stapling can
+all still pass. This is an operating-system launch-policy failure, not an Aiden profile migration;
+do not delete `~/Library/Application Support/Aiden Agent` or `~/.aiden` while diagnosing it.
+
+First stop every suspended Aiden and ShipIt process, restart the Mac, and install the newest DMG
+after moving the old application bundle aside rather than overwriting it. If newly installed
+Electron apps from other vendors also remain at `_dyld_start`, update to a newer macOS 27 beta or
+return to the current stable macOS release before judging the Aiden artifact. Keep the old bundle
+and `~/Library/Caches/com.sambitcreate.aiden-agent.ShipIt` logs until the replacement launches.
+Release acceptance must record this OS boundary separately from the hosted signing, notarization,
+package, and disposable-profile gates.
 
 ## Physical Mac acceptance on a personal Mac Studio
 
@@ -113,7 +158,6 @@ Never place an Apple private key, certificate password, or notarization credenti
 
 ## Version-line changes
 
-For a planned minor or major release, change only the major/minor line in `package.json` and
-`package-lock.json` (for example, `0.27.0` to `0.28.0`). The next workflow run becomes
-`0.28.<run number>`, which remains greater than every `0.27.x` build. Do not lower the
-major/minor line or manually reuse a published version.
+For every planned release, change the complete version in `package.json` and `package-lock.json`
+(for example, `0.35.0` to `0.35.1`, or `0.35.0` to `0.36.0`). The next eligible workflow run uses
+that exact version. Do not lower the version or reuse a published tag.

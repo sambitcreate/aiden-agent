@@ -12,8 +12,10 @@ import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
 import { ScheduledTasksView } from "../components/scheduled-tasks-view";
+import { BotsView } from "./bots-view";
 import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
+import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 
@@ -141,6 +143,30 @@ const createImagesWorkflowRoute = createRoute({
   staticData: { title: "Image workflow" },
 });
 
+const botsRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/bots",
+  component: BotsView,
+  staticData: { title: "Bots" },
+});
+
+const botRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/bots/$botId",
+  component: BotsView,
+  staticData: { title: "Bot" },
+});
+
+const botChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/bots/$botId/chat/$chatId",
+  component: function BotChatRoute() {
+    const { botId, chatId } = botChatRoute.useParams();
+    return <BotChatRouteView botId={botId} chatId={chatId} />;
+  },
+  staticData: { title: "Bot conversation" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -161,6 +187,9 @@ const routeTree = rootRoute.addChildren([
     scheduledRoute,
     createImagesIndexRoute,
     createImagesWorkflowRoute,
+    botsRoute,
+    botRoute,
+    botChatRoute,
   ]),
   settingsRoute,
 ]);

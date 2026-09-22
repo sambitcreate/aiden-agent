@@ -1,0 +1,5 @@
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"PRIVATE_UPSTREAM_BODY_7dbfe9"}]}
+
+data: definitely-not-json
+

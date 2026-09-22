@@ -2,9 +2,16 @@
 
 import type { AnthropicMessagesCompat, Models } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
-import { resolveModelRuntimeWith, type ResolvedModelRuntime } from "./model-runtime-core.js";
+import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
+import {
+  buildModel,
+  resolveModelRuntimeWith,
+  withPinnedBotProviderAuth,
+  type ResolvedModelRuntime,
+} from "./model-runtime-core.js";
 import { catalogProviderSlug } from "./models-catalog-core.js";
 import { modelsCatalog } from "./models-catalog.js";
+import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import { providerRegistry } from "./provider-registry.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { secrets } from "./secrets.js";
@@ -29,6 +36,7 @@ export async function resolveModelRuntime(
   providerId: string,
   modelId: string,
   signal?: AbortSignal,
+  conversationId?: string,
 ): Promise<ResolvedModelRuntime> {
   // Ensure the one-release legacy key migration completes even when a
   // scheduled/background generation runs before Provider Settings is opened.
@@ -76,5 +84,72 @@ export async function resolveModelRuntime(
     providerId,
     modelId,
     signal,
+    conversationId,
+  );
+}
+
+/** Resolve a Bot runtime with request auth pinned before the final authority revalidation. */
+export async function resolveBotModelRuntime(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+  conversationId?: string,
+): Promise<ResolvedModelRuntime> {
+  const runtime = await resolveModelRuntime(providerId, modelId, signal, conversationId);
+  if (
+    runtime.provider.id === OPENAI_CODEX_PROVIDER_ID ||
+    !providerRegistry.isBuiltinProvider(runtime.provider.id)
+  ) {
+    return runtime;
+  }
+  if (signal?.aborted) throw signal.reason;
+  const [provider, auth] = await Promise.all([
+    Promise.resolve(providerRegistry.models.getProvider(runtime.provider.id)),
+    providerRegistry.models.getAuth(runtime.model),
+  ]);
+  if (!provider || !auth) {
+    throw new Error("This Bot's AI connection is no longer configured.");
+  }
+  if (signal?.aborted) throw signal.reason;
+  return withPinnedBotProviderAuth(runtime, auth, provider.streamSimple.bind(provider));
+}
+
+/**
+ * Resolve stored built-in auth before Bot authority admission. Pi may refresh
+ * and persist an expired OAuth credential here; the post-admission runtime
+ * resolution then pins the fresh credential without invalidating its own lease.
+ */
+export async function preflightBotModelAuth(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const runtime = await resolveModelRuntime(providerId, modelId, signal);
+  if (
+    runtime.provider.id === OPENAI_CODEX_PROVIDER_ID ||
+    !providerRegistry.isBuiltinProvider(runtime.provider.id)
+  ) {
+    return;
+  }
+  if (signal?.aborted) throw signal.reason;
+  const auth = await providerRegistry.models.getAuth(runtime.model);
+  if (!auth) throw new Error("This Bot's AI connection is no longer configured.");
+  if (signal?.aborted) throw signal.reason;
+}
+
+/** Offline model metadata only: no credential migration, auth, discovery or provider I/O. */
+export async function resolveCompactionModelMetadata(
+  providerId: string,
+  modelId: string,
+  conversationId?: string,
+) {
+  const native = providerRegistry.getBuiltinModel(providerId, modelId);
+  if (native) return withOpenCodeSessionAttribution(native, conversationId);
+  const provider = await configStore.getProvider(providerId);
+  if (!provider || !provider.models.includes(modelId))
+    throw new Error("Saved model metadata is unavailable.");
+  return withOpenCodeSessionAttribution(
+    buildModel(provider, modelId, await modelsCatalog.runtimeLimits(provider, modelId)),
+    conversationId,
   );
 }

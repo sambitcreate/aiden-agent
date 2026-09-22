@@ -882,3 +882,18 @@ test("exports a verified asset through a main-owned absolute destination", async
     );
   });
 });
+
+test("byte cache also bounds zero-byte entries and preserves LRU ordering", () => {
+  const cache = new ByteBoundedLru<{ byteLength: number }>(10, 2);
+  cache.set("a", { byteLength: 0 });
+  cache.set("b", { byteLength: 0 });
+  cache.get("a");
+  cache.set("c", { byteLength: 0 });
+  assert.equal(cache.size, 2);
+  assert.equal(cache.get("b"), undefined);
+  for (let i = 0; i < 10_000; i += 1) cache.set(String(i), { byteLength: 0 });
+  assert.equal(cache.size, 2);
+  assert.equal(cache.byteLength, 0);
+  cache.clear();
+  assert.equal(cache.size, 0);
+});

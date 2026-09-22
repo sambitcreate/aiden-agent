@@ -106,15 +106,18 @@ function makeCoordinator(options: {
   diagnostics?: unknown[];
   createId?: () => string;
   cleanupTimeout?: number;
+  openExternal?: (url: string) => Promise<void>;
 }) {
   const opened = options.opened ?? [];
   const diagnostics = options.diagnostics ?? [];
   const providerBackend = backend(options.login);
   return new ProviderAuthFlowCoordinator({
     backendFor: () => providerBackend,
-    openExternal: async (url) => {
-      opened.push(url);
-    },
+    openExternal:
+      options.openExternal ??
+      (async (url) => {
+        opened.push(url);
+      }),
     diagnostic: (event) => diagnostics.push(event),
     flowTimeoutMs: options.timeout,
     authCleanupTimeoutMs: options.cleanupTimeout,
@@ -205,6 +208,63 @@ test("browser flow forwards only prompts/events and opens the validated auth URL
     { flowId: FLOW_A, providerId: PROVIDER_ID, cancelled: false },
   ]);
   assert.equal(messages(owner, "providers:auth:error").length, 0);
+});
+
+test("a committed credential reports catalog refresh failure as a nonfatal warning", async () => {
+  const owner = new FakeOwner(1);
+  const providerBackend: ProviderAuthBackend = {
+    snapshot: async () => snapshot(false),
+    authenticate: async () => ({ token: "main-process-only" }),
+    commitCredential: async () => ({ warning: "Credentials saved; retry catalog refresh." }),
+    logout: async () => undefined,
+  };
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => providerBackend,
+    openExternal: async () => undefined,
+    createId: ids(PROMPT_A),
+  });
+
+  coordinator.start(owner, request());
+  await waitForMessages(owner, "providers:auth:done");
+  assert.deepEqual(messages(owner, "providers:auth:done"), [{
+    flowId: FLOW_A,
+    providerId: PROVIDER_ID,
+    cancelled: false,
+    warning: "Credentials saved; retry catalog refresh.",
+  }]);
+  assert.equal(messages(owner, "providers:auth:error").length, 0);
+});
+
+test("browser launch failure keeps a safe manual sign-in link available", async () => {
+  const owner = new FakeOwner(1);
+  const finish = deferred<unknown>();
+  const coordinator = makeCoordinator({
+    openExternal: async () => {
+      throw new Error("private operating system detail");
+    },
+    login: async (interaction) => {
+      interaction.notify({
+        type: "auth_url",
+        url: "https://auth.openai.com/oauth/authorize?state=temporary",
+      });
+      return finish.promise;
+    },
+  });
+
+  assert.deepEqual(coordinator.start(owner, request()), { started: true });
+  await waitForMessages(owner, "providers:auth:event", 2);
+  const events = messages<ProviderAuthEventDto>(owner, "providers:auth:event");
+  assert.equal(events[0]?.type, "auth_url");
+  assert.deepEqual(events[1], {
+    flowId: FLOW_A,
+    providerId: PROVIDER_ID,
+    type: "browser_open_failed",
+    url: "https://auth.openai.com/oauth/authorize?state=temporary",
+    message: "Aiden couldn't open the browser automatically. Use the sign-in link below.",
+  });
+  assert.doesNotMatch(JSON.stringify(events), /private operating system detail/u);
+  finish.resolve({});
+  await waitForMessages(owner, "providers:auth:done");
 });
 
 test("Pi-native API-key setup preserves provider-owned multi-field prompts", async () => {
@@ -301,6 +361,27 @@ test("non-HTTPS authorization URLs are blocked before opening or crossing IPC", 
     opened,
     login: async (interaction) => {
       interaction.notify({ type: "auth_url", url: "http://evil.example/steal" });
+      return {};
+    },
+  });
+
+  coordinator.start(owner, request());
+  await waitForMessages(owner, "providers:auth:error");
+  assert.deepEqual(opened, []);
+  assert.equal(messages(owner, "providers:auth:event").length, 0);
+  assert.equal(
+    messages<ProviderAuthErrorDto>(owner, "providers:auth:error")[0].code,
+    "sign_in_failed",
+  );
+});
+
+test("Codex authorization rejects an unexpected HTTPS host before opening or crossing IPC", async () => {
+  const opened: string[] = [];
+  const owner = new FakeOwner(1);
+  const coordinator = makeCoordinator({
+    opened,
+    login: async (interaction) => {
+      interaction.notify({ type: "auth_url", url: "https://login.example/looks-safe" });
       return {};
     },
   });

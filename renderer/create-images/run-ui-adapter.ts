@@ -604,15 +604,21 @@ export function createImagesRunSubscriptionController(
   const cancelSchedule =
     options.cancelSchedule ??
     ((timer: SubscriptionTimer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-  const pending = new Map<string, CreateImagesRunChangedNotification>();
+  const pending = new Map<string, {
+    snapshot?: CreateImagesRunChangedNotification & { snapshot: CreateImagesRunListResult };
+    active?: CreateImagesRunChangedNotification & { activeRun: CreateImagesRunView };
+    activeFirstSequence?: number;
+  }>();
   let disposed = false;
   let started = false;
   let inFlight = false;
   let attemptGeneration = 0;
   let failedAttempts = 0;
+  let gapAttempts = 0;
   let retryTimer: SubscriptionTimer | undefined;
   let subscriptionId: string | undefined;
   let lastStreamSequence = -1;
+  let baseline: Extract<CreateImagesRunListResult, { status: "ready" }> | undefined;
   let removeNotificationListener: (() => void) | undefined;
 
   const clearRetry = () => {
@@ -627,12 +633,25 @@ export function createImagesRunSubscriptionController(
 
   const rememberPending = (notification: CreateImagesRunChangedNotification) => {
     const prior = pending.get(notification.subscriptionId);
-    if (prior && prior.streamSequence >= notification.streamSequence) return;
+    const latest = prior?.active ?? prior?.snapshot;
+    if (latest && latest.streamSequence >= notification.streamSequence) return;
     if (!prior && pending.size >= MAX_PENDING_SUBSCRIPTIONS) {
       const oldestId = pending.keys().next().value as string | undefined;
       if (oldestId) pending.delete(oldestId);
     }
-    pending.set(notification.subscriptionId, notification);
+    if (notification.snapshot) {
+      // A complete snapshot supersedes all earlier buffered state.
+      pending.set(notification.subscriptionId, { snapshot: notification });
+    } else {
+      const contiguous = prior?.active &&
+        prior.active.activeRun.runId === notification.activeRun.runId &&
+        prior.active.streamSequence + 1 === notification.streamSequence;
+      pending.set(notification.subscriptionId, {
+        snapshot: prior?.snapshot,
+        active: notification,
+        activeFirstSequence: contiguous ? prior.activeFirstSequence : notification.streamSequence,
+      });
+    }
   };
 
   const releaseCurrentForSnapshot = (snapshot: CreateImagesRunListResult) => {
@@ -648,19 +667,57 @@ export function createImagesRunSubscriptionController(
     }
   };
 
+  const applyNotification = (
+    notification: CreateImagesRunChangedNotification,
+    firstSequence = notification.streamSequence,
+  ) => {
+    if (notification.activeRun) {
+      if (firstSequence !== lastStreamSequence + 1 || !baseline ||
+          notification.activeRun.workflowId !== options.workflowId ||
+          baseline.activeRun?.runId !== notification.activeRun.runId) {
+        // A missing full publication could have changed history or recovery state.
+        // Release and resubscribe; never apply a patch to an unknown baseline.
+        if (subscriptionId) release(subscriptionId);
+        subscriptionId = undefined;
+        baseline = undefined;
+        lastStreamSequence = -1;
+        pending.clear();
+        failedAttempts = ++gapAttempts;
+        scheduleRetry();
+        return;
+      }
+      // subscribe() can finish a newer disk snapshot after an earlier event was buffered.
+      if (notification.activeRun.journalRevision <= baseline.activeRun.journalRevision &&
+          notification.activeRun.lastSequence <= baseline.activeRun.lastSequence) {
+        lastStreamSequence = notification.streamSequence;
+        return;
+      }
+      baseline = { ...baseline, activeRun: notification.activeRun, latestTerminalRun: undefined };
+      lastStreamSequence = notification.streamSequence;
+      gapAttempts = 0;
+      options.apply(baseline);
+    } else {
+      gapAttempts = 0;
+      lastStreamSequence = notification.streamSequence;
+      const previousActive = baseline?.activeRun;
+      baseline = notification.snapshot.status === "ready" ? notification.snapshot : undefined;
+      if (previousActive && baseline?.activeRun?.runId === previousActive.runId &&
+          baseline.activeRun.journalRevision < previousActive.journalRevision) {
+        baseline = { ...baseline, activeRun: previousActive };
+      }
+      options.apply(baseline ?? notification.snapshot);
+      releaseCurrentForSnapshot(notification.snapshot);
+    }
+  };
+
   const onNotification = (notification: CreateImagesRunChangedNotification) => {
     if (disposed) return;
     if (!subscriptionId) {
-      rememberPending(notification);
+      if (inFlight) rememberPending(notification);
       return;
     }
-    if (
-      notification.subscriptionId === subscriptionId &&
-      notification.streamSequence > lastStreamSequence
-    ) {
-      lastStreamSequence = notification.streamSequence;
-      options.apply(notification.snapshot);
-      releaseCurrentForSnapshot(notification.snapshot);
+    if (notification.subscriptionId === subscriptionId && notification.streamSequence > lastStreamSequence) {
+      applyNotification(notification);
     }
   };
 
@@ -705,14 +762,17 @@ export function createImagesRunSubscriptionController(
       lastStreamSequence = result.streamSequence;
       failedAttempts = 0;
       clearRetry();
+      baseline = result.snapshot.status === "ready" ? result.snapshot : undefined;
       options.apply(result.snapshot);
       releaseCurrentForSnapshot(result.snapshot);
       if (!subscriptionId) return;
-      const pendingSnapshot = pending.get(result.subscriptionId);
+      const buffered = pending.get(result.subscriptionId);
+      const pendingSnapshot = buffered?.snapshot;
       if (pendingSnapshot && pendingSnapshot.streamSequence > lastStreamSequence) {
-        lastStreamSequence = pendingSnapshot.streamSequence;
-        options.apply(pendingSnapshot.snapshot);
-        releaseCurrentForSnapshot(pendingSnapshot.snapshot);
+        applyNotification(pendingSnapshot);
+      }
+      if (subscriptionId && buffered?.active && buffered.active.streamSequence > lastStreamSequence) {
+        applyNotification(buffered.active, buffered.activeFirstSequence);
       }
       pending.clear();
     } catch {
@@ -739,6 +799,7 @@ export function createImagesRunSubscriptionController(
       if (disposed || subscriptionId || inFlight) return;
       clearRetry();
       failedAttempts = 0;
+      gapAttempts = 0;
       void attempt();
     },
     dispose() {
@@ -749,6 +810,7 @@ export function createImagesRunSubscriptionController(
       removeNotificationListener?.();
       removeNotificationListener = undefined;
       pending.clear();
+      baseline = undefined;
       if (subscriptionId) release(subscriptionId);
       subscriptionId = undefined;
     },

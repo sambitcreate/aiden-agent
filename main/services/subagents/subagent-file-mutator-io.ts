@@ -14,8 +14,9 @@ import {
   type SubagentWorkspaceRootIdentity,
 } from "./subagent-file-mutation-core.js";
 
-const MAX_RESPONSE_BYTES = 275_000;
+const MAX_RESPONSE_BYTES = 725_000;
 const MAX_COMMAND_BYTES = 275_000;
+const MAX_HTML_CONTENT_BYTES = 512 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const RECOVERY_NAME =
   /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;
@@ -446,6 +447,48 @@ export class SubagentFileMutatorClient {
     return this.stateOperation(() =>
       this.inspectUnlocked(effectIdValue, relativePathValue, signal),
     );
+  }
+
+  readHtml(
+    requestIdValue: string,
+    relativePathValue: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return this.stateOperation(async () => {
+      if (this.state.kind !== "idle") {
+        throw new SubagentFileMutatorError("invalid_input");
+      }
+      let requestId: string;
+      let relativePath: string;
+      try {
+        requestId = canonicalSubagentFileEffectId(requestIdValue);
+        relativePath = canonicalSubagentFileRelativePath(relativePathValue);
+      } catch {
+        throw new SubagentFileMutatorError("invalid_input");
+      }
+      const response = await this.request(
+        `read-html ${requestId} ${encodeProtocolValue(relativePath)}`,
+        signal,
+      );
+      const match =
+        /^html-read ([A-Za-z0-9_-]{1,64}) ([0-9]+) ([A-Za-z0-9+/=]+|-)$/u.exec(
+          response,
+        );
+      if (!match || match[1] !== requestId) {
+        this.terminate(new SubagentFileMutatorError("io_failed"));
+        throw new SubagentFileMutatorError("io_failed");
+      }
+      const bytes = Number(match[2]);
+      if (
+        !Number.isSafeInteger(bytes) ||
+        bytes < 1 ||
+        bytes > MAX_HTML_CONTENT_BYTES
+      ) {
+        this.terminate(new SubagentFileMutatorError("io_failed"));
+        throw new SubagentFileMutatorError("io_failed");
+      }
+      return decodeProtocolText(match[3], bytes);
+    });
   }
 
   private async inspectUnlocked(

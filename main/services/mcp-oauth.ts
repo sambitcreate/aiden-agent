@@ -6,8 +6,8 @@
 
 import * as http from "http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
@@ -32,15 +32,22 @@ import {
   type McpOAuthGeneration,
 } from "./mcp-oauth-operation.js";
 import type { McpOAuthOperation } from "./mcp-oauth-operation.js";
-import { assertMcpPresetServer } from "./mcp-presets.js";
+import {
+  MCP_OAUTH_LOOPBACK_PORT,
+  MCP_OAUTH_REDIRECT_URI,
+  explainMcpOAuthFailure,
+  mcpOAuthClientMetadata,
+} from "./mcp-oauth-client-metadata.js";
+import { assertMcpPresetServer, mcpOAuthClientNameForServer } from "./mcp-presets.js";
 import { closeAgainAfterSettled } from "./generation-bound-connection-cache.js";
 import type { McpServer } from "./types.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
+import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
 // sessions (dynamic client registration records it once).
-const OAUTH_PORT = 41390;
-const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_PORT}/callback`;
+const OAUTH_PORT = MCP_OAUTH_LOOPBACK_PORT;
+const OAUTH_REDIRECT_URI = MCP_OAUTH_REDIRECT_URI;
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const oauthOperations = new McpOAuthOperationGate();
 
@@ -67,6 +74,7 @@ class McpOAuthProvider implements OAuthClientProvider {
     private readonly requestIsCurrent: () => boolean = () => true,
     private readonly transaction?: McpOAuthSessionTransaction,
     private readonly observeTokens?: (tokens: OAuthTokens) => void,
+    private readonly oauthClientName: string = mcpOAuthClientMetadata().client_name,
   ) {}
 
   private async boundSession() {
@@ -109,13 +117,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   get clientMetadata(): OAuthClientMetadata {
-    return {
-      client_name: "Aiden Agent",
-      redirect_uris: [OAUTH_REDIRECT_URI],
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      token_endpoint_auth_method: "none",
-    };
+    return mcpOAuthClientMetadata(this.oauthClientName) as OAuthClientMetadata;
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
@@ -175,7 +177,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (!("signal" in this.generation)) {
       throw new Error(
-        "This MCP server needs sign-in. Open Settings → MCP and click Authorize.",
+        "This MCP server needs sign-in. Open Settings → Plugins and click Authorize.",
       );
     }
     this.assertCanMutate();
@@ -207,17 +209,17 @@ class McpOAuthProvider implements OAuthClientProvider {
 export function makeOAuthTransport(
   server: McpServer,
   provider: OAuthClientProvider,
+  signal?: AbortSignal,
 ): StreamableHTTPClientTransport | SSEClientTransport {
   assertMcpPresetServer(server);
   if (!server.url) throw new Error("This MCP server needs a URL.");
-  const url = new URL(server.url);
-  const requestInit = server.headers ? { headers: server.headers } : undefined;
-  if (server.transport === "sse") {
-    return new SSEClientTransport(url, { authProvider: provider, requestInit });
-  }
-  return new StreamableHTTPClientTransport(url, {
+  if (server.transport === "stdio") throw new Error("OAuth requires a remote MCP server.");
+  return createMcpRemoteTransport({
+    transport: server.transport,
+    serviceUrl: server.url,
+    serviceHeaders: server.headers,
+    signal,
     authProvider: provider,
-    requestInit,
   });
 }
 
@@ -235,6 +237,7 @@ export function oauthProviderFor(
     isCurrent,
     undefined,
     observeTokens,
+    mcpOAuthClientNameForServer(server),
   );
 }
 
@@ -432,6 +435,8 @@ export async function authorizeMcpServer(
     operation,
     isCurrent,
     transaction,
+    undefined,
+    mcpOAuthClientNameForServer(server),
   );
   let loopback: Loopback | null = null;
   let commitAttempted = false;
@@ -441,7 +446,11 @@ export async function authorizeMcpServer(
     // while the SDK mutates a private replacement buffer. A renderer reload,
     // failed provider, or process crash before final verification cannot erase
     // credentials that were still valid when the user started.
-    const transport = makeOAuthTransport(server, provider);
+    const transportSignal = AbortSignal.any([
+      operation.signal,
+      ...(ownerSignal ? [ownerSignal] : []),
+    ]);
+    const transport = makeOAuthTransport(server, provider, transportSignal);
     const client = new Client(
       { name: "aiden-agent", version: "0.27.0" },
       { capabilities: {} },
@@ -466,17 +475,21 @@ export async function authorizeMcpServer(
       // Expected: connect() triggered redirectToAuthorization (browser opened).
     }
 
-    const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
-      operation.signal,
-      ownerSignal,
-    ]);
-    await raceMcpOAuthCancellation(transport.finishAuth(code), [
-      operation.signal,
-      ownerSignal,
-    ]);
+    try {
+      const code = await raceMcpOAuthCancellation(loopback.waitForCode(), [
+        operation.signal,
+        ownerSignal,
+      ]);
+      await raceMcpOAuthCancellation(transport.finishAuth(code), [
+        operation.signal,
+        ownerSignal,
+      ]);
+    } finally {
+      await transport.close().catch(() => {});
+    }
 
     // Verify the freshly minted tokens actually authorize a connection.
-    const verifyTransport = makeOAuthTransport(server, provider);
+    const verifyTransport = makeOAuthTransport(server, provider, transportSignal);
     const verifyClient = new Client(
       { name: "aiden-agent", version: "0.27.0" },
       { capabilities: {} },
@@ -524,7 +537,7 @@ export async function authorizeMcpServer(
       "mcp-oauth",
       `Authorization failed for "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
     );
-    throw error;
+    throw explainMcpOAuthFailure(error);
   } finally {
     loopback?.close();
     oauthOperations.end(operation);

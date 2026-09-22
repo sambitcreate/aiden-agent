@@ -15,8 +15,11 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { constants as fsConstants } from "node:fs";
+import { isMap, isScalar, parseDocument } from "yaml";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
+import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -25,32 +28,48 @@ interface Frontmatter {
 }
 
 /**
- * Parse a minimal `key: value` YAML frontmatter block delimited by `---`.
- * Only the flat scalar keys we care about (name, description) are read; the rest
- * of the document is returned as the body (the skill instructions).
+ * Read only top-level string metadata from YAML's syntax tree. Never convert
+ * the document to JS: unrelated metadata and aliases must not be expanded or
+ * allowed to overwrite the skill's identity. Invalid files are skipped alone.
  */
-function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } {
+function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
   const raw = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input; // strip BOM if present
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) return { frontmatter: {}, body: raw.trim() };
-  const [, block, body] = match;
-  const frontmatter: Frontmatter = {};
-  for (const line of block.split(/\r?\n/)) {
-    const idx = line.indexOf(":");
-    if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim().toLowerCase();
-    let value = line.slice(idx + 1).trim();
-    // Strip surrounding quotes if present.
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
+  const opening = raw.match(/^---[\t ]*\r?\n/);
+  if (!opening) return { frontmatter: {}, body: raw.trim() };
+  const remaining = raw.slice(opening[0].length);
+  const closing = /^---[\t ]*(?:\r?\n|$)/m.exec(remaining);
+  if (!closing) return null;
+  const body = remaining.slice(closing.index + closing[0].length).trim();
+  try {
+    const document = parseDocument(remaining.slice(0, closing.index), {
+      schema: "core",
+      version: "1.2",
+      prettyErrors: false,
+      uniqueKeys: true,
+    });
+    if (document.errors.length || document.warnings.length) return null;
+    if (document.contents === null) return { frontmatter: {}, body };
+    if (!isMap(document.contents)) return null;
+    // uniqueKeys compares scalar keys but does not resolve alias-equivalent
+    // keys. Require literal string keys so lookup cannot hide an ambiguous
+    // identity. Unrelated alias values remain untouched and unexpanded.
+    for (const { key } of document.contents.items) {
+      if (!isScalar(key) || typeof key.value !== "string") return null;
     }
-    if (key === "name") frontmatter.name = value;
-    else if (key === "description") frontmatter.description = value;
+    const frontmatter: Frontmatter = {};
+    for (const key of ["name", "description"] as const) {
+      if (!document.contents.has(key)) continue;
+      const node: unknown = document.contents.get(key, true);
+      if (!isScalar(node) || typeof node.value !== "string") return null;
+      // Catalog metadata is single-line safe display text. Keep instruction
+      // bytes intact, and leave other control characters for registry rejection.
+      frontmatter[key] =
+        key === "description" ? node.value.replace(/[\r\n\t]+/g, " ").trim() : node.value;
+    }
+    return { frontmatter, body };
+  } catch {
+    return null;
   }
-  return { frontmatter, body: body.trim() };
 }
 
 interface ScanConfig {
@@ -310,7 +329,9 @@ async function scanPatterns(
         continue;
       }
 
-      const { frontmatter, body } = parseSkillMd(raw);
+      const parsed = parseSkillMd(raw);
+      if (!parsed) continue;
+      const { frontmatter, body } = parsed;
       const entryName = path.basename(path.dirname(skillMd));
       const name = (frontmatter.name || entryName).trim();
       const instructions = body || frontmatter.description || "";
@@ -419,7 +440,15 @@ async function scanAllSkillCandidates(
     }
     return results.flat();
   } catch (error) {
-    console.warn("Skill discovery failed:", error instanceof Error ? error.message : String(error));
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "skills",
+      event: "skills-discovery-failed",
+      outcome: "degraded",
+      code: projected.code,
+      fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+    });
     return [];
   }
 }

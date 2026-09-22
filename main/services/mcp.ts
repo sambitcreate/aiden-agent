@@ -4,15 +4,14 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { logger } from "../platform.js";
+import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
+import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import {
   assertMcpPresetServer,
-  createNoRedirectFetch,
   presetSecretId,
 } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
@@ -48,8 +47,11 @@ import {
 import type {
   SubagentMcpClientPort,
   SubagentMcpReadHost,
+  SubagentMcpRemoteTool,
 } from "./subagents/subagent-mcp-read.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
+import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
+import { MAX_MCP_RESPONSE_BYTES } from "./mcp-fetch-policy.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -77,11 +79,14 @@ async function resolveAuth(
     throw new Error("The renderer document is no longer active.");
   if (!key)
     throw new Error(
-      `${preset.name} needs an API key — add one in Settings → MCP Servers.`,
+      `${preset.name} needs an API key — add one in Settings → Plugins.`,
     );
   return {
     ...server,
-    headers: { ...server.headers, [preset.auth.headerName]: key },
+    headers: {
+      ...server.headers,
+      [preset.auth.headerName]: mcpApiKeyHeaderValue(key, preset.auth.headerValuePrefix),
+    },
   };
 }
 
@@ -90,6 +95,7 @@ function makeTransport(
   isCurrent: () => boolean = () => true,
   options: {
     forceNoRedirect?: boolean;
+    onTerminalFailure?: () => void;
     registerCredentialRedactor?: (
       redactor: SubagentMcpCredentialRedactor,
     ) => void;
@@ -100,6 +106,7 @@ function makeTransport(
       throw new Error("This MCP server needs a command to run.");
     return new StdioClientTransport({
       command: server.command,
+      maxBufferSize: MAX_MCP_RESPONSE_BYTES,
       args: server.args ?? [],
       env: {
         ...(process.env as Record<string, string>),
@@ -108,14 +115,10 @@ function makeTransport(
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
-  const preset = assertMcpPresetServer(server);
-  const url = new URL(server.url);
-  const requestInit = server.headers ? { headers: server.headers } : undefined;
+  assertMcpPresetServer(server);
   const guardedFetch = options.forceNoRedirect
     ? createBoundedSubagentMcpFetch()
-    : preset?.auth.kind === "apiKey"
-      ? createNoRedirectFetch()
-      : undefined;
+    : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const observeOAuthTokens = options.registerCredentialRedactor
@@ -128,17 +131,14 @@ function makeTransport(
         ),
       )
     : undefined;
-  if (server.transport === "sse") {
-    return new SSEClientTransport(url, {
-      requestInit,
-      authProvider,
-      fetch: guardedFetch,
-    });
-  }
-  return new StreamableHTTPClientTransport(url, {
-    requestInit,
+  return createMcpRemoteTransport({
+    transport: server.transport,
+    serviceUrl: server.url,
+    serviceHeaders: server.headers,
+    isCurrent,
     authProvider,
     fetch: guardedFetch,
+    onTerminalFailure: options.onTerminalFailure,
   });
 }
 
@@ -207,6 +207,61 @@ export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
   },
 );
 
+function botMcpRequestOptions(signal: AbortSignal) {
+  return { signal, timeout: 10_000, maxTotalTimeout: 10_000 };
+}
+
+/**
+ * Fresh metadata inspection through the same transports and authentication as
+ * ordinary Aiden MCP. Unlike subagent discovery this intentionally supports
+ * stdio and does not apply subagent authority limits or cache entries.
+ */
+export async function inspectConfiguredMcpToolsForBotCatalog(
+  server: McpServer,
+  signal: AbortSignal,
+): Promise<readonly SubagentMcpRemoteTool[]> {
+  const lease = mcpConfigurationLeases.acquire(server.id);
+  const operationSignal = AbortSignal.any([signal, lease.signal]);
+  const isCurrent = () => {
+    lease.assertCurrent();
+    if (operationSignal.aborted) throw subagentMcpAbortReason(operationSignal);
+    return true;
+  };
+  return withConfiguredMcp(
+    server.id,
+    mcpRuntimeConnectionSnapshot(server),
+    async () => {
+      const client = new Client(
+        { name: "aiden-bot-mcp-catalog", version: "1.0.0" },
+        { capabilities: {} },
+      );
+      try {
+        await client.connect(
+          makeTransport(await resolveAuth(server, isCurrent), isCurrent) as never,
+          botMcpRequestOptions(operationSignal),
+        );
+        isCurrent();
+        const { tools } = await client.listTools(
+          undefined,
+          botMcpRequestOptions(operationSignal),
+        );
+        isCurrent();
+        return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
+          name,
+          ...(description === undefined ? {} : { description }),
+          ...(inputSchema === undefined ? {} : { inputSchema }),
+          ...(outputSchema === undefined ? {} : { outputSchema }),
+          ...(annotations === undefined ? {} : { annotations }),
+          ...(execution === undefined ? {} : { execution }),
+        }));
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    },
+    isCurrent,
+  );
+}
+
 class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();
   private readonly statusClients =
@@ -223,12 +278,16 @@ class McpManager {
           { name: "aiden-agent", version: "1.0.0" },
           { capabilities: {} },
         ),
-      async (client, connectionIsCurrent) => {
+      async (client, connectionIsCurrent, onClosed) => {
+        // Register before connect: closure during initialization must also
+        // prevent a dead client from being published to the cache.
+        client.onclose = onClosed;
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
           makeTransport(
             await resolveAuth(server, connectionIsCurrent),
             connectionIsCurrent,
+            { onTerminalFailure: onClosed },
           ) as never,
         );
       },
@@ -374,10 +433,21 @@ export async function collectMcpAgentTools(
           }`,
         );
       }
-      logger.warn(
-        "mcp",
-        `Skipping MCP server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const projected = projectDiagnosticError(error);
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "mcp",
+        event: "mcp-degraded",
+        outcome: projected.code === "cancelled" ? "cancelled" : "degraded",
+        code: projected.code,
+        fields: {
+          errorType: projected.errorType,
+          ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
+          ...(projected.causeCode ? { causeCode: projected.causeCode } : {}),
+          ...(projected.httpStatus === undefined ? {} : { httpStatus: projected.httpStatus }),
+          failurePhase: "mcp-tool-discovery",
+        },
+      });
     }
   }
   if (options.strict && servers.length > 0 && all.length === 0) {

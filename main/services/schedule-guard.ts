@@ -14,6 +14,7 @@ type ScheduledTaskExecutionBoundary = Pick<
   | "providerId"
   | "model"
   | "providerFingerprint"
+  | "webSearchEnabled"
 >;
 
 export const SCHEDULED_TASK_MCP_SERVER_LIMIT = 16;
@@ -95,12 +96,26 @@ export function assertAssistantScheduleExecutionBoundary(
     (task.permission === "full" && task.workspaceId === undefined && !hasMcpAccess) ||
     (hasMcpAccess && task.permission !== "full") ||
     !hasExactMcpBindings ||
-    !hasPinnedRuntime
+    !hasPinnedRuntime ||
+    task.webSearchEnabled === true
   ) {
     throw new Error(
       "Aiden-created automations must remain provider/model-pinned LLM tasks, choose either one project or exactly bound approved MCP servers, and Full access requires a project or exactly bound approved MCP server.",
     );
   }
+}
+
+/**
+ * Web Search is an explicit unattended authority dimension. Availability in
+ * global settings can never grant an old/new ordinary task, and the Assistant
+ * automation positive allowlist remains closed even if storage is malformed.
+ */
+export function scheduledTaskAllowsWebSearch(
+  task: Pick<ScheduledTask, "mode" | "executionProfile" | "webSearchEnabled">,
+): boolean {
+  return (
+    task.mode === "llm" && task.executionProfile === undefined && task.webSearchEnabled === true
+  );
 }
 
 export function scheduledTaskGenerationMode(

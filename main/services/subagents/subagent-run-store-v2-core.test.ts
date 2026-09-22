@@ -276,6 +276,51 @@ test("strict V2 store persists a native authority manifest and monotonic lifecyc
   );
 });
 
+test("V2 store preserves projection provenance until terminal additions", async () => {
+  const state = stateWith(database());
+  const store = createSubagentRunStoreV2(async () => "/private/v2", {
+    storageFactory: () => storage(state),
+  });
+  await store.initialize();
+  const running = snapshot({
+    state: "running",
+    projectionNotices: ["task_truncated"],
+  });
+  await store.upsert(running, manifest());
+
+  await assert.rejects(
+    store.upsert(
+      snapshot({ ...running, revision: 2, updatedAt: 20, projectionNotices: undefined }),
+      manifest(),
+    ),
+    /lifecycle cannot move backward/u,
+  );
+  await assert.rejects(
+    store.upsert(
+      snapshot({
+        ...running,
+        revision: 2,
+        updatedAt: 20,
+        projectionNotices: ["task_truncated", "display_filtered"],
+      }),
+      manifest(),
+    ),
+    /lifecycle cannot move backward/u,
+  );
+
+  const completed = snapshot({
+    ...running,
+    revision: 2,
+    state: "completed",
+    updatedAt: 21,
+    finishedAt: 21,
+    terminalMarkdown: "Done.\n\n... [report truncated]",
+    projectionNotices: ["task_truncated", "report_truncated", "display_filtered"],
+  });
+  await store.upsert(completed, manifest());
+  assert.deepEqual((await store.get(running.runId))?.projectionNotices, completed.projectionNotices);
+});
+
 test("run reservations reject an over-cap batch before any queued snapshot is written", async () => {
   const state = stateWith(database());
   const store = createSubagentRunStoreV2(async () => "/private/v2", {

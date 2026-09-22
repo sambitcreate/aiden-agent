@@ -13,11 +13,13 @@ const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 const featureAssetPaths = [
   "aiden-workspace.png",
-  "features/aiden-assistant.png",
+  "features/gemini-live.png",
+  "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
   "features/create-images.png",
+  "features/browser.png",
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
@@ -32,19 +34,23 @@ const featureAssetPaths = [
   "features/themes-accessibility.png",
   "features/thinking-controls.png",
   "features/telegram-remote-control.png",
+  "features/aiden-on-the-go.png",
   "features/usage-profile.png",
   "features/voice-dictation.png",
   "features/web-search.png",
   "features/workspaces-worktrees.png",
 ] as const;
-const providerPresentation = source.slice(
-  source.indexOf("const providerChoices"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
-const featurePresentation = source.slice(
-  source.indexOf("const featureBentos"),
-  source.indexOf("function builtinProviderSetupLabel"),
-);
+
+function sourceSection(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0, `Missing source section start: ${startMarker}`);
+  assert.ok(end > start, `Missing source section end: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+const providerPresentation = sourceSection("const providerChoices", "type FeatureGroupId");
+const featurePresentation = sourceSection("const featureBentos", "const FEATURE_LAYOUTS");
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
@@ -177,16 +183,16 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
     source,
     /data-onboarding-footer[\s\S]*?className="[^"]*shrink-0[^"]*border-t[^"]*"/u,
   );
-  assert.match(source, /h-\[min\(600px,calc\(100vh-32px\)\)\]/u);
+  assert.match(source, /h-\[min\(600px,calc\(100vh-60px\)\)\]/u);
   assert.match(source, /ref=\{scrollContainerRef\}[\s\S]*?data-onboarding-scroll/u);
   assert.match(
     source,
-    /scrollContainerRef\.current\?\.scrollTo\(\{ top: 0, behavior: "auto" \}\);[\s\S]*?\}, \[index\]\);/u,
+    /scrollContainerRef\.current\?\.scrollTo\(\{ top: 0, behavior: "auto" \}\);[\s\S]*?\}, \[index, open\]\);/u,
   );
 });
 
-test("provider setup progressively reveals the complete live Pi catalog", () => {
-  assert.match(source, />\s*Choose from more\s*</u);
+test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
+  assert.match(source, />\s*Other ways\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
   assert.match(source, /data-onboarding-more-providers/u);
@@ -195,21 +201,96 @@ test("provider setup progressively reveals the complete live Pi catalog", () => 
   assert.match(source, /providers\.isError/u);
   assert.match(source, /providers\.refetch\(\)/u);
   assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
+  assert.match(source, /canConfigureOnboardingBuiltinProvider\(provider\)/u);
+  assert.match(source, /onboardingBuiltinProviderSetupLabel\(provider\)/u);
+  assert.match(
+    source,
+    /if \(!isOnboardingBuiltinProviderReady\(provider\)\)[\s\S]*?setSettingUpProvider\(provider\)/u,
+  );
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
-  assert.match(source, /provider\.id === "openai-codex"[\s\S]*?provider\.isBuiltin === true/u);
-  assert.match(source, /setSettingUpProvider\(chatGptProvider\)/u);
+  assert.match(source, /<CodexProviderSettings/u);
+  assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
+  assert.match(source, /useCodexProviderStatus\(\)/u);
+  assert.match(source, /persistModelSelection\("openai-codex", model\)/u);
+  assert.doesNotMatch(source, /chatGptProvider/u);
   assert.doesNotMatch(source, /providersApi\.authStart/u);
 });
 
-test("onboarding traps focus and locks navigation during durable writes", () => {
+test("Tailscale model setup advertises its supported HTTP transport", () => {
+  assert.match(source, /http:\/\/model\.tailnet\.ts\.net:11434\/v1/u);
+});
+
+test("onboarding is an application modal with an explicit provider deferral", () => {
   assert.match(source, /<DialogPrimitive\.Root open>/u);
-  assert.match(source, /<DialogPrimitive\.Content/u);
+  assert.match(source, /const \[open, setOpen\] = React\.useState\(true\)/u);
+  assert.match(source, /data-onboarding-active="true"/u);
+  assert.match(source, /<DialogPrimitive\.Content[\s\S]*?data-slot="dialog-content"/u);
   assert.match(source, /onEscapeKeyDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
   assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
-  assert.match(source, /variant="transparent"[\s\S]*?disabled=\{saving\}[\s\S]*?>\s*Skip/u);
-  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 6);
+  assert.match(source, /Profile and provider setup required/u);
+  assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
+  assert.match(source, />\s*Skip provider\s*</u);
+  assert.match(source, /setProviderSkipped\(true\)/u);
+  assert.match(source, /providerSkipped \|\| !selectedProviderId \? "deferred" : "completed"/u);
+  assert.match(source, /Provider setup skipped/u);
+  assert.doesNotMatch(source, />\s*Set up later\s*</u);
+  assert.match(source, /setOpen\(shouldOpenOnboarding\(snapshot\.outcome\)\)/u);
+  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
+});
+
+test("pre-workspace Web Search disclosure is default-aware, explicit, and request-free", () => {
+  assert.match(source, /data-onboarding-web-search/u);
+  assert.match(source, /const webSearch = useWebSearch\(\)/u);
+  assert.match(source, /const next = await webSearchApi\.setEnabled\(enabled\)/u);
+  assert.match(source, /queryClient\.setQueryData\(queryKeys\.webSearch, next\)/u);
+  assert.match(
+    source,
+    /Fresh profiles start with Web Search on; anonymous Exa is the initial\s+recipient/u,
+  );
+  assert.match(
+    source,
+    /send\s+that query and your network\s+address to Exa only when the model\s+invokes search/u,
+  );
+  assert.match(source, /This screen makes no\s+network\s+request/u);
+  assert.match(source, /Existing opt-outs and routes stay unchanged/u);
+  assert.match(
+    source,
+    /disabled=\{!webSearch\.data \|\| webSearch\.isFetching \|\| webSearchSaving\}/u,
+  );
+  assert.match(source, /aria-label="Allow Web Search in attended chats"/u);
+  assert.match(source, /aria-describedby="onboarding-web-search-description"/u);
+  assert.match(source, /motion-reduce:transition-none/u);
+  assert.doesNotMatch(source, /exaApi\.(setEnabled|setKey)/u);
+  assert.doesNotMatch(source, /setWebSearchEnabled\(true\)/u);
+});
+
+test("hosted keys validate before selection and endpoint routes require discovered models", () => {
+  const hostedKeyFlow = source.slice(
+    source.indexOf("const validateHostedApiKey"),
+    source.indexOf("const skipProvider"),
+  );
+  const validate = hostedKeyFlow.indexOf("providersApi.validateOnboardingApiKey");
+  const publish = hostedKeyFlow.indexOf("queryClient.setQueryData<Provider[]>", validate);
+  const select = hostedKeyFlow.indexOf("persistModelSelection(saved.id", validate);
+  assert.ok(validate >= 0 && validate < publish && publish < select);
+  const providerStep = source.slice(
+    source.indexOf('if (step === "provider")'),
+    source.indexOf("  return (", source.indexOf('if (step === "provider")')),
+  );
+  assert.match(
+    providerStep,
+    /needsEndpointDiscovery = isLocalRuntime \|\| choice === "tailscale"/u,
+  );
+  assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
+  assert.match(
+    source,
+    /title=\{`Connect \$\{apiKeyDialogChoice === "openai-key" \? "OpenAI" : "Anthropic"\}`\}/u,
+  );
+  assert.match(source, /confirmLabel=\{discovering \? "Validating…" : "Validate & continue"\}/u);
+  assert.match(source, /type="password"[\s\S]*?Paste your API key/u);
+  assert.doesNotMatch(source, /<Text variant="small-strong">API key<\/Text>/u);
 });
 
 test("onboarding presentation stays compact and free of decorative gradients", () => {
@@ -219,9 +300,14 @@ test("onboarding presentation stays compact and free of decorative gradients", (
     providerPresentation,
     /The key stays on this Mac and can be rotated later in Settings\./u,
   );
+  assert.match(source, /shadow-onboarding/u);
+  assert.match(source, /px-4 pb-4 pt-11/u);
+  assert.doesNotMatch(source, /max-\[760px\]:rounded-none|max-\[760px\]:shadow-none/u);
+  assert.match(source, /border-transparent bg-input[\s\S]*?focus:border-transparent/u);
 });
 
-test("the final step is a complete grouped bento gallery with hover and keyboard descriptions", () => {
+test("the final step is a complete grouped bento gallery with hover descriptions", () => {
+  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
@@ -234,13 +320,19 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+  );
+  assert.match(
+    source,
+    /Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline\./u,
   );
   assert.match(
     featurePresentation,
-    /compare, annotate, and reuse visual workflows in a local image workspace/u,
+    /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
-  assert.match(source, /tabIndex=\{0\}/u);
+  assert.doesNotMatch(featurePresentation, /choose to connect it/u);
+  assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
+  assert.match(source, /Phone and tablet access starts off[\s\S]*?Settings →\s*Aiden On The Go/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
@@ -265,7 +357,8 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Web Search",
     "Reusable Skills",
     "MCP Connectors",
-    "Aiden Assistant",
+    "Aiden Live",
+    "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
     "Command Palette",
@@ -273,17 +366,38 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Permissioned by Default",
     "Themes & Accessibility",
     "Aiden in Telegram",
+    "Aiden On The Go",
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 24);
+  assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
+  assert.match(featurePresentation, /workspace agent show raster images inline/u);
+  assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
+  assert.match(
+    featurePresentation,
+    /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
+  );
+  assert.match(
+    featurePresentation,
+    /benchmark-only OpenRouter key never imports its model catalog/u,
+  );
+  assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
+  assert.match(featurePresentation, /ordinary browsing stays offline/u);
+  assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
+  assert.match(featurePresentation, /explicitly connect cloud transcription/u);
+  assert.match(featurePresentation, /Browser & Annotations/u);
+  assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
+  assert.match(featurePresentation, /Incognito is temporary/u);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 27);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 24);
+  assert.equal(featureAssetPaths.length, 27);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
+  assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
+  assert.ok(featureAssetPaths.includes("features/bots.png"));
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(
@@ -303,4 +417,17 @@ test("every advertised feature has its own one-megapixel PNG with alpha", () => 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
+});
+
+test("primary AI choices include custom setup without opening advanced providers", () => {
+  assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
+  for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
+    assert.ok(source.includes(`title: "${title}"`));
+  }
+  assert.match(source, /<ProviderEditor[\s\S]*?layer="onboarding"[\s\S]*?requireReady/u);
+  const editor = readFileSync(new URL("./settings/provider-editor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /requireReady &&/u);
+  assert.match(editor, /models.length === 0/u);
+  assert.match(editor, /defaultModelIsHidden/u);
+  assert.match(editor, /await onSaved\(\)/u);
 });

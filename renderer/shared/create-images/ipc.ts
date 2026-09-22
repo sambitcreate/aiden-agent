@@ -604,11 +604,13 @@ export type CreateImagesRunSubscriptionResult =
   | { status: "not-found" }
   | { status: "unavailable"; message: string; retryAfterMs?: number };
 
-export interface CreateImagesRunChangedNotification {
+export type CreateImagesRunChangedNotification = {
   subscriptionId: string;
   streamSequence: number;
-  snapshot: CreateImagesRunListResult;
-}
+} & (
+  | { snapshot: CreateImagesRunListResult; activeRun?: never }
+  | { activeRun: CreateImagesRunView; snapshot?: never }
+);
 
 export interface CreateImagesGetWorkflowRequest {
   workflowId: string;

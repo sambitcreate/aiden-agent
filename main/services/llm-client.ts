@@ -1,3 +1,6 @@
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
@@ -10,18 +13,77 @@
 
 import {
   convertToLlm,
+  DEFAULT_COMPACTION_SETTINGS,
   type AgentHarnessResources,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
-import { buildAgentTools } from "./tools.js";
-import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
+import { buildAgentTools, buildSchedulingTools } from "./tools.js";
+import {
+  BROWSER_AGENT_GUIDANCE,
+  BROWSER_MUTATION_TOOL_NAMES,
+  browserToolApprovalSummary,
+  browserLocalFileRequest,
+  createBrowserAgentTools,
+  canUseBrowserTools,
+  isBrowserToolName,
+} from "./browser-tools.js";
+import { prepareBrowserToolApproval, assertBrowserToolApproval, type BrowserToolApproval } from "./browser/approval.js";
+import type { PreparedBrowserFile } from "./browser/files.js";
+import { createBrowserDiscovery } from "./browser-discovery.js";
+import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import { webSearchService } from "./web-search-main.js";
+import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
+import {
+  APPROVAL_TOOL_NAMES,
+  DISCLOSURE_APPROVAL_TOOL_NAMES,
+  buildPinnedCodingTools,
+  summarizeToolCall,
+} from "./coding-tools.js";
+import {
+  BOT_FILE_TOOL_NAMES,
+  buildBotFileTools,
+  type BotFileToolLocation,
+} from "./bot-file-tool-router.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
-import { secrets } from "./secrets.js";
 import { chatStore } from "./chat-store.js";
+import { botStore } from "./bot-store.js";
+import {
+  resolveBotForGeneration,
+  withBotRuntimeInstructions,
+  type BotWorkspacePromptAuthority,
+} from "./bot-system-prompt.js";
+import {
+  assertExactBotProviderDispatch,
+  prepareBotGeneration,
+  type PreparedBotGeneration,
+} from "./bot-generation-preparation.js";
+import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
+import {
+  botRuntimeAuthority,
+  BOT_DESKTOP_AUDIENCE_ID,
+  resolveBotRuntimeCatalogSnapshot,
+  resolveBotRuntimeApprovedRoots,
+  type BotRuntimeApprovedRoot,
+} from "./bot-runtime-authority-main.js";
+import type { BotRuntimeAuthorityAdmission } from "./bot-runtime-authority.js";
+import {
+  botManagedWorkspace,
+  resolveBotRuntimeMcpConnectionIdentities,
+  resolveBotRuntimeSkills,
+} from "./bot-capability-services-main.js";
+import {
+  exactBotMcpToolNames,
+  exactBotSkillToolNames,
+  filterExactBotSubagentMcpInventory,
+  filterBotSkillSnapshot,
+  protectAdmittedBotTool,
+} from "./bot-tool-authority.js";
+import { mcpAgentToolName } from "./mcp-tool-identity.js";
+import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
 import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
@@ -35,7 +97,13 @@ import {
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
-import { resolveModelRuntime } from "./model-runtime.js";
+import {
+  preflightBotModelAuth,
+  resolveBotModelRuntime,
+  resolveModelRuntime,
+  type ResolvedModelRuntime,
+} from "./model-runtime.js";
+import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admission-core.js";
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
@@ -45,7 +113,14 @@ import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
-import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
+import type {
+  ApprovalDecision,
+  Attachment,
+  Chat,
+  ChatStartParams,
+  WorkspacePermission,
+} from "./types.js";
+import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
@@ -60,6 +135,7 @@ import {
   SCHEDULE_TOOL_NAME,
   attachAssistantScheduleMcpApproval,
   prepareAssistantEditAutomationProposal,
+  prepareStandardScheduleApproval,
   repairAssistantScheduleMcpTarget,
   resolveAssistantScheduleMcpServers,
   resolveAssistantScheduleProject,
@@ -68,26 +144,39 @@ import {
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
-import { chatMessageToPiMessage } from "./generation-messages.js";
+import { chatMessageToPiMessage, chatUserTextWithAttachments } from "./generation-messages.js";
 import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
+import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import {
   beginPiVisibleTurnLease,
   piCompactionSessionStore,
   recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
+  projectVisibleHistoryWithoutSkills,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { createInMemoryPiSession } from "./pi-session-repository-port.js";
+import type { PiSessionPort } from "./pi-session-port.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
-import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
+import { advisorRuntime } from "./advisor-runtime-main.js";
+import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
+import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
+import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
+import { generationEmergencyUserError } from "./generation-emergency-outcome.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
+import {
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
@@ -156,8 +245,10 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import {
   preparedSkillPromptForCurrentTurn,
+  formatPreparedSkillInvocation,
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { ChatDeletionGate } from "./chat-deletion-gate.js";
 import {
   authoritativeChatGenerationMode,
@@ -167,12 +258,67 @@ import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
+  type PiAgentRuntimeExtension,
 } from "./pi-agent-runtime-harness.js";
+import {
+  createMemoryExtension,
+  authorizeMemoryProposal,
+  authorizeMemoryRemoval,
+  memoryMetadataForChat,
+  memoryProvenanceForGeneration,
+  memoryScopeForChat,
+  REMEMBER_MEMORY_TOOL_NAME,
+  FORGET_MEMORY_TOOL_NAME,
+} from "./memory-context.js";
+import { memoryStore } from "./memory-store-main.js";
+import { memoryEnabledForChat } from "./memory-policy.js";
+import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
+import {
+  piUpgradeBehaviorEnabledAtStartup,
+  piUpgradeChatBehaviorEligible,
+  piUpgradeMemoryEligible,
+} from "./pi-upgrade-rollout.js";
+import { isPackagedRuntime } from "../runtime-mode.js";
+import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
+import {
+  createDisplayImageExtensionRuntime,
+  displayedAssistantImageUsage,
+  DISPLAY_IMAGE_TOOL_NAME,
+  shouldEnableDisplayImageExtension,
+} from "./display-image-extension.js";
+import {
+  CHAT_ARTIFACT_EVENT_VERSION,
+  type ChatHtmlArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
+import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
+import { displayImageArtifactStore } from "./display-image-artifact-store.js";
+import {
+  createGenerativeUiExtensionRuntime,
+  displayedAssistantHtmlUsage,
+  GENERATIVE_UI_TOOL_NAME,
+  shouldEnableGenerativeUiExtension,
+} from "./generative-ui-extension.js";
+import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import {
+  createAskUserQuestionExtension,
+  shouldEnableAskUserQuestionExtension,
+} from "./ask-user-question-extension.js";
+import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
+import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
+import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
+import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
+import { chatProgressEvents } from "./chat-progress-events.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -180,6 +326,20 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+function uniqueResponseImages(
+  sharedImages: readonly Attachment[],
+  displayedImages: readonly Attachment[],
+): Attachment[] {
+  const images = [...sharedImages];
+  for (const attachment of displayedImages) {
+    if (images.some((item) => item.id === attachment.id || item.data === attachment.data)) {
+      continue;
+    }
+    images.push(attachment);
+  }
+  return images;
+}
 
 function piResourcesForSkillSnapshot(
   snapshot: SkillRegistrySnapshot | undefined,
@@ -201,6 +361,8 @@ function piResourcesForSkillSnapshot(
 }
 
 export interface GenerationExecutionOptions {
+  /** Main-owned Telegram queue provenance, resolved freshly at generation. */
+  telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
   /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
   permission?: GenerationPermission;
   /** Scheduled and other background runs can withhold tools that would recurse or mutate. */
@@ -225,6 +387,13 @@ export interface GenerationExecutionOptions {
   onTurnAccepted?: () => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
+  /** Main-owned stable principal used for the versioned Bot Full Access notice. */
+  botAudienceId?: string;
+}
+
+interface BotGenerationAuthorityContext {
+  admission: BotRuntimeAuthorityAdmission;
+  prepared: PreparedBotGeneration<ResolvedModelRuntime>;
 }
 
 interface LoadMonitorState {
@@ -245,6 +414,7 @@ interface ActiveGeneration {
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
+  releaseBotAuthority: () => void;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -264,6 +434,7 @@ const initializing = new Map<
     computerUse?: ComputerUseController;
     loadMonitor?: LoadMonitorState;
     releaseSkillReservation: () => void;
+    releaseBotAuthority: () => void;
   }
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
@@ -290,6 +461,56 @@ function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () 
   release();
 }
 
+function releaseGenerationBotAuthority(entry: { releaseBotAuthority: () => void }): void {
+  const release = entry.releaseBotAuthority;
+  entry.releaseBotAuthority = () => {};
+  release();
+}
+
+function botWorkspacePromptAuthority(
+  context: BotGenerationAuthorityContext,
+  roots: readonly BotRuntimeApprovedRoot[],
+): BotWorkspacePromptAuthority {
+  const { files } = context.admission.authority;
+  if (files.mode === "full_mac") {
+    return { mode: "full_mac", botHome: files.botHome };
+  }
+  if (files.mode === "off") return { mode: "off", botHome: false };
+  return {
+    mode: "scoped",
+    botHome: files.botHome,
+    approvedRoots: roots.map(({ root }) => root),
+  };
+}
+
+function botHasOrdinaryCapability(
+  context: BotGenerationAuthorityContext,
+  kind: "web" | "browser" | "computer_use" | "schedules" | "subagents" | "tasks",
+): boolean {
+  return context.admission.authority.otherCapabilities.some((grant) => grant.kind === kind);
+}
+
+async function prepareBotSkillAuthority(
+  context: BotGenerationAuthorityContext,
+  snapshot: SkillRegistrySnapshot,
+  currentSkills: Parameters<typeof exactBotSkillToolNames>[1],
+): Promise<{ snapshot: SkillRegistrySnapshot; toolNames: ReadonlySet<string> }> {
+  const resolved = await resolveBotRuntimeSkills(context.admission.authority.botId);
+  const allowedToolNames = exactBotSkillToolNames(
+    context.admission.authority,
+    currentSkills,
+    resolved,
+    snapshot,
+  );
+  // Prove the captured instructions still correspond to the admitted catalog
+  // before either prompt resources or tool schemas can expose them.
+  await context.admission.revalidateBeforeEffect();
+  return {
+    snapshot: filterBotSkillSnapshot(snapshot, allowedToolNames, context.admission),
+    toolNames: allowedToolNames,
+  };
+}
+
 function broadcastChatSettled(
   streamId: string,
   chatId: string,
@@ -297,6 +518,7 @@ function broadcastChatSettled(
   fallbackWorkspaceId: string | undefined,
 ): void {
   chatActivityRegistry.settle(streamId);
+  chatProgressEvents.settle(chatId, streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
@@ -312,6 +534,13 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 }
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
+  const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
+  if (chatId && channel === "chat:todo") {
+    const snapshot = (payload as { snapshot?: import("../../renderer/shared/todo.js").TodoSnapshotViewV1 })?.snapshot;
+    if (snapshot) chatProgressEvents.durableTodo(chatId, streamId, snapshot);
+  } else if (chatId && channel === "chat:subagents") {
+    chatProgressEvents.changed(chatId);
+  }
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {
@@ -346,6 +575,11 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
     throw new Error("The generation's renderer document is no longer active.");
   }
 });
+const questionnaires = new AskUserQuestionCoordinator((prompt) => {
+  if (!sendGeneration(prompt.streamId, "chat:questionnaire", prompt)) {
+    throw new Error("The generation's renderer document is no longer active.");
+  }
+});
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.
@@ -368,15 +602,15 @@ async function buildSystemPrompt(
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
 ): Promise<string> {
-  const base =
-    "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
+  const base = PI_CHAT_SYSTEM_PROMPT;
   const skillsText =
     skillsAvailable && skillSnapshot
       ? formatAvailableSkills(skillSnapshot, availableToolNames)
       : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
+  const browserSuffix = availableToolNames?.has("browser_open") ? `\n\n${BROWSER_AGENT_GUIDANCE}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -401,7 +635,8 @@ async function buildSystemPrompt(
         ? "You may make changes and run commands directly."
         : "") +
     delegation +
-    skillsSuffix
+    skillsSuffix +
+    browserSuffix
   );
 }
 
@@ -409,32 +644,92 @@ async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
   chat: Chat,
+  botContext: BotGenerationAuthorityContext | undefined,
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
+  rendererOwner: boolean,
+  browserOwner: ChatGenerationOwner,
   options: GenerationExecutionOptions,
 ) {
-  const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
+  const sharedImages: Attachment[] = [];
+  const displayedImages: Attachment[] = [];
+  const displayedImageIds = new Set<string>();
+  const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
+  const displayedHtmlIds = new Set<string>();
+  const generationExtensions: PiAgentRuntimeExtension[] = [];
+  const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
+  const shareImage = (attachment: Attachment) => {
+    const existing = responseImages();
+    if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      throw new Error("This response already contains the maximum number of images.");
+    }
+    if (existing.some((item) => item.id === attachment.id || item.data === attachment.data)) {
+      return;
+    }
+    const nextBytes = existing.reduce((sum, item) => sum + item.size, 0) + attachment.size;
+    if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+      throw new Error("The images shared in this response exceed the 16 MB limit.");
+    }
+    sharedImages.push(attachment);
+  };
+  const runtime =
+    botContext?.prepared.runtime ??
+    (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
+  const botBound = botContext !== undefined;
+  const botApprovedRoots = botContext
+    ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
+    : [];
+  const botRuntimeCatalog = botContext
+    ? await resolveBotRuntimeCatalogSnapshot(botContext.admission.authority, signal)
+    : undefined;
   const attendedAssistant = params.mode === "assistant";
   const assistantPersonaMode =
     params.mode === "assistant" || params.mode === "assistant-unattended";
   const assistantAutomationMode = params.mode === "assistant-automation";
   const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  if (
+    shouldEnableAskUserQuestionExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      botBound,
+      rendererOwner,
+      excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+    })
+  ) {
+    generationExtensions.push(
+      createAskUserQuestionExtension({
+        request: (toolCallId, questions, requestSignal) =>
+          questionnaires.request(
+            { streamId, toolCallId, questions },
+            ownerDocumentId,
+            requestSignal,
+          ),
+      }),
+    );
+  }
   // The dock persona is never folder-scoped. Project automation mode is
   // main-only and reaches this branch only after the persisted approval profile
   // has bound the scheduled run to a workspace.
   const workspace =
-    params.workspaceId && !assistantPersonaMode
+    botContext?.prepared.workspace ??
+    (params.workspaceId && !assistantPersonaMode
       ? await configStore.getWorkspace(params.workspaceId)
-      : undefined;
-  if (workspace) await assertManagedWorktreeAdmission(workspace);
+      : undefined);
+  if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
-  const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
+  const git =
+    folderPath && (!botContext || botContext.admission.authority.files.botHome)
+      ? await gitInfo(folderPath)
+      : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
+  assertCustomModelImageLimit(runtime.provider.modelMetadata?.[model.id]?.overrides,
+    runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1));
   if (assistantAutomationMode || params.mode === "assistant-unattended") {
     assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
   }
@@ -454,7 +749,7 @@ async function prepareGeneration(
         ? settings.codexThinkingByModel?.[params.model]
         : params.providerId === ANTHROPIC_PROVIDER_ID
           ? settings.anthropicThinkingByModel?.[params.model]
-          : undefined;
+          : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -463,6 +758,7 @@ async function prepareGeneration(
   let computerUse: ComputerUseController | undefined;
   if (
     options.allowComputerUse !== false &&
+    (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
     chat.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
@@ -483,7 +779,9 @@ async function prepareGeneration(
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
-    allowSubagents: options.allowSubagents,
+    allowSubagents:
+      options.allowSubagents !== false &&
+      (!botContext || botHasOrdinaryCapability(botContext, "subagents")),
     usageSource: options.usageSource,
     excludedToolNames: options.excludeToolNames,
     workspaceId: workspace?.id,
@@ -496,22 +794,37 @@ async function prepareGeneration(
   const childWriteRollout = subagentChildWriteEnabled();
   const childShellRollout = subagentChildShellEnabled();
   const childDelegationRollout = subagentChildDelegationEnabled();
-  const subagentWriteEnabled = subagentWorkspaceWriteAllowedForGeneration({
-    subagentsAllowed: allowSubagents,
-    childWriteRollout,
-    v2StoreSelected: subagentRunStore.selection === "v2",
-    workspacePermission: workspace?.permission,
-    generationPermission: permission,
-  });
-  const subagentWebEnabled =
+  const subagentWriteEnabled =
+    subagentWorkspaceWriteAllowedForGeneration({
+      subagentsAllowed: allowSubagents,
+      childWriteRollout,
+      v2StoreSelected: subagentRunStore.selection === "v2",
+      workspacePermission: workspace?.permission,
+      generationPermission: permission,
+    }) &&
+    (!botContext || botContext.admission.authority.files.botHome);
+  const subagentWebAvailability =
     allowSubagents &&
     childWebRollout &&
-    settings.exaEnabled === true &&
-    Boolean(await secrets.getKey("exa"));
-  const subagentMcpInventory =
+    (!botContext || botHasOrdinaryCapability(botContext, "web"))
+      ? await webSearchService.availability()
+      : undefined;
+  const subagentWebEnabled = subagentWebAvailability?.ready === true;
+  const discoveredSubagentMcpInventory =
     allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
       ? await resolveProductionSubagentMcpInventory(signal)
       : [];
+  const botSubagentMcpConnectionIdentities =
+    botContext && discoveredSubagentMcpInventory.length > 0
+      ? await resolveBotRuntimeMcpConnectionIdentities(signal)
+      : [];
+  const subagentMcpInventory = botContext
+    ? filterExactBotSubagentMcpInventory(
+        botContext.admission.authority,
+        discoveredSubagentMcpInventory,
+        botSubagentMcpConnectionIdentities,
+      )
+    : discoveredSubagentMcpInventory;
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&
@@ -519,6 +832,7 @@ async function prepareGeneration(
     subagentRunStore.selection === "v2" &&
     workspace?.permission !== "none" &&
     permission !== "none" &&
+    (!botContext || botContext.admission.authority.shell.enabled) &&
     (await access(subagentShellBinary).then(
       () => true,
       () => false,
@@ -528,7 +842,12 @@ async function prepareGeneration(
     childDelegationRollout &&
     subagentRunStore.selection === "v2" &&
     workspace?.permission !== "none" &&
-    permission !== "none";
+    permission !== "none" &&
+    !botContext;
+  const subagentReadCeiling =
+    botContext && !botContext.admission.authority.files.botHome
+      ? []
+      : inheritedSubagentReadToolCeiling(options.excludeToolNames);
   let subagentProjector: SubagentEventProjector | undefined;
   const subagentPersistence =
     allowSubagents && workspace && folderPath
@@ -550,9 +869,20 @@ async function prepareGeneration(
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
           requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
-            approvals.request(descriptor, approvalSignal, approvalOwnerDocumentId),
-          currentWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-          validateWorkspace: (candidate) => assertManagedWorktreeAdmission(candidate),
+            approvals
+              .request(descriptor, approvalSignal, approvalOwnerDocumentId)
+              .then((outcome) => outcome === "allowed"),
+          currentWorkspace: async (workspaceId) =>
+            botContext && workspaceId === workspace.id
+              ? { ...workspace }
+              : configStore.getWorkspace(workspaceId),
+          validateWorkspace: async (candidate) => {
+            if (!botContext) return assertManagedWorktreeAdmission(candidate);
+            if (candidate.id !== workspace.id || candidate.folderPath !== workspace.folderPath) {
+              throw new Error("The Bot subagent workspace changed.");
+            }
+            await botManagedWorkspace.revalidate(botContext.prepared.managedWorkspace);
+          },
           workspaceOperationRegistry,
           control: subagentRunStore.selection === "v2" ? subagentControlMainV2 : undefined,
           applyControlSnapshot: (snapshot) => {
@@ -601,6 +931,7 @@ async function prepareGeneration(
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
+          compactionEngine: compactionEngineFrom(settings.compactionEngine),
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -608,7 +939,7 @@ async function prepareGeneration(
           thinkingLevel,
           workspaceRoot: folderPath,
           permission: toolPermission,
-          inheritedCeiling: inheritedSubagentReadToolCeiling(options.excludeToolNames),
+          inheritedCeiling: subagentReadCeiling,
           loadPersistedChatForFork: async (forkSignal) => {
             if (subagentRunStore.selection !== "v2") {
               throw new Error("Forked subagent context is unavailable during V1 rollback.");
@@ -637,19 +968,102 @@ async function prepareGeneration(
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
-  const skillSnapshot =
+  let skillSnapshot =
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
-  const tools = (
+  let botSkillToolNames: ReadonlySet<string> = new Set();
+  if (botContext && skillSnapshot) {
+    if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
+    const filtered = await prepareBotSkillAuthority(
+      botContext,
+      skillSnapshot,
+      botRuntimeCatalog.resources.skills,
+    );
+    skillSnapshot = filtered.snapshot;
+    botSkillToolNames = filtered.toolNames;
+  }
+  const botConnectionIds = botContext
+    ? botContext.admission.authority.connections.map(({ sourceId }) => sourceId)
+    : undefined;
+  const schedulingAllowed =
+    (!assistantMode || attendedAssistant) &&
+    !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
+    (!botContext || options.interactionSurface !== "telegram") &&
+    (!botContext || botHasOrdinaryCapability(botContext, "schedules"));
+  const botScheduleToolNames =
+    botContext && schedulingAllowed
+      ? new Set(
+          buildSchedulingTools({
+            workspaceId: workspace?.id,
+            allowScheduling: true,
+          }).map(({ name }) => name),
+        )
+      : new Set<string>();
+  const browserFileApprovals = new Map<string, PreparedBrowserFile>();
+  const browserActionApprovals = new Map<string, { approval: BrowserToolApproval; args: Record<string, unknown> }>();
+  const browserSelection: { initialized: boolean; tabId?: string } = { initialized: false };
+  const browserEligible = workspace && canUseBrowserTools({ permission, rendererOwner, assistantMode, bot: Boolean(botContext) });
+  const browserState = browserEligible ? await (await import("./browser/service.js")).browserService.getState(workspace.id) : undefined;
+  const browserEnabled = browserState && resolveBrowserAgentAccess(browserState.defaults.agentAccess, browserState.agentAccessOverride);
+  const browserTools =
+    workspace && browserEnabled
+      ? createBrowserAgentTools({
+          workspaceId: workspace.id,
+          chatId: params.chatId,
+          generationId: streamId,
+          signal,
+          supportsImages,
+          selection: browserSelection,
+          revalidate: async () => {
+            if (signal.aborted || !active.has(streamId)) throw new Error("This browser generation is no longer active.");
+            const currentWorkspace = await configStore.getWorkspace(workspace.id);
+            if (!currentWorkspace || currentWorkspace.permission === "none" || currentWorkspace.permission !== workspace.permission || currentWorkspace.folderPath !== workspace.folderPath) {
+              throw new Error("Browser workspace access changed. Start a new response.");
+            }
+          },
+          port: {
+            getState: async () => (await import("./browser/service.js")).browserService.getState(workspace.id),
+            command: async (command, browserSignal, callId) => {
+              const { browserService } = await import("./browser/service.js");
+              const approvedAction = callId ? browserActionApprovals.get(callId) : undefined;
+              const beforeEffect = approvedAction ? () => assertBrowserToolApproval(
+                approvedAction.approval, approvedAction.approval.toolName, approvedAction.args,
+                browserService.getApprovalTarget(workspace.id, approvedAction.approval.target.tabId),
+              ) : undefined;
+              beforeEffect?.();
+              return browserService.command(workspace.id, command, {
+                source: "agent", signal: browserSignal, supportsImages, beforeEffect,
+                ...(callId && browserFileApprovals.has(callId) ? { preparedFile: browserFileApprovals.get(callId)! } : {}),
+                ...(browserOwner.id !== 0 ? { owner: browserOwner } : {}),
+              });
+            },
+          },
+        })
+      : [];
+  const disclosedBrowserTools = browserTools.filter(({ name }) => !options.excludeToolNames?.has(name));
+  const browserDiscovery = disclosedBrowserTools.length ? createBrowserDiscovery(
+    disclosedBrowserTools,
+    async () => {
+      signal.throwIfAborted();
+      if (!active.has(streamId) || !workspace) throw new Error("This browser generation is no longer active.");
+      const current = await configStore.getWorkspace(workspace.id);
+      if (!current || current.permission !== workspace.permission || current.folderPath !== workspace.folderPath) throw new Error("Browser workspace access changed. Start a new response.");
+      const state = await (await import("./browser/service.js")).browserService.getState(workspace.id);
+      if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
+    },
+  ) : undefined;
+  let tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
       permission: toolPermission,
       computerUse,
-      allowScheduling:
-        (!assistantMode || attendedAssistant) && !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
-      allowMcpTools: options.allowMcpTools,
-      mcpServerIds: options.mcpServerIds,
+      browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
+      allowScheduling: schedulingAllowed,
+      allowMcpTools: botContext
+        ? options.allowMcpTools !== false && botConnectionIds!.length > 0
+        : options.allowMcpTools,
+      mcpServerIds: botContext ? botConnectionIds : options.mcpServerIds,
       mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
       mode: assistantPersonaMode
@@ -659,8 +1073,9 @@ async function prepareGeneration(
           : undefined,
       interactionSurface: options.interactionSurface,
       allowTelegramDirect:
-        !assistantMode || attendedAssistant || options.interactionSurface === "telegram",
-      assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
+        !botBound &&
+        (!assistantMode || attendedAssistant || options.interactionSurface === "telegram"),
+      assistantModelSelection: schedulingAllowed ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
             createSubagentTool(
@@ -674,14 +1089,263 @@ async function prepareGeneration(
               subagentDelegationEnabled,
             )
         : undefined,
+      shareImage: folderPath ? shareImage : undefined,
+      includeCodingTools: !botContext,
+      imageInspectionTool:
+        botContext && !supportsImages && botContext.admission.authority.visionProvider
+          ? createVisionAnalysisTool(
+              {
+                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                authority: {
+                  providerId: botContext.admission.authority.visionProvider.sourceProviderId,
+                  modelId: botContext.admission.authority.visionProvider.sourceModelId,
+                  revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+                },
+              },
+              {
+                resolveRuntime: (providerId, modelId, signal) =>
+                  resolveBotModelRuntime(providerId, modelId, signal, params.chatId),
+              },
+            )
+          : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  const botMutatingToolNames = new Set<string>();
+  if (botContext) {
+    const authority = botContext.admission.authority;
+    const fileLocations: BotFileToolLocation[] = [];
+    if (authority.files.botHome) {
+      fileLocations.push({
+        id: "builtin.bot_home.v1",
+        label: "Bot folder",
+        root: authority.workingDirectory,
+        expectedIdentity: authority.managedHome.incarnation,
+      });
+    }
+    if (authority.files.fullMac) {
+      fileLocations.push({
+        id: authority.files.fullMac.sourceId,
+        label: "Full Mac",
+        root: "/",
+      });
+    }
+    fileLocations.push(
+      ...botApprovedRoots.map(({ device, inode, ...location }) => ({
+        ...location,
+        expectedIdentity: { device, inode },
+      })),
+    );
+    if (fileLocations.length > 0) {
+      tools.push(
+        ...buildBotFileTools({
+          defaultLocation: fileLocations[0]!,
+          additionalLocations: fileLocations.slice(1),
+        }),
+      );
+    }
+    if (authority.files.botHome) {
+      tools.push(
+        createShareImageTool({
+          workspaceRoot: authority.workingDirectory,
+          expectedWorkspaceIdentity: authority.managedHome.incarnation,
+          scopeToWorkspace: true,
+          share: shareImage,
+        }),
+      );
+    }
+    if (authority.shell.enabled) {
+      const shell = buildPinnedCodingTools(authority.workingDirectory).find(
+        ({ name }) => name === "run_command",
+      );
+      if (!shell) throw new Error("The Bot shell tool is unavailable.");
+      tools.push(shell);
+    }
+    const configuredServers = await configStore.listMcpServers();
+    if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
+    const mcpToolNames = exactBotMcpToolNames(
+      authority,
+      botRuntimeCatalog.resources.connections,
+      (connectionSourceId, toolName) => {
+        const server = configuredServers.find(({ id }) => id === connectionSourceId);
+        if (!server) throw new Error("A selected Bot connection is no longer configured.");
+        return mcpAgentToolName(server, toolName);
+      },
+    );
+    for (const [modelToolName, grant] of mcpToolNames) {
+      if (grant.effect === "mutating") botMutatingToolNames.add(modelToolName);
+    }
+    const webAllowed = botHasOrdinaryCapability(botContext, "web");
+    const computerAllowed = botHasOrdinaryCapability(botContext, "computer_use");
+    const subagentsAllowed = botHasOrdinaryCapability(botContext, "subagents");
+    tools = tools.flatMap((tool) => {
+      const allowed = botSkillToolNames.has(tool.name)
+        ? true
+        : tool.name === INSPECT_IMAGE_TOOL_NAME
+          ? !supportsImages && Boolean(authority.visionProvider)
+          : mcpToolNames.has(tool.name)
+            ? true
+            : tool.name === "web_search"
+              ? webAllowed
+              : tool.name === COMPUTER_USE_TOOL_NAME
+                ? computerAllowed
+                : tool.name === "subagent"
+                  ? subagentsAllowed
+                  : BOT_FILE_TOOL_NAMES.includes(tool.name as (typeof BOT_FILE_TOOL_NAMES)[number])
+                    ? fileLocations.length > 0
+                    : tool.name === "run_command"
+                      ? authority.shell.enabled
+                      : tool.name === SHARE_IMAGE_TOOL_NAME
+                        ? authority.files.botHome
+                        : botScheduleToolNames.has(tool.name);
+      return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
+    });
+  }
+  if (
+    !botContext &&
+    shouldEnableDisplayImageExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+    })
+  ) {
+    const artifactStoreAvailability = displayImageArtifactStore.availability();
+    if (!artifactStoreAvailability.available) {
+      throw new Error(
+        `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
+      );
+    }
+    const existingUsage = displayedAssistantImageUsage(chat.messages);
+    const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
+    if (pendingUsage.count > 0) {
+      throw new Error(
+        "A previous image response could not be recovered. Delete this chat to discard it before continuing.",
+      );
+    }
+    const displayImageRuntime = createDisplayImageExtensionRuntime({
+      workspaceRoot: folderPath!,
+      artifactNamespace: streamId,
+      existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
+      existingChatImageCount: existingUsage.count + pendingUsage.count,
+      existingChatImagePixels: existingUsage.pixels + pendingUsage.pixels,
+      onArtifact: async (artifact, dimensions) => {
+        const existing = responseImages();
+        if (
+          existing.some(
+            (item) => item.id === artifact.attachment.id || item.data === artifact.attachment.data,
+          )
+        ) {
+          return false;
+        }
+        if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+          throw new Error("This response already contains the maximum number of images.");
+        }
+        const nextBytes =
+          existing.reduce((sum, item) => sum + item.size, 0) + artifact.attachment.size;
+        if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+          throw new Error("The images shared in this response exceed the 16 MB limit.");
+        }
+        await displayImageArtifactStore.stage({
+          chatId: params.chatId,
+          generationId: streamId,
+          model: params.model,
+          artifact,
+          pixels: dimensions.width * dimensions.height,
+        });
+        if (displayedImageIds.has(artifact.attachment.id)) return false;
+        displayedImageIds.add(artifact.attachment.id);
+        displayedImages.push(artifact.attachment);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: {
+            version: CHAT_ARTIFACT_EVENT_VERSION,
+            operation: "present",
+            artifact,
+          },
+        });
+        return true;
+      },
+    });
+    generationExtensions.push(displayImageRuntime.extension);
+  }
+  if (
+    !botContext &&
+    shouldEnableGenerativeUiExtension({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      workspaceRoot: folderPath,
+      permission,
+      excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+    })
+  ) {
+    const htmlStoreAvailability = generativeUiArtifactStore.availability();
+    if (!htmlStoreAvailability.available) {
+      throw new Error(
+        `${htmlStoreAvailability.reason} Open Aiden's developer log to locate the staging file that needs repair.`,
+      );
+    }
+    const existingHtmlUsage = displayedAssistantHtmlUsage(chat.messages);
+    const pendingHtmlUsage = await generativeUiArtifactStore.usageByChat(params.chatId);
+    if (pendingHtmlUsage.count > 0) {
+      await generativeUiArtifactStore.reconcilePersisted({
+        id: params.chatId,
+        messages: chat.messages,
+      });
+    }
+    const pendingHtmlAfterReconcile = await generativeUiArtifactStore.usageByChat(params.chatId);
+    if (pendingHtmlAfterReconcile.count > 0) {
+      throw new Error(
+        "A previous visual artifact could not be recovered. Delete this chat to discard it before continuing.",
+      );
+    }
+    const visualize = params.visualize === true;
+    const generativeUiRuntime = createGenerativeUiExtensionRuntime({
+      workspaceRoot: folderPath!,
+      artifactNamespace: `${streamId}:html`,
+      existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
+      existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
+      preferArtifactThisTurn: visualize,
+      onArtifact: async (artifact, html) => {
+        await generativeUiArtifactStore.stage({
+          chatId: params.chatId,
+          generationId: streamId,
+          model: params.model,
+          artifact,
+          html,
+        });
+        const index = displayedHtmlArtifacts.findIndex((item) => item.mediaId === artifact.mediaId);
+        if (index >= 0) {
+          displayedHtmlArtifacts[index] = artifact;
+        } else {
+          if (displayedHtmlArtifacts.length >= MAX_HTML_ARTIFACTS_PER_RESPONSE) {
+            throw new Error("This response already contains the maximum number of HTML artifacts.");
+          }
+          displayedHtmlIds.add(artifact.mediaId);
+          displayedHtmlArtifacts.push(artifact);
+        }
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: {
+            version: CHAT_ARTIFACT_EVENT_VERSION,
+            operation: "present",
+            artifact,
+          },
+        });
+        return true;
+      },
+    });
+    generationExtensions.push(generativeUiRuntime.extension);
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
     workspace?.id &&
     folderPath &&
-    permission !== "none"
+    permission !== "none" &&
+    (!botContext || botContext.admission.authority.files.botHome)
   ) {
     try {
       googleWorkspaceSnapshot = buildGeminiWorkspaceSnapshot(
@@ -699,10 +1363,14 @@ async function prepareGeneration(
   }
   return {
     runtime: { ...runtime, model },
+    browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
     permission,
     folderPath,
     git,
     tools,
+    generationExtensions,
+    displayedImages,
+    displayedHtmlArtifacts,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -711,6 +1379,11 @@ async function prepareGeneration(
     workspaceId: workspace?.id,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
+    compactionEngine: compactionEngineFrom(settings.compactionEngine),
+    sharedImages,
+    botContext,
+    botApprovedRoots,
+    botMutatingToolNames,
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
@@ -772,6 +1445,7 @@ export const llmClient = {
       skillInvocation: undefined as PreparedSkillInvocation | undefined,
       skillPrompt: undefined as string | undefined,
       releaseSkillReservation: () => {},
+      releaseBotAuthority: () => {},
     };
     const computerUseGateSnapshot = computerUseGenerationGate.snapshot();
     let handedOff = false;
@@ -787,6 +1461,7 @@ export const llmClient = {
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
+            chatProgressEvents.begin(params.chatId, streamId);
           },
         );
     } catch (error) {
@@ -802,8 +1477,36 @@ export const llmClient = {
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
-    let authoritativeChat!: Chat;
+    let authoritativeChat: Chat | undefined;
+    let authoritativeBot: BotDefinition | undefined;
+    let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    const initializationTerminalState = { attempted: false };
+    const persistInitializationTerminal = async (
+      status: "failed" | "cancelled",
+      cancellationOrigin?: GenerationCancellationOrigin,
+    ): Promise<void> => {
+      await persistGenerationInitializationTerminal({
+        state: initializationTerminalState,
+        hasAuthoritativeChat: authoritativeChat !== undefined,
+        workspaceId: initialization.workspaceId,
+        streamId,
+        providerId: params.providerId,
+        model: params.model,
+        status,
+        cancellationOrigin,
+        isCurrent: () =>
+          initializing.get(streamId) === initialization ||
+          (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === owner),
+        append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
+        onUnknownOutcome: (terminalError) =>
+          logger.error(
+            "pi",
+            `Could not persist the initialization outcome for stream ${streamId}`,
+            terminalError,
+          ),
+      });
+    };
     try {
       const chat = await chatStore.get(params.chatId);
       if (!chat) {
@@ -811,6 +1514,63 @@ export const llmClient = {
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
+      authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
+        botStore.get(botId),
+      );
+      if (authoritativeBot) {
+        const canonical = selectCanonicalBotChat(await chatStore.listByBot(authoritativeBot.id));
+        if (canonical?.id !== chat.id) {
+          throw new Error("This historical Bot chat is read-only. Open the Bot's current chat.");
+        }
+        const providerId = chat.providerId;
+        const model = chat.model;
+        const botId = authoritativeBot.id;
+        if (!providerId || !model) {
+          throw new Error(
+            "This Bot chat needs an exact AI connection and model before it can reply.",
+          );
+        }
+        const admission = await admitBotAfterProviderAuthPreflight({
+          signal: initialization.controller.signal,
+          preflightAuth: () =>
+            preflightBotModelAuth(providerId, model, initialization.controller.signal),
+          admit: () =>
+            botRuntimeAuthority.admit({
+              audienceId: options.botAudienceId ?? BOT_DESKTOP_AUDIENCE_ID,
+              botId,
+              chatId: chat.id,
+            }),
+        });
+        const invalidate = () => {
+          active.get(streamId)?.agent.abort();
+          if (!initialization.controller.signal.aborted) {
+            initialization.controller.abort(
+              admission.signal.reason instanceof Error
+                ? admission.signal.reason
+                : new Error("Bot access changed while this response was active."),
+            );
+          }
+        };
+        admission.signal.addEventListener("abort", invalidate, { once: true });
+        if (admission.signal.aborted) invalidate();
+        initialization.releaseBotAuthority = () => {
+          admission.signal.removeEventListener("abort", invalidate);
+          admission.release();
+        };
+        const prepared = await prepareBotGeneration({
+          chat,
+          bot: authoritativeBot,
+          requested: {
+            workspaceId: params.workspaceId,
+            providerId: params.providerId,
+            model: params.model,
+          },
+          resolveManagedWorkspace: (botId) => botManagedWorkspace.resolve(botId),
+          resolveRuntime: resolveBotModelRuntime,
+          signal: initialization.controller.signal,
+        });
+        botContext = { admission, prepared };
+      }
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
@@ -831,6 +1591,17 @@ export const llmClient = {
           authoritativeMode,
         );
       }
+      if (options.telegramSkillInvocation) {
+        const selection = options.telegramSkillInvocation;
+        const currentUser = [...authoritativeChat.messages].reverse().find((message) => message.role === "user");
+        if (options.interactionSurface !== "telegram" || selection.workspaceId !== authoritativeWorkspaceId || !currentUser) {
+          throw new Error("The queued Telegram skill no longer matches this conversation.");
+        }
+        const skill = await skillRegistry.resolveFresh(selection.workspaceId, selection.invocationId);
+        const prepared = formatPreparedSkillInvocation(skill, currentUser.content, selection.workspaceId, currentUser.id);
+        initialization.skillInvocation = prepared;
+        initialization.skillPrompt = prepared.formattedPrompt;
+      }
       if (workspaceMutationGate.isChanging(authoritativeWorkspaceId)) {
         throw new Error("The workspace is changing. Try again in a moment.");
       }
@@ -845,37 +1616,64 @@ export const llmClient = {
           mode: authoritativeMode,
         },
         chat,
+        botContext,
         initialization.controller.signal,
         computerUseGateSnapshot,
         (computerUse) => {
           initialization.computerUse = computerUse;
         },
         owner.documentId,
+        owner.id !== 0,
+        owner,
         options,
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
+        releaseGenerationBotAuthority(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        questionnaires.releaseStream(streamId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
+      releaseGenerationBotAuthority(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
+    const generationChat = authoritativeChat;
+    if (!generationChat) {
+      throw new Error("This chat is no longer available.");
+    }
     const {
       runtime,
+      browserDiscovery, browserSelection, browserFileApprovals, browserActionApprovals,
       permission,
       folderPath,
       git,
       tools,
+      generationExtensions,
+      displayedImages,
+      displayedHtmlArtifacts,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -885,6 +1683,11 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
+      compactionEngine,
+      sharedImages,
+      botContext: preparedBotContext,
+      botApprovedRoots,
+      botMutatingToolNames,
     } = setup;
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
@@ -894,6 +1697,7 @@ export const llmClient = {
       providerName: runtime.provider.label,
       model: model.id,
       modelName: model.name,
+      providerFingerprint: scheduledProviderFingerprint(runtime.provider),
     };
     const exposeReasoning = shouldExposeReasoning(runtime.provider, showLocalModelReasoning);
 
@@ -942,13 +1746,16 @@ export const llmClient = {
       providerFailure?: ProviderFailureV1,
     ) => {
       const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
+      const assistantAttachments = uniqueResponseImages(sharedImages, displayedImages);
       if (
         !content.trim() &&
         !reasoning.trim() &&
         finalTimeline.steps.length === 0 &&
         finalTimeline.status !== "cancelled" &&
         !subagents &&
-        !providerFailure
+        !providerFailure &&
+        assistantAttachments.length === 0 &&
+        displayedHtmlArtifacts.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -970,6 +1777,8 @@ export const llmClient = {
                 ? finalTimeline
                 : undefined,
             subagents,
+            attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
+            htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
           },
           {
             providerId: params.providerId,
@@ -980,6 +1789,30 @@ export const llmClient = {
         const messageId = [...chat.messages]
           .reverse()
           .find((message) => message.role === "assistant")?.id;
+        if (displayedImages.length > 0) {
+          try {
+            await displayImageArtifactStore.remove(
+              params.chatId,
+              displayedImages.map((attachment) => attachment.id),
+            );
+          } catch (error) {
+            logger.warn(
+              "pi",
+              `Could not clear committed image artifacts for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
+        if (displayedHtmlArtifacts.length > 0) {
+          try {
+            await generativeUiArtifactStore.commit(
+              params.chatId,
+              displayedHtmlArtifacts.map((artifact) => artifact.mediaId),
+            );
+          } catch (error) {
+            logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
+          }
+        }
         return { chat, error: undefined, messageId };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
@@ -998,14 +1831,191 @@ export const llmClient = {
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
-    let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
+    let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
+    let piJournalless = false;
+    let piUpgradeCompactionEnabled = false;
+    let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
     try {
+      const piUpgradePolicy = await piUpgradeRolloutStore.load();
+      piUpgradeCompactionEnabled = piUpgradeChatBehaviorEligible(piUpgradePolicy, generationChat, {
+        development: !isPackagedRuntime(),
+        behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+      });
+      const piOpen = await piCompactionSessionStore.openChatIfEligible(
+        params.chatId,
+        generationChat,
+      );
+      if (piOpen.session) {
+        piSession = piOpen.session;
+      } else {
+        // The device rollout classifies this chat as pre-activation or holding
+        // a deferred v3 migration. Run the turn journalless over an in-memory
+        // session: no v4 journal is created and no recovery record is claimed.
+        piJournalless = true;
+        piSession = await createInMemoryPiSession(params.chatId);
+      }
+      const recallExtension: PiAgentRuntimeExtension = {
+        id: "aiden.chat-history-recall",
+        tools: [createVccRecallTool(async () => piSession!)],
+      };
+      let memoryExtension: PiAgentRuntimeExtension | undefined;
+      try {
+        const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
+          development: !isPackagedRuntime(),
+          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+        });
+        if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+        if (!(await memoryEnabledForChat(configStore, generationChat))) {
+          throw new Error("Durable memory is disabled by the current memory policy.");
+        }
+        const scope = memoryScopeForChat(generationChat);
+        await memoryStore.replaceChatMetadata(
+          scope,
+          generationChat.id,
+          memoryMetadataForChat(generationChat),
+        );
+        const provenance = memoryProvenanceForGeneration(
+          generationChat,
+          options.turnId,
+          owner.id !== 0,
+        );
+        memoryExtension = await createMemoryExtension({
+          store: memoryStore,
+          enabled: () => memoryEnabledForChat(configStore, generationChat),
+          scope,
+          ...(provenance ? { provenance } : {}),
+        });
+        if (provenance) memoryApprovalContext = { scope, provenance };
+      } catch {
+        // Memory is an optional local context source. Corruption or an
+        // unsupported SQLite build must remove both read and write tools.
+        logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
+      }
+      let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
+      if (
+        shouldEnableTodoExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          remoteOwner: owner.kind === "remote",
+          botTaskTrackingAllowed: preparedBotContext !== undefined && botHasOrdinaryCapability(preparedBotContext, "tasks"),
+          excluded: options.excludeToolNames?.has(TODO_TOOL_NAME) ?? false,
+        })
+      ) {
+        const todo = await loadDurableTodoSnapshot(
+          params.chatId,
+          piJournalless ? undefined : piSession,
+        );
+        if (todo.state) {
+          const todoState = todo.state;
+          const publishTodo = (state: typeof todoState) => {
+            sendGeneration(streamId, "chat:todo", {
+              streamId,
+              snapshot: todoSnapshotForRenderer(params.chatId, state),
+            });
+          };
+          todoRuntimeExtension = createTodoExtension(todoState, { onDurableSnapshot: publishTodo });
+          if (preparedBotContext) {
+            const authority = preparedBotContext.admission;
+            todoRuntimeExtension.beforeToolCall = async (context) => {
+              if (context.toolCall.name === TODO_TOOL_NAME) await authority.revalidateBeforeEffect();
+              return undefined;
+            };
+          }
+          generationExtensions.push(todoRuntimeExtension);
+        }
+        const todoDiagnostic = todoSnapshotDiagnostic(todo.snapshot);
+        if (todoDiagnostic) writeDiagnosticEvent(todoDiagnostic);
+        sendGeneration(streamId, "chat:todo", { streamId, snapshot: todo.snapshot });
+      }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
-      const runtimeExtensions = runtimeExtensionSnapshot.extensions;
+      // Arbitrary runtime extensions remain outside the exact Bot catalog.
+      // Only the explicitly admitted task extension and existing memory/recall
+      // contributions enter Bot prompts and schemas.
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
+        ? [
+            ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
+            ...(memoryExtension ? [memoryExtension] : []),
+            // Journalless runs must not offer VCC recall over an empty
+            // in-memory journal; history recall would be dishonest.
+            ...(piJournalless ? [] : [recallExtension]),
+            {
+              id: "aiden.bot-runtime-authority",
+              beforeProviderRequest: async ({ model: requestModel }) => {
+                assertExactBotProviderDispatch(
+                  {
+                    provider: preparedBotContext.prepared.runtime.model.provider,
+                    model: preparedBotContext.admission.authority.provider.sourceModelId,
+                  },
+                  { provider: requestModel.provider, model: requestModel.id },
+                );
+                await preparedBotContext.admission.revalidateBeforeEffect();
+                return undefined;
+              },
+            },
+          ]
+        : [
+            ...runtimeExtensionSnapshot.extensions,
+            ...generationExtensions,
+            ...(memoryExtension ? [memoryExtension] : []),
+            // Journalless runs must not offer VCC recall over an empty
+            // in-memory journal; history recall would be dishonest.
+            ...(piJournalless ? [] : [recallExtension]),
+          ];
+      const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
+        "",
+        tools,
+        baseRuntimeExtensions,
+      ).tools;
+      const advisorExtension = await advisorRuntime.extensionForGeneration({
+        scope: {
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          mode: authoritativeMode,
+          bot: preparedBotContext !== undefined,
+          child: false,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(ADVISOR_TOOL_NAME) ?? false,
+        },
+        executor: {
+          providerId: runtime.provider.id,
+          modelId: model.id,
+          effort: thinkingLevel,
+        },
+        executorTools: toolsBeforeAdvisor,
+        getLiveMessages: (toolCallId) =>
+          candidate ? snapshotAdvisorRuntimeMessages(candidate.state, toolCallId) : [],
+        ...(shouldEnableAskUserQuestionExtension({
+          usageSource: options.usageSource,
+          interactionSurface: options.interactionSurface,
+          assistantMode: authoritativeMode !== undefined,
+          botBound: preparedBotContext !== undefined,
+          rendererOwner: owner.id !== 0,
+          excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+        })
+          ? {
+              requestQuestionnaire: (
+                toolCallId: string,
+                questions: Parameters<typeof questionnaires.request>[0]["questions"],
+                requestSignal?: AbortSignal,
+              ) =>
+                questionnaires.request(
+                  { streamId, toolCallId, questions },
+                  owner.documentId,
+                  requestSignal,
+                ),
+            }
+          : {}),
+      });
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = advisorExtension
+        ? [...baseRuntimeExtensions, advisorExtension]
+        : baseRuntimeExtensions;
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -1060,20 +2070,38 @@ export const llmClient = {
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
               );
-      const runtimeContributions = resolvePiAgentRuntimeContributionSnapshot(
-        baseSystemPrompt,
+      const botSystemPrompt = authoritativeBot
+        ? preparedBotContext
+          ? withBotRuntimeInstructions(
+              baseSystemPrompt,
+              authoritativeBot,
+              preparedBotContext.prepared.managedWorkspace,
+              botWorkspacePromptAuthority(preparedBotContext, botApprovedRoots),
+            )
+          : (() => {
+              throw new Error("Bot runtime authority was not prepared.");
+            })()
+        : baseSystemPrompt;
+      const resolvedContributions = resolvePiAgentRuntimeContributionSnapshot(
+        botSystemPrompt,
         tools,
         piResourcesForSkillSnapshot(skillSnapshot),
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
+      const runtimeContributions = applyCustomModelToolPolicy(
+        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+      );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const generationContextOptions = {
+        contextWindow: model.contextWindow, systemPrompt, tools: runtimeTools,
+        supportsImages, providerId: model.provider, modelId: model.id,
+      };
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
       });
-      piSession = await piCompactionSessionStore.openChat(params.chatId);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
           activeCompactionStepId = timeline.compactionStarted();
@@ -1086,6 +2114,7 @@ export const llmClient = {
           timeline.compactionFinished(
             activeCompactionStepId,
             event.aborted ? "cancelled" : event.result ? "completed" : "failed",
+            event.result,
           );
           activeCompactionStepId = undefined;
         }
@@ -1104,6 +2133,7 @@ export const llmClient = {
         }
       };
       const compactionOptions = {
+        engine: compactionEngine,
         models: createPiCompactionModels(runtime, (message) =>
           usageStore.record(
             assistantUsageRecord({
@@ -1116,23 +2146,58 @@ export const llmClient = {
         ),
         model,
         thinkingLevel,
+        settings: {
+          ...DEFAULT_COMPACTION_SETTINGS,
+          enabled: piUpgradeCompactionEnabled,
+        },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
       };
-      const promptJournal = piSession;
 
-      const currentUser = [...authoritativeChat.messages]
+
+      const currentUser = [...generationChat.messages]
         .reverse()
         .find((message) => message.role === "user");
       const priorVisibleMessages = currentUser
-        ? authoritativeChat.messages.filter((message) => message.id !== currentUser.id)
-        : authoritativeChat.messages;
+        ? generationChat.messages.filter((message) => message.id !== currentUser.id)
+        : generationChat.messages;
+      const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
+      if (!skillsEnabledForTurn) {
+        piSession = await projectVisibleHistoryWithoutSkills(piSession, priorVisibleMessages, model);
+      }
+      const promptJournal = piSession;
       const contentOverrides = new Map<string, string>();
       if (currentUser) {
         if (
           initialization.skillInvocation?.userMessageId === currentUser.id &&
           initialization.skillPrompt
         ) {
+          if ((await configStore.getSettings()).skillsEnabled === false) {
+            throw new Error("Skills are disabled in Settings → Skills.");
+          }
+          if (preparedBotContext) {
+            const allowedSkill = skillSnapshot?.available.find(
+              (skill) =>
+                skill.name === initialization.skillInvocation?.provenance.name &&
+                skill.source === initialization.skillInvocation.provenance.source,
+            );
+            if (!allowedSkill) {
+              throw new Error("This skill is not enabled for this Bot chat.");
+            }
+            const expectedPrompt = formatPreparedSkillInvocation(
+              allowedSkill,
+              chatUserTextWithAttachments(
+                currentUser.content,
+                currentUser.attachments,
+                SLASH_LIMITS.formattedInvocationBytes,
+              ),
+              workspaceId!,
+              currentUser.id,
+            ).formattedPrompt;
+            if (expectedPrompt !== initialization.skillPrompt) {
+              throw new Error("This Bot skill changed before generation started.");
+            }
+          }
           contentOverrides.set(currentUser.id, initialization.skillPrompt);
         }
       }
@@ -1146,13 +2211,15 @@ export const llmClient = {
       );
       if (recoveryEffects.length > 0) {
         await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects);
-        for (const effect of recoveryEffects) {
-          await piRuntimeEffectStore.markRecoveryRecorded({
-            effectId: effect.effectId,
-            operationId: effect.operationId,
-            runId: effect.runId,
-            chatId: effect.chatId,
-          });
+        if (!piJournalless) {
+          for (const effect of recoveryEffects) {
+            await piRuntimeEffectStore.markRecoveryRecorded({
+              effectId: effect.effectId,
+              operationId: effect.operationId,
+              runId: effect.runId,
+              chatId: effect.chatId,
+            });
+          }
         }
       }
       currentPromptMessage = currentUser
@@ -1195,12 +2262,7 @@ export const llmClient = {
             }
           : {}),
         transformContext: createGenerationContextTransform(
-          {
-            contextWindow: model.contextWindow,
-            systemPrompt,
-            tools: runtimeTools,
-            supportsImages,
-          },
+          generationContextOptions,
           (result) => {
             logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
               model: model.id,
@@ -1250,8 +2312,13 @@ export const llmClient = {
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = context;
-          let changed = false;
+          let nextContext = await prepareCustomModelToolContext(context, browserDiscovery?.prepare.bind(browserDiscovery), runtime.provider.modelMetadata?.[model.id]?.overrides);
+          let changed = nextContext !== context;
+          if (changed) {
+            assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });
+            generationContextOptions.tools = nextContext.tools ?? [];
+            generationContextOptions.systemPrompt = nextContext.systemPrompt;
+          }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
               consecutiveAttendedToolErrorTurns,
@@ -1276,6 +2343,22 @@ export const llmClient = {
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
+          let browserFileApproval: PreparedBrowserFile | undefined;
+          let browserActionApproval: BrowserToolApproval | undefined;
+          if (context.toolCall.name === "browser_open" || context.toolCall.name === "browser_navigate") {
+            try {
+              const file = browserLocalFileRequest(context.toolCall.name, context.args as Record<string, unknown>);
+              if (file && workspaceId) {
+                const { browserFileService } = await import("./browser/files.js");
+                browserFileApproval = await browserFileService.prepare(workspaceId, file.path, { assetPaths: file.assetPaths, signal });
+                if (!browserFileApproval.requiresApproval) browserFileApprovals.set(context.toolCall.id, browserFileApproval);
+              }
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Local preview access failed." };
+            }
+          }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
@@ -1313,9 +2396,22 @@ export const llmClient = {
             const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
-              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+              permission === "ask" && (APPROVAL_TOOL_NAMES.has(context.toolCall.name) || BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name));
+            const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            const memoryApproval =
+              context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
+              context.toolCall.name === FORGET_MEMORY_TOOL_NAME;
+            const botMcpApproval = botMutatingToolNames.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
-            if (!scheduleApproval && !workspaceApproval) {
+            let preparedStandardScheduleSummary: string | undefined;
+            if (
+              !scheduleApproval &&
+              !workspaceApproval &&
+              !disclosureApproval &&
+              !memoryApproval &&
+              !botMcpApproval &&
+              !browserFileApproval?.requiresApproval
+            ) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
@@ -1360,15 +2456,113 @@ export const llmClient = {
                       : "Aiden rejected this automation change.",
                 };
               }
+            } else if (createScheduleApproval) {
+              try {
+                const prepared = await prepareStandardScheduleApproval(
+                  context.args,
+                  approvalModelSelection,
+                  undefined,
+                  workspaceId,
+                );
+                if (signal?.aborted) throw new Error("Scheduled task action was cancelled.");
+                preparedStandardScheduleSummary = prepared.summary;
+                approvalDetails = prepared.details;
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "Aiden rejected this scheduled task action.",
+                };
+              }
             }
-            summary = editScheduleApproval
-              ? summarizeEditAutomationToolCall(context.args)
-              : scheduleApproval
-                ? summarizeScheduleToolCall(context.args)
-                : summarizeToolCall(context.toolCall.name, context.args);
+            if (memoryApproval) {
+              timeline.toolAwaitingApproval(context.toolCall.id);
+              const requestMemoryApproval = async (
+                summary: string,
+                approvalSignal?: AbortSignal,
+              ) => {
+                const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+                if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                return approvals.request(
+                  {
+                    streamId,
+                    toolCallId,
+                    toolName: context.toolCall.name,
+                    summary,
+                    details: approvalDetails,
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              };
+              const memoryDecision =
+                context.toolCall.name === FORGET_MEMORY_TOOL_NAME
+                  ? await authorizeMemoryRemoval(
+                      context.args,
+                      memoryApprovalContext,
+                      async (scope, factId) =>
+                        (await memoryStore.list(scope)).find(
+                          (fact) => fact.id === factId && fact.state === "active",
+                        ),
+                      requestMemoryApproval,
+                      signal,
+                    )
+                  : await authorizeMemoryProposal(
+                      context.args,
+                      memoryApprovalContext,
+                      requestMemoryApproval,
+                      signal,
+                    );
+              if (!memoryDecision.allowed) {
+                deniedToolCalls.add(context.toolCall.id);
+                if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason: memoryDecision.reason,
+                };
+              }
+              timeline.toolRunning(context.toolCall.id);
+              return undefined;
+            } else
+              summary = editScheduleApproval
+                ? summarizeEditAutomationToolCall(context.args)
+                : preparedStandardScheduleSummary
+                  ? preparedStandardScheduleSummary
+                  : scheduleApproval
+                    ? summarizeScheduleToolCall(context.args)
+                    : isBrowserToolName(context.toolCall.name)
+                      ? browserToolApprovalSummary(context.toolCall.name)
+                      : summarizeToolCall(context.toolCall.name, context.args);
+          }
+          if (browserFileApproval?.requiresApproval) {
+            summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
+          }
+          if (workspaceId && BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name)) {
+            try {
+              const { browserService } = await import("./browser/service.js");
+              if (!browserSelection.initialized) {
+                const state = await browserService.getState(workspaceId);
+                browserSelection.tabId = state.activeTabId ?? undefined;
+                browserSelection.initialized = true;
+              }
+              const args = context.args as Record<string, unknown>;
+              const tabId = typeof args.tabId === "string" ? args.tabId : browserSelection.tabId;
+              if (!tabId) throw new Error("No current browser tab is available. Call browser_open first.");
+              browserActionApproval = prepareBrowserToolApproval(context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, tabId));
+              args.tabId = browserActionApproval.target.tabId;
+              summary = browserActionApproval.summary;
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Browser approval target is unavailable." };
+            }
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
-          const allowed = await approvals.request(
+          const approvalOutcome = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) throw new Error("The tool approval step was not initialized.");
@@ -1383,7 +2577,27 @@ export const llmClient = {
             signal,
             owner.documentId,
           );
+          const allowed = approvalOutcome === "allowed";
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (allowed && (browserFileApproval || browserActionApproval)) {
+            try {
+              signal?.throwIfAborted();
+              if (browserFileApproval) {
+                (await import("./browser/files.js")).browserFileService.approve(browserFileApproval);
+                browserFileApprovals.set(context.toolCall.id, browserFileApproval);
+              }
+              if (browserActionApproval && workspaceId) {
+                const { browserService } = await import("./browser/service.js");
+                const args = context.args as Record<string, unknown>;
+                assertBrowserToolApproval(browserActionApproval, context.toolCall.name, args, browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId));
+                browserActionApprovals.set(context.toolCall.id, { approval: browserActionApproval, args });
+              }
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Browser approval expired." };
+            }
+          }
           if (allowed && attendedScheduleApproval) {
             attachAssistantScheduleMcpApproval(context.args, approvedScheduleMcpBindings);
           }
@@ -1410,9 +2624,16 @@ export const llmClient = {
             ? undefined
             : {
                 block: true,
-                reason: attendedScheduleApproval
-                  ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
-                  : "The user denied this action.",
+                reason:
+                  attendedScheduleApproval && approvalOutcome === "denied"
+                    ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
+                    : approvalOutcome === "denied"
+                      ? "The user denied this action."
+                      : approvalOutcome === "detached"
+                        ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
+                        : approvalOutcome === "unavailable"
+                          ? "Aiden could not present the approval request. Return to the chat and retry the action."
+                          : "The action was cancelled before approval.",
               };
         },
       });
@@ -1440,6 +2661,23 @@ export const llmClient = {
               timeline.thinkingStarted();
               noteModelBecameReady();
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
+            if (e.type === "toolcall_start") {
+              // Tool-call arguments can stream for a long while (a full HTML
+              // artifact for render_artifact) before execution begins. Open the
+              // pending step now so the transcript shows live activity through
+              // that window for every provider; execution events upgrade it.
+              // Some OpenAI-compatible backends stream an empty id first and
+              // backfill it later, so wait for a usable one.
+              const block = e.partial.content[e.contentIndex];
+              if (
+                block?.type === "toolCall" &&
+                typeof block.id === "string" &&
+                block.id &&
+                typeof block.name === "string"
+              ) {
+                timeline.toolStarted(block.id, block.name, {});
+              }
+            }
             if (e.type === "text_delta") {
               const separator = !currentAssistantTurnHadVisibleText
                 ? assistantTurnTextSeparator(full, e.delta)
@@ -1533,6 +2771,13 @@ export const llmClient = {
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            const terminalStatus = generationCancelRequested()
+              ? "cancelled"
+              : denied
+                ? "blocked"
+                : event.isError
+                  ? "failed"
+                  : "completed";
             if (
               attendedAssistant &&
               event.isError &&
@@ -1550,14 +2795,10 @@ export const llmClient = {
             }
             timeline.toolFinished(
               event.toolCallId,
-              generationCancelRequested()
-                ? "cancelled"
-                : denied
-                  ? "blocked"
-                  : event.isError
-                    ? "failed"
-                    : "completed",
-              event.result?.details,
+              terminalStatus,
+              terminalStatus === "completed"
+                ? event.result?.details
+                : safeToolIssueDetails(event.toolName, terminalStatus, event.result),
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,
@@ -1575,28 +2816,47 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal("cancelled", initialization.cancellationOrigin);
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
+        releaseGenerationBotAuthority(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+        questionnaires.releaseStream(streamId);
+        broadcastChatSettled(
+          streamId,
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
+      releaseGenerationBotAuthority(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
     if (!agent || !piSession) {
+      await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
+      releaseGenerationBotAuthority(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
+      questionnaires.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
@@ -1608,10 +2868,12 @@ export const llmClient = {
     const quarantineFailedPiRecovery = (message: string, error: unknown) => {
       piJournalHealthy = false;
       logger.error("pi", message, error);
-      piCompactionSessionStore.quarantineChatUntilRecovered(
-        params.chatId,
-        Promise.reject(new Error("Pi journal recovery requires application restart.")),
-      );
+      if (!piJournalless) {
+        piCompactionSessionStore.quarantineChatUntilRecovered(
+          params.chatId,
+          Promise.reject(new Error("Pi journal recovery requires application restart.")),
+        );
+      }
     };
     const finalizePiTurnPersistence = async (persisted: {
       chat: Chat | undefined;
@@ -1646,7 +2908,9 @@ export const llmClient = {
             await syncChatMessagesToPiSession(piJournal, [visibleAssistant], model, supportsImages);
           }
         });
-        piCompactionSessionStore.quarantineChatUntilRecovered(params.chatId, recovery);
+        if (!piJournalless) {
+          piCompactionSessionStore.quarantineChatUntilRecovered(params.chatId, recovery);
+        }
         return;
       }
       const turnLease = piTurnLease;
@@ -1723,7 +2987,9 @@ export const llmClient = {
           markerAlreadyPersisted: reconcileAbandonedVisibleAssistant,
         });
         try {
-          await piRuntimeEffectStore.acknowledgeChatEffectsDurable(params.chatId);
+          if (!piJournalless) {
+            await piRuntimeEffectStore.acknowledgeChatEffectsDurable(params.chatId);
+          }
         } catch (error) {
           // The Pi turn is already durable. Leaving the effect unacknowledged
           // makes startup install a conservative no-repeat boundary.
@@ -1758,8 +3024,10 @@ export const llmClient = {
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
+      releaseBotAuthority: initialization.releaseBotAuthority,
     };
     initialization.releaseSkillReservation = () => {};
+    initialization.releaseBotAuthority = () => {};
     initialization.loadMonitor = undefined;
     loadHost = activeGeneration;
     // Publish the active owner before removing initialization so cancellation
@@ -1767,6 +3035,7 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
+      await persistInitializationTerminal("cancelled", activeGeneration.cancellationOrigin);
       await piTurnLease?.rollback().catch((error) => {
         logger.error(
           "pi",
@@ -1777,12 +3046,24 @@ export const llmClient = {
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       await computerUse?.close().catch(() => {});
-      sendGeneration(streamId, "chat:done", { streamId, content: "" });
+      sendGeneration(streamId, "chat:done", {
+        streamId,
+        content: "",
+        cancelled: true,
+        cancellationOrigin: activeGeneration.cancellationOrigin,
+      });
       releaseGenerationSkillReservation(activeGeneration);
+      releaseGenerationBotAuthority(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      questionnaires.releaseStream(streamId);
+      broadcastChatSettled(
+        streamId,
+        params.chatId,
+        activeGeneration.workspaceId,
+        params.workspaceId,
+      );
       return false;
     }
 
@@ -1854,7 +3135,8 @@ export const llmClient = {
           }
         }
         const finalError =
-          runtimeOutcome.kind === "provider_failed"
+          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
               : runtimeOutcome.reason === "context-overflow"
@@ -1866,23 +3148,14 @@ export const llmClient = {
                     : "The model could not complete this response."
             : runtimeOutcome.kind === "host_failed"
               ? "The local agent runtime could not complete this response safely."
-              : null;
-        if (runtimeOutcome.kind === "provider_failed") {
-          logger.warn("pi", `Provider generation failed for stream ${streamId}.`, {
-            category: runtimeOutcome.providerFailure?.category ?? "unknown",
-            attempts: runtimeOutcome.attempts,
-            retryExhausted: runtimeOutcome.providerFailure?.retryExhausted ?? false,
-          });
-        }
+              : null);
         if (finalError) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed"
-              ? runtimeOutcome.providerFailure
-              : undefined,
+            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
@@ -1895,7 +3168,14 @@ export const llmClient = {
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
-        } else if (!full.trim() && !wasCancelled) {
+        } else if (
+          !generationHasVisibleOutput(
+            full,
+            uniqueResponseImages(sharedImages, displayedImages).length +
+              displayedHtmlArtifacts.length,
+          ) &&
+          !wasCancelled
+        ) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -1960,10 +3240,17 @@ export const llmClient = {
           await computerUse?.close().catch(() => {});
         } finally {
           releaseGenerationSkillReservation(activeGeneration);
+          releaseGenerationBotAuthority(activeGeneration);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
-          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          questionnaires.releaseStream(streamId);
+          broadcastChatSettled(
+            streamId,
+            params.chatId,
+            activeGeneration.workspaceId,
+            params.workspaceId,
+          );
         }
       }
     })();
@@ -1975,6 +3262,10 @@ export const llmClient = {
   /** Resolve a pending tool-approval request from the UI. */
   approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
+  },
+
+  answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
+    return questionnaires.respond(promptId, response, ownerDocumentId);
   },
 
   /**
@@ -1999,6 +3290,7 @@ export const llmClient = {
     endLoadMonitor(runtimeOwner, streamId, false);
     void runtimeOwner.computerUse?.close();
     approvals.detachStream(streamId);
+    questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);
     return true;
   },
@@ -2072,6 +3364,7 @@ export const llmClient = {
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
+    await btwService.forget(chatId);
     for (const [streamId, entry] of [...initializing.entries()]) {
       if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
@@ -2136,6 +3429,12 @@ export const llmClient = {
     ) {
       return null;
     }
+    // Foreground admission and BTW reservation fence each other: an existing
+    // side question is aborted here, while a concurrent BTW start rechecks
+    // isChatBusy after it reserves its per-chat slot. These calls are adjacent
+    // and synchronous on Electron's main thread, so no reservation can enter
+    // between the abort and the foreground claim.
+    btwOperationRegistry.abortForForeground(chatId);
     return chatTurnAdmission.tryBegin(chatId, turnId, ownerId, chatHasGenerationOwnership(chatId));
   },
 
@@ -2153,6 +3452,15 @@ export const llmClient = {
 
   abandonChatTurn(chatId: string, turnId: string, ownerId: string): boolean {
     return chatTurnAdmission.releaseMatching(chatId, turnId, ownerId);
+  },
+
+  /** Discard active snapshots when the user disables skills across the app. */
+  cancelForSkillsDisabled(): void {
+    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
+      this.cancel(streamId, "user_stop");
+    }
+    // Detached children may retain skill instructions in their forked context.
+    subagentRuntimeRegistry.abortAll();
   },
 
   /** Closing the global gate cancels every snapshot that could race the setting change. */
@@ -2188,10 +3496,12 @@ export const llmClient = {
   },
 
   abortAll(): void {
+    btwService.shutdown();
     chatTurnAdmission.releaseAll();
     for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
     for (const [streamId] of active) this.cancel(streamId, "application_shutdown");
     approvals.shutdown();
+    questionnaires.shutdown();
   },
 
   async shutdown(): Promise<boolean> {

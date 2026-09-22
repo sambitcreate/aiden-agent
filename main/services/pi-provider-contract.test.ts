@@ -9,8 +9,17 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
 
   const providerIds = providers.map((entry) => entry.id);
   assert.equal(new Set(providerIds).size, providerIds.length);
-  assert.equal(providerIds.length, 36);
+  assert.equal(providerIds.length, 40);
   assert.ok(providerIds.includes("radius"));
+  assert.deepEqual(
+    providers.filter(
+      (entry) =>
+        typeof entry.auth.apiKey?.login !== "function" &&
+        typeof entry.auth.oauth?.login !== "function",
+    ).map((entry) => entry.id),
+    [],
+    "Every pinned built-in must retain an explicit stored-auth setup path for Bots.",
+  );
   assert.deepEqual(
     models.getProviders().map((entry) => entry.id),
     providerIds,

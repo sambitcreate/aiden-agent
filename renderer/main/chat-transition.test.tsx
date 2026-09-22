@@ -6,6 +6,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { QueryClient } from "@tanstack/react-query";
+import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
+import type { Chat } from "../lib/types.js";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -50,6 +53,12 @@ test("chat pane owns its own per-chat reset instead of relying on a remount", ()
   ]) {
     assert.ok(reset.includes(setter), `chatId reset must clear ${setter}`);
   }
+});
+
+test("chat-scoped transcript UI remounts so previews cannot cross navigation", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /<MessageList\s+key=\{chatId\}/u);
+  assert.doesNotMatch(pane, /<ScrollArea[^>]*\bkey=\{chatId\}/u);
 });
 
 test("per-chat reset runs before paint so no frame carries the outgoing chat", () => {
@@ -116,7 +125,9 @@ test("session navigation seeds caches, respects route intent, and restores desti
   );
   assert.match(worktree, /setQueryData<Workspace\[\]>/u);
   assert.match(worktree, /chatIdRef\.current !== sourceChatId/u);
-  assert.match(worktree, /The worktree was created, but its chat could not be created/u);
+  assert.match(worktree, /The worktree was created, but Aiden could not open its new chat/u);
+  assert.match(worktree, /createChatDraft\(workspace.id\)/u);
+  assert.doesNotMatch(worktree, /chatsApi\.create\(/u);
   assert.match(worktree, /await navigate/u);
   assert.match(worktree, /requestAnimationFrame\(\(\) => composerRef\.current\?\.focus/u);
 });
@@ -133,6 +144,30 @@ test("a committed append is not presented as unsent when generation start later 
   assert.ok(append >= 0 && start > append);
   assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
+});
+
+test("an unpersisted image response blocks sends, copies, and the composer until deletion", () => {
+  const pane = source("./chat-pane.tsx");
+  const handleSend = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+  const copy = between(pane, "const copyChat = React.useCallback(", "const exportChat");
+
+  assert.match(handleSend, /if \(imageArtifactRecoveryPending\)/u);
+  assert.match(copy, /if \(imageArtifactRecoveryPending\)/u);
+  assert.match(
+    pane,
+    /hasUnpersistedResponse \|\| chat\.data\?\.imageArtifactRecoveryPending === true/u,
+  );
+  assert.match(
+    pane,
+    /ready=\{\s*ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable\s*\}/u,
+  );
+  assert.match(pane, /Delete this chat to discard it/iu);
+  assert.match(pane, /imageArtifactRecoveryUnavailable/u);
+  assert.match(pane, /Settings → About → Diagnostics and choose Reveal/iu);
 });
 
 test("terminal chat snapshots reach cache before visual stream handoff awaits", () => {
@@ -193,7 +228,10 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   assert.match(sidebar, /Aiden could not create a chat/u);
   assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
   assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);
-  assert.match(sidebar, /enterWorkspace\(id\)\.catch/u);
+  assert.match(
+    sidebar,
+    /const openChat[\s\S]*?catch \(error\)[\s\S]*?Aiden could not open that chat/u,
+  );
   const pane = source("./chat-pane.tsx");
   const worktreeGuard = pane.indexOf("if (documentAppendReconciliationRequired)");
   const worktreeMutation = pane.indexOf("gitApi.createWorktree(", worktreeGuard);
@@ -220,10 +258,11 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   assert.match(composer, /key=\{chatId\}/u);
   assert.match(pane, /slashPaletteBlocked=\{Boolean\(pending\)\}/u);
 
-  // The key is load-bearing: Composer holds this state with no chatId reset.
+  // The key is load-bearing: Composer holds this state with no chatId reset,
+  // including a one-time seed owned by that exact renderer draft.
   const composerSource = source("../components/composer.tsx");
   assert.match(composerSource, /const \[draft, dispatchDraft\] = React\.useReducer/u);
-  assert.match(composerSource, /text: ""/u);
+  assert.match(composerSource, /text: initialText/u);
   assert.match(
     composerSource,
     /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u,
@@ -270,4 +309,116 @@ test("sidebar prefetches a chat before the click so the pane does not blank", ()
   );
   assert.match(sidebar, /onPointerEnter=\{\(\) => prefetchChat\(chat\.id\)\}/u);
   assert.match(sidebar, /onFocus=\{\(\) => prefetchChat\(chat\.id\)\}/u);
+});
+
+test("a revisited detached stream restores the responding window from its last text delta", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /detachedTextStreamingRemaining\(\s*detachedLastTextDeltaAt/u);
+  assert.match(pane, /setTextStreaming\(true\)[\s\S]{0,240}setTextStreaming\(false\)/u);
+  assert.match(
+    pane,
+    /streamingText:[\s\S]{0,180}detachedGenerationDraining[\s\S]{0,120}displayedStreamingText/u,
+  );
+});
+
+test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
+  assert.match(pane, /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u);
+  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
+  assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
+  assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
+  assert.match(pane, /canSteer=\{ready && \(\(isGenerating && canStopGeneration\) \|\| Boolean\(visibleDetachedProjection\)\)/u);
+  assert.match(pane, /if \(!\(canStopGeneration \|\| visibleDetachedProjection\) \|\| isStoppingGeneration\) return/u);
+  assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
+  assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
+  assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
+  assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
+  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+});
+
+test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
+  const start = send.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(install >= 0 && start > install);
+
+  const queryClient = new QueryClient();
+  const chatId = "chat-read-race";
+  const assistantTail = {
+    id: chatId,
+    messages: [{ id: "previous", role: "assistant", content: "Previous answer", createdAt: 1 }],
+  } as Chat;
+  const appendedTurn = {
+    ...assistantTail,
+    messages: [
+      ...assistantTail.messages,
+      { id: "current", role: "user", content: "Current prompt", createdAt: 2 },
+    ],
+  } as Chat;
+  let resolveOldRead!: (chat: Chat) => void;
+  const oldRead = queryClient.fetchQuery({
+    queryKey: queryKeys.chat(chatId),
+    queryFn: () => new Promise<Chat>((resolve) => { resolveOldRead = resolve; }),
+  });
+
+  await Promise.resolve();
+  await installAppendedChatSnapshot(queryClient, chatId, appendedTurn);
+  resolveOldRead(assistantTail);
+  await assert.rejects(oldRead);
+  const cached = queryClient.getQueryData<Chat>(queryKeys.chat(chatId));
+  assert.equal(cached?.messages[cached.messages.length - 1]?.role, "user");
+  queryClient.clear();
+});
+
+test("root recovery reconciles missed detached terminals against authoritative activity", () => {
+  const root = source("./root-view.tsx");
+  const recovery = between(
+    root,
+    "const reconcileInactiveOwners = (payload: unknown) => {",
+    "}, [reconcileDetachedLifecycleChat]);",
+  );
+  assert.match(recovery, /parseChatActivitySnapshot\(payload\)/u);
+  assert.match(recovery, /pendingDetachedLifecycleChats\(\)/u);
+  assert.match(recovery, /!activeChatIds\.has\(owner\.chatId\)/u);
+  assert.ok(
+    recovery.indexOf('onNotification("chats:activity-changed"') < recovery.indexOf(".activitySnapshot()"),
+    "Recovery must subscribe before its bootstrap snapshot",
+  );
+  assert.match(root, /captureDetachedLifecycleChat\(owner\)/u);
+  assert.match(root, /clearInactiveDetachedLifecycleChat\(captured, new Set\(snapshot\.activeChatIds\)\)/u);
+  assert.match(root, /subscribeChatSettlements[\s\S]{0,180}reconcileDetachedLifecycleChat\(settlement\)/u);
+});
+
+test("every ordinary new-agent entry opens a draft without eager creation", () => {
+  for (const file of ["./chat-layout.tsx", "./root-view.tsx", "./chat-pane.tsx", "../components/chat-sidebar.tsx"]) {
+    const implementation = source(file);
+    assert.match(implementation, /createChatDraft\(/u, file);
+    assert.doesNotMatch(implementation, /chatsApi\s*\.create\(/u, file);
+  }
+});
+
+test("first-message promotion seeds the real cache before releasing draft state without navigation", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  assert.match(pane, /useChat\(draft \? undefined : chatId\)/u);
+  assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
+  const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
+  const promote = send.indexOf("finishChatDraftSend(chatId, true)");
+  const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
+  const start = send.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
+  assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
+  assert.doesNotMatch(send, /navigate\(/u);
+  assert.match(pane, /enabled: !draft && ready/u);
+});
+
+
+test("ordinary sends retain their generation-intent guard while draft promotion also checks its view owner", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
+  assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
 });

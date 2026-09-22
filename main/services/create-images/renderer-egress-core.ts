@@ -24,10 +24,26 @@ export function shouldBlockAidenRendererEgress(input: {
   requestUrl: string;
   rendererUrl: string | undefined;
   packaged: boolean;
+  authorizedBrowserFavicon?: boolean;
 }): boolean {
   const request = parsed(input.requestUrl);
   if (!request || !REMOTE_PROTOCOLS.has(request.protocol) || !input.rendererUrl) return false;
   if (!isAidenMainRendererUrl(input.rendererUrl)) return false;
+  if (input.authorizedBrowserFavicon === true) return false;
   if (input.packaged) return true;
   return request.hostname !== "127.0.0.1" && request.hostname !== "localhost";
+}
+
+/** Narrow exception for existing browser chrome, never arbitrary renderer URLs. */
+export function authorizeBrowserFaviconEgress(
+  request: { url: string; method: string; resourceType: string; webContentsId?: number },
+  documentId: string | undefined,
+  authorize: (url: string, ownerId: number, documentId: string) => boolean,
+): boolean {
+  const url = parsed(request.url);
+  return !!url && (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username && !url.password &&
+    request.method === "GET" && request.resourceType === "image" &&
+    request.webContentsId !== undefined && documentId !== undefined &&
+    authorize(request.url, request.webContentsId, documentId);
 }

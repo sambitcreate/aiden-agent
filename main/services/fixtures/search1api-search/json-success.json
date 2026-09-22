@@ -1,0 +1,21 @@
+{
+  "searchParameters": {
+    "query": "current Search1API docs",
+    "max_results": 2,
+    "crawl_results": 0
+  },
+  "results": [
+    {
+      "title": "Search1API Search API",
+      "link": "https://s1.dev/docs/basic/search",
+      "snippet": "Search1API returns ranked web results from multiple engines.",
+      "content": null
+    },
+    {
+      "title": "Second Search1API source",
+      "link": "https://example.test/search1api-second",
+      "snippet": "A second untrusted Search1API result.",
+      "content": "Content is not requested by this bounded search adapter."
+    }
+  ]
+}

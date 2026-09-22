@@ -1,7 +1,13 @@
 # Subagent Orchestration Expansion
 
-Status: In progress. Phases 0–6 and the production-inert Phase 7A durable
-background lifecycle core are complete; Phase 7B activation is next.
+Status: In progress. Phases 0–6, the production-inert Phase 7A durable
+background lifecycle core, and the Phase 7B1 storage seam are complete. The
+2026-08-18 worker-startup diagnostic hardening and the 2026-08-25 Pi semantic,
+foreground presentation/recovery, and parent-only mobile projection repairs are
+complete. The 2026-09-01 foreground failure remediation is also complete. The
+2026-09-01 V1-to-V2 checkpoint repair makes persisted migration verification
+content-addressed across macOS volume remounts while retaining native generation
+checks for same-process writes. Phase 7B coordinator activation is next.
 
 Spec date: 2026-08-05.
 
@@ -155,6 +161,84 @@ and its complete correction loop, the user explicitly stopped further review-
 subagent delegation. Remaining slices continue with implementation, direct root
 inspection, focused/aggregate automated gates, and correction of observed
 failures, but no additional independent review-subagent waits.
+
+Reliability remediation (2026-08-18): two live zero-activity child failures
+were traced to four pre-ready Electron worker exits whose bootstrap cause had
+been discarded. Isolated inference now retains only a bounded, redacted
+pre-ready stderr tail; writes one owner-only correlated record to the rotating
+`subagent-runtime.log`; preserves closed attempt/stage/exit and provider-failure
+category evidence; and has a real Electron worker `ready` smoke test registered
+in the focused gate. Parent and child prompts now state truthful failed-child
+and blocked-result behavior. No prompt, provider payload, header, URL,
+credential, or raw runtime exception enters renderer snapshots or Pi journals.
+
+Production launch repair (2026-08-25): six zero-activity production failures
+were traced to an invalid macOS assumption in the ownership hardening above.
+Electron delivers UtilityProcess script arguments to its Node service without
+reliably exposing them in the packaged Helper's `ps` command, so requiring the
+launch nonce there rejected every healthy child before provider dispatch. The
+OS PID/start identity is again used only as the compare-before-SIGKILL reuse
+fence; a strict nonce-bearing `ready` IPC frame now authenticates the loaded
+worker before its provider is constructed or contacted. Focused protocol and
+real Electron worker smoke coverage lock matching and mismatched readiness.
+
+Dev clone-boundary repair (2026-08-25): the first retest passed launch identity
+but failed before readiness with Electron's `An object could not be cloned.`
+Pi deliberately passes full `AgentTool` instances through the structurally
+compatible provider context and spreads its loop configuration into provider
+options; those values include `execute`, credential, transform, and lifecycle
+callbacks that belong in main. Aiden now positively projects only provider tool
+definitions and documented stream options, then JSON-normalizes every parent
+frame against the strict inference protocol before UtilityProcess IPC. This
+matches pi-subagents' explicit JSON/process boundary while preserving Aiden's
+embedded Pi sessions and main-owned tools. Focused protocol, aggregate
+Subagents, and callback-bearing real Electron worker smoke gates cover it.
+
+Pi semantic-normalization repair (2026-08-25): a follow-up dev retest exposed
+privacy false positives after children were launching successfully. Aiden had
+applied its renderer-safe recursive credential/encoding sanitizer to actual
+child prompts, reports, shell output, source-file admission, filenames, and grep
+lines. Model-facing text now uses a dedicated control-only normalizer so authored
+prose, paths, source syntax, encodings, Markdown, and Unicode remain exact like
+Pi. Child reads/search preserve ordinary repository semantics while explicit
+credential paths, private-key formats, workspace confinement, symlink/race
+checks, bounds, and renderer snapshot projection remain separate controls.
+Regression coverage locks the exact `and report back` failure, routes, public
+keys, encoded-looking content, safe hidden metadata, and the retained protected
+path/private-key matrix.
+
+Foreground presentation and mobile-boundary repair (2026-08-25): foreground
+snapshots now reconcile monotonically across live, handoff, persisted V1, and
+native V2 sources; terminal outcomes and immutable identity cannot roll back.
+Owner-scoped Stop progress/errors, exact-reference saved-detail refresh, stale
+and delayed-save presentation, focus recovery, narrow layouts, and one polite
+announcement authority passed independent runtime and UX review loops. Remote
+iOS/Android projections remain parent-only: ordinary parent transcript,
+timeline/outcome, and stream state cross the boundary while child references,
+snapshots, histories, controls, and endpoints remain Mac-local. Structural
+privacy validation is recursive and normalized, but visible parent text stays
+opaque and exact. Aggregate desktop gates, Android 104/104 unit tests, and a
+physical-iPhone Phase 0 run (26 pass, 2 expected skips) are green.
+
+Mobile progress follow-on (2026-09-14): [Mobile Task Progress and Subagents](mobile-task-progress-and-subagents-plan.md) introduces a separately negotiated, read-only public roster with opaque public identities and bounded display facts. Ordinary parent transcripts and turn streams retain the historical parent-only contract; private child histories, raw prompts/results, and child mutation authority remain excluded. Follow-on validation does not replace the historical evidence above or activate background controls.
+
+Foreground failure remediation (2026-09-01): installed-production evidence
+showed three independent failures in one attended turn. `share_image` was being
+treated as an image-inspection tool and every non-allow approval outcome became
+the misleading label “denied”; its contract now says it is outbound-only and
+approval denial, cancellation, background detachment, and publication failure
+remain distinct. A mixed workspace/Web batch omitted its optional capability
+root, so the parser applied the legacy workspace-read-only root and rejected the
+Web child; omitted roots now infer the exact union of explicit task requests,
+while capability-less siblings are pinned to the legacy read-only lane and an
+explicit root still fails closed on widening. One long workspace child then
+consumed the tree's 128,000-token ceiling by itself, making same-tree retry
+impossible; per-request context remains 128,000 tokens while the independently
+enforced cumulative tree ceiling is four times that value. Budget exhaustion is
+now a typed diagnostic and terminal activity persists only allowlisted,
+actionable issue codes, never raw provider or tool error text. Focused contract,
+supervisor, approval, timeline, diagnostic, and privacy regressions cover the
+incident paths.
 
 ## Phases
 
@@ -663,6 +747,36 @@ Focused coordinator tests passed 3/3 with TypeScript clean.
   executable checkpoints, leases, idempotency, and authority revalidation.
 
 ## Verification matrix
+
+### 2026-09-12 upstream refresh: required before background activation
+
+The original August 5 design baseline remains historical. The latest comparison
+is `nicobailon/pi-subagents@940406c0d48890060d1f5f5280925c8f5a5c7389`
+(v0.67.0 plus 23 commits); see
+[the integrated-upstream audit](../testing/integrated-upstream-audit-2026-09-12.md).
+This refresh does not activate the coordinator or change the Pi runtime pin.
+
+Production activation must demonstrate all of the following in crash-point
+tests and the packaged nested-run soak:
+
+- Durable acceptance makes the run queryable before child allocation begins.
+- Result commit precedes terminal status publication and completion notification.
+- Steering distinguishes queued, consumed, and unconsumed-at-shutdown outcomes;
+  enqueue success alone must never be reported as consumption.
+- Descendants and owned tool/process work drain before ancestor completion and
+  before inference capacity is released. Exercise cancellation during a depth-two
+  handoff with one completed and one interrupted descendant.
+- Unresolved external effects remain `unknown`; incomplete inference remains
+  `interrupted`. Neither outcome causes an automatic effect retry on restart.
+- Corrupt status degrades to a bounded partial record without inventing completion.
+- Unchanged status does not repeatedly wake or notify the parent.
+- Desktop Remote, iOS, and Android preserve parent-only child projections.
+
+The foreground workspace-read prompt now follows the actual assembled tool
+intersection. An empty tool set remains valid for task/fork-only analysis; role
+names do not imply a missing capability or authorize widening access.
+
+### Existing final gates
 
 Every final gate includes:
 

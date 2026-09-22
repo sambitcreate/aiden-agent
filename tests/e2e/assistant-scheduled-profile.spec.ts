@@ -1,41 +1,44 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explore", async ({
+test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to explore", async ({
   aiden,
 }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
-  // Assistant is a local dock. Exercise its state without submitting a prompt
-  // (and therefore without creating a provider request or an assistant thread).
-  await page.getByRole("button", { name: "Open Aiden" }).click();
-  const assistantComposer = page.getByRole("textbox", { name: "Message Aiden" });
-  const assistantPanel = assistantComposer.locator(
-    "xpath=ancestor::div[.//button[@aria-label='New conversation']][1]",
-  );
-  await expect(assistantComposer).toBeVisible();
-  await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
-  await expect(page.getByText("Try asking", { exact: true })).toBeVisible();
-  // Main chat history has its own sidebar “Recent” bucket. A fresh Assistant
-  // session deliberately has no saved Assistant threads to list yet.
-  await expect(assistantPanel.getByText("Recent", { exact: true })).toHaveCount(0);
-  await assistantComposer.fill("Unsaved assistant draft");
-  await page.getByRole("button", { name: "Minimize Aiden" }).click();
-  await expect(page.getByRole("button", { name: "Open Aiden" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Aiden" }).click();
-  await expect(assistantComposer).toHaveValue("Unsaved assistant draft");
-  await assistantComposer.fill("");
-  await page.getByRole("button", { name: "Minimize Aiden" }).click();
+  // The dock is now the one-time Aiden Live setup entry point. Exercise the
+  // keyboard path without requesting system permissions or contacting Google.
+  const liveSetupTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
+  await liveSetupTrigger.press("Enter");
+  const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
+  await expect(liveSetup).toBeVisible();
+  await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
+  await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
+  await expect(liveSetup).toHaveCount(0);
+  await expect(liveSetupTrigger).toBeVisible();
 
-  // Scheduled templates only open an editor. Escape closes it without saving;
-  // unavailable creation remains a valid, explicit product state.
+  // Natural-language creation stays available even if manual task dependencies
+  // are unavailable. Templates only open an editor; Escape closes without saving.
   await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   const taskSearch = page.getByRole("searchbox", { name: "Search scheduled tasks" });
   await taskSearch.fill("definitely-not-a-schedule");
   await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
-  await taskSearch.fill("");
+  // Drive the native value setter and input event directly. Empty Playwright
+  // fill can leave this controlled search unchanged on hosted Electron, while
+  // native select+Backspace can lose its selection. Keyboard navigation is
+  // covered independently.
+  await taskSearch.evaluate((element: HTMLInputElement) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
+    setter.call(element, "");
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await expect(taskSearch).toHaveValue("");
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();
@@ -49,6 +52,12 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     "true",
   );
   await page.getByRole("tab", { name: "All", exact: true }).click();
+  const createWithAiden = page.getByRole("button", { name: "Create with Aiden", exact: true });
+  await expect(createWithAiden).toBeEnabled();
+  await createWithAiden.click();
+  const seededComposer = page.locator("textarea");
+  await expect(seededComposer).toHaveValue("Create an automation that ");
+  await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   const dailyBrief = page.getByRole("button", { name: /Daily brief/u });
   await expect(dailyBrief).toBeVisible();
   if (await dailyBrief.isEnabled()) {
@@ -57,7 +66,7 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
   } else {
-    await expect(page.getByRole("button", { name: "Create" })).toBeDisabled();
+    await expect(dailyBrief).toBeDisabled();
   }
 
   await page.getByRole("button", { name: "Profile", exact: true }).click();
@@ -68,7 +77,12 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     exact: true,
   });
   await expect(profileName).toHaveText("E2E Local User");
-  await page.getByRole("button", { name: "Edit profile name" }).click();
+  // The editor is a normal visible action here; exercise the same pointer path
+  // a user takes after the scheduled-task dialog has fully closed.
+  const editProfileName = page.getByRole("button", { name: "Edit profile name" });
+  await expect(editProfileName).toBeVisible();
+  await expect(editProfileName).toBeEnabled();
+  await editProfileName.click();
   const profileInput = page.getByRole("textbox", { name: "Profile name" });
   await profileInput.fill("   ");
   await expect(page.getByRole("button", { name: "Save profile name" })).toBeDisabled();
@@ -82,6 +96,16 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await page.getByRole("button", { name: "About", exact: true }).click();
   await expect(page.getByRole("heading", { name: "About", exact: true })).toBeVisible();
   await expect(page.getByText(/^Version .+ Beta/u)).toBeVisible();
+  await expect(page.getByText("Diagnostics", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Nothing is uploaded automatically/u)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reveal", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export…", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Enable…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("never uploaded automatically");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Delete…", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("does not delete chats");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();

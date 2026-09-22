@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"results\":[{\"title\":\"Exa documentation\",\"url\":\"https://exa.ai/docs/reference/exa-mcp\",\"text\":\"  Hosted MCP search   evidence.  \"},{\"title\":\"Unsafe credential URL\",\"url\":\"https://user:pass@example.test/private\",\"text\":\"must be dropped\"},{\"url\":\"https://example.test/second\",\"highlights\":[\"Second\",\"result\"]}]}"
+      }
+    ],
+    "isError": false
+  }
+}

@@ -2551,3 +2551,140 @@ test("terminal history is newest first, durable, and does not mutate its input",
   assert.equal(views[0]?.nodeSummary, "1 of 3 nodes succeeded");
   assert.equal(views[1]?.durationLabel, "1m 5s");
 });
+
+test("active publications reuse history and resubscribe on gaps without applying stale patches", async () => {
+  const applied: CreateImagesRunListResult[] = [];
+  const released: string[] = [];
+  const scheduled: Array<() => void> = [];
+  let listener: ((notification: CreateImagesRunChangedNotification) => void) | undefined;
+  let subscriptions = 0;
+  const snapshot = { status: "ready" as const, authoritative: true as const,
+    activeRun: runView(), history: [], recoveries: [] };
+  const controller = createImagesRunSubscriptionController({
+    workflowId: "workflow-1",
+    subscribe: async () => ({ status: "ready", subscriptionId: `sub-${++subscriptions}`,
+      streamSequence: 0, snapshot }),
+    unsubscribe: ({ subscriptionId }) => { released.push(subscriptionId); },
+    onChanged: (handler) => { listener = handler; return () => undefined; },
+    apply: (result) => applied.push(result),
+    schedule: (callback) => { scheduled.push(callback); return callback; },
+    cancelSchedule: () => undefined,
+  });
+  controller.start();
+  await Promise.resolve();
+  listener!({ subscriptionId: "sub-1", streamSequence: 1,
+    activeRun: { ...runView(), lastSequence: 20 } });
+  const patched = applied[applied.length - 1];
+  assert.equal(patched?.status, "ready");
+  if (patched?.status !== "ready") throw new Error("Expected ready");
+  assert.equal(patched.history, snapshot.history);
+  assert.equal(patched.activeRun?.lastSequence, 20);
+  listener!({ subscriptionId: "sub-1", streamSequence: 3,
+    activeRun: { ...runView(), lastSequence: 30 } });
+  assert.equal(applied.length, 2);
+  assert.deepEqual(released, ["sub-1"]);
+  scheduled.shift()!();
+  await Promise.resolve();
+  assert.equal(subscriptions, 2);
+  listener!({ subscriptionId: "sub-1", streamSequence: 4,
+    activeRun: { ...runView(), lastSequence: 40 } });
+  assert.equal(applied.length, 3);
+  // A late terminal full snapshot seals the current subscription, even across a gap.
+  listener!({ subscriptionId: "sub-2", streamSequence: 5, snapshot: {
+    ...snapshot, activeRun: undefined, latestTerminalRun: { ...runView(), status: "succeeded" },
+  } });
+  const terminal = applied[applied.length - 1];
+  assert.equal(terminal?.status === "ready" && terminal.latestTerminalRun?.status, "succeeded");
+  controller.dispose();
+});
+
+test("a buffered active event cannot roll back the newer subscription snapshot", async () => {
+  let resolve!: (value: CreateImagesRunSubscriptionResult) => void;
+  let listener!: (notification: CreateImagesRunChangedNotification) => void;
+  const applied: CreateImagesRunListResult[] = [];
+  const controller = createImagesRunSubscriptionController({
+    workflowId: "workflow-1",
+    subscribe: () => new Promise((done) => { resolve = done; }),
+    unsubscribe: () => true,
+    onChanged: (handler) => { listener = handler; return () => undefined; },
+    apply: (result) => applied.push(result),
+  });
+  controller.start();
+  listener({ subscriptionId: "sub", streamSequence: 1,
+    activeRun: { ...runView(), journalRevision: 2, lastSequence: 2 } });
+  listener({ subscriptionId: "sub", streamSequence: 2,
+    activeRun: { ...runView(), journalRevision: 3, lastSequence: 3 } });
+  resolve({ status: "ready", subscriptionId: "sub", streamSequence: 0, snapshot: {
+    status: "ready", authoritative: true, history: [], recoveries: [],
+    activeRun: { ...runView(), journalRevision: 3, lastSequence: 3 },
+  } });
+  await Promise.resolve();
+  assert.equal(applied.length, 1);
+  const current = applied[0];
+  assert.equal(current.status === "ready" && current.activeRun?.journalRevision, 3);
+  listener({ subscriptionId: "sub", streamSequence: 3,
+    activeRun: { ...runView(), journalRevision: 4, lastSequence: 4 } });
+  assert.equal(applied.length, 2);
+  controller.dispose();
+});
+
+test("buffered active bursts retain a preceding full history prune", async () => {
+  let resolve!: (value: CreateImagesRunSubscriptionResult) => void;
+  let listener!: (notification: CreateImagesRunChangedNotification) => void;
+  const applied: CreateImagesRunListResult[] = [];
+  const controller = createImagesRunSubscriptionController({
+    workflowId: "workflow-1",
+    subscribe: () => new Promise((done) => { resolve = done; }),
+    unsubscribe: () => true,
+    onChanged: (handler) => { listener = handler; return () => undefined; },
+    apply: (result) => applied.push(result),
+  });
+  controller.start();
+  listener({ subscriptionId: "sub", streamSequence: 1, snapshot: {
+    status: "ready", authoritative: true, history: [], recoveries: [],
+    activeRun: { ...runView(), journalRevision: 2, lastSequence: 2 },
+  } });
+  for (let sequence = 2; sequence <= 4; sequence += 1) listener({
+    subscriptionId: "sub", streamSequence: sequence,
+    activeRun: { ...runView(), journalRevision: sequence + 1, lastSequence: sequence + 1 },
+  });
+  resolve({ status: "ready", subscriptionId: "sub", streamSequence: 0, snapshot: {
+    status: "ready", authoritative: true, history: [terminalRunView()], recoveries: [],
+    activeRun: { ...runView(), journalRevision: 5, lastSequence: 5 },
+  } });
+  await Promise.resolve();
+  const latest = applied[applied.length - 1];
+  assert.equal(latest.status, "ready");
+  if (latest.status !== "ready") throw new Error("Expected ready");
+  assert.deepEqual(latest.history, []);
+  assert.equal(latest.activeRun?.journalRevision, 5);
+  assert.ok(applied.every((result) => result.status !== "ready" || result.activeRun?.journalRevision === 5));
+  controller.dispose();
+});
+
+test("persistent active publication gaps stop automatic resubscription at the retry budget", async () => {
+  let listener!: (notification: CreateImagesRunChangedNotification) => void;
+  const scheduled: Array<() => void> = [];
+  let count = 0;
+  const controller = createImagesRunSubscriptionController({
+    workflowId: "workflow-1",
+    subscribe: async () => ({ status: "ready", subscriptionId: `sub-${++count}`, streamSequence: 0,
+      snapshot: { status: "ready", authoritative: true, history: [], recoveries: [], activeRun: runView() } }),
+    unsubscribe: () => true,
+    onChanged: (handler) => { listener = handler; return () => undefined; },
+    apply: () => undefined,
+    retryDelaysMs: [1, 2],
+    schedule: (callback) => { scheduled.push(callback); return callback; },
+    cancelSchedule: () => undefined,
+  });
+  controller.start();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await Promise.resolve();
+    listener({ subscriptionId: `sub-${attempt}`, streamSequence: 2,
+      activeRun: { ...runView(), journalRevision: 100, lastSequence: 100 } });
+    if (attempt < 3) scheduled.shift()!();
+  }
+  assert.equal(count, 3);
+  assert.deepEqual(scheduled, []);
+  controller.dispose();
+});

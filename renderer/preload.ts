@@ -112,6 +112,8 @@ const aidenAPI = {
       ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.accessibilityStatus) as Promise<boolean>,
     request: (): Promise<boolean> =>
       ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.accessibilityRequest) as Promise<boolean>,
+    openSettings: (): Promise<boolean> =>
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.accessibilityOpenSettings) as Promise<boolean>,
   },
 };
 

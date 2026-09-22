@@ -13,8 +13,14 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
+import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
+import { telegramChatId } from "./telegram-turn.js";
+import { TelegramApiError } from "./telegram-bot-api.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -24,6 +30,11 @@ import type {
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps } from "./telegram-turn.js";
 import type { AppSettings } from "../types.js";
+import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
+import type {
+  ContextLifecycleAudience,
+  ContextLifecycleService,
+} from "../context-lifecycle-service.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -79,6 +90,7 @@ interface SentMessage {
   text: string;
   parseMode?: "HTML" | "MarkdownV2";
   disablePreview?: boolean;
+  replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
 }
 
 function createMockApi(opts: MockApiOptions) {
@@ -86,7 +98,9 @@ function createMockApi(opts: MockApiOptions) {
   const sentMessages: SentMessage[] = [];
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
+  const editedMessages: Array<Parameters<TelegramBotApi["editMessageText"]>[0]> = [];
   const calls: string[] = [];
+  const commandRegistrations: Array<readonly { command: string; description: string }[]> = [];
   let getMeCalls = 0;
   let getUpdatesCalls = 0;
   let sendChatActionCalls = 0;
@@ -94,6 +108,9 @@ function createMockApi(opts: MockApiOptions) {
 
   const api = {
     sentMessages,
+    editedMessages,
+    commandRegistrations,
+    async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
     voiceMessages,
     calls,
@@ -132,6 +149,7 @@ function createMockApi(opts: MockApiOptions) {
       text: string;
       parseMode?: "HTML" | "MarkdownV2";
       disablePreview?: boolean;
+      replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
     }): Promise<TelegramMessage> {
       sentMessages.push({
         chatId: p.chatId,
@@ -139,6 +157,7 @@ function createMockApi(opts: MockApiOptions) {
         text: p.text,
         parseMode: p.parseMode,
         disablePreview: p.disablePreview,
+        ...(p.replyMarkup ? { replyMarkup: p.replyMarkup } : {}),
       });
       return {
         message_id: sentMessages.length,
@@ -147,18 +166,39 @@ function createMockApi(opts: MockApiOptions) {
         text: p.text,
       };
     },
-    async sendRichMessage(p: { chatId: number; threadId?: number; markdown: string }): Promise<TelegramMessage> {
+    async sendRichMessage(p: {
+      chatId: number;
+      threadId?: number;
+      markdown: string;
+    }): Promise<TelegramMessage> {
       richMessages.push(p);
-      return { message_id: richMessages.length, chat: { id: p.chatId, type: "private" }, date: 0, text: p.markdown };
+      return {
+        message_id: richMessages.length,
+        chat: { id: p.chatId, type: "private" },
+        date: 0,
+        text: p.markdown,
+      };
     },
-    async sendVoice(p: { chatId: number; threadId?: number; bytes: Uint8Array }): Promise<TelegramMessage> {
+    async sendVoice(p: {
+      chatId: number;
+      threadId?: number;
+      bytes: Uint8Array;
+    }): Promise<TelegramMessage> {
       voiceMessages.push(p);
       return { message_id: voiceMessages.length, chat: { id: p.chatId, type: "private" }, date: 0 };
     },
     async sendChatAction(_chatId: number, _action: string): Promise<void> {
       sendChatActionCalls += 1;
     },
-    async editMessageText(): Promise<void> {},
+    async downloadFile(fileId: string) {
+      return {
+        file: { file_id: fileId, file_unique_id: `unique-${fileId}` },
+        bytes: new Uint8Array([1, 2, 3]),
+      };
+    },
+    async editMessageText(params: Parameters<TelegramBotApi["editMessageText"]>[0]): Promise<void> {
+      editedMessages.push(params);
+    },
     async answerCallbackQuery(): Promise<void> {
       answerCallbackQueryCalls += 1;
     },
@@ -175,6 +215,7 @@ interface MockConfigState {
   hasToken: boolean;
   allowedUserId?: number;
   telegramWorkspaceId?: string;
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
@@ -194,6 +235,7 @@ function createMockConfig(state: MockConfigState) {
     // Preserve the legacy delivery assertions in this compatibility fixture.
     // Native rich delivery has dedicated coverage below.
     telegramRendering: state.telegramRendering ?? "html",
+    telegramDraftPreviews: state.telegramDraftPreviews,
     telegramVoiceMode: state.telegramVoiceMode,
     telegramThreadedMode: state.telegramThreadedMode,
   });
@@ -251,6 +293,7 @@ function createMockConfig(state: MockConfigState) {
 // ---------------------------------------------------------------------------
 
 interface MockTurnOptions {
+  draft?: string;
   reply?: string;
   /** Never resolve llmClient.start so the turn stays "active". */
   pending?: boolean;
@@ -262,6 +305,13 @@ interface MockTurnOptions {
   workspaceResolver?: (
     workspaceId?: string,
   ) => { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
+  existingChats?: Array<{
+    id: string;
+    workspaceId: string;
+    botId: string;
+    providerId?: string;
+    model?: string;
+  }>;
 }
 
 /** Minimal owner surface the turn shim drives back through send(). */
@@ -278,8 +328,13 @@ function createMockTurn(opts: MockTurnOptions = {}) {
 
   const pendingStart = new EventEmitter();
   let pendingOwner: TurnOwner | undefined;
-  const createdChats: Array<{ id: string; workspaceId?: string }> = [];
-  const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string; content?: string }> = [];
+  const createdChats: Array<{ id: string; workspaceId?: string; botId?: string }> = [];
+  const startedParams: Array<{
+    chatId: string;
+    workspaceId?: string;
+    mode?: string;
+    content?: string;
+  }> = [];
   const llmClient = {
     beginChatTurn() {
       if (opts.busy) return null;
@@ -294,7 +349,12 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     },
     async start(
       streamId: string,
-      _params: { chatId: string; workspaceId?: string; mode?: string; messages?: Array<{ content: string }> },
+      _params: {
+        chatId: string;
+        workspaceId?: string;
+        mode?: string;
+        messages?: Array<{ content: string }>;
+      },
       owner: TurnOwner,
       _options: unknown,
     ): Promise<boolean> {
@@ -309,6 +369,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         owner.send("chat:error", { streamId, message: opts.failMessage });
         return true;
       }
+      if (opts.draft) owner.send("chat:delta", { streamId, delta: opts.draft });
       owner.send("chat:done", { streamId, content: opts.reply ?? "Mock reply" });
       return true;
     },
@@ -321,9 +382,13 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   };
 
   const chatStore = {
-    async create(input: { id: string; title: string; workspaceId?: string }) {
+    async create(input: { id: string; title: string; workspaceId?: string; botId?: string }) {
       createCalls += 1;
-      createdChats.push({ id: input.id, workspaceId: input.workspaceId });
+      createdChats.push({
+        id: input.id,
+        ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+        ...(input.botId !== undefined ? { botId: input.botId } : {}),
+      });
       return {
         id: input.id,
         title: input.title,
@@ -331,8 +396,17 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         workspaceId: input.workspaceId,
       };
     },
-    async get(_id: string) {
-      return null;
+    async get(id: string) {
+      const chat = opts.existingChats?.find((candidate) => candidate.id === id);
+      return chat
+        ? {
+            providerId: "openai",
+            model: "gpt-4",
+            ...chat,
+            title: "Telegram bot",
+            updatedAt: 0,
+          }
+        : null;
     },
     async appendMessage(id: string, _message: unknown) {
       appendCalls += 1;
@@ -361,6 +435,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         opts.workspaceResolver?.(workspaceId) ?? opts.workspace ?? { kind: "assistant" as const }
       );
     },
+    async preflightBotTurnAuthority() {},
     broadcastMetadata(_chat: unknown) {},
   };
 
@@ -421,12 +496,15 @@ function createLogs() {
 // ---------------------------------------------------------------------------
 
 interface HarnessOptions {
+  listPromptCommands?: import("./telegram-service-core.js").TelegramServiceDeps["listPromptCommands"];
+  validateSkillInvocation?: import("./telegram-service-core.js").TelegramServiceDeps["validateSkillInvocation"];
   enabled?: boolean;
   hasToken?: boolean;
   allowedUserId?: number;
   me?: TelegramUser;
   batches?: TelegramUpdate[][];
   autoStop?: boolean;
+  draft?: string;
   reply?: string;
   pendingTurn?: boolean;
   busyTurn?: boolean;
@@ -435,18 +513,28 @@ interface HarnessOptions {
   workspaces?: Array<{ id: string; name: string; folderPath: string }>;
   telegramWorkspaceId?: string;
   workspaceResolver?: MockTurnOptions["workspaceResolver"];
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
+  profile?: string;
+  resolveBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["resolveBotBinding"];
+  validateBotBinding?: import("./telegram-service-core.js").TelegramServiceDeps["validateBotBinding"];
+  assertBotBindingStoreHealthy?: import("./telegram-service-core.js").TelegramServiceDeps["assertBotBindingStoreHealthy"];
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
-  applyModelSelection?: (choice: import("./telegram-controls.js").TelegramModelChoice) => Promise<void>;
+  applyModelSelection?: (
+    choice: import("./telegram-controls.js").TelegramModelChoice,
+  ) => Promise<void>;
+  compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
   delayAfterFirstBatch?: boolean;
+  existingChats?: MockTurnOptions["existingChats"];
+  storeInboundFile?: import("./telegram-service-core.js").TelegramServiceDeps["storeInboundFile"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -456,10 +544,12 @@ function harness(o: HarnessOptions = {}) {
     allowedUserId: o.allowedUserId,
     telegramWorkspaceId: o.telegramWorkspaceId,
     telegramRendering: o.telegramRendering,
+    telegramDraftPreviews: o.telegramDraftPreviews,
     telegramVoiceMode: o.telegramVoiceMode,
     telegramThreadedMode: o.telegramThreadedMode,
   });
   const turnMock = createMockTurn({
+    draft: o.draft,
     reply: o.reply,
     pending: o.pendingTurn,
     busy: o.busyTurn,
@@ -475,6 +565,7 @@ function harness(o: HarnessOptions = {}) {
         }
         return o.workspace ?? { kind: "assistant" as const };
       }),
+    existingChats: o.existingChats,
   });
   const sleepMock = createMockSleep();
   const logs = createLogs();
@@ -494,15 +585,23 @@ function harness(o: HarnessOptions = {}) {
     api: api as unknown as TelegramBotApi,
     config: config as unknown as TelegramConfig,
     turn: turnMock.turn as unknown as TelegramTurnDeps,
+    profile: o.profile,
+    resolveBotBinding: o.resolveBotBinding,
+    validateBotBinding: o.validateBotBinding,
+    assertBotBindingStoreHealthy: o.assertBotBindingStoreHealthy,
     listWorkspaces: async () => o.workspaces ?? [],
     listModels: o.listModels,
+    listPromptCommands: o.listPromptCommands,
+    validateSkillInvocation: o.validateSkillInvocation,
     applyModelSelection: o.applyModelSelection,
+    compactChat: o.compactChat,
     abortChat: o.abortChat,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
+    storeInboundFile: o.storeInboundFile,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
     sleep: sleepMock.sleep,
@@ -646,6 +745,33 @@ test("first message from a non-bot user pairs the owner (sets telegramAllowedUse
     api.sentMessages.some((m) => m.text.includes("paired")),
     "pairing acknowledgement sent",
   );
+});
+
+test("unhealthy binding authority blocks both pairing and ordinary Telegram fallback", async (t) => {
+  for (const allowedUserId of [undefined, 42]) {
+    await t.test(allowedUserId === undefined ? "unpaired" : "paired", async () => {
+      const sender = person(allowedUserId ?? 42, "owner");
+      const { service, api, config, turnMock } = harness({
+        enabled: true,
+        hasToken: true,
+        allowedUserId,
+        assertBotBindingStoreHealthy: async () => {
+          throw new Error("Telegram routing data is unavailable. Open Aiden on the Mac to repair it.");
+        },
+        batches: [[makeUpdate(1, makeMessage(10, sender, "must not fall back"))]],
+        autoStop: true,
+      });
+
+      await service.start();
+      await waitFor(() => api.sentMessages.some(({ text }) =>
+        text.includes("Telegram routing data is unavailable")));
+
+      assert.equal(turnMock.startCalls(), 0);
+      assert.equal(service.queueSize, 0);
+      assert.equal(config.state.allowedUserId, allowedUserId);
+      assert.deepEqual(config.setSettingsCalls, []);
+    });
+  }
 });
 
 test("messages from a user other than the paired owner are ignored", async () => {
@@ -950,7 +1076,11 @@ test("always voice mode intercepts automatic text and falls back only when synth
     telegramRendering: "rich",
     telegramVoiceMode: "always",
     batches: [[makeUpdate(1, makeMessage(10, owner, "Speak"))]],
-    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+    synthesizeVoice: async () => ({
+      bytes: new Uint8Array([1]),
+      name: "voice.ogg",
+      mimeType: "audio/ogg",
+    }),
   });
   await voiced.service.start();
   await waitFor(() => voiced.api.voiceMessages.length === 1);
@@ -991,6 +1121,272 @@ test("a scoped Telegram prompt uses an isolated project chat", async () => {
   assert.equal(started?.chatId, "telegram-42-workspace-a");
   assert.equal(started?.workspaceId, "workspace-a");
   assert.equal(started?.mode, "assistant-automation");
+});
+
+test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mode", async () => {
+  const owner = person(42, "owner");
+  const binding = {
+    botId: "bot-a",
+    profile: "work",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
+    backingChatId: "telegram-work-bot-a",
+  } as const;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async (input) => input.profile === "work" ? binding : undefined,
+    workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
+    existingChats: [{ id: binding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "bot prompt"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Mock reply")));
+
+  assert.deepEqual(turnMock.createdChats(), []);
+  assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-bot-a");
+  assert.equal(turnMock.startedParams()[0]?.workspaceId, "bot-home-a");
+  assert.equal(turnMock.startedParams()[0]?.mode, undefined);
+});
+
+test("an ordinary unbound route never enters Bot validation or changes fallback routing", async () => {
+  const owner = person(42, "owner");
+  let validationCalls = 0;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => undefined,
+    validateBotBinding: async () => {
+      validationCalls += 1;
+      return "Bot validation must not run for an unbound route.";
+    },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "ordinary prompt"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Mock reply")),
+  );
+
+  assert.equal(validationCalls, 0);
+  assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-42");
+  assert.equal(turnMock.startedParams()[0]?.mode, "assistant-unattended");
+});
+
+test("a persisted Bot binding dispatches in its managed home while retaining its external route", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-telegram-binding-dispatch-"));
+  try {
+    const bindings = createTelegramBotBindingStore({
+      root: () => root,
+      now: () => 100,
+      createBackingChatId: () => "telegram-bot-11111111-1111-4111-8111-111111111111",
+    });
+    const binding = await bindings.bind({
+      botId: "bot-a",
+      profile: "work",
+      chatId: 100,
+      ownerUserId: 42,
+      workspaceId: "external-work",
+      backingWorkspaceId: "managed-bot-home",
+    });
+    const owner = person(42, "owner");
+    const { service, api, turnMock } = harness({
+      enabled: true,
+      allowedUserId: 42,
+      profile: "work",
+      resolveBotBinding: (input) => bindings.resolve(
+        input.profile,
+        input.chatId,
+        input.threadId,
+      ),
+      existingChats: [{
+        id: binding.backingChatId,
+        workspaceId: binding.backingWorkspaceId,
+        botId: binding.botId,
+      }],
+      batches: [[makeUpdate(1, makeMessage(10, owner, "managed prompt"))]],
+      autoStop: true,
+    });
+
+    await service.start();
+    await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
+      ({ text }) => text.includes("Mock reply"),
+    ));
+
+    assert.equal(binding.workspaceId, "external-work");
+    assert.equal(turnMock.startedParams()[0]?.workspaceId, "managed-bot-home");
+    assert.equal(turnMock.startedParams()[0]?.chatId, binding.backingChatId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Bot-bound Telegram files carry exact Bot identity into managed-home storage", async () => {
+  const owner = person(42, "owner");
+  const stored: Array<{
+    workspaceId?: string;
+    botId?: string;
+    name: string;
+  }> = [];
+  const inbound: TelegramMessage = {
+    ...makeMessage(10, owner, "inspect this file"),
+    document: {
+      file_id: "file-1",
+      file_unique_id: "unique-file-1",
+      file_name: "report.pdf",
+      mime_type: "application/pdf",
+      file_size: 3,
+    },
+  };
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => ({
+      botId: "bot-a",
+      profile: "work",
+      chatId: 100,
+      ownerUserId: 42,
+      workspaceId: "external-work",
+      backingWorkspaceId: "managed-bot-home",
+      backingChatId: "telegram-work-bot-a",
+      enabled: true,
+      revision: "binding-revision",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    existingChats: [{
+      id: "telegram-work-bot-a",
+      workspaceId: "managed-bot-home",
+      botId: "bot-a",
+    }],
+    storeInboundFile: async (input) => {
+      stored.push({
+        workspaceId: input.workspaceId,
+        botId: input.botId,
+        name: input.name,
+      });
+      return "/private/bot-home/.aiden/telegram-inbox/work/report.pdf";
+    },
+    batches: [[makeUpdate(1, inbound)]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
+    ({ text }) => text.includes("Mock reply"),
+  ));
+
+  assert.deepEqual(stored, [{
+    workspaceId: "managed-bot-home",
+    botId: "bot-a",
+    name: "report.pdf",
+  }]);
+});
+
+test("bot binding validation rejects archived or missing bot identities before queue admission", async () => {
+  const owner = person(42, "owner");
+  const binding = {
+    botId: "archived-bot",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-archived",
+    backingChatId: "telegram-default-archived-bot",
+  } as const;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    resolveBotBinding: async () => binding,
+    validateBotBinding: async () => false,
+    batches: [[makeUpdate(1, makeMessage(10, owner, "should not run"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => api.sentMessages.some(({ text }) => text.includes("unavailable or archived")));
+
+  assert.equal(turnMock.startCalls(), 0);
+  assert.equal(service.queueSize, 0);
+});
+
+test("a binding resolver is never called for group chats or unauthorized users", async () => {
+  let calls = 0;
+  const resolver = async () => {
+    calls += 1;
+    return undefined;
+  };
+  const intruder = person(99, "intruder");
+  const group = makeMessage(10, person(42, "owner"), "group prompt", -100);
+  group.chat.type = "group";
+  const { service } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    resolveBotBinding: resolver,
+    batches: [[makeUpdate(1, group), makeUpdate(2, makeMessage(11, intruder, "private intruder"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => service.getStatus().status === "disabled");
+  assert.equal(calls, 0);
+});
+
+test("queued turns retain their captured backing chat when a source is rebound", async () => {
+  const owner = person(42, "owner");
+  const first = {
+    botId: "bot-a",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-a",
+    backingChatId: "telegram-bot-a",
+  } as const;
+  const second = {
+    botId: "bot-b",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "work",
+    backingWorkspaceId: "bot-home-b",
+    backingChatId: "telegram-bot-b",
+  } as const;
+  let resolveCalls = 0;
+  const { service, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    resolveBotBinding: async () => resolveCalls++ === 0 ? first : second,
+    workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
+    existingChats: [
+      { id: first.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+      { id: second.backingChatId, workspaceId: "bot-home-b", botId: "bot-b" },
+    ],
+    batches: [[
+      makeUpdate(1, makeMessage(10, owner, "first")),
+      makeUpdate(2, makeMessage(11, owner, "second")),
+    ]],
+    autoStop: false,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && service.queueSize === 1);
+  turnMock.completePendingTurn();
+  await waitFor(() => turnMock.startCalls() === 2);
+
+  assert.deepEqual(turnMock.createdChats(), []);
+  service.stop();
 });
 
 test("dispatch gate blocks a second turn while one is already active", async () => {
@@ -1039,13 +1435,20 @@ test("thumbs-down reaction removes the matching queued prompt", async () => {
     pendingTurn: true,
     delayAfterFirstBatch: true,
     batches: [
-      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "queued"))],
+      [
+        makeUpdate(1, makeMessage(10, owner, "active")),
+        makeUpdate(2, makeMessage(11, owner, "queued")),
+      ],
       [reaction],
     ],
     autoStop: false,
   });
   await service.start();
-  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Queued prompt removed")));
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Queued prompt removed")),
+  );
   assert.equal(service.queueSize, 0);
   turnMock.completePendingTurn();
   service.stop();
@@ -1060,18 +1463,23 @@ test("reaction shortcut variants normalize variation selectors and promote queue
     autoStop: false,
     delayAfterFirstBatch: true,
     batches: [
-      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "waiting"))],
-      [{
-        update_id: 3,
-        message_reaction: {
-          chat: { id: 100, type: "private" },
-          message_id: 11,
-          user: owner,
-          old_reaction: [],
-          new_reaction: [{ type: "emoji", emoji: "❤️" }],
-          date: 0,
+      [
+        makeUpdate(1, makeMessage(10, owner, "active")),
+        makeUpdate(2, makeMessage(11, owner, "waiting")),
+      ],
+      [
+        {
+          update_id: 3,
+          message_reaction: {
+            chat: { id: 100, type: "private" },
+            message_id: 11,
+            user: owner,
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "❤️" }],
+            date: 0,
+          },
         },
-      }],
+      ],
     ],
   });
   await result.service.start();
@@ -1088,7 +1496,11 @@ test("thread provisioning reports the BotFather capability prerequisite", async 
   });
   await result.service.start();
   await assert.rejects(result.service.ensureThreads(), /BotFather/u);
-  assert.ok(result.service.getStatus().recentDiagnostics.some(({ message }) => message.includes("BotFather")));
+  assert.ok(
+    result.service
+      .getStatus()
+      .recentDiagnostics.some(({ message }) => message.includes("BotFather")),
+  );
 });
 
 test("reaction updates are offered to registered extension routing first", async () => {
@@ -1097,17 +1509,21 @@ test("reaction updates are offered to registered extension routing first", async
   const { service } = harness({
     enabled: true,
     allowedUserId: 42,
-    batches: [[{
-      update_id: 1,
-      message_reaction: {
-        chat: { id: 100, type: "private" },
-        message_id: 10,
-        user: owner,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
-        date: 0,
-      },
-    }]],
+    batches: [
+      [
+        {
+          update_id: 1,
+          message_reaction: {
+            chat: { id: 100, type: "private" },
+            message_id: 10,
+            user: owner,
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "👍" }],
+            date: 0,
+          },
+        },
+      ],
+    ],
     handleExtensionUpdate: async () => {
       extensionCalls += 1;
       return true;
@@ -1126,7 +1542,7 @@ test("thread messages capture their durable workspace and replies stay in the th
     allowedUserId: 42,
     telegramRendering: "rich",
     workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
-    resolveThreadWorkspace: async (threadId) => threadId === 77 ? "project" : undefined,
+    resolveThreadWorkspace: async (threadId) => (threadId === 77 ? "project" : undefined),
     batches: [[makeUpdate(1, message)]],
   });
   await service.start();
@@ -1140,7 +1556,9 @@ test("pairing reset clears queued work and durable thread bindings", async () =>
   const { service, config } = harness({
     enabled: true,
     allowedUserId: 42,
-    clearThreadTargets: async () => { cleared += 1; },
+    clearThreadTargets: async () => {
+      cleared += 1;
+    },
     batches: [],
     autoStop: false,
   });
@@ -1171,8 +1589,14 @@ test("offset persistence failure is diagnostic and polling remains live", async 
     await originalPersist(offset);
   };
   await service.start();
-  await waitFor(() => api.sentMessages.filter(({ text }) => text.includes("Aiden Telegram Agent")).length === 2);
-  assert.ok(service.getStatus().recentDiagnostics.some(({ message }) => message.includes("disk unavailable")));
+  await waitFor(
+    () => api.sentMessages.filter(({ text }) => text.includes("Aiden Telegram Agent")).length === 2,
+  );
+  assert.ok(
+    service
+      .getStatus()
+      .recentDiagnostics.some(({ message }) => message.includes("disk unavailable")),
+  );
 });
 
 test("active-run model switching persists first, aborts safely, and queues a continuation", async () => {
@@ -1195,13 +1619,22 @@ test("active-run model switching persists first, aborts safely, and queues a con
     autoStop: false,
     batches: [
       [makeUpdate(1, makeMessage(10, owner, "long task"))],
-      [{
-        update_id: 2,
-        callback_query: { id: "model", from: owner, message: controlMessage, data: "model:set:0" },
-      }],
+      [
+        {
+          update_id: 2,
+          callback_query: {
+            id: "model",
+            from: owner,
+            message: controlMessage,
+            data: "model:set:0",
+          },
+        },
+      ],
     ],
     listModels: async () => [choice],
-    applyModelSelection: async (selected) => { applied.push(selected); },
+    applyModelSelection: async (selected) => {
+      applied.push(selected);
+    },
     abortChat: async () => {
       aborts += 1;
       finishActive();
@@ -1211,6 +1644,263 @@ test("active-run model switching persists first, aborts safely, and queues a con
   await result.service.start();
   await waitFor(() => applied.length === 1 && aborts === 1 && result.turnMock.startCalls() === 2);
   assert.deepEqual(applied, [choice]);
-  assert.match(result.turnMock.startedParams()[1]?.content ?? "", /Continue the interrupted task using Next\/next-model/);
+  assert.match(
+    result.turnMock.startedParams()[1]?.content ?? "",
+    /Continue the interrupted task using Next\/next-model/,
+  );
   result.service.stop();
 });
+
+test("a stale model callback cannot select a model omitted by the current visible catalog", async () => {
+  const owner = person(42);
+  const applied: unknown[] = [];
+  const result = harness({
+    enabled: true,
+    allowedUserId: 42,
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "hidden-model",
+            from: owner,
+            message: makeMessage(20, BOT, "model menu"),
+            data: "model:set:0",
+          },
+        },
+      ],
+    ],
+    listModels: async () => [],
+    applyModelSelection: async (selected) => {
+      applied.push(selected);
+    },
+  });
+  await result.service.start();
+  await waitFor(() => result.api.answerCallbackQueryCalls() > 0);
+  assert.deepEqual(applied, []);
+  result.service.stop();
+});
+
+test("bound Bot compaction callback targets the immutable canonical backing chat", async () => {
+  const owner = person(42);
+  const binding = {
+    botId: "bot-1",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: owner.id,
+    workspaceId: "bot-workspace",
+    backingWorkspaceId: "bot-workspace",
+    backingChatId: "canonical-bot-chat",
+    enabled: true,
+  } as const;
+  const compactedChatIds: string[] = [];
+  const lifecycle = createTelegramLifecycleAdapter(
+    {
+      compactChat: async (chatId: string, audience: ContextLifecycleAudience) => {
+        compactedChatIds.push(chatId);
+        assert.deepEqual(audience, {
+          kind: "telegram",
+          profile: "default",
+          ownerId: "telegram:default",
+        });
+        return { compacted: true, tokensBefore: 123_456 };
+      },
+      cancelChat: () => false,
+    } as unknown as ContextLifecycleService,
+    "default",
+  );
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-bound-bot",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    resolveBotBinding: async () => binding,
+    validateBotBinding: async () => true,
+    compactChat: lifecycle.compactChat,
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [binding.backingChatId]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Session compacted from about 123,456 tokens")),
+  );
+  result.service.stop();
+});
+
+test("manual Telegram compaction preserves the shared busy admission result", async () => {
+  const owner = person(42);
+  const compactedChatIds: string[] = [];
+  const result = harness({
+    enabled: true,
+    allowedUserId: owner.id,
+    telegramWorkspaceId: "workspace-a",
+    profile: "work",
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "compact-busy",
+            from: owner,
+            message: makeMessage(20, BOT, "session menu"),
+            data: "compact:yes",
+          },
+        },
+      ],
+    ],
+    compactChat: async (chatId) => {
+      compactedChatIds.push(chatId);
+      return { compacted: false, error: "Wait for the active turn to finish or abort it first." };
+    },
+  });
+
+  await result.service.start();
+  await waitFor(() => compactedChatIds.length === 1);
+
+  assert.deepEqual(compactedChatIds, [telegramChatId(owner.id, "workspace-a", "work")]);
+  assert.ok(
+    result.api.sentMessages.some(({ text }) =>
+      text.includes("Wait for the active turn to finish or abort it first")),
+  );
+  assert.equal(result.turnMock.startCalls(), 0);
+  result.service.stop();
+});
+
+
+test("a skill queued before global disable is rejected at dispatch and command registration refreshes", async () => {
+  let skillsEnabled = true;
+  let validations = 0;
+  const h = harness({
+    enabled: true, hasToken: true, allowedUserId: 42, pendingTurn: true, autoStop: false,
+    telegramWorkspaceId: "project",
+    workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "ordinary work")),
+      makeUpdate(2, makeMessage(11, person(42), "/review inspect the patch"))]],
+    listPromptCommands: async () => skillsEnabled ? [{ command: "review", description: "Review code",
+      skillInvocation: { workspaceId: "project", invocationId: "opaque-skill" } }] : [],
+    validateSkillInvocation: async () => { validations += 1; if (!skillsEnabled) throw new Error("Skills are disabled"); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1 && h.service.queueSize === 1);
+  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  skillsEnabled = false;
+  await h.service.refreshCommands();
+  assert(!h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  h.turnMock.completePendingTurn();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Skills are disabled")));
+  assert.equal(validations, 1);
+  assert.equal(h.turnMock.startCalls(), 1, "disabled queued skill never starts inference");
+  assert.equal(h.turnMock.appendCalls(), 1, "expanded or disabled skill text never enters visible history");
+  skillsEnabled = true;
+  await h.service.refreshCommands();
+  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  h.service.stop();
+});
+
+
+test("unchanged final HTML draft still delivers remaining chunks and voice actions once", async () => {
+  const reply = "a".repeat(5_000);
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramDraftPreviews: true,
+    draft: reply,
+    reply: `${reply}\n<!-- telegram_voice {"text":"Done"} -->`,
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+  });
+  h.api.editMessageText = async (params) => {
+    h.api.editedMessages.push(params);
+    assert.equal(params.text, h.api.sentMessages[0]?.text, "final edit matches the persisted preview");
+    throw new TelegramApiError("Bad Request: message is not modified: specified new message content is exactly the same", 400);
+  };
+  try {
+    await h.service.start();
+    await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+    assert.deepEqual(h.logs.errors, []);
+    assert.equal(h.api.editedMessages.length, 1);
+    assert.equal(h.api.sentMessages.length, 2, "preview and remaining chunk without a duplicate first chunk");
+    assert.equal(h.api.sentMessages.map(({ text }) => text).join(""), reply);
+    assert.equal(h.api.voiceMessages.length, 1, "final delivery continues to outbound actions");
+  } finally {
+    h.service.stop();
+  }
+});
+
+for (const description of ["message to edit not found", "message can't be edited"]) {
+  test(`final HTML reply replaces an unavailable preview: ${description}`, async () => {
+    const inbound = { ...makeMessage(10, person(42), "hello", 123), message_thread_id: 17 };
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: 'Final answer\n<!-- telegram_button {"label":"Next","prompt":"Continue"} -->',
+      batches: [[makeUpdate(1, inbound)]],
+    });
+    h.api.editMessageText = async (params) => {
+      h.api.editedMessages.push(params);
+      throw new TelegramApiError(`Bad Request: ${description}`, 400);
+    };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.deepEqual(h.logs.errors, []);
+      assert.equal(h.api.editedMessages.length, 1);
+      assert.equal(h.api.sentMessages.length, 2, "one replacement for the unavailable preview");
+      const replacement = h.api.sentMessages[1]!;
+      assert.equal(replacement.text, "Final answer");
+      assert.equal(replacement.chatId, 123);
+      assert.equal(replacement.threadId, 17);
+      assert.equal(replacement.parseMode, "HTML");
+      assert.equal(replacement.disablePreview, true);
+      assert.deepEqual(replacement.replyMarkup, h.api.editedMessages[0]?.replyMarkup);
+      assert.equal(replacement.replyMarkup?.inline_keyboard[0]?.[0]?.text, "Next");
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+for (const failure of [
+  new TelegramApiError("Too Many Requests: retry after 10", 429, 10),
+  new TelegramApiError("Bad Request: can't parse entities", 400),
+  new TelegramApiError("Internal Server Error", 500),
+  new TelegramApiError("message is not modified", 403),
+  new Error("message to edit not found"),
+]) {
+  test(`final HTML edit does not mask or resend on ${failure.message} (${failure instanceof TelegramApiError ? failure.code : "transport"})`, async () => {
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: "Final answer",
+      batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    });
+    h.api.editMessageText = async () => { throw failure; };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.equal(h.logs.errors.length, 1);
+      assert.equal(h.logs.errors[0]?.cause, failure);
+      assert.equal(h.api.sentMessages.filter(({ text }) => text === "Final answer").length, 1, "no speculative resend after uncertain edit failure");
+    } finally {
+      h.service.stop();
+    }
+  });
+}

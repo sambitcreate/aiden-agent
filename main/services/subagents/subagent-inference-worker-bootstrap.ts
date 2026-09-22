@@ -45,4 +45,19 @@ Object.defineProperty(childProcess, "promises", {
 syncBuiltinESMExports();
 
 const runtimeModule = "./subagent-inference-worker-runtime.js";
-await import(runtimeModule);
+try {
+  await import(runtimeModule);
+} catch (error) {
+  // This runs before the request protocol exists, so stderr is the only
+  // reliable parent-owned channel. Main captures only a bounded pre-ready
+  // tail, redacts it, and never forwards it to renderer state or Pi journals.
+  const detail =
+    error instanceof Error
+      ? `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`
+      : "Unknown bootstrap failure";
+  const forcedExit = setTimeout(() => process.exit(1), 100);
+  process.stderr.write(`AIDEN_SUBAGENT_BOOTSTRAP_FAILURE\n${detail}\n`, () => {
+    clearTimeout(forcedExit);
+    process.exit(1);
+  });
+}

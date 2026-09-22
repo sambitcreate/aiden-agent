@@ -63,6 +63,7 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
   assert.equal(created.permission, "read-only");
   assert.equal(created.notify, true);
   assert.equal(created.enabled, true);
+  assert.equal(created.webSearchEnabled, false);
   assert.ok(created.nextRunAt);
 
   const withChat = await store.updateRuntime(created.id, {
@@ -95,6 +96,52 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
     }),
     /prompt/iu,
   );
+});
+
+test("ordinary schedule Web Search authority defaults closed, persists explicitly, and survives edits", async () => {
+  const store = testStore();
+  const closed = await store.save({
+    name: "Legacy-safe brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize current events.",
+  });
+  assert.equal(closed.webSearchEnabled, false);
+
+  const granted = await store.save({
+    id: closed.id,
+    name: closed.name,
+    mode: closed.mode,
+    cron: closed.cron,
+    timezone: closed.timezone,
+    prompt: closed.prompt,
+    permission: closed.permission,
+    webSearchEnabled: true,
+  });
+  assert.equal(granted.webSearchEnabled, true);
+
+  const edited = await store.save({
+    id: granted.id,
+    name: "Edited brief",
+    mode: granted.mode,
+    cron: granted.cron,
+    timezone: granted.timezone,
+    prompt: granted.prompt,
+    permission: granted.permission,
+  });
+  assert.equal(edited.webSearchEnabled, true);
+
+  const script = await store.save({
+    name: "Script brief",
+    mode: "script",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    script: "report.sh",
+    permission: "full",
+    webSearchEnabled: true,
+  });
+  assert.equal(script.webSearchEnabled, false);
 });
 
 test("task revisions advance monotonically when the clock does not", async () => {
@@ -581,4 +628,57 @@ test("a missing dedicated chat can be cleared and recreated", async () => {
   const second = await store.ensureChatId(task.id, create);
   assert.notEqual(second, first);
   assert.equal(created.length, 2);
+});
+
+test("runtime ownership is rechecked at disk publication and preserves later writes", async (t) => {
+  const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { DataStore } = await import("./data-store.js");
+  const root = await mkdtemp(join(tmpdir(), "aiden-schedule-runtime-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let ownerIsCurrent = true;
+  let revokeBeforePublication = false;
+  const tasks = new DataStore<unknown[]>("tasks.json", [], () => root, {
+    beforeWritePublish: () => {
+      if (revokeBeforePublication) ownerIsCurrent = false;
+    },
+  });
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const task = await store.save({
+    name: "Daily brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  const originalBytes = await readFile(join(root, "tasks.json"), "utf8");
+  revokeBeforePublication = true;
+
+  await assert.rejects(
+    store.updateRuntime(
+      task.id,
+      { enabled: false, lastResult: "error", lastError: "obsolete startup failure" },
+      () => ownerIsCurrent,
+    ),
+    /no longer active/iu,
+  );
+  assert.deepEqual(await store.get(task.id), task);
+  assert.equal(await readFile(join(root, "tasks.json"), "utf8"), originalBytes);
+
+  revokeBeforePublication = false;
+  const newer = await store.updateRuntime(task.id, {
+    lastResult: "success",
+    chatId: "newer-chat-claim",
+  });
+  await assert.rejects(
+    store.updateRuntime(task.id, { enabled: false }, () => ownerIsCurrent),
+    /no longer active/iu,
+  );
+  assert.deepEqual(await store.get(task.id), newer);
+  const diskTask = JSON.parse(await readFile(join(root, "tasks.json"), "utf8"))[0];
+  assert.equal(diskTask.enabled, true);
+  assert.equal(diskTask.lastResult, "success");
+  assert.equal(diskTask.chatId, "newer-chat-claim");
+  assert.equal(diskTask.updatedAt, newer.updatedAt);
 });

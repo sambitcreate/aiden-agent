@@ -17,18 +17,9 @@ import {
   Server,
   Settings,
   Sun,
-  TerminalSquare,
   Wrench,
 } from "lucide-react";
-import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-  toast,
-} from "./ui";
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 import {
   COMMANDS,
@@ -45,11 +36,8 @@ import {
 import { useChats, useProviders, useSettings, queryKeys } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { providersApi, settingsApi } from "../lib/ipc";
-import {
-  readModelSelectionRevision,
-  useModelSelection,
-} from "../lib/use-model-selection";
-import { createModelEntries, isUsable } from "../lib/model-picker-data";
+import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
+import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { SETTINGS_DESTINATIONS } from "../lib/settings-section";
 import {
   createDefaultAppearanceConfig,
@@ -69,6 +57,13 @@ import {
   persistRecentCommands,
   recordRecentCommand,
 } from "../lib/command-palette-recent";
+import {
+  filterPaletteResult,
+  paletteResult,
+  reconcilePaletteResult,
+  staticPaletteResult,
+  type PaletteResult,
+} from "../lib/command-palette-results";
 
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
@@ -91,7 +86,7 @@ function Shortcut({ commandId }: { commandId: CommandId }) {
   const value = binding(commandId);
   if (!value) return null;
   return (
-    <kbd className="ml-auto shrink-0 rounded-md border border-separator bg-control/55 px-1.5 py-0.5 font-sans text-mini text-secondary">
+    <kbd className="ml-auto shrink-0 rounded-md bg-control/55 px-1.5 py-0.5 font-sans text-mini text-secondary">
       {prettyAccelerator(value)}
     </kbd>
   );
@@ -99,6 +94,23 @@ function Shortcut({ commandId }: { commandId: CommandId }) {
 
 function ItemDetail({ children }: { children: React.ReactNode }) {
   return <span className="ml-auto min-w-0 truncate text-small text-tertiary">{children}</span>;
+}
+
+function PaletteResultItem({
+  result,
+  ...props
+}: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords" | "disabled" | "forceMount"> & {
+  result: PaletteResult;
+}) {
+  return (
+    <CommandItem
+      {...props}
+      value={result.value}
+      keywords={result.keywords}
+      disabled={result.disabled}
+      forceMount={result.forceMount}
+    />
+  );
 }
 
 export function AppCommandPalette({
@@ -112,9 +124,14 @@ export function AppCommandPalette({
   const chats = useChats(activeId);
   const providers = useProviders();
   const settings = useSettings();
-  const selection = useModelSelection(providers.data);
+  const selection = useModelSelection(
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+    settings.data !== undefined,
+  );
   const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
+  const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const modelSelectionEpoch = React.useRef(0);
   const [recentCommands, setRecentCommands] = React.useState<CommandId[]>(() => {
@@ -127,8 +144,14 @@ export function AppCommandPalette({
     }
   });
   const models = React.useMemo(
-    () => createModelEntries(providers.data ?? []),
-    [providers.data],
+    () =>
+      settings.data
+        ? visibleModelEntries(
+            createModelEntries(providers.data ?? []),
+            settings.data?.hiddenModelsByProvider,
+          )
+        : [],
+    [providers.data, settings.data],
   );
   const unavailableModelProviders = React.useMemo(
     () => (providers.data ?? []).filter((provider) => !isUsable(provider)),
@@ -142,6 +165,101 @@ export function AppCommandPalette({
         (order.get(right.id) ?? Number.POSITIVE_INFINITY),
     );
   }, [recentCommands]);
+  const chatResults = React.useMemo(
+    () => [...(chats.data ?? [])]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((chat) => ({
+        chat,
+        result: paletteResult(`chat:${chat.id}`, [
+          chat.title,
+          new Date(chat.updatedAt).toLocaleString(),
+        ]),
+      })),
+    [chats.data],
+  );
+  const modelResults = React.useMemo(
+    () => models.map((entry) => ({
+      entry,
+      result: {
+        ...paletteResult(`model:${entry.value}`, [entry.label, entry.model, entry.providerLabel]),
+        disabled: busy,
+      },
+    })),
+    [models, busy],
+  );
+  const unavailableResults = React.useMemo(
+    () => unavailableModelProviders.map((provider) => ({
+      provider,
+      result: paletteResult(`unavailable-provider:${provider.id}`, [
+        provider.label, ...provider.models, "unavailable setup provider",
+      ]),
+    })),
+    [unavailableModelProviders],
+  );
+  const providerResults = React.useMemo(
+    () => (providers.data ?? []).map((provider) => ({
+      provider,
+      result: paletteResult(`provider:${provider.id}`, [
+        provider.label, provider.id, "manage connection models",
+      ]),
+    })),
+    [providers.data],
+  );
+  const rootResults = rootCommands.map((definition) => ({
+    definition,
+    result: staticPaletteResult(
+      `${definition.title} ${definition.description} ${definition.keywords.join(" ")}`,
+      { disabled: !canExecute(definition.id) },
+    ),
+  }));
+  const newChatResult = staticPaletteResult("New chat conversation", {
+    disabled: !canExecute("chat.new"),
+  });
+  const chatRetryResult = staticPaletteResult("Retry loading chats", { forceMount: true });
+  const modelRetryResult = staticPaletteResult("Retry loading models", { forceMount: true });
+  const providerRetryResult = staticPaletteResult("Retry loading providers", { forceMount: true });
+  const refreshResult = staticPaletteResult("Refresh provider model catalogs update", {
+    disabled: busy,
+  });
+  const appearanceResults = [
+    { mode: "system" as const, title: "Follow macOS appearance", icon: Palette },
+    { mode: "light" as const, title: "Use light appearance", icon: Sun },
+    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
+  ].map((item) => ({
+    ...item,
+    result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
+  }));
+  const settingsResults = SETTINGS_DESTINATIONS.map((destination) => ({
+    destination,
+    result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")}`),
+  }));
+  // One inventory owns both rendering and selection, including static actions,
+  // disabled states and force-mounted retry rows in every palette mode.
+  const resultsByMode: Record<CommandPaletteMode, PaletteResult[]> = {
+    root: rootResults.map(({ result }) => result),
+    chats: [
+      newChatResult,
+      ...(chats.isError ? [chatRetryResult] : []),
+      ...chatResults.map(({ result }) => result),
+    ],
+    models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
+      : [...modelResults, ...unavailableResults].map(({ result }) => result),
+    providers: [
+      refreshResult,
+      ...(providers.isError ? [providerRetryResult] : []),
+      ...providerResults.map(({ result }) => result),
+    ],
+    settings: [...appearanceResults, ...settingsResults].map(({ result }) => result),
+  };
+  const currentResults = resultsByMode[palette.mode];
+  const selectedResultValue = reconcilePaletteResult(activeResult, currentResults, query);
+  React.useLayoutEffect(() => {
+    // Persist a fallback too, so a removed result cannot reclaim selection if it
+    // later reappears. Do not overwrite a newer keyboard/pointer selection.
+    if (selectedResultValue !== activeResult) {
+      setActiveResult((current) => current === activeResult ? selectedResultValue : current);
+    }
+  }, [activeResult, selectedResultValue]);
   const appearanceMode = normalizeAppearanceConfig(
     settings.data?.appearance ?? createDefaultAppearanceConfig(),
   ).mode;
@@ -231,9 +349,15 @@ export function AppCommandPalette({
     if (busy) return;
     setBusy(true);
     try {
-      const next = await providersApi.refresh();
-      queryClient.setQueryData(queryKeys.providers, next);
-      toast.success("Provider model catalogs refreshed");
+      const result = await providersApi.refresh();
+      queryClient.setQueryData(queryKeys.providers, result.providers);
+      if (result.errors.length > 0) {
+        toast.warning(
+          `${result.providers.length > 0 ? "Available catalogs refreshed; " : ""}${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} kept cached models.`,
+        );
+      } else {
+        toast.success("Provider model catalogs refreshed");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Providers could not be refreshed.");
     } finally {
@@ -256,9 +380,7 @@ export function AppCommandPalette({
           const currentSettings = await settingsApi.get();
           if (!isCurrent()) return;
           previousAppearance = normalizeAppearanceConfig(
-            readCachedAppearance() ??
-              currentSettings.appearance ??
-              createDefaultAppearanceConfig(),
+            readCachedAppearance() ?? currentSettings.appearance ?? createDefaultAppearanceConfig(),
           );
           const appearance = {
             ...previousAppearance,
@@ -362,8 +484,14 @@ export function AppCommandPalette({
           <DialogPrimitive.Title className="sr-only">
             {MODE_LABELS[palette.mode]}
           </DialogPrimitive.Title>
-          <Command className="min-h-[420px]">
-            <div className="flex h-10 items-center border-b border-separator px-3">
+          <Command
+            value={selectedResultValue}
+            onValueChange={setActiveResult}
+            className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control"
+            // Dynamic values identify rows; search only their human-readable metadata.
+            filter={filterPaletteResult}
+          >
+            <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
                 <span className="mr-2 flex size-6 items-center justify-center rounded-md bg-control text-secondary">
                   <Keyboard className="size-3.5" />
@@ -372,7 +500,7 @@ export function AppCommandPalette({
                 <button
                   type="button"
                   onClick={() => enterMode("root")}
-                  className="mr-1 flex size-7 items-center justify-center rounded-lg text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection"
+                  className="mr-1 flex size-7 items-center justify-center rounded-full text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection"
                   aria-label="Back to commands"
                 >
                   <ArrowLeft className="size-4" />
@@ -389,6 +517,8 @@ export function AppCommandPalette({
             </div>
             <CommandInput
               data-command-palette-input
+              containerClassName="px-4"
+              showSeparator={false}
               value={query}
               onValueChange={setQuery}
               placeholder={
@@ -416,7 +546,7 @@ export function AppCommandPalette({
               </CommandEmpty>
 
               {palette.mode === "root"
-                ? rootCommands.map((definition) => {
+                ? rootResults.map(({ definition, result }) => {
                     const Icon = CATEGORY_ICON[definition.category];
                     const opensMode = [
                       "chat.search",
@@ -425,11 +555,10 @@ export function AppCommandPalette({
                       "settings.search",
                     ].includes(definition.id);
                     return (
-                      <CommandItem
+                      <PaletteResultItem
                         key={definition.id}
-                        value={`${definition.title} ${definition.description} ${definition.keywords.join(" ")}`}
+                        result={result}
                         onSelect={() => runCommand(definition.id)}
-                        disabled={!canExecute(definition.id)}
                         aria-keyshortcuts={ariaKeyShortcut(binding(definition.id))}
                         className="min-h-11 px-3"
                       >
@@ -440,19 +569,18 @@ export function AppCommandPalette({
                         ) : (
                           <Shortcut commandId={definition.id} />
                         )}
-                      </CommandItem>
+                      </PaletteResultItem>
                     );
                   })
                 : null}
 
               {palette.mode === "chats" ? (
                 <>
-                  <CommandItem
-                    value="New chat conversation"
+                  <PaletteResultItem
+                    result={newChatResult}
                     onSelect={() => runCommand("chat.new")}
-                    disabled={!canExecute("chat.new")}
                     aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
-                    className="min-h-11 px-3"
+                    className="mb-1 min-h-11 px-3"
                   >
                     <MessageSquare className="size-4 text-secondary" />
                     <span>New chat</span>
@@ -461,149 +589,150 @@ export function AppCommandPalette({
                     ) : (
                       <ItemDetail>Open a workspace first</ItemDetail>
                     )}
-                  </CommandItem>
-                  <CommandSeparator />
+                  </PaletteResultItem>
                   {chats.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading chats" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading chats"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading chats…</span>
                     </CommandItem>
                   ) : null}
                   {chats.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading chats"
+                    <PaletteResultItem
+                      result={chatRetryResult}
                       onSelect={() => void chats.refetch()}
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
                       <span>Chats could not be loaded</span>
                       <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
+                    </PaletteResultItem>
                   ) : null}
-                  {[...(chats.data ?? [])]
-                    .sort((left, right) => right.updatedAt - left.updatedAt)
-                    .map((chat) => (
-                      <CommandItem
+                  {chatResults.map(({ chat, result }) => (
+                      <PaletteResultItem
                         key={chat.id}
-                        value={`${chat.title} ${new Date(chat.updatedAt).toLocaleString()}`}
+                        result={result}
                         onSelect={() => void openChat(chat.id)}
                         className="min-h-11 px-3"
                       >
                         <Clock3 className="size-4 shrink-0 text-secondary" />
                         <span className="min-w-0 flex-1 truncate">{chat.title}</span>
                         <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
-                      </CommandItem>
+                      </PaletteResultItem>
                     ))}
                 </>
               ) : null}
 
-              {palette.mode === "models"
-                ? providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading models…</span>
-                    </CommandItem>
-                  ) : providers.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading models"
-                      onSelect={() => void providers.refetch()}
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 text-secondary" />
-                      <span>Models could not be loaded</span>
-                      <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
-                  ) : models.map((entry) => {
-                    const selected =
-                      selection.providerId === entry.providerId && selection.model === entry.model;
-                    return (
-                      <CommandItem
-                        key={entry.value}
-                        value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
-                        onSelect={() => void selectModel(entry.providerId, entry.model)}
-                        disabled={busy}
-                        aria-current={selected ? "true" : undefined}
-                        className="min-h-11 px-3"
-                      >
-                        <Bot className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                        <ItemDetail>{entry.providerLabel}</ItemDetail>
-                        {selected ? (
-                          <>
-                            <span className="sr-only">Current</span>
-                            <Check
-                              aria-hidden="true"
-                              className="size-4 shrink-0 text-accent"
-                            />
-                          </>
-                        ) : null}
-                      </CommandItem>
-                    );
-                  }).concat(
-                    unavailableModelProviders.map((provider) => (
-                      <CommandItem
-                        key={`unavailable-${provider.id}`}
-                        value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
-                        onSelect={() => {
-                          if (!allowNavigation()) return;
-                          rememberCommand("model.change");
-                          close();
-                          void navigate({
-                            to: "/settings",
-                            search: { section: "providers" },
-                          });
-                        }}
-                        className="min-h-11 px-3"
-                      >
-                        <Server className="size-4 shrink-0 text-secondary" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {provider.label} models
-                        </span>
-                        <ItemDetail>
-                          {provider.models.length > 0 ? "Setup needed" : "No models available"}
-                        </ItemDetail>
-                        <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                      </CommandItem>
-                    )),
-                  )
-                : null}
+              {palette.mode === "models" ? (
+                providers.isLoading ? (
+                  <CommandItem forceMount disabled value="Loading models" className="min-h-11 px-3">
+                    <RefreshCw className="size-4 animate-spin text-secondary" />
+                    <span>Loading models…</span>
+                  </CommandItem>
+                ) : providers.isError ? (
+                  <PaletteResultItem
+                    result={modelRetryResult}
+                    onSelect={() => void providers.refetch()}
+                    className="min-h-11 px-3"
+                  >
+                    <RefreshCw className="size-4 text-secondary" />
+                    <span>Models could not be loaded</span>
+                    <ItemDetail>Retry</ItemDetail>
+                  </PaletteResultItem>
+                ) : (
+                  modelResults
+                    .map(({ entry, result }) => {
+                      const selected =
+                        selection.providerId === entry.providerId &&
+                        selection.model === entry.model;
+                      return (
+                        <PaletteResultItem
+                          key={entry.value}
+                          result={result}
+                          onSelect={() => void selectModel(entry.providerId, entry.model)}
+                          aria-current={selected ? "true" : undefined}
+                          className="min-h-11 px-3"
+                        >
+                          <Bot className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                          <ItemDetail>{entry.providerLabel}</ItemDetail>
+                          {selected ? (
+                            <>
+                              <span className="sr-only">Current</span>
+                              <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
+                            </>
+                          ) : null}
+                        </PaletteResultItem>
+                      );
+                    })
+                    .concat(
+                      unavailableResults.map(({ provider, result }) => (
+                        <PaletteResultItem
+                          key={`unavailable-${provider.id}`}
+                          result={result}
+                          onSelect={() => {
+                            if (!allowNavigation()) return;
+                            rememberCommand("model.change");
+                            close();
+                            void navigate({
+                              to: "/settings",
+                              search: { section: "providers" },
+                            });
+                          }}
+                          className="min-h-11 px-3"
+                        >
+                          <Server className="size-4 shrink-0 text-secondary" />
+                          <span className="min-w-0 flex-1 truncate">{provider.label} models</span>
+                          <ItemDetail>
+                            {provider.models.length > 0 ? "Setup needed" : "No models available"}
+                          </ItemDetail>
+                          <ChevronRight className="size-4 shrink-0 text-tertiary" />
+                        </PaletteResultItem>
+                      )),
+                    )
+                )
+              ) : null}
 
               {palette.mode === "providers" ? (
                 <>
-                  <CommandItem
-                    value="Refresh provider model catalogs update"
+                  <PaletteResultItem
+                    result={refreshResult}
                     onSelect={() => void refreshProviders()}
-                    disabled={busy}
-                    className="min-h-11 px-3"
+                    className="mb-1 min-h-11 px-3"
                   >
                     <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
                     <span>{busy ? "Refreshing providers…" : "Refresh provider catalogs"}</span>
-                  </CommandItem>
-                  <CommandSeparator />
+                  </PaletteResultItem>
                   {providers.isLoading ? (
-                    <CommandItem forceMount disabled value="Loading providers" className="min-h-11 px-3">
+                    <CommandItem
+                      forceMount
+                      disabled
+                      value="Loading providers"
+                      className="min-h-11 px-3"
+                    >
                       <RefreshCw className="size-4 animate-spin text-secondary" />
                       <span>Loading providers…</span>
                     </CommandItem>
                   ) : null}
                   {providers.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading providers"
+                    <PaletteResultItem
+                      result={providerRetryResult}
                       onSelect={() => void providers.refetch()}
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
                       <span>Providers could not be loaded</span>
                       <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
+                    </PaletteResultItem>
                   ) : null}
-                  {(providers.data ?? []).map((provider) => (
-                    <CommandItem
+                  {providerResults.map(({ provider, result }) => (
+                    <PaletteResultItem
                       key={provider.id}
-                      value={`${provider.label} ${provider.id} manage connection models`}
+                      result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
@@ -620,44 +749,35 @@ export function AppCommandPalette({
                         {provider.hasKey || !provider.needsKey ? "Connected" : "Setup needed"}
                       </ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
                 </>
               ) : null}
 
               {palette.mode === "settings" ? (
                 <>
-                  {[
-                    { mode: "system" as const, title: "Follow macOS appearance", icon: Palette },
-                    { mode: "light" as const, title: "Use light appearance", icon: Sun },
-                    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
-                  ].map((item) => (
-                    <CommandItem
+                  {appearanceResults.map((item, index) => (
+                    <PaletteResultItem
                       key={item.mode}
-                      value={`${item.title} theme appearance`}
+                      result={item.result}
                       onSelect={() => void setAppearance(item.mode)}
-                      disabled={busy}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
-                      className="min-h-11 px-3"
+                      className={cn("min-h-11 px-3", index === 2 && "mb-1")}
                     >
                       <item.icon className="size-4 text-secondary" />
                       <span>{item.title}</span>
                       {appearanceMode === item.mode ? (
                         <>
                           <span className="sr-only">Current</span>
-                          <Check
-                            aria-hidden="true"
-                            className="ml-auto size-4 text-accent"
-                          />
+                          <Check aria-hidden="true" className="ml-auto size-4 text-accent" />
                         </>
                       ) : null}
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
-                  <CommandSeparator />
-                  {SETTINGS_DESTINATIONS.map((destination) => (
-                    <CommandItem
+                  {settingsResults.map(({ destination, result }) => (
+                    <PaletteResultItem
                       key={destination.id}
-                      value={`${destination.title} ${destination.keywords.join(" ")}`}
+                      result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
@@ -672,19 +792,11 @@ export function AppCommandPalette({
                       <span className="min-w-0 flex-1 truncate">{destination.title}</span>
                       <ItemDetail>{destination.group}</ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
                 </>
               ) : null}
             </CommandList>
-            <div className="flex h-9 items-center gap-3 border-t border-separator px-3 text-mini text-tertiary">
-              <span>↑↓ Navigate</span>
-              <span>↩ Run</span>
-              <span className="ml-auto flex items-center gap-1">
-                <TerminalSquare className="size-3.5" />
-                Local app actions
-              </span>
-            </div>
           </Command>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

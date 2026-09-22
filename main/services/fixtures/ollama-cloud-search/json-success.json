@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "title": "Ollama Web Search",
+      "url": "https://docs.ollama.com/capabilities/web-search",
+      "content": "Ollama Cloud web search returns bounded source snippets."
+    },
+    {
+      "title": "Second Ollama source",
+      "url": "https://example.test/ollama-second",
+      "content": "A second untrusted Ollama Cloud result."
+    },
+    {
+      "title": "Duplicate Ollama source",
+      "url": "https://example.test/ollama-second",
+      "content": "This duplicate is discarded."
+    }
+  ]
+}

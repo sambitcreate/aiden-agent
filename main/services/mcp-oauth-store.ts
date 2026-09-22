@@ -17,6 +17,7 @@ import {
 } from "./secret-map-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { commitOwnedMutation } from "./mcp-oauth-store-core.js";
+import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 
 const FILE = "mcp-oauth.json";
 
@@ -75,12 +76,16 @@ async function writeMap(
     await commitOwnedMutation({
       isCurrent,
       publish: async () => {
+        invalidateBotRuntimeInventoryAuthority("mcp_credential");
         await fs.rename(temporary, target);
+        invalidateBotRuntimeInventoryAuthority("mcp_credential");
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },
       rollback: async () => {
+        invalidateBotRuntimeInventoryAuthority("mcp_credential");
         await fs.rename(rollback, target);
+        invalidateBotRuntimeInventoryAuthority("mcp_credential");
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },

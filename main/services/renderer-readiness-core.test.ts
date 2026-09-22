@@ -30,12 +30,18 @@ test("disposal releases a waiter so window teardown cannot hang it", async () =>
 
 test("main invalidates readiness and reloads after the renderer process exits", () => {
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  // Keep recovery checks inside the crash callback, allowing diagnostics before
+  // reset and a backoff promise around the tracked reload.
+  const crashHandler = main.match(
+    /createdWindow\.webContents\.on\(\s*"render-process-gone",[\s\S]*?^ {2}\}\);/mu,
+  )?.[0];
+  assert.ok(crashHandler, "main must register a renderer crash handler");
   assert.match(
-    main,
-    /webContents\.on\(\s*"render-process-gone",\s*\(\) => \{\s*rendererReadiness\.reset\(\)/u,
+    crashHandler,
+    /rendererReadiness\.reset\(\);[\s\S]*const recovery = mainWindowLoads\.replace\(/u,
   );
   assert.match(
-    main,
-    /const recovery = mainWindowLoads\.replace\(\s*createdWindow\.loadURL\(mainWindowUrl\),?\s*\)/u,
+    crashHandler,
+    /const recovery = mainWindowLoads\.replace\([\s\S]*await createdWindow\.loadURL\(mainWindowUrl\)/u,
   );
 });

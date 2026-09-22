@@ -76,7 +76,7 @@ export function ScheduledTasksSettings() {
           </Button>
         </Callout>
       ) : null}
-      <FieldSet title="Scheduled tasks">
+      <FieldSet title="Background execution">
         <Field
           label="Enable scheduled tasks"
           description="Pause or resume every automatic task without deleting its schedule."
@@ -273,7 +273,7 @@ export function ScheduledTasksSettings() {
         confirmVariant="destructive"
         onConfirm={async () => {
           if (!removing) return;
-          await scheduleApi.remove(removing.id);
+          await scheduleApi.remove(removing.id, removing.updatedAt);
           setRemoving(null);
           await queryClient.invalidateQueries({ queryKey: queryKeys.scheduledTasks });
         }}

@@ -1,6 +1,6 @@
 import { OPENAI_CODEX_BASE_URL, OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import type { ModelCatalogProvider } from "./models-catalog-core.js";
-import type { ModelInfo } from "./types.js";
+import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
 interface ModelCatalogReader {
   info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo>;
@@ -9,8 +9,48 @@ interface ModelCatalogReader {
 
 interface ProviderModelInfoDependencies {
   modelsCatalog: ModelCatalogReader;
-  legacyProvider(providerId: string): Promise<ModelCatalogProvider>;
+  legacyProvider(
+    providerId: string,
+  ): Promise<ModelCatalogProvider & Pick<StoredProvider, "modelMetadata">>;
   codexModelInfo(modelId: string): ModelInfo | undefined;
+}
+
+function providerInfo(
+  modelId: string,
+  metadata: ProviderModelMetadata | undefined,
+): ModelInfo | undefined {
+  if (!metadata) return undefined;
+  return {
+    id: modelId,
+    name: metadata.name,
+    vision: metadata.vision ?? false,
+    toolCall: metadata.toolCall ?? false,
+    reasoning: metadata.reasoning ?? false,
+    openWeights: false,
+    modelType: metadata.type,
+    parameterCount: metadata.parameterCount,
+    format: metadata.format,
+    contextLength: metadata.contextLength,
+    inputModalities: metadata.vision ? ["text", "image"] : ["text"],
+    metadataSource: "provider",
+    matched: true,
+  };
+}
+
+function withProviderFallback(
+  modelId: string,
+  catalog: ModelInfo,
+  metadata: ProviderModelMetadata | undefined,
+): ModelInfo {
+  const info = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  if (!metadata?.overrides) return info;
+  const overrides = metadata.overrides;
+  const vision = overrides.maxImages === 0 ? false : overrides.vision ?? info.vision;
+  const modalities = new Set(info.inputModalities ?? ["text"]);
+  if (vision) modalities.add("image"); else modalities.delete("image");
+  if (overrides.video === true) modalities.add("video");
+  if (overrides.video === false) modalities.delete("video");
+  return { ...info, ...overrides, detectedCapabilities: { vision: info.vision, reasoning: info.reasoning, toolCall: info.toolCall, openWeights: info.openWeights, contextLength: info.contextLength, outputLimit: info.outputLimit, video: info.inputModalities?.includes("video") }, vision, inputModalities: [...modalities], metadataSource: "provider", matched: true };
 }
 
 const CODEX_CATALOG_PROVIDER: ModelCatalogProvider = {
@@ -36,11 +76,12 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.ranking) return pinned;
+  if (!catalog.ranking && !catalog.benchmark) return pinned;
   return {
     ...pinned,
-    ranking: catalog.ranking,
-    metadataSource: "artificial-analysis",
+    ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
+    ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
+    metadataSource: catalog.ranking ? "artificial-analysis" : pinned.metadataSource,
     matched: true,
   };
 }
@@ -50,10 +91,9 @@ export function createProviderModelInfo(dependencies: ProviderModelInfoDependenc
   return {
     async info(providerId: string, modelId: string): Promise<ModelInfo> {
       if (providerId !== OPENAI_CODEX_PROVIDER_ID) {
-        return dependencies.modelsCatalog.info(
-          await dependencies.legacyProvider(providerId),
-          modelId,
-        );
+        const provider = await dependencies.legacyProvider(providerId);
+        const catalog = await dependencies.modelsCatalog.info(provider, modelId);
+        return withProviderFallback(modelId, catalog, provider.modelMetadata?.[modelId]);
       }
       const catalog = await dependencies.modelsCatalog.info(CODEX_CATALOG_PROVIDER, modelId);
       return mergeCodexModelInfo(modelId, dependencies.codexModelInfo(modelId), catalog);
@@ -61,9 +101,17 @@ export function createProviderModelInfo(dependencies: ProviderModelInfoDependenc
 
     async infoMany(providerId: string, modelIds: string[]): Promise<Record<string, ModelInfo>> {
       if (providerId !== OPENAI_CODEX_PROVIDER_ID) {
-        return dependencies.modelsCatalog.infoMany(
-          await dependencies.legacyProvider(providerId),
-          modelIds,
+        const provider = await dependencies.legacyProvider(providerId);
+        const catalog = await dependencies.modelsCatalog.infoMany(provider, modelIds);
+        return Object.fromEntries(
+          modelIds.map((modelId) => [
+            modelId,
+            withProviderFallback(
+              modelId,
+              catalog[modelId] ?? unmatched(modelId),
+              provider.modelMetadata?.[modelId],
+            ),
+          ]),
         );
       }
       const catalog = await dependencies.modelsCatalog.infoMany(CODEX_CATALOG_PROVIDER, modelIds);

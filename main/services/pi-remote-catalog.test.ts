@@ -1,0 +1,1464 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DataStore } from "./data-store.js";
+
+import {
+  InMemoryCredentialStore,
+  createModels,
+  type Api,
+  type AuthContext,
+  type Credential,
+  type CredentialStore,
+  type Model,
+  type ModelsStoreEntry,
+  type ModelsStore,
+  type Provider,
+  type RefreshModelsContext,
+} from "@earendil-works/pi-ai";
+import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
+
+import {
+  projectPiCatalogRefreshErrors,
+  refreshPiCatalogs,
+  staleCatalogProviderIds,
+} from "./pi-catalog-refresh.js";
+import {
+  AIDEN_PI_CATALOG_USER_AGENT,
+  parsePiRemoteCatalog,
+  PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS,
+  withPiRemoteCatalog,
+} from "./pi-remote-catalog.js";
+import {
+  normalizePiModelsDocument,
+  createOwnedPiModelsStore,
+  createPiModelsBackingStore,
+  type ProviderModelsStore,
+} from "./pi-models-store.js";
+import { concentrateProvider } from "./concentrate-provider.js";
+import {
+  additionalAidenPiApis,
+  withAidenPiCompatibility,
+  withProviderStreamOverrides,
+} from "./pi-provider-compatibility.js";
+import { piModelMetadataFor } from "./pi-model-metadata.js";
+import { googleProviderModels } from "./google-provider.js";
+import { isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+
+test("Google catalog policy excludes legacy families without excluding current models", () => {
+  for (const id of [
+    "gemini-2.5", "gemini-2.5-pro", "gemini-2.5-flash-lite",
+    "gemini-2.5-computer-use-preview-10-2025", "gemini-2.0-flash-001",
+    "gemini-1.5-pro-latest", "models/gemini-2.5-flash",
+  ]) assert.equal(isSelectableGoogleCatalogModel(id), false, id);
+  for (const id of ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemma-4-31b-it", "gemini-25-flash"])
+    assert.equal(isSelectableGoogleCatalogModel(id), true, id);
+  assert.ok(googleProviderModels().length > 0);
+  assert.ok(googleProviderModels().every((model) => isSelectableGoogleCatalogModel(model.id)));
+});
+
+test("Google legacy models stay excluded across bundled, cached, and refreshed catalogs", async () => {
+  const google = builtinProviders().find((provider) => provider.id === "google");
+  assert.ok(google);
+  const current = google.getModels().find((model) => model.id === "gemini-3.5-flash");
+  assert.ok(current);
+  const legacy = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"].map(
+    (id) => ({ ...current, id, name: id }),
+  );
+  const baseline = { ...google, getModels: () => [current, ...legacy] };
+  const checkedAt = Date.parse("2026-09-10T16:01:00Z");
+  const store = memoryProviderStore({
+    models: legacy,
+    checkedAt,
+    lastModified: Date.parse("2026-09-10T16:00:00Z"),
+  } as ModelsStoreEntry);
+  const provider = withPiRemoteCatalog(baseline, {
+    now: () => checkedAt,
+    fetchImpl: async () => Response.json([current, ...legacy], {
+      headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+    }),
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  const assertCatalog = () => {
+    assert.deepEqual(provider.getModels().map((model) => model.id), [current.id]);
+    assert.ok(models.getModel("google", current.id));
+    for (const model of legacy) assert.equal(models.getModel("google", model.id), undefined);
+  };
+  assertCatalog();
+  await refreshProvider(provider, store, { allowNetwork: false });
+  assertCatalog();
+  await refreshProvider(provider, store, { force: true });
+  assertCatalog();
+
+  const otherProvider = withPiRemoteCatalog({ ...baseline, id: "custom:google" });
+  assert.deepEqual(otherProvider.getModels().map((model) => model.id), [current, ...legacy].map((model) => model.id));
+});
+
+function opencodeGoProvider() {
+  const provider = builtinProviders().find((entry) => entry.id === "opencode-go");
+  assert.ok(provider, "pinned Pi must expose OpenCode Go");
+  return provider;
+}
+
+function oxAlphaModel(): Model<Api> {
+  const template = opencodeGoProvider().getModels()[0];
+  assert.ok(template);
+  return {
+    ...template,
+    id: "ox-alpha-free",
+    name: "Ox Alpha Free (Unlimited)",
+    provider: "opencode-go",
+    reasoning: true,
+    input: ["text", "image"],
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: "max",
+    },
+    contextWindow: 1_000_000,
+    maxTokens: 131_072,
+  };
+}
+
+function memoryProviderStore(initial?: ModelsStoreEntry): ProviderModelsStore & {
+  snapshot(): ModelsStoreEntry | undefined;
+} {
+  let entry = initial === undefined ? undefined : structuredClone(initial);
+  const owned = createOwnedPiModelsStore({
+    read: async () => (entry === undefined ? undefined : structuredClone(entry)),
+    write: async (_id, next) => { entry = structuredClone(next); },
+    delete: async () => { entry = undefined; },
+  });
+  return {
+    ...owned.providerStore("test"),
+    snapshot: () => (entry === undefined ? undefined : structuredClone(entry)),
+  };
+}
+
+function refreshContext(
+  store: ReturnType<typeof memoryProviderStore>,
+  options: Partial<Pick<RefreshModelsContext, "allowNetwork" | "force" | "credential" | "signal">> = {},
+): RefreshModelsContext {
+  return {
+    stored: store.snapshot(),
+    allowNetwork: options.allowNetwork ?? true,
+    ...(options.force === undefined ? {} : { force: options.force }),
+    ...(options.credential === undefined ? {} : { credential: options.credential }),
+    signal: options.signal ?? new AbortController().signal,
+    publish: async (publication) => {
+      if (publication.persist === null) await store.delete();
+      else if (publication.persist !== undefined) await store.write(publication.persist);
+      publication.update?.();
+      return true;
+    },
+  };
+}
+
+function refreshProvider(
+  provider: Provider,
+  store: ReturnType<typeof memoryProviderStore>,
+  options?: Parameters<typeof refreshContext>[1],
+): Promise<void> {
+  assert.ok(provider.refreshModels);
+  return provider.refreshModels(refreshContext(store, options));
+}
+
+test("remote catalog parser accepts Pi's keyed response and pins provider identity", () => {
+  const model = oxAlphaModel();
+  const parsed = parsePiRemoteCatalog("opencode-go", {
+    [model.id]: { ...model, provider: "attacker-controlled" },
+  });
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.id, "ox-alpha-free");
+  assert.equal(parsed[0]?.provider, "opencode-go");
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", { models: "wrong" }));
+});
+
+test("Ox Alpha publishes its native low, high, and max thinking contract", () => {
+  assert.deepEqual(piModelMetadataFor("opencode-go", oxAlphaModel()), {
+    source: "provider",
+    name: "Ox Alpha Free (Unlimited)",
+    type: "llm",
+    vision: true,
+    reasoning: true,
+    thinkingLevels: ["low", "high", "max"],
+    thinkingCanDisable: false,
+    contextLength: 1_000_000,
+  });
+});
+
+test("provider stream overrides dispatch a newly cataloged API without altering other APIs", () => {
+  const original = opencodeGoProvider();
+  const marker = {};
+  let selected = "";
+  const provider = withProviderStreamOverrides(original, {
+    "openai-responses": {
+      stream: (() => { selected = "responses"; return marker; }) as never,
+      streamSimple: (() => { selected = "responses-simple"; return marker; }) as never,
+    },
+  });
+  const responses = { ...oxAlphaModel(), api: "openai-responses" as const };
+  assert.equal(provider.stream(responses, {} as never, {}), marker);
+  assert.equal(selected, "responses");
+  assert.equal(provider.streamSimple(responses, {} as never, {}), marker);
+  assert.equal(selected, "responses-simple");
+});
+
+test("OpenCode Go overlay publishes ox-alpha without sending provider credentials", async () => {
+  const store = memoryProviderStore();
+  const requests: Array<{ url: string; headers: Headers }> = [];
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    fetchImpl: async (input, init) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ "ox-alpha-free": oxAlphaModel() }), {
+        status: 200,
+        headers: {
+          etag: '"catalog-v1"',
+          "last-modified": "Thu, 20 Aug 2026 16:00:00 GMT",
+        },
+      });
+    },
+    now: () => Date.parse("2026-08-20T16:01:00Z"),
+  });
+
+  await refreshProvider(provider, store, {
+    credential: { type: "api_key", key: "must-not-leak" },
+    allowNetwork: true,
+    force: true,
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.url, "https://pi.dev/api/models/providers/opencode-go");
+  assert.equal(requests[0]?.headers.get("authorization"), null);
+  assert.equal(requests[0]?.headers.get("x-api-key"), null);
+  assert.equal(requests[0]?.headers.get("cookie"), null);
+  assert.equal(requests[0]?.headers.get("user-agent"), AIDEN_PI_CATALOG_USER_AGENT);
+  assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
+  assert.ok(store.snapshot()?.models.some((model) => model.id === "ox-alpha-free"));
+});
+
+test("cached overlays hydrate offline and honor freshness unless force refreshed", async () => {
+  const checkedAt = Date.parse("2026-08-20T16:01:00Z");
+  const store = memoryProviderStore({
+    models: [oxAlphaModel()],
+    checkedAt,
+    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+  } as ModelsStoreEntry);
+  let fetches = 0;
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    fetchImpl: async () => {
+      fetches += 1;
+      return new Response(null, { status: 304 });
+    },
+    now: () => checkedAt + PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS - 1,
+  });
+
+  await refreshProvider(provider, store, { allowNetwork: false });
+  assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
+
+  await refreshProvider(provider, store, { allowNetwork: true });
+  assert.equal(fetches, 0);
+
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
+  assert.equal(fetches, 1);
+  assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
+});
+
+test("fresh empty and negative catalog results do not refetch on every launch", async () => {
+  const checkedAt = Date.parse("2026-08-22T16:00:00Z");
+  for (const firstResponse of [
+    () => Response.json({}, { headers: { "last-modified": "Sat, 22 Aug 2026 15:59:00 GMT" } }),
+    () => new Response(null, { status: 404 }),
+    () => new Response(null, { status: 501 }),
+  ]) {
+    const store = memoryProviderStore();
+    let fetches = 0;
+    const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+      fetchImpl: async () => {
+        fetches += 1;
+        return firstResponse();
+      },
+      now: () => checkedAt,
+    });
+    await refreshProvider(provider, store, { allowNetwork: true });
+    await refreshProvider(provider, store, { allowNetwork: true });
+    assert.equal(fetches, 1);
+    assert.deepEqual(store.snapshot()?.models, []);
+  }
+});
+
+test("conditional refresh sends only the safe ETag validator and keeps a 304 overlay", async () => {
+  const store = memoryProviderStore({
+    models: [oxAlphaModel()],
+    checkedAt: Date.parse("2026-08-20T16:01:00Z"),
+    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+    etag: '"catalog-v1"',
+  } as ModelsStoreEntry);
+  let headers = new Headers();
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    fetchImpl: async (_input, init) => {
+      headers = new Headers(init?.headers);
+      return new Response(null, { status: 304 });
+    },
+  });
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
+  assert.equal(headers.get("if-none-match"), '"catalog-v1"');
+  assert.equal(headers.get("if-modified-since"), null);
+  assert.ok(provider.getModels().some((model) => model.id === "ox-alpha-free"));
+});
+
+test("configured provider refresh is isolated and publishes before its caller continues", async () => {
+  const credentials: CredentialStore = new InMemoryCredentialStore();
+  const stores = new Map<string, ReturnType<typeof memoryProviderStore>>();
+  const storeFor = (providerId: string) => {
+    let store = stores.get(providerId);
+    if (!store) {
+      store = memoryProviderStore();
+      stores.set(providerId, store);
+    }
+    return store;
+  };
+  const models = builtinModels({ credentials });
+  const original = models.getProvider("opencode-go");
+  assert.ok(original);
+  const requested: string[] = [];
+  const compatible = withAidenPiCompatibility(original);
+  models.setProvider(
+    withPiRemoteCatalog(compatible, {
+      supportedApis: additionalAidenPiApis(original.id),
+      fetchImpl: async (input) => {
+        requested.push(String(input));
+        return Response.json(
+          {
+            "ox-alpha-free": oxAlphaModel(),
+            "gpt-5.6-luna": {
+              ...oxAlphaModel(),
+              id: "gpt-5.6-luna",
+              name: "GPT-5.6 Luna",
+              api: "openai-responses",
+            },
+          },
+          { headers: { "last-modified": "Thu, 20 Aug 2026 16:00:00 GMT" } },
+        );
+      },
+    }),
+  );
+  await credentials.modify(
+    "opencode-go",
+    async () => ({ type: "api_key", key: "configured" }) satisfies Credential,
+  );
+  const result = await refreshPiCatalogs({
+    models,
+    credentials,
+    providerModelsStore: storeFor,
+    providerIds: ["opencode-go"],
+  });
+
+  assert.equal(result.aborted, false);
+  assert.equal(result.errors.size, 0);
+  assert.deepEqual(requested, ["https://pi.dev/api/models/providers/opencode-go"]);
+  assert.ok(models.getModel("opencode-go", "ox-alpha-free"));
+  assert.ok(models.getModel("opencode-go", "gpt-5.6-luna"));
+});
+
+test("catalog parser preserves OpenRouter's documented unknown-price sentinel", () => {
+  const model = oxAlphaModel();
+  const parsed = parsePiRemoteCatalog("openrouter", [{
+    ...model,
+    provider: "openrouter",
+    cost: { input: -1_000_000, output: -1_000_000, cacheRead: 0, cacheWrite: 0 },
+  }]);
+  assert.equal(parsed[0]?.cost.input, -1_000_000);
+  assert.throws(() => parsePiRemoteCatalog("openrouter", [{
+    ...model,
+    cost: { ...model.cost, input: -1 },
+  }]));
+});
+
+test("catalog parser rejects duplicate ids, unsafe origins, credential headers, and unsupported APIs", () => {
+  const model = oxAlphaModel();
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [model, model]));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...model, baseUrl: "http://example.test/v1" }]));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...model, headers: { Authorization: "secret" } }]));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...model, headers: { "Key": "value" } }]));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{
+    ...model,
+    compat: { nested: { constructor: "poison" } },
+  }]));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...model, api: "unknown-api" }], {
+    allowedApis: new Set(["openai-responses"]),
+  }));
+  assert.throws(() => parsePiRemoteCatalog("opencode-go", [{ ...model, baseUrl: "https://evil.example/v1" }], {
+    allowedOrigins: new Set([new URL(model.baseUrl).origin]),
+  }));
+});
+
+test("last-known-good catalog survives 404, 501, server errors, and malformed payloads", async () => {
+  const checkedAt = Date.parse("2026-08-20T16:01:00Z");
+  for (const response of [
+    () => new Response(null, { status: 404 }),
+    () => new Response(null, { status: 501 }),
+    () => new Response(null, { status: 500 }),
+    () => Response.json({ models: "invalid" }, { status: 200 }),
+  ]) {
+    const store = memoryProviderStore({
+      models: [oxAlphaModel()],
+      checkedAt,
+      lastModified: Date.parse("2026-08-20T16:00:00Z"),
+      etag: '"old"',
+    } as ModelsStoreEntry);
+    const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+      fetchImpl: async () => response(),
+      now: () => checkedAt + PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS,
+    });
+    await refreshProvider(provider, store, { allowNetwork: false });
+    await refreshProvider(provider, store, { allowNetwork: true, force: true }).catch(() => undefined);
+    assert.ok(provider.getModels().some((entry) => entry.id === "ox-alpha-free"));
+    assert.ok(store.snapshot()?.models.some((entry) => entry.id === "ox-alpha-free"));
+  }
+});
+
+test("minimum-version and oversized responses fail closed without replacing the cache", async () => {
+  const store = memoryProviderStore({
+    models: [oxAlphaModel()],
+    checkedAt: 1,
+    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+  } as ModelsStoreEntry);
+  for (const response of [
+    () => Response.json({ "ox-alpha-free": oxAlphaModel() }, {
+      headers: { "x-pi-model-catalog-minimum-version": "999.0.0" },
+    }),
+    () => new Response("x".repeat(5 * 1024 * 1024 + 1), {
+      headers: { "content-type": "application/json" },
+    }),
+    () => Response.json({ "ox-alpha-free": oxAlphaModel() }, {
+      headers: { "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT" },
+    }),
+  ]) {
+    const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+      fetchImpl: async () => response(),
+    });
+    await assert.rejects(refreshProvider(provider, store, { allowNetwork: true, force: true }));
+    assert.ok(store.snapshot()?.models.some((entry) => entry.id === "ox-alpha-free"));
+  }
+});
+
+test("an older valid catalog cannot roll back a newer cached generation", async () => {
+  const cached = oxAlphaModel();
+  const store = memoryProviderStore({
+    models: [cached],
+    checkedAt: Date.parse("2026-08-20T16:01:00Z"),
+    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+  } as ModelsStoreEntry);
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    fetchImpl: async () => Response.json({
+      replacement: { ...cached, id: "replacement", name: "Older replacement" },
+    }, { headers: { "last-modified": "Wed, 19 Aug 2026 16:00:00 GMT" } }),
+  });
+
+  await refreshProvider(provider, store, { allowNetwork: false });
+  await assert.rejects(
+    refreshProvider(provider, store, { allowNetwork: true, force: true }),
+    /older than the cached generation/u,
+  );
+  assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [cached.id]);
+  assert.deepEqual(provider.getModels().filter((model) => model.id === cached.id).map((model) => model.id), [cached.id]);
+});
+
+test("a future generation cannot poison the cache and a current catalog recovers it", async () => {
+  const now = Date.parse("2026-08-22T18:00:00Z");
+  const poisoned = { ...oxAlphaModel(), id: "future-poison", name: "Future poison" };
+  const store = memoryProviderStore({
+    models: [poisoned],
+    checkedAt: now,
+    lastModified: Date.parse("9999-12-31T23:59:59Z"),
+    etag: '"future"',
+  } as ModelsStoreEntry);
+  const recovered = { ...oxAlphaModel(), id: "recovered", name: "Recovered" };
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    now: () => now,
+    fetchImpl: async () => Response.json({ recovered }, {
+      headers: { "last-modified": "Sat, 22 Aug 2026 17:59:00 GMT" },
+    }),
+  });
+
+  await refreshProvider(provider, store, { allowNetwork: false });
+  assert.equal(provider.getModels().some((model) => model.id === poisoned.id), false);
+  await refreshProvider(provider, store, { allowNetwork: true, force: true });
+  assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [recovered.id]);
+  assert.ok(provider.getModels().some((model) => model.id === recovered.id));
+
+  const futureResponse = withPiRemoteCatalog(opencodeGoProvider(), {
+    now: () => now,
+    fetchImpl: async () => Response.json({ poisoned }, {
+      headers: { "last-modified": "Fri, 31 Dec 9999 23:59:59 GMT" },
+    }),
+  });
+  await assert.rejects(
+    refreshProvider(futureResponse, memoryProviderStore(), { allowNetwork: true, force: true }),
+    /invalid future generation timestamp/u,
+  );
+});
+
+test("clock rollback retains the last-known-good catalog and its downgrade fence", async () => {
+  const acceptedAt = Date.parse("2026-08-22T18:00:00Z");
+  const cached = { ...oxAlphaModel(), id: "newer-cached", name: "Newer cached" };
+  const store = memoryProviderStore({
+    models: [cached],
+    checkedAt: acceptedAt,
+    lastModified: Date.parse("2026-08-22T17:59:00Z"),
+  } as ModelsStoreEntry);
+  const older = { ...oxAlphaModel(), id: "older-remote", name: "Older remote" };
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    now: () => Date.parse("2026-08-22T17:00:00Z"),
+    fetchImpl: async () => Response.json({ older }, {
+      headers: { "last-modified": "Sat, 01 Aug 2026 12:00:00 GMT" },
+    }),
+  });
+
+  await refreshProvider(provider, store, { allowNetwork: false });
+  assert.ok(provider.getModels().some((model) => model.id === cached.id));
+  await assert.rejects(
+    refreshProvider(provider, store, { allowNetwork: true, force: true }),
+    /older than the cached generation/u,
+  );
+  assert.deepEqual(store.snapshot()?.models.map((model) => model.id), [cached.id]);
+});
+
+test("clock-rollback revalidation retains its acceptance boundary across restart", async () => {
+  const acceptedAt = Date.parse("2026-08-22T18:00:00Z");
+  const rolledBackNow = Date.parse("2026-08-22T17:00:00Z");
+  const cached = { ...oxAlphaModel(), id: "rollback-cached", name: "Rollback cached" };
+  for (const response of [
+    () => new Response(null, { status: 304 }),
+    () => new Response(null, { status: 404 }),
+    () => new Response(null, { status: 501 }),
+  ]) {
+    const store = memoryProviderStore({
+      models: [cached],
+      checkedAt: acceptedAt,
+      lastModified: Date.parse("2026-08-22T17:59:00Z"),
+      etag: '"accepted"',
+    } as ModelsStoreEntry);
+    const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+      now: () => rolledBackNow,
+      fetchImpl: async () => response(),
+    });
+    await refreshProvider(provider, store, { allowNetwork: true, force: true });
+    assert.equal(store.snapshot()?.checkedAt, acceptedAt);
+
+    const restarted = withPiRemoteCatalog(opencodeGoProvider(), { now: () => rolledBackNow });
+    await refreshProvider(restarted, store, { allowNetwork: false });
+    assert.ok(restarted.getModels().some((model) => model.id === cached.id));
+  }
+});
+
+test("renderer catalog errors contain only bounded app-owned copy", () => {
+  const secret = "sk-upstream-token-canary";
+  const projected = projectPiCatalogRefreshErrors(new Map([
+    ["radius\n<script>", new Error(`upstream reflected ${secret}`)],
+  ]));
+  assert.deepEqual(projected, [{
+    providerId: "radiusscript",
+    message: "Catalog refresh failed. Cached models were kept.",
+  }]);
+  assert.equal(JSON.stringify(projected).includes(secret), false);
+  assert.equal(JSON.stringify(projected).includes("<script>"), false);
+});
+
+test("provider-scoped refresh isolates failures and aborts a hung provider promptly", async () => {
+  const credentials: CredentialStore = new InMemoryCredentialStore();
+  const models = builtinModels({ credentials });
+  const template = opencodeGoProvider();
+  const ok = { ...template, id: "ok-provider", refreshModels: async () => undefined };
+  const broken = { ...template, id: "broken-provider", refreshModels: async () => { throw new Error("offline"); } };
+  const hung = { ...template, id: "hung-provider", refreshModels: async () => new Promise<void>(() => undefined) };
+  for (const provider of [ok, broken, hung]) {
+    models.setProvider(provider);
+    await credentials.modify(provider.id, async () => ({ type: "api_key", key: "configured" }));
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 10);
+  const result = await refreshPiCatalogs({
+    models,
+    credentials,
+    providerModelsStore: () => memoryProviderStore(),
+    providerIds: ["ok-provider", "broken-provider", "hung-provider"],
+    signal: controller.signal,
+  });
+  assert.equal(result.aborted, true);
+  assert.match(result.errors.get("broken-provider")?.message ?? "", /offline/u);
+});
+
+test("provider-scoped refresh aborts a non-mutating auth check without invoking OAuth resolution", async () => {
+  const template = opencodeGoProvider();
+  const controller = new AbortController();
+  let mutatingAuthCalls = 0;
+  const models = {
+    getProvider: () => ({ ...template, refreshModels: async () => undefined }),
+    checkAuth: async () => new Promise<never>(() => undefined),
+    getAuth: async () => {
+      mutatingAuthCalls += 1;
+      throw new Error("OAuth resolution must not run during scoped refresh.");
+    },
+  };
+  const credentials = {
+    read: async () => ({ type: "api_key", key: "configured" }),
+  };
+  setTimeout(() => controller.abort(), 10);
+  const result = await refreshPiCatalogs({
+    models: models as never,
+    credentials: credentials as never,
+    providerModelsStore: () => memoryProviderStore(),
+    providerIds: ["hung-auth"],
+    signal: controller.signal,
+  });
+  assert.equal(result.aborted, true);
+  assert.equal(result.errors.get("hung-auth")?.name, "AbortError");
+  assert.equal(mutatingAuthCalls, 0);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const invalidation of ["abort", "replace", "remove", "credential-change", "logout"] as const) {
+  for (const persistence of ["write", "delete", "none"] as const) {
+    test(`scoped catalog rejects ${persistence} publication after ${invalidation}`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const original = { models: [oxAlphaModel()], checkedAt: 1 };
+      const store = memoryProviderStore(original);
+      const started = deferred<RefreshModelsContext>();
+      const release = deferred<void>();
+      const finished = deferred<void>();
+      let accepted: boolean | undefined;
+      let updates = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        refreshModels: async (context) => {
+          started.resolve(context);
+          await release.promise; // Simulate a provider/body read ignoring cancellation.
+          accepted = await context.publish({
+            ...(persistence === "write" ? { persist: { models: [], checkedAt: 2 } }
+              : persistence === "delete" ? { persist: null } : {}),
+            update: () => { updates += 1; },
+          });
+          finished.resolve();
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+      const controller = new AbortController();
+      const pending = refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        providerIds: [provider.id], signal: controller.signal,
+      });
+      await started.promise;
+      if (invalidation === "abort") {
+        controller.abort();
+        assert.equal((await pending).aborted, true);
+      } else if (invalidation === "replace") {
+        models.setProvider({ ...provider, refreshModels: async () => undefined });
+      } else if (invalidation === "remove") {
+        models.deleteProvider(provider.id);
+      } else if (invalidation === "credential-change") {
+        await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+      } else {
+        await credentials.delete(provider.id);
+      }
+      release.resolve();
+      await finished.promise;
+      await pending;
+      assert.equal(accepted, false);
+      assert.deepEqual(store.snapshot(), original);
+      assert.equal(updates, 0);
+    });
+  }
+}
+
+for (const invalidation of ["abort", "replace", "credential-change", "logout"] as const) {
+  test(`scoped catalog suppresses in-memory update when ${invalidation} happens during persistence`, async () => {
+    const credentials = new InMemoryCredentialStore();
+    const models = createModels({ credentials });
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const finished = deferred<void>();
+    let updates = 0;
+    let accepted: boolean | undefined;
+    const store = memoryProviderStore();
+    const provider: Provider = {
+      ...opencodeGoProvider(),
+      refreshModels: async (context) => {
+        accepted = await context.publish({
+          persist: { models: [], checkedAt: 1 },
+          update: () => { updates += 1; },
+        });
+        finished.resolve();
+      },
+    };
+    models.setProvider(provider);
+    await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+    const controller = new AbortController();
+    const owned = createOwnedPiModelsStore({
+      read: () => store.read(),
+      delete: () => store.delete(),
+      write: async (_id, entry) => {
+        writing.resolve();
+        await release.promise;
+        await store.write(entry);
+      },
+    });
+    const pending = refreshPiCatalogs({
+      models, credentials, providerModelsStore: owned.providerStore,
+      providerIds: [provider.id], signal: controller.signal,
+    });
+    await writing.promise;
+    if (invalidation === "abort") controller.abort();
+    else if (invalidation === "replace") models.setProvider({ ...provider, refreshModels: async () => undefined });
+    else if (invalidation === "credential-change") {
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+    } else await credentials.delete(provider.id);
+    release.resolve();
+    await finished.promise;
+    await pending;
+    assert.equal(accepted, false);
+    assert.equal(updates, 0);
+    assert.equal(await owned.modelsStore.read(provider.id), undefined);
+  });
+}
+
+test("post-write validation errors retire the entry before a queued native publisher", async () => {
+  const backing = memoryProviderStore();
+  const owned = createOwnedPiModelsStore({
+    read: () => backing.read(), write: (_id, entry) => backing.write(entry), delete: () => backing.delete(),
+  });
+  let checks = 0;
+  const obsolete = owned.providerStore("radius").publish(
+    { persist: { models: [], checkedAt: 1 } },
+    async () => { if (++checks === 2) throw new Error("keychain unavailable"); return true; },
+    () => true,
+  );
+  const rejection = assert.rejects(obsolete, /keychain unavailable/u);
+  const latest = { models: [], checkedAt: 2 };
+  await owned.modelsStore.write("radius", latest);
+  await rejection;
+  assert.deepEqual(await backing.read(), latest);
+});
+
+for (const stage of ["size-check", "before-rename", "directory-fsync", "after-rename"] as const) {
+  for (const changed of [false, true]) {
+    test(`DataStore ${stage} rejection preserves only a still-owned previous catalog (${changed ? "changed" : "stable"} account)`, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "aiden-catalog-commit-state-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const original = { models: [{ ...oxAlphaModel(), provider: "radius", id: "last-good" }] };
+      let fail = false;
+      const injected = new Error(`${stage} failure`);
+      const disk = new DataStore<{ version: 1; entries: Record<string, ModelsStoreEntry> }>(
+        "catalog.json", { version: 1, entries: {} }, () => root, {
+          maxBytes: 4096,
+          beforeWritePublish: () => {
+            if (fail && stage === "before-rename") { fail = false; throw injected; }
+          },
+          afterWritePublish: () => {
+            if (fail && stage === "after-rename") { fail = false; throw injected; }
+          },
+        },
+      );
+      // Fault injection at the actual private fsync boundary, without changing
+      // production filesystem calls or interpreting a generic mock rejection.
+      const syncBoundary = disk as unknown as { syncDirectory(directory: string): Promise<void> };
+      const syncDirectory = syncBoundary.syncDirectory.bind(disk);
+      t.mock.method(syncBoundary, "syncDirectory", async (directory: string) => {
+        if (fail && stage === "directory-fsync") { fail = false; throw injected; }
+        await syncDirectory(directory);
+      });
+      await disk.update((draft) => { draft.entries.radius = original; });
+      const owned = createOwnedPiModelsStore(createPiModelsBackingStore(disk));
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "original-synthetic" }));
+      const expected = await credentials.read("radius");
+      let checks = 0;
+      fail = true;
+      const next = { models: [{ ...original.models[0], id: stage === "size-check" ? "x".repeat(5000) : "rejected-model" }] };
+      await assert.rejects(owned.providerStore("radius").publish({ persist: next }, async () => {
+        const current = await credentials.read("radius");
+        if (++checks === 1 && changed) {
+          await credentials.modify("radius", async () => ({ type: "api_key", key: "replacement-synthetic" }));
+        }
+        return JSON.stringify(current) === JSON.stringify(expected);
+      }, () => true), stage === "size-check" ? /schema is not safe/u : (error) => error === injected);
+      const retained = !changed && (stage === "size-check" || stage === "before-rename") ? original : undefined;
+      assert.deepEqual(await owned.modelsStore.read("radius"), retained);
+      const freshDisk = new DataStore<{ version: 1; entries: Record<string, ModelsStoreEntry> }>(
+        "catalog.json", { version: 1, entries: {} }, () => root,
+      );
+      assert.deepEqual((await freshDisk.load()).entries.radius, retained);
+    });
+  }
+}
+
+for (const cleanup of ["delete", "empty-fallback", "fallback-fsync-error"] as const) {
+  for (const newer of [false, true]) {
+    test(`committed write rejection uses ${cleanup} before ${newer ? "new publisher" : "offline restart"}`, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "aiden-catalog-uncertain-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const disk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+      const writing = deferred<void>();
+      const release = deferred<void>();
+      const failure = new Error("directory fsync failed after rename");
+      let writes = 0;
+      let deletions = 0;
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+      const expected = await credentials.read("radius");
+      const stale = { models: [{ ...oxAlphaModel(), provider: "radius", id: "old-account-model" }] };
+      const fresh = { models: [{ ...oxAlphaModel(), provider: "radius", id: "new-account-model" }] };
+      const owned = createOwnedPiModelsStore({
+        read: async () => (await disk.load()).entry,
+        write: async (_id, entry) => {
+          const count = ++writes;
+          if (count === 1) { writing.resolve(); await release.promise; }
+          await disk.update((draft) => { draft.entry = entry; });
+          if (count === 1 || (count === 2 && cleanup === "fallback-fsync-error")) throw failure;
+        },
+        delete: async () => {
+          deletions += 1;
+          if (cleanup !== "delete") throw new Error("retirement delete failed");
+          await disk.update((draft) => { delete draft.entry; });
+        },
+      });
+      const publication = owned.providerStore("radius").publish({ persist: stale },
+        async () => JSON.stringify(await credentials.read("radius")) === JSON.stringify(expected), () => true);
+      const rejected = assert.rejects(publication, (error) => {
+        if (cleanup === "fallback-fsync-error") assert.equal((error as { cause: unknown }).cause, failure);
+        else assert.equal(error, failure);
+        return true;
+      });
+      await writing.promise;
+      await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+      const next = newer ? owned.modelsStore.write("radius", fresh) : Promise.resolve();
+      release.resolve();
+      await rejected;
+      await next;
+      assert.equal(deletions, 1);
+      assert.deepEqual((await owned.modelsStore.read("radius"))?.models ?? [], newer ? fresh.models : []);
+      const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+      const restarted = createModels({ modelsStore: {
+        read: async () => (await restartedDisk.load()).entry,
+        write: async () => { throw new Error("offline write"); },
+        delete: async () => { throw new Error("offline delete"); },
+      } });
+      restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+      await restarted.refresh({ providers: ["radius"], allowNetwork: false });
+      assert.deepEqual(restarted.getModels("radius").map((model) => model.id), newer ? ["new-account-model"] : []);
+    });
+  }
+}
+
+test("failed retirement quarantines same-process hydration until a confirmed replacement", async () => {
+  let entry: ModelsStoreEntry | undefined;
+  let storageFailed = true;
+  let writes = 0;
+  const original = new Error("uncertain initial write");
+  const owned = createOwnedPiModelsStore({
+    read: async () => entry,
+    write: async (_id, next) => {
+      if (storageFailed && ++writes > 1) throw new Error("replacement unavailable");
+      entry = next;
+      if (storageFailed) throw original;
+    },
+    delete: async () => { if (storageFailed) throw new Error("delete unavailable"); entry = undefined; },
+  });
+  await assert.rejects(owned.providerStore("radius").publish({
+    persist: { models: [{ ...oxAlphaModel(), provider: "radius", id: "uncertain-model" }] },
+  }, async () => true, () => true), (error) => {
+    assert.equal((error as { cause: unknown }).cause, original);
+    return true;
+  });
+  assert.ok(entry, "all cleanup writes failed, so the backing store remains uncertain");
+  const offline = createModels({ modelsStore: owned.modelsStore });
+  offline.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+  await offline.refresh({ providers: ["radius"], allowNetwork: false });
+  assert.equal(offline.getModel("radius", "uncertain-model"), undefined);
+  storageFailed = false;
+  const replacement = { models: [], checkedAt: 5 };
+  await owned.modelsStore.write("radius", replacement);
+  assert.deepEqual(await owned.modelsStore.read("radius"), replacement);
+});
+
+for (const operation of ["read", "write", "delete"] as const) {
+  test(`queued native catalog ${operation} observes cancellation before touching storage`, async () => {
+    const backing = memoryProviderStore({ models: [], checkedAt: 1 });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let calls = 0;
+    const owned = createOwnedPiModelsStore({
+      read: async () => { calls += 1; return backing.read(); },
+      write: async (_id, entry) => { calls += 1; await backing.write(entry); },
+      delete: async () => { calls += 1; await backing.delete(); },
+    });
+    const active = owned.providerStore("radius").publish({}, async () => {
+      entered.resolve();
+      await release.promise;
+      return true;
+    }, () => true);
+    await entered.promise;
+    const controller = new AbortController();
+    const options = { signal: controller.signal };
+    const queued = operation === "write"
+      ? owned.modelsStore.write("radius", { models: [], checkedAt: 2 }, options)
+      : owned.modelsStore[operation]("radius", options);
+    const rejection = assert.rejects(queued, { name: "AbortError" });
+    controller.abort();
+    release.resolve();
+    await active;
+    await rejection;
+    assert.equal(calls, 0);
+    assert.deepEqual(await backing.read(), { models: [], checkedAt: 1 });
+  });
+}
+
+for (const mode of ["scoped", "full"] as const) {
+  for (const invalidation of ["credential-change", "abort"] as const) {
+    for (const newer of ["none", "identical", "different"] as const) {
+      test(`${mode} Radius offline restart retires ${invalidation} write and preserves ${newer} publisher`, async (t) => {
+        const root = await mkdtemp(join(tmpdir(), "aiden-catalog-ownership-"));
+        t.after(() => rm(root, { recursive: true, force: true }));
+        const disk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+        const writing = deferred<void>();
+        const release = deferred<void>();
+        const written = deferred<void>();
+        let admitted: ModelsStoreEntry | undefined;
+        const backing: ModelsStore = {
+          read: async () => (await disk.load()).entry,
+          write: async (_id, entry) => {
+            admitted = entry;
+            writing.resolve();
+            await release.promise;
+            await disk.update((draft) => { draft.entry = entry; });
+            written.resolve();
+          },
+          delete: async () => { await disk.update((draft) => { delete draft.entry; }); },
+        };
+        const owned = createOwnedPiModelsStore(backing);
+        const store = owned.providerStore("radius");
+        const credentials = new InMemoryCredentialStore();
+        await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+        const models = createModels({ credentials, modelsStore: owned.modelsStore });
+        const radius = builtinProviders().find((provider) => provider.id === "radius")!;
+        models.setProvider(radius);
+        t.mock.method(globalThis, "fetch", async () => Response.json({
+          baseUrl: "https://radius.invalid", models: [{ ...oxAlphaModel(), id: "old-account-model" }],
+        }));
+        const controller = new AbortController();
+        const pending = refreshPiCatalogs({
+          models, credentials, providerModelsStore: () => store,
+          ...(mode === "scoped" ? { providerIds: ["radius"] } : {}), signal: controller.signal,
+        });
+        await writing.promise;
+        if (invalidation === "credential-change") {
+          await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+        } else controller.abort();
+        const latest = structuredClone(admitted!);
+        if (newer === "different") latest.models = [{ ...latest.models[0], id: "new-account-model" }];
+        const newerWrite = newer === "none" ? Promise.resolve() : owned.modelsStore.write("radius", latest);
+        let readFinished = false;
+        const waitingRead = store.read().then((entry) => { readFinished = true; return entry; });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(readFinished, false, "offline reads wait for ownership validation and retirement");
+        release.resolve();
+        await written.promise;
+        await pending;
+        await newerWrite;
+        assert.deepEqual(await waitingRead, newer === "none" ? undefined : latest);
+        // A fresh disk reader and real pinned Radius provider reproduce startup hydration.
+        const restartedDisk = new DataStore<{ entry?: ModelsStoreEntry }>("catalog.json", {}, () => root);
+        const restarted = createModels({
+          credentials,
+          modelsStore: { ...backing, read: async () => (await restartedDisk.load()).entry },
+        });
+        restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+        await restarted.refresh({ providers: ["radius"], allowNetwork: false });
+        assert.deepEqual(restarted.getModels("radius").map((model) => model.id),
+          newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]);
+      });
+    }
+  }
+}
+
+for (const mode of ["scoped", "full"] as const) {
+  for (const change of ["replace", "logout"] as const) {
+    test(`${mode} pi.dev response cannot publish after credential ${change}`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const store = memoryProviderStore();
+      const models = createModels({ credentials, modelsStore: {
+        read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+      } });
+      const started = deferred<void>();
+      const response = deferred<Response>();
+      const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+        now: () => Date.parse("2026-09-10T16:01:00Z"),
+        fetchImpl: async () => {
+          started.resolve();
+          return response.promise;
+        },
+      });
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "old-synthetic" }));
+      const pending = refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
+      });
+      await started.promise;
+      if (change === "replace") await credentials.modify(provider.id, async () => ({ type: "api_key", key: "new-synthetic" }));
+      else await credentials.delete(provider.id);
+      const obsolete = { ...oxAlphaModel(), id: "obsolete-catalog-model" };
+      response.resolve(Response.json([obsolete], {
+        headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+      }));
+      const result = await pending;
+      assert.equal(result.errors.size, 0);
+      assert.equal(store.snapshot(), undefined);
+      assert.equal(models.getModel(provider.id, obsolete.id), undefined);
+    });
+
+  }
+}
+
+for (const allowNetwork of [false, true]) {
+  for (const failRead of [false, true]) {
+    test(`${allowNetwork ? "full" : "offline"} refresh distinguishes ${failRead ? "failed" : "missing"} credentials`, async () => {
+      const underlying = new InMemoryCredentialStore();
+      const readFailure = new Error("synthetic keychain unavailable");
+      const credentials: CredentialStore = {
+        list: underlying.list.bind(underlying),
+        modify: underlying.modify.bind(underlying),
+        delete: underlying.delete.bind(underlying),
+        read: async () => { if (failRead) throw readFailure; return undefined; },
+      };
+      const models = createModels({ credentials });
+      const radius = builtinProviders().find((provider) => provider.id === "radius")!;
+      models.setProvider({ ...radius, auth: { apiKey: { name: "Unconfigured", resolve: async () => undefined } } });
+      const cached = { ...oxAlphaModel(), provider: "radius", id: "cached-model" };
+      const store = memoryProviderStore({ models: [cached] });
+      const result = await refreshPiCatalogs({ models, credentials, providerModelsStore: () => store, allowNetwork });
+      assert.equal(result.aborted, false);
+      if (failRead) {
+        assert.equal(result.errors.size, 1);
+        assert.match(result.errors.get("radius")?.message ?? "", /Credential store read failed/u);
+        assert.equal((result.errors.get("radius") as { cause?: unknown }).cause, readFailure);
+        assert.equal(models.getModel("radius", cached.id), undefined, "unknown ownership does not hydrate");
+      } else {
+        assert.equal(result.errors.size, 0);
+        assert.ok(models.getModel("radius", cached.id));
+      }
+      assert.deepEqual(store.snapshot()?.models, [cached]);
+    });
+  }
+}
+
+test("guarded full refresh preserves production default env and file auth resolution", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-catalog-auth-context-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "synthetic-auth-profile");
+  await writeFile(file, "synthetic fixture");
+  const variable = "AIDEN_CATALOG_AUTH_CONTEXT_TEST";
+  const previous = process.env[variable];
+  process.env[variable] = "synthetic-context-key";
+  t.after(() => { if (previous === undefined) delete process.env[variable]; else process.env[variable] = previous; });
+  const credentials = new InMemoryCredentialStore();
+  const store = memoryProviderStore();
+  const observed: (Credential | undefined)[] = [];
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    auth: { apiKey: {
+      name: "Synthetic ambient auth",
+      resolve: async ({ ctx }) => {
+        const key = await ctx.env(variable);
+        if (!key || !await ctx.fileExists(file)) return undefined;
+        return { auth: { apiKey: key } };
+      },
+    } },
+    refreshModels: async (context) => {
+      if (context.allowNetwork) {
+        observed.push(context.credential);
+        await context.publish({ persist: { models: [], checkedAt: 1 } });
+      }
+    },
+  };
+  // Matches the sole production ProviderRegistry construction: no custom context.
+  const models = createModels({ credentials, modelsStore: {
+    read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+  } });
+  models.setProvider(provider);
+  assert.equal((await models.refresh()).errors.size, 0);
+  assert.equal((await refreshPiCatalogs({ models, credentials, providerModelsStore: () => store })).errors.size, 0);
+  assert.equal(observed.length, 2);
+  assert.deepEqual(observed[1], observed[0]);
+  assert.equal(observed[1]?.type, "api_key");
+  assert.equal(observed[1]?.key, "synthetic-context-key");
+});
+
+for (const fileAvailable of [false, true]) {
+  test(`guarded refresh preserves custom env and file auth context (${fileAvailable ? "available" : "missing"} profile)`, async () => {
+    const credentials = new InMemoryCredentialStore();
+    const store = memoryProviderStore();
+    let envReads = 0;
+    let fileReads = 0;
+    const authContext: AuthContext = {
+      env: async (name) => {
+        envReads += 1;
+        return name === "AIDEN_CUSTOM_CONTEXT_CANARY" ? "synthetic-custom-context-key" : undefined;
+      },
+      fileExists: async (path) => {
+        fileReads += 1;
+        return fileAvailable && path === "virtual://aiden-profile";
+      },
+    };
+    const observed: (Credential | undefined)[] = [];
+    const provider: Provider = {
+      ...opencodeGoProvider(),
+      auth: { apiKey: {
+        name: "Synthetic custom-context auth",
+        resolve: async ({ ctx }) => {
+          const key = await ctx.env("AIDEN_CUSTOM_CONTEXT_CANARY");
+          const exists = await ctx.fileExists("virtual://aiden-profile");
+          return key && exists ? { auth: { apiKey: key } } : undefined;
+        },
+      } },
+      refreshModels: async (context) => {
+        if (!context.allowNetwork) return;
+        observed.push(context.credential);
+        await context.publish({ persist: { models: [], checkedAt: 1 } });
+      },
+    };
+    const models = createModels({ credentials, authContext, modelsStore: {
+      read: () => store.read(), write: (_id, entry) => store.write(entry), delete: () => store.delete(),
+    } });
+    models.setProvider(provider);
+    const direct = await models.refresh();
+    // Both collections must receive the same caller-owned context.
+    const options = { models, credentials, authContext, providerModelsStore: () => store };
+    const guarded = await refreshPiCatalogs(options);
+    assert.equal(direct.errors.size, 0);
+    assert.equal(guarded.errors.size, 0);
+    assert.equal(envReads, 2);
+    assert.equal(fileReads, 2);
+    assert.equal(observed.length, fileAvailable ? 2 : 0);
+    if (fileAvailable) {
+      assert.deepEqual(observed[1], observed[0]);
+      assert.equal(observed[1]?.key, "synthetic-custom-context-key");
+    }
+  });
+}
+
+test("offline guarded refresh does not resolve the supplied custom auth context", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const authContext: AuthContext = {
+    env: async () => { throw new Error("offline env resolution"); },
+    fileExists: async () => { throw new Error("offline file resolution"); },
+  };
+  const models = createModels({ credentials, authContext });
+  const store = memoryProviderStore();
+  let offlinePhases = 0;
+  models.setProvider({
+    ...opencodeGoProvider(),
+    refreshModels: async (context) => {
+      assert.equal(context.allowNetwork, false);
+      offlinePhases += 1;
+    },
+  });
+  assert.equal((await models.refresh({ allowNetwork: false })).errors.size, 0);
+  const options = { models, credentials, authContext, providerModelsStore: () => store, allowNetwork: false };
+  assert.equal((await refreshPiCatalogs(options)).errors.size, 0);
+  assert.equal(offlinePhases, 2);
+});
+
+for (const mode of ["full", "scoped", "offline"] as const) {
+  for (const expires of [0, Date.now() + 3_600_000]) {
+    test(`${mode} catalog preserves native OAuth policy for ${expires === 0 ? "expired" : "valid"} credentials`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const store = memoryProviderStore();
+      const original: Credential = { type: "oauth", access: "old-access", refresh: "synthetic", expires };
+      const rotated: Credential = { ...original, access: "rotated-access", expires: Date.now() + 3_600_000 };
+      let rotations = 0;
+      let published = false;
+      let networkPhases = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        auth: { oauth: {
+          name: "Synthetic OAuth",
+          login: async () => original,
+          refresh: async () => { rotations += 1; return rotated; },
+          toAuth: async () => { throw new Error("Catalog refresh does not resolve inference auth"); },
+        } },
+        refreshModels: async (context) => {
+          if (!context.allowNetwork) return;
+          networkPhases += 1;
+          const expected = mode === "full" && expires === 0 ? rotated : original;
+          assert.deepEqual(context.credential, expected);
+          published = await context.publish({ persist: { models: [], checkedAt: 1 } });
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => original);
+      const result = await refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
+        allowNetwork: mode !== "offline",
+      });
+      assert.equal(result.errors.size, 0);
+      assert.equal(rotations, mode === "full" && expires === 0 ? 1 : 0);
+      assert.equal(networkPhases, mode === "offline" ? 0 : 1);
+      assert.equal(published, mode !== "offline");
+      assert.deepEqual(await credentials.read(provider.id), rotations ? rotated : original);
+    });
+  }
+}
+
+test("full OAuth refresh rejects a later account replacement after its legitimate rotation", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  let accepted: boolean | undefined;
+  let updates = 0;
+  const expired: Credential = { type: "oauth", access: "expired", refresh: "synthetic", expires: 0 };
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    auth: { oauth: {
+      name: "Synthetic OAuth", login: async () => expired,
+      refresh: async () => ({ ...expired, access: "rotated", expires: Date.now() + 3_600_000 }),
+      toAuth: async (credential) => ({ apiKey: credential.access }),
+    } },
+    refreshModels: async (context) => {
+      if (!context.allowNetwork) return;
+      assert.equal(context.credential?.type, "oauth");
+      assert.equal(context.credential?.access, "rotated");
+      started.resolve();
+      await release.promise;
+      accepted = await context.publish({
+        persist: { models: [], checkedAt: 1 }, update: () => { updates += 1; },
+      });
+    },
+  };
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => expired);
+  const pending = refreshPiCatalogs({ models, credentials, providerModelsStore: () => store });
+  await started.promise;
+  await credentials.modify(provider.id, async () => ({ ...expired, access: "new-account", expires: Date.now() + 3_600_000 }));
+  release.resolve();
+  assert.equal((await pending).errors.size, 0);
+  assert.equal(accepted, false);
+  assert.equal(updates, 0);
+  assert.equal(store.snapshot(), undefined);
+});
+
+test("offline startup rejects Radius hydration after a credential changes during the cache read", async (t) => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const reading = deferred<void>();
+  const release = deferred<void>();
+  const owned = createOwnedPiModelsStore({
+    read: async () => {
+      reading.resolve();
+      await release.promise;
+      return { models: [{ ...oxAlphaModel(), provider: "radius", id: "old-account-model" }] };
+    },
+    write: async () => { throw new Error("Offline hydration must not write"); },
+    delete: async () => { throw new Error("Offline hydration must not delete"); },
+  });
+  models.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
+  await credentials.modify("radius", async () => ({ type: "api_key", key: "old-synthetic" }));
+  let networkCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => { networkCalls += 1; throw new Error("Unexpected network"); });
+  const pending = refreshPiCatalogs({
+    models, credentials, providerModelsStore: owned.providerStore, allowNetwork: false,
+  });
+  await reading.promise;
+  await credentials.modify("radius", async () => ({ type: "api_key", key: "new-synthetic" }));
+  release.resolve();
+  assert.equal((await pending).errors.size, 0);
+  assert.equal(networkCalls, 0);
+  assert.equal(models.getModel("radius", "old-account-model"), undefined);
+});
+
+test("a new full pi.dev refresh does not join the aborted scoped network request", async () => {
+  const credentials = new InMemoryCredentialStore();
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  const requests: ReturnType<typeof deferred<Response>>[] = [];
+  const started = deferred<void>();
+  const provider = withPiRemoteCatalog(opencodeGoProvider(), {
+    now: () => Date.parse("2026-09-10T16:01:00Z"),
+    fetchImpl: async () => {
+      const response = deferred<Response>();
+      requests.push(response);
+      started.resolve();
+      return response.promise;
+    },
+  });
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+  const options = { models, credentials, providerModelsStore: () => store };
+  const old = refreshPiCatalogs({ ...options, providerIds: [provider.id] });
+  await started.promise;
+  const next = refreshPiCatalogs(options);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const count = requests.length;
+  requests.forEach((request, index) => request.resolve(Response.json([
+    { ...oxAlphaModel(), id: index === 0 ? "obsolete-model" : "newest-model" },
+  ], { headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" } })));
+  await Promise.all([old, next]);
+  assert.equal(count, 2);
+  assert.equal(models.getModel(provider.id, "obsolete-model"), undefined);
+  assert.ok(models.getModel(provider.id, "newest-model"));
+});
+
+for (const firstMode of ["scoped", "full"] as const) {
+  for (const nextMode of ["scoped", "full"] as const) {
+    test(`${nextMode} refresh supersedes an older ${firstMode} refresh without late publication`, async () => {
+      const credentials = new InMemoryCredentialStore();
+      const models = createModels({ credentials });
+      const store = memoryProviderStore();
+      const started = deferred<void>();
+      const release = deferred<void>();
+      const late = deferred<boolean>();
+      let requests = 0;
+      let live = 0;
+      const provider: Provider = {
+        ...opencodeGoProvider(),
+        refreshModels: async (context) => {
+          if (!context.allowNetwork) return;
+          const request = ++requests;
+          if (request === 1) { started.resolve(); await release.promise; }
+          const accepted = await context.publish({
+            persist: { models: [], checkedAt: request }, update: () => { live = request; },
+          });
+          if (request === 1) late.resolve(accepted);
+        },
+      };
+      models.setProvider(provider);
+      await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+      const refresh = (mode: "scoped" | "full") => refreshPiCatalogs({
+        models, credentials, providerModelsStore: () => store,
+        ...(mode === "scoped" ? { providerIds: [provider.id] } : {}),
+      });
+      const first = refresh(firstMode);
+      await started.promise;
+      assert.equal((await refresh(nextMode)).errors.size, 0);
+      await first; // Supersession must release the old caller even when the provider ignores abort.
+      release.resolve();
+      assert.equal(await late.promise, false);
+      assert.equal(live, 2);
+      assert.equal(store.snapshot()?.checkedAt, 2);
+    });
+  }
+}
+
+test("scoped catalog cancellation fences a hung publication credential check", async () => {
+  const underlying = new InMemoryCredentialStore();
+  const checking = deferred<void>();
+  const release = deferred<void>();
+  const finished = deferred<void>();
+  let publishing = false;
+  const credentials: CredentialStore = {
+    list: underlying.list.bind(underlying),
+    modify: underlying.modify.bind(underlying),
+    delete: underlying.delete.bind(underlying),
+    read: async (id) => {
+      if (publishing) {
+        checking.resolve();
+        await release.promise;
+      }
+      return underlying.read(id);
+    },
+  };
+  const models = createModels({ credentials });
+  const store = memoryProviderStore();
+  let accepted: boolean | undefined;
+  let updates = 0;
+  const provider: Provider = {
+    ...opencodeGoProvider(),
+    refreshModels: async (context) => {
+      publishing = true;
+      accepted = await context.publish({
+        persist: { models: [], checkedAt: 1 },
+        update: () => { updates += 1; },
+      });
+      finished.resolve();
+    },
+  };
+  models.setProvider(provider);
+  await credentials.modify(provider.id, async () => ({ type: "api_key", key: "synthetic" }));
+  const controller = new AbortController();
+  const pending = refreshPiCatalogs({
+    models, credentials, providerModelsStore: () => store,
+    providerIds: [provider.id], signal: controller.signal,
+  });
+  await checking.promise;
+  controller.abort();
+  assert.equal((await pending).aborted, true);
+  await finished.promise;
+  release.resolve();
+  assert.equal(accepted, false);
+  assert.equal(store.snapshot(), undefined);
+  assert.equal(updates, 0);
+});
+
+test("stale launch refresh selects only stale pi.dev overlays", async () => {
+  const radius = builtinProviders().find((provider) => provider.id === "radius");
+  assert.ok(radius);
+  const now = Date.parse("2026-08-22T18:00:00Z");
+  const stale = withPiRemoteCatalog(opencodeGoProvider(), { now: () => now });
+  const fresh = withPiRemoteCatalog({ ...opencodeGoProvider(), id: "fresh-overlay" }, { now: () => now });
+  const stores = new Map<string, ReturnType<typeof memoryProviderStore>>([
+    [stale.id, memoryProviderStore()],
+    [fresh.id, memoryProviderStore({
+      models: [],
+      checkedAt: now - 1_000,
+    })],
+  ]);
+  const providers = [stale, fresh, radius, concentrateProvider()];
+  const ids = await staleCatalogProviderIds(
+    providers,
+    (providerId) => stores.get(providerId) ?? memoryProviderStore(),
+  );
+  assert.equal(ids.includes("radius"), false);
+  assert.equal(ids.includes("concentrate"), false);
+  assert.deepEqual(ids, [stale.id]);
+  assert.ok(ids.every((id) => providers.find((provider) => provider.id === id)?.refreshModels));
+});
+
+test("persisted Pi catalog normalization strips unsafe entries and validators", () => {
+  const model = oxAlphaModel();
+  const normalized = normalizePiModelsDocument({
+    version: 999,
+    entries: {
+      "opencode-go": {
+        models: [model],
+        checkedAt: 123,
+        lastModified: 456,
+        etag: '"safe"',
+      },
+      "../unsafe": { models: [model] },
+      poisoned: { models: [{ ...model, headers: { Cookie: "secret" } }] },
+    },
+  });
+  assert.equal(normalized.version, 1);
+  assert.deepEqual(Object.keys(normalized.entries), ["opencode-go"]);
+  assert.equal((normalized.entries["opencode-go"] as { etag?: string }).etag, '"safe"');
+});

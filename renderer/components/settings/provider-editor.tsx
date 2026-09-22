@@ -1,3 +1,8 @@
+import { CustomModelOptionsEditor } from "./custom-model-options";
+import {
+  mergeDiscoveredModelMetadata,
+  parseCustomModelOptions,
+} from "../../shared/custom-model-options";
 // Dialog to configure a custom provider: base URL, API key, connection test,
 // model discovery, and default model. Pi built-ins use a separate setup view.
 
@@ -9,6 +14,7 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineMetadata,
   Select,
   SelectContent,
   SelectItem,
@@ -16,9 +22,10 @@ import {
   SelectValue,
   Text,
   toast,
+  type DialogLayer,
 } from "../ui";
 import { providersApi } from "../../lib/ipc";
-import { useModelInfo } from "../../lib/queries";
+import { useModelInfo, useSettings } from "../../lib/queries";
 import { resolveModelDisplay } from "../../lib/model-display";
 import type {
   Provider,
@@ -27,6 +34,9 @@ import type {
   ProviderModelMetadata,
 } from "../../lib/types";
 import { resolveProviderDeployment } from "../../shared/provider-deployment";
+import { ProviderModelVisibility } from "./provider-model-visibility";
+import { ProviderIcon } from "../provider-icon";
+import { isModelHidden } from "../../shared/model-visibility";
 
 /** Compact k-token label, e.g. 128000 → "128K". */
 function formatContext(n: number | undefined): string | null {
@@ -48,7 +58,9 @@ interface ProviderEditorProps {
   provider: Provider;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
+  layer?: DialogLayer;
+  requireReady?: boolean;
   returnFocus?: () => HTMLElement | null;
 }
 
@@ -58,7 +70,11 @@ export function ProviderEditor({
   onOpenChange,
   onSaved,
   returnFocus,
+  layer,
+  requireReady = false,
 }: ProviderEditorProps) {
+  const artworkInputRef = React.useRef<HTMLInputElement>(null);
+  const artworkBusyRef = React.useRef(false);
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
@@ -68,12 +84,16 @@ export function ProviderEditor({
   );
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
-  const [modelMetadata, setModelMetadata] = React.useState<Record<string, ProviderModelMetadata>>(
-    provider.modelMetadata ?? {},
-  );
+  const [modelMetadata, setModelMetadata] = React.useState<
+    Record<string, ProviderModelMetadata>
+  >(provider.modelMetadata ?? {});
   const [defaultModel, setDefaultModel] = React.useState(
     provider.defaultModel ?? provider.models[0] ?? "",
   );
+  const [artwork, setArtwork] = React.useState(provider.artwork);
+  const [artworkBusy, setArtworkBusy] = React.useState(false);
+  const [moreOptions, setMoreOptions] = React.useState(false);
+  const [manualModels, setManualModels] = React.useState<string[]>([]);
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [modelsStale, setModelsStale] = React.useState(false);
@@ -82,8 +102,29 @@ export function ProviderEditor({
     error: boolean;
   } | null>(null);
   const modelInfo = useModelInfo(provider.id, models, provider);
+  const settings = useSettings();
+  const visibleDefaultModels = settings.data
+    ? models.filter(
+        (modelId) =>
+          !isModelHidden(
+            settings.data?.hiddenModelsByProvider,
+            provider.id,
+            modelId,
+          ),
+      )
+    : [];
+  const defaultModelIsHidden = Boolean(
+    settings.data &&
+    defaultModel &&
+    isModelHidden(
+      settings.data.hiddenModelsByProvider,
+      provider.id,
+      defaultModel,
+    ),
+  );
   const usesArtificialAnalysis = models.some(
-    (modelId) => modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
+    (modelId) =>
+      modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
   );
 
   // Reset drafts whenever a different provider is opened.
@@ -96,8 +137,15 @@ export function ProviderEditor({
       setDeployment(resolveProviderDeployment(provider));
       setKeyDraft("");
       setModels(provider.models);
+      setMoreOptions(false);
+      setManualModels(
+        provider.models.filter(
+          (id) => provider.modelMetadata?.[id]?.manuallyAdded,
+        ),
+      );
       setModelMetadata(provider.modelMetadata ?? {});
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
+      setArtwork(provider.artwork);
       setModelsStale(false);
       setConnectionNotice(null);
     }
@@ -107,6 +155,7 @@ export function ProviderEditor({
     id: provider.id,
     kind,
     label: label.trim() || provider.label,
+    artwork,
     baseUrl: baseUrl.trim() || provider.baseUrl,
     models,
     modelMetadata,
@@ -117,13 +166,63 @@ export function ProviderEditor({
     isBuiltin: false,
   });
 
+  const chooseArtwork = async (file: File | undefined) => {
+    if (!file || artworkBusyRef.current) return;
+    if (file.size > 512 * 1024) {
+      toast.error("Provider artwork must be 512 KB or smaller.");
+      return;
+    }
+    artworkBusyRef.current = true;
+    setArtworkBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          typeof reader.result === "string"
+            ? resolve(reader.result)
+            : reject(new Error("Aiden could not read that image."));
+        reader.onerror = () =>
+          reject(reader.error ?? new Error("Aiden could not read that image."));
+        reader.readAsDataURL(file);
+      });
+      const dataBase64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      setArtwork(
+        await providersApi.normalizeArtwork({ name: file.name, dataBase64 }),
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Aiden could not use that provider icon.",
+      );
+    } finally {
+      artworkBusyRef.current = false;
+      setArtworkBusy(false);
+      if (artworkInputRef.current) artworkInputRef.current.value = "";
+    }
+  };
+
   const applyDiscoveredModels = (
     list: string[],
     metadata: Record<string, ProviderModelMetadata>,
     recommendedModel?: string,
   ) => {
+    list = [...new Set([...list, ...manualModels])];
     setModels(list);
-    setModelMetadata(metadata);
+    setModelMetadata((current) =>
+      mergeDiscoveredModelMetadata(
+        {
+          ...Object.fromEntries(
+            manualModels.map((id) => [
+              id,
+              current[id] ?? { source: "provider" as const },
+            ]),
+          ),
+          ...metadata,
+        },
+        current,
+      ),
+    );
     setDefaultModel((current) =>
       list.includes(current)
         ? current
@@ -137,7 +236,8 @@ export function ProviderEditor({
   const markDiscoveryStale = () => {
     setModelsStale(true);
     setConnectionNotice({
-      message: "Connection settings changed. Discover models again before saving.",
+      message:
+        "Connection settings changed. Discover models again before saving.",
       error: true,
     });
   };
@@ -145,8 +245,15 @@ export function ProviderEditor({
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
-      applyDiscoveredModels(result.models, result.modelMetadata, result.recommendedModel);
+      const result = await providersApi.test(
+        buildDraft(),
+        keyDraft.trim() || undefined,
+      );
+      applyDiscoveredModels(
+        result.models,
+        result.modelMetadata,
+        result.recommendedModel,
+      );
       if (result.models.length > 0) {
         setConnectionNotice({
           message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
@@ -172,18 +279,37 @@ export function ProviderEditor({
 
   const handleSave = async () => {
     if (modelsStale) {
-      const message = "Connection settings changed. Discover models again before saving.";
+      const message =
+        "Connection settings changed. Discover models again before saving.";
       setConnectionNotice({ message, error: true });
       toast.error(message);
       return;
     }
+    if (
+      requireReady &&
+      (models.length === 0 ||
+        !defaultModel ||
+        !models.includes(defaultModel) ||
+        defaultModelIsHidden)
+    ) {
+      setConnectionNotice({
+        message:
+          "Discover models and choose an available default before continuing.",
+        error: true,
+      });
+      return;
+    }
     setSaving(true);
     try {
+      for (const metadata of Object.values(modelMetadata))
+        parseCustomModelOptions(metadata.overrides);
       await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
       if (models.length === 0) {
-        toast.info("Saved without models. Discover models before sending a chat.");
+        toast.info(
+          "Saved without models. Discover models before sending a chat.",
+        );
       }
-      onSaved();
+      await onSaved();
       onOpenChange(false);
     } catch (error) {
       const message = `Couldn't save provider: ${error instanceof Error ? error.message : String(error)}`;
@@ -197,6 +323,8 @@ export function ProviderEditor({
   return (
     <Dialog
       open={open}
+      layer={layer}
+      busy={saving || testing}
       onOpenChange={onOpenChange}
       title={`Configure ${provider.label}`}
       description="Set the connection details and models for this custom endpoint."
@@ -212,8 +340,61 @@ export function ProviderEditor({
         </Field>
 
         <Field
+          label="Provider icon"
+          description="Choose a PNG or SVG up to 512 KB. Aiden normalizes it locally and shares only the bounded PNG with paired iOS devices."
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+              <ProviderIcon
+                providerId={provider.id}
+                providerLabel={label.trim() || provider.label}
+                artwork={artwork}
+                className="size-6"
+              />
+            </span>
+            <input
+              ref={artworkInputRef}
+              type="file"
+              accept="image/png,image/svg+xml,.png,.svg"
+              className="sr-only"
+              aria-label="Choose provider icon"
+              disabled={artworkBusy}
+              onChange={(event) => void chooseArtwork(event.target.files?.[0])}
+            />
+            <Button
+              type="button"
+              variant="muted"
+              size="small"
+              disabled={artworkBusy}
+              onClick={() => artworkInputRef.current?.click()}
+            >
+              {artworkBusy
+                ? "Normalizing…"
+                : artwork
+                  ? "Replace"
+                  : "Choose image"}
+            </Button>
+            {artwork ? (
+              <Button
+                type="button"
+                variant="transparent"
+                size="small"
+                disabled={artworkBusy}
+                onClick={() => setArtwork(undefined)}
+              >
+                Use default
+              </Button>
+            ) : null}
+          </div>
+        </Field>
+
+        <Field
           label="Base URL"
-          description="Base address of an OpenAI- or Anthropic-compatible API."
+          description={
+            isTailnetEndpoint(baseUrl)
+              ? "Private Tailnet address. HTTP and HTTPS are supported; Tailscale encrypts traffic between devices."
+              : "Base address of an OpenAI- or Anthropic-compatible API."
+          }
         >
           <Input
             value={baseUrl}
@@ -315,7 +496,9 @@ export function ProviderEditor({
                 setKeyDraft(e.target.value);
                 markDiscoveryStale();
               }}
-              placeholder={provider.hasKey ? "••••••••••••" : "Paste your API key"}
+              placeholder={
+                provider.hasKey ? "••••••••••••" : "Paste your API key"
+              }
             />
           </Field>
         ) : null}
@@ -349,12 +532,29 @@ export function ProviderEditor({
         {models.length > 0 ? (
           <Field label="Default model">
             <div className="grid gap-1.5">
-              <Select value={defaultModel} onValueChange={setDefaultModel}>
+              <Select
+                value={defaultModel}
+                onValueChange={setDefaultModel}
+                disabled={settings.data === undefined}
+              >
                 <SelectTrigger size="small">
                   <SelectValue placeholder="Select a model" />
                 </SelectTrigger>
                 <SelectContent>
-                  {models.map((m) => (
+                  {defaultModelIsHidden ? (
+                    <SelectItem value={defaultModel} disabled>
+                      {
+                        resolveModelDisplay(
+                          defaultModel,
+                          modelMetadata[defaultModel]?.name
+                            ? { name: modelMetadata[defaultModel].name }
+                            : modelInfo.data?.[defaultModel],
+                        ).label
+                      }{" "}
+                      <InlineMetadata>· Hidden</InlineMetadata>
+                    </SelectItem>
+                  ) : null}
+                  {visibleDefaultModels.map((m) => (
                     <SelectItem key={m} value={m}>
                       {
                         resolveModelDisplay(
@@ -393,12 +593,18 @@ export function ProviderEditor({
             Model capabilities
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Capability hints bundled with this release. Check provider documentation for exact
-            support.
+            Detected capabilities with your custom overrides. Check provider
+            documentation for exact support.
           </Text>
           <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
             {models.map((m, i) => {
-              const info = modelInfo.data?.[m];
+              const info = {
+                ...modelInfo.data?.[m],
+                ...modelInfo.data?.[m]?.detectedCapabilities,
+                ...modelMetadata[m]?.overrides,
+              };
+              if (modelMetadata[m]?.overrides?.maxImages === 0)
+                info.vision = false;
               const display = resolveModelDisplay(m, info);
               const ctx = formatContext(info?.contextLength);
               return (
@@ -406,19 +612,34 @@ export function ProviderEditor({
                   key={m}
                   className={`flex items-center gap-2 px-3 py-2 ${i > 0 ? "border-t border-separator" : ""}`}
                 >
-                  <Text variant="small" truncate className="min-w-0 flex-1" title={m}>
+                  <Text
+                    variant="small"
+                    truncate
+                    className="min-w-0 flex-1"
+                    title={m}
+                  >
                     {display.label}
                   </Text>
                   {info?.matched ? (
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
                       {info.vision ? <Badge color="blue">Vision</Badge> : null}
-                      {info.toolCall ? <Badge color="green">Tools</Badge> : null}
-                      {info.reasoning ? <Badge color="purple">Reasoning</Badge> : null}
-                      {info.openWeights ? <Badge color="secondary">Open</Badge> : null}
+                      {info.toolCall ? (
+                        <Badge color="green">Tools</Badge>
+                      ) : null}
+                      {info.reasoning ? (
+                        <Badge color="purple">Reasoning</Badge>
+                      ) : null}
+                      {info.openWeights ? (
+                        <Badge color="secondary">Open</Badge>
+                      ) : null}
                       {ctx ? <Badge color="secondary">{ctx}</Badge> : null}
                     </div>
                   ) : (
-                    <Text variant="small" color="quaternary" className="shrink-0">
+                    <Text
+                      variant="small"
+                      color="quaternary"
+                      className="shrink-0"
+                    >
                       {modelInfo.isLoading ? "…" : "Unlisted"}
                     </Text>
                   )}
@@ -427,6 +648,70 @@ export function ProviderEditor({
             })}
           </div>
         </div>
+      ) : null}
+      <Button
+        className="mt-4"
+        variant="transparent"
+        size="small"
+        aria-expanded={moreOptions}
+        aria-controls="custom-model-options"
+        onClick={() => setMoreOptions((value) => !value)}
+      >
+        More options
+      </Button>
+      {moreOptions ? (
+        <section id="custom-model-options" className="mt-3">
+          <CustomModelOptionsEditor
+            models={models}
+            metadata={modelMetadata}
+            info={modelInfo.data}
+            disabled={saving || testing}
+            modelsStale={modelsStale}
+            onAdd={(id) => {
+              if (modelsStale) {
+                const retained = [...new Set([...manualModels, id])];
+                setModels(retained);
+                setManualModels(retained);
+                setModelMetadata(
+                  Object.fromEntries(
+                    retained.map((modelId) => [
+                      modelId,
+                      {
+                        ...modelMetadata[modelId],
+                        source: modelMetadata[modelId]?.source ?? "provider",
+                        manuallyAdded: true,
+                      },
+                    ]),
+                  ),
+                );
+                if (!retained.includes(defaultModel)) setDefaultModel(id);
+                setModelsStale(false);
+                setConnectionNotice(null);
+                return;
+              }
+              setModels((current) => [...current, id]);
+              setManualModels((current) => [...current, id]);
+              setModelMetadata((current) => ({
+                ...current,
+                [id]: { source: "provider", manuallyAdded: true },
+              }));
+              if (!defaultModel) setDefaultModel(id);
+            }}
+            onChange={(id, overrides) =>
+              setModelMetadata((current) => ({
+                ...current,
+                [id]: {
+                  ...current[id],
+                  source: current[id]?.source ?? "provider",
+                  overrides,
+                },
+              }))
+            }
+          />
+          <ProviderModelVisibility
+            provider={{ ...provider, models, modelMetadata }}
+          />
+        </section>
       ) : null}
     </Dialog>
   );

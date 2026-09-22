@@ -1,0 +1,159 @@
+name: Model catalog refresh
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-catalog-refresh-main
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      base-sha: ${{ steps.gate.outputs.base-sha }}
+      changed: ${{ steps.detect.outputs.changed }}
+      skip: ${{ steps.gate.outputs.skip }}
+    steps:
+      - name: Check out triggering revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Detect an exact catalog-refresh bot commit
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "base-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != "push" || "$GITHUB_ACTOR" != "github-actions[bot]" ]]; then
+            exit 0
+          fi
+          subject="$(git log -1 --pretty=%s "$GITHUB_SHA")"
+          changed_paths="$(git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA")"
+          if [[ "$subject" == "chore: refresh models.dev catalog" && "$changed_paths" == "resources/model-capabilities.json" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Use Node.js 22
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        if: steps.gate.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Refresh models.dev snapshot
+        if: steps.gate.outputs.skip != 'true'
+        run: npm run models:refresh
+
+      - name: Verify model catalog contracts
+        if: steps.gate.outputs.skip != 'true'
+        run: npm run test:model-catalog
+
+      - name: Ensure only the snapshot changed
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unexpected="$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v '^resources/model-capabilities.json$' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Catalog refresh changed files outside the approved snapshot:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Detect snapshot changes
+        if: steps.gate.outputs.skip != 'true'
+        id: detect
+        shell: bash
+        run: |
+          if git diff --quiet -- resources/model-capabilities.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stage verified snapshot artifact
+        if: steps.detect.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir catalog-artifact
+          cp resources/model-capabilities.json catalog-artifact/model-capabilities.json
+          cd catalog-artifact
+          sha256sum model-capabilities.json > model-capabilities.json.sha256
+
+      - name: Upload verified snapshot artifact
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: models-dev-catalog-${{ github.sha }}
+          path: catalog-artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: refresh
+    if: needs.refresh.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out verified base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.refresh.outputs.base-sha }}
+
+      - name: Download verified snapshot artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: models-dev-catalog-${{ needs.refresh.outputs.base-sha }}
+          path: catalog-artifact
+
+      - name: Verify and apply snapshot artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd catalog-artifact
+          sha256sum --check model-capabilities.json.sha256
+          node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("model-capabilities.json", "utf8")); if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) throw new Error("Invalid catalog artifact");'
+          cd ..
+          cp catalog-artifact/model-capabilities.json resources/model-capabilities.json
+          unexpected="$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep -v '^resources/model-capabilities.json$' | grep -v '^catalog-artifact/' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Publish preparation changed files outside the approved snapshot:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Commit verified snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- resources/model-capabilities.json
+          git commit -m "chore: refresh models.dev catalog"
+
+      - name: Push verified snapshot
+        shell: bash
+        env:
+          PUBLISH_TOKEN: ${{ github.token }}
+        run: git push "https://x-access-token:${PUBLISH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main

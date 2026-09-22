@@ -305,7 +305,7 @@ test("tree ledger reserves fan-out and usage atomically across every budget", ()
         turns: 0,
         networkOperations: 0,
       }),
-    /budget exhausted/u,
+    /tokens budget exhausted \(100,001 attempted; 100,000 allowed\).*new parent turn/u,
   );
   assert.deepEqual(ledger.snapshot(), beforeUsageFailure);
   ledger.finish(first.identity.runId);
@@ -351,7 +351,7 @@ test("tree ledger enforces aggregate turn and network ceilings", () => {
         turns: 1,
         networkOperations: 0,
       }),
-    /turn, network/u,
+    /turns budget exhausted \(3 attempted; 2 allowed\)/u,
   );
   assert.throws(
     () =>
@@ -362,7 +362,7 @@ test("tree ledger enforces aggregate turn and network ceilings", () => {
         turns: 0,
         networkOperations: 1,
       }),
-    /turn, network/u,
+    /network operations budget exhausted \(2 attempted; 1 allowed\)/u,
   );
   assert.deepEqual(ledger.snapshot(), full);
 });

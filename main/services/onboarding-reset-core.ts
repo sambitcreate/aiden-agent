@@ -1,5 +1,6 @@
 export interface OnboardingResetOperations {
   disconnectArtificialAnalysis(): Promise<unknown>;
+  clearModelInsights(): Promise<unknown>;
   resetConfiguration(): Promise<void>;
   clearLegacySecrets(): Promise<void>;
   clearPiCredentials(): Promise<void>;
@@ -49,9 +50,12 @@ async function captureFailure(
 export async function performOnboardingReset(operations: OnboardingResetOperations): Promise<void> {
   const failures: unknown[] = [];
 
-  // Artificial Analysis owns both a Pi credential and a separate cache. Let
-  // its runtime remove both before the catch-all Pi credential pass.
-  await captureFailure(failures, operations.disconnectArtificialAnalysis);
+  // Disconnect model-data sources before the catch-all Pi credential pass;
+  // each source owns both its dedicated key and its device-local cache.
+  await Promise.all([
+    captureFailure(failures, operations.disconnectArtificialAnalysis),
+    captureFailure(failures, operations.clearModelInsights),
+  ]);
 
   await Promise.all([
     captureFailure(failures, operations.resetConfiguration),

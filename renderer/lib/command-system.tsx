@@ -174,7 +174,7 @@ export function CommandSystemProvider({
       const commandId = resolveCommandForKeyEvent(event, bindings, {
         editable: isEditable(target),
         fileEditor: Boolean(target?.closest("[data-command-scope='fileEditor']")),
-        terminal: Boolean(target?.closest("[data-command-scope='terminal'], .xterm")),
+        terminal: Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen")),
         modal:
           applicationModal ||
           Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]')),

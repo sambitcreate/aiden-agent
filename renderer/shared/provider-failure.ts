@@ -91,7 +91,7 @@ export function providerFailurePresentation(
         rate_limit: "The model provider is receiving too many requests. Wait a moment and try again.",
         authentication: "The model provider rejected the current authentication. Review the connection in Settings.",
         quota: "The model provider reported that this account has no available quota.",
-        invalid_request: "The model provider could not accept this request.",
+        invalid_request: "The model provider could not accept this request. Review the selected model and provider settings.",
         context_window: "This conversation exceeded the model’s context window.",
         output_limit: "The model reached its output limit. Any partial response above was saved.",
         interrupted: "The model response was interrupted before it completed.",

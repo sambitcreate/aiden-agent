@@ -1,3 +1,4 @@
+import { writeDevLog } from "../dev-log.js";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
@@ -121,10 +122,10 @@ export class CreateImagesWorkflowProposalService {
           source: "workflow-proposal",
         }),
       ).catch(() => {
-        console.warn("[create-images] Workflow proposal usage could not be recorded.", {
+        writeDevLog("warn", "create-images", ["Workflow proposal usage could not be recorded.", {
           providerId: runtime.provider.id,
           modelId: runtime.model.id,
-        });
+        }]);
       });
     } catch {
       await this.recordUsage(
@@ -153,11 +154,11 @@ export class CreateImagesWorkflowProposalService {
     }
     const parsed = parseCreateImagesWorkflowProposal(assistantText(result), input.current);
     if (parsed.status !== "ready") {
-      console.warn("[create-images] Workflow proposal rejected safely.", {
+      writeDevLog("warn", "create-images", ["Workflow proposal rejected safely.", {
         providerId: runtime.provider.id,
         modelId: runtime.model.id,
         reason: parsed.message,
-      });
+      }]);
       return {
         status: "unavailable",
         message: "The selected model returned an invalid or unsupported graph. The workflow was not changed.",

@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { ExternalLink } from "lucide-react";
+
 import { Button, Dialog, Field, Input, Text, toast, type DialogLayer } from "../ui";
 import { providersApi } from "../../lib/ipc";
 import {
@@ -8,12 +10,15 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
+import { ProviderModelVisibility } from "./provider-model-visibility";
 
 interface BuiltinProviderEditorProps {
   provider: Provider;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
+  /** Voice-only setup needs a credential but does not require a chat catalog. */
+  requireChatModel?: boolean;
   layer?: DialogLayer;
 }
 
@@ -21,6 +26,7 @@ function eventCopy(event: ProviderAuthEvent): string {
   if (event.type === "device_code")
     return `Use code ${event.userCode} in the browser that just opened.`;
   if (event.type === "auth_url") return event.instructions ?? "Continue setup in your browser.";
+  if (event.type === "browser_open_failed") return event.message;
   return event.message;
 }
 
@@ -34,14 +40,18 @@ export function BuiltinProviderEditor({
   open,
   onOpenChange,
   onSaved,
+  requireChatModel = true,
   layer,
 }: BuiltinProviderEditorProps) {
   const sessionRef = React.useRef<ProviderAuthSession | null>(null);
+  const mountedRef = React.useRef(true);
+  const openRef = React.useRef(open);
   const [prompt, setPrompt] = React.useState<ProviderAuthPrompt | null>(null);
   const [value, setValue] = React.useState("");
   const [message, setMessage] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const [responding, setResponding] = React.useState(false);
+  const [authLink, setAuthLink] = React.useState<string | null>(null);
   const interactiveMethods = (provider.authMethods ?? []).filter(
     (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
   );
@@ -50,8 +60,24 @@ export function BuiltinProviderEditor({
     const session = sessionRef.current;
     sessionRef.current = null;
     if (!session?.isActive()) return;
-    void session.cancel().catch(() => session.dispose());
+    void session
+      .cancel()
+      .then((result) => {
+        if (result.cancelled) session.dispose();
+      })
+      .catch(() => session.dispose());
   }, []);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  React.useLayoutEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) {
@@ -61,6 +87,7 @@ export function BuiltinProviderEditor({
       setMessage(null);
       setStarting(false);
       setResponding(false);
+      setAuthLink(null);
     }
   }, [open, provider.id, releaseSession]);
 
@@ -80,40 +107,61 @@ export function BuiltinProviderEditor({
     try {
       const session = createProviderAuthSession(providersApi, provider.id, authType, {
         onPrompt: (nextPrompt) => {
+          setAuthLink(null);
           setPrompt(nextPrompt);
           setValue("");
           setMessage(null);
           setStarting(false);
         },
         onEvent: (event) => {
+          if (event.type === "auth_url" || event.type === "browser_open_failed") {
+            setAuthLink(event.url);
+          } else if (event.type === "device_code") {
+            setAuthLink(event.verificationUri);
+          }
           setMessage(eventCopy(event));
           setStarting(false);
         },
         onDone: async (event) => {
           sessionRef.current = null;
-          setPrompt(null);
-          setStarting(false);
           if (event.cancelled) return;
+          if (mountedRef.current && openRef.current) {
+            setPrompt(null);
+            setStarting(false);
+          }
           try {
-            const providers = await providersApi.refresh();
-            onSaved();
+            const providers = await providersApi.list();
             const refreshed = providers.find((item) => item.id === provider.id);
-            toast.success(
-              refreshed?.hasKey
-                ? `${provider.label} is ready.`
-                : `${provider.label} setup completed.`,
-            );
-            onOpenChange(false);
+            if (!refreshed?.hasKey || (requireChatModel && refreshed.models.length === 0)) {
+              if (mountedRef.current && openRef.current) {
+                setMessage(
+                  `${provider.label} is configured, but no usable chat model is available yet.`,
+                );
+              }
+              return;
+            }
+            // A cancellation request can race the provider's irreversible
+            // credential commit. Reconcile the parent/cache even if this
+            // editor closed while the session reported `finishing`.
+            await onSaved();
+            if (mountedRef.current && openRef.current) {
+              if (event.warning) toast.warning(event.warning);
+              else toast.success(`${provider.label} is configured.`);
+              onOpenChange(false);
+            }
           } catch (error) {
-            setMessage(
-              error instanceof Error
-                ? error.message
-                : "Setup completed, but the model catalog could not refresh.",
-            );
+            if (mountedRef.current && openRef.current) {
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : "Setup completed, but provider readiness could not be checked.",
+              );
+            }
           }
         },
         onError: (error) => {
           sessionRef.current = null;
+          if (!mountedRef.current || !openRef.current) return;
           setPrompt(null);
           setStarting(false);
           toast.error(error.message);
@@ -204,7 +252,7 @@ export function BuiltinProviderEditor({
         ) : interactiveMethods.length > 0 ? (
           <div className="grid gap-2">
             <Text variant="small" color="secondary">
-              Choose a setup method. Pi will ask only for the details this provider requires.
+              Choose a setup method. Aiden asks only for the details this provider requires.
             </Text>
             {interactiveMethods.map((method) => (
               <Button
@@ -219,8 +267,8 @@ export function BuiltinProviderEditor({
           </div>
         ) : (
           <Text variant="small" color="secondary">
-            This provider uses credentials Pi discovers from your system or environment; there is no
-            endpoint or manual credential configuration in Aiden.
+            This provider uses credentials Aiden discovers from your system or environment; there is
+            no endpoint or manual credential configuration.
           </Text>
         )}
         {message ? (
@@ -228,10 +276,27 @@ export function BuiltinProviderEditor({
             {message}
           </Text>
         ) : null}
-        <Text variant="small" color="tertiary">
-          {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"} are currently
-          available.
-        </Text>
+        {authLink ? (
+          <Button asChild variant="filled" size="small" className="justify-self-start">
+            <a href={authLink} target="_blank" rel="noopener noreferrer">
+              Open sign-in page <ExternalLink className="size-3.5" />
+            </a>
+          </Button>
+        ) : null}
+        {requireChatModel ? (
+          <>
+            <Text variant="small" color="tertiary">
+              {provider.models.length} model
+              {provider.models.length === 1 ? " is" : "s are"} currently available.
+            </Text>
+            <ProviderModelVisibility provider={provider} />
+          </>
+        ) : (
+          <Text variant="small" color="tertiary">
+            This setup stores the credential for Gemini voice. Chat-model access follows the choice
+            you made in the previous step.
+          </Text>
+        )}
       </div>
     </Dialog>
   );

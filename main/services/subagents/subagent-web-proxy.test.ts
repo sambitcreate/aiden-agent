@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import {
-  createSubagentAuthorityV2,
-  type SubagentAuthorityV2,
-} from "./authority-v2.js";
+  normalizeWebSearchRequest,
+  webSearchError,
+  type WebSearchResultSet,
+} from "../web-search-core.js";
+import type { WebSearchSearchOptions } from "../web-search.js";
 import {
-  MAX_SUBAGENT_WEB_QUERY_BYTES,
   MAX_SUBAGENT_WEB_QUERY_CHARS,
-  MAX_SUBAGENT_WEB_RESPONSE_BYTES,
-  MAX_SUBAGENT_WEB_RESULT_BYTES,
-  MAX_SUBAGENT_WEB_RESULTS,
-  MAX_SUBAGENT_WEB_TEXT_BYTES,
-  SUBAGENT_WEB_PROXY_TIMEOUT_MS,
   SubagentWebProxyHost,
   type ConsumeSubagentNetworkOperation,
   type SubagentWebProxyHostDependencies,
 } from "./subagent-web-proxy.js";
 
-const SECRET = "exa-secret-do-not-disclose";
 const HASH = "a".repeat(64);
 
 function authority(
@@ -72,17 +68,35 @@ function authority(
   });
 }
 
-function jsonResponse(value: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
+function result(providerId: "exa" | "brave" = "exa"): WebSearchResultSet {
+  return {
+    providerId,
+    results: [{ title: "Result", url: "https://example.test", text: "Evidence" }],
+    untrusted: true,
+  };
 }
 
-function harness(
-  overrides: Partial<SubagentWebProxyHostDependencies> = {},
-): {
+function optionsOf(
+  options: WebSearchSearchOptions | AbortSignal | undefined,
+): WebSearchSearchOptions {
+  return options && !(options instanceof AbortSignal) ? options : {};
+}
+
+async function defaultSearch(
+  requestValue: unknown,
+  optionsValue: WebSearchSearchOptions | AbortSignal | undefined,
+): Promise<WebSearchResultSet> {
+  const request = normalizeWebSearchRequest(requestValue);
+  assert.deepEqual(request, { query: "bounded query", numResults: 3 });
+  const options = optionsOf(optionsValue);
+  await options.beforeProviderAttempt?.("exa");
+  const value = result();
+  const valid = await options.revalidateAfterAttempt?.("exa", value);
+  assert.equal(valid, true);
+  return value;
+}
+
+function harness(overrides: Partial<SubagentWebProxyHostDependencies> = {}): {
   host: SubagentWebProxyHost;
   scheduled: Array<{ callback: () => void; delayMs: number; cancelled: boolean }>;
 } {
@@ -92,9 +106,11 @@ function harness(
     cancelled: boolean;
   }> = [];
   const host = new SubagentWebProxyHost({
-    fetch: async () => jsonResponse({ results: [] }),
-    webSearchEnabled: async () => true,
-    readExaApiKey: async () => SECRET,
+    search: defaultSearch,
+    webSearchAvailability: async () => ({
+      ready: true,
+      route: [{ providerId: "exa", ready: true, configurationStatus: "configured" }],
+    }),
     now: () => 1_000,
     scheduleTimeout: (callback, delayMs) => {
       const timer = { callback, delayMs, cancelled: false };
@@ -111,9 +127,10 @@ function harness(
 function webTool(
   host: SubagentWebProxyHost,
   grant: unknown,
+  current: () => unknown = () => grant,
   consumeNetworkOperation: ConsumeSubagentNetworkOperation = () => true,
 ) {
-  return host.toolForAuthority(grant, () => grant, consumeNetworkOperation);
+  return host.toolForAuthority(grant, current, consumeNetworkOperation);
 }
 
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
@@ -138,435 +155,273 @@ test("web tools require exact live foreground V2 authority with a positive web g
   assert.equal(webTool(host, authority())?.name, "web_search");
 });
 
-test("the host owns credentials and fixes redirect, timeout, request, and signal policy", async () => {
-  let request:
-    | { input: string | URL | Request; init: RequestInit | undefined }
-    | undefined;
-  const { host, scheduled } = harness({
-    fetch: async (input, init) => {
-      request = { input, init };
-      return jsonResponse({
-        results: [{ title: "Result", url: "https://example.test", text: "Evidence" }],
-      });
+test("delegates only a bounded normalized request and marks results as untrusted", async () => {
+  let seenRequest: unknown;
+  const { host } = harness({
+    search: async (requestValue, optionsValue) => {
+      seenRequest = requestValue;
+      const request = normalizeWebSearchRequest(requestValue);
+      assert.deepEqual(request, { query: "bounded query", numResults: 3 });
+      const options = optionsOf(optionsValue);
+      await options.beforeProviderAttempt?.("exa");
+      const value = result();
+      assert.equal(await options.revalidateAfterAttempt?.("exa", value), true);
+      return value;
     },
   });
   const tool = webTool(host, authority());
   assert.ok(tool);
-  assert.doesNotMatch(JSON.stringify(tool), new RegExp(SECRET, "u"));
-  const caller = new AbortController();
-  const result = await tool.execute(
-    "call-1",
-    { query: "bounded query", numResults: 3 },
-    caller.signal,
-  );
-  assert.equal(String(request?.input), "https://api.exa.ai/search");
-  assert.equal(request?.init?.redirect, "error");
-  assert.equal(request?.init?.credentials, "omit");
-  assert.equal(request?.init?.referrerPolicy, "no-referrer");
-  assert.equal(request?.init?.cache, "no-store");
-  assert.ok(request?.init?.signal instanceof AbortSignal);
-  assert.equal(request?.init?.signal?.aborted, false);
-  assert.equal((request?.init?.headers as Record<string, string>)["x-api-key"], SECRET);
-  assert.equal(scheduled[0]?.delayMs, SUBAGENT_WEB_PROXY_TIMEOUT_MS);
-  assert.equal(scheduled[0]?.cancelled, true);
-  assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", new RegExp(SECRET, "u"));
-});
-
-test("abort before fetch consumes no network operation", async () => {
-  let fetches = 0;
-  let charges = 0;
-  const { host } = harness({
-    fetch: async () => {
-      fetches += 1;
-      return jsonResponse({ results: [] });
-    },
-  });
-  const tool = webTool(host, authority({ maxNetworkOperations: 1 }), () => {
-    charges += 1;
-    return charges <= 1;
-  });
-  assert.ok(tool);
-  const cancelled = new AbortController();
-  cancelled.abort(new Error(`${SECRET} caller detail`));
-  assert.equal(
-    await rejectionMessage(tool.execute("cancelled", { query: "private query" }, cancelled.signal)),
-    "Web search was cancelled.",
-  );
-  await tool.execute("allowed", { query: "public query" });
-  assert.equal(fetches, 1);
-  assert.equal(charges, 1);
-});
-
-test("an abort after fetch begins propagates and permanently consumes budget", async () => {
-  let fetchSignal: AbortSignal | null | undefined;
-  let started: (() => void) | undefined;
-  const didStart = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const { host } = harness({
-    fetch: async (_input, init) => {
-      fetchSignal = init?.signal;
-      started?.();
-      return await new Promise<Response>(() => {});
-    },
-  });
-  let remaining = 1;
-  const tool = webTool(host, authority({ maxNetworkOperations: 1 }), () => {
-    if (remaining <= 0) return false;
-    remaining -= 1;
-    return true;
-  });
-  assert.ok(tool);
-  const caller = new AbortController();
-  const operation = tool.execute("active", { query: "query" }, caller.signal);
-  await didStart;
-  caller.abort(new Error(`${SECRET} caller detail`));
-  assert.equal(await rejectionMessage(operation), "Web search was cancelled.");
-  assert.equal(fetchSignal?.aborted, true);
-  assert.equal(
-    await rejectionMessage(tool.execute("over-budget", { query: "query" })),
-    "Web search network budget exhausted.",
-  );
-});
-
-test("the fixed host timeout aborts fetch without exposing provider details", async () => {
-  let fetchSignal: AbortSignal | null | undefined;
-  let started: (() => void) | undefined;
-  const didStart = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const { host, scheduled } = harness({
-    fetch: async (_input, init) => {
-      fetchSignal = init?.signal;
-      started?.();
-      return await new Promise<Response>(() => {});
-    },
-  });
-  const tool = webTool(host, authority());
-  assert.ok(tool);
-  const operation = tool.execute("timeout", { query: `${SECRET} query` });
-  await didStart;
-  assert.equal(scheduled[0]?.delayMs, SUBAGENT_WEB_PROXY_TIMEOUT_MS);
-  scheduled[0]?.callback();
-  assert.equal(await rejectionMessage(operation), "Web search timed out.");
-  assert.equal(fetchSignal?.aborted, true);
-});
-
-test("query character and UTF-8 byte ceilings fail before fetch and budget", async () => {
-  let fetches = 0;
-  let charges = 0;
-  const { host } = harness({
-    fetch: async () => {
-      fetches += 1;
-      return jsonResponse({ results: [] });
-    },
-  });
-  const tool = webTool(host, authority({ maxNetworkOperations: 1 }), () => {
-    charges += 1;
-    return charges <= 1;
-  });
-  assert.ok(tool);
-  assert.equal(
-    await rejectionMessage(tool.execute("blank", { query: " \t\n " })),
-    "Web search request exceeded its size limit.",
-  );
-  assert.equal(
-    await rejectionMessage(
-      tool.execute("chars", { query: "a".repeat(MAX_SUBAGENT_WEB_QUERY_CHARS + 1) }),
-    ),
-    "Web search request exceeded its size limit.",
-  );
-  const multibyte = "€".repeat(Math.floor(MAX_SUBAGENT_WEB_QUERY_BYTES / 3) + 1);
-  assert.ok(multibyte.length <= MAX_SUBAGENT_WEB_QUERY_CHARS);
-  assert.equal(
-    await rejectionMessage(tool.execute("bytes", { query: multibyte })),
-    "Web search request exceeded its size limit.",
-  );
-  await tool.execute("valid", { query: "still allowed" });
-  assert.equal(fetches, 1);
-  assert.equal(charges, 1);
-});
-
-test("content-length and streaming bytes independently cap provider responses", async () => {
-  const declared = harness({
-    fetch: async () =>
-      new Response("{}", {
-        status: 200,
-        headers: { "content-length": String(MAX_SUBAGENT_WEB_RESPONSE_BYTES + 1) },
-      }),
-  }).host;
-  const declaredTool = webTool(declared, authority({ runId: "run-declared" }));
-  assert.ok(declaredTool);
-  assert.equal(
-    await rejectionMessage(declaredTool.execute("declared", { query: "query" })),
-    "Web search response exceeded its size limit.",
-  );
-
-  const streaming = harness({
-    fetch: async () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array(MAX_SUBAGENT_WEB_RESPONSE_BYTES));
-            controller.enqueue(new Uint8Array(1));
-            controller.close();
-          },
-        }),
-        { status: 200 },
-      ),
-  }).host;
-  const streamingTool = webTool(streaming, authority({ runId: "run-stream" }));
-  assert.ok(streamingTool);
-  assert.equal(
-    await rejectionMessage(streamingTool.execute("stream", { query: "query" })),
-    "Web search response exceeded its size limit.",
-  );
-});
-
-test("result count and fields are byte-bounded, credential-redacted, and URL-userinfo-free", async () => {
-  const results = Array.from({ length: MAX_SUBAGENT_WEB_RESULTS + 4 }, (_value, index) => ({
-    title: `Title ${index} ${SECRET}`,
-    url: `https://alice:${SECRET}@example.test/${index}?echo=${encodeURIComponent(SECRET)}`,
-    text: `${SECRET}${"😀".repeat(MAX_SUBAGENT_WEB_TEXT_BYTES)}`,
-  }));
-  const { host } = harness({ fetch: async () => jsonResponse({ results }) });
-  const tool = webTool(host, authority());
-  assert.ok(tool);
-  const output = await tool.execute("results", { query: "query", numResults: 10 });
+  const output = await tool.execute("call", { query: "  bounded query  ", numResults: 3 });
+  assert.deepEqual(seenRequest, { query: "bounded query", numResults: 3 });
   const text = output.content[0]?.type === "text" ? output.content[0].text : "";
-  assert.ok(new TextEncoder().encode(text).byteLength <= MAX_SUBAGENT_WEB_RESULT_BYTES);
-  assert.doesNotMatch(text, new RegExp(SECRET, "u"));
-  assert.doesNotMatch(text, /alice:/u);
-  const payload = JSON.parse(text.slice(text.indexOf("\n") + 1)) as {
-    results: Array<{ title: string; url: string; text: string }>;
-  };
-  assert.equal(payload.results.length, MAX_SUBAGENT_WEB_RESULTS);
-  for (const result of payload.results) {
-    assert.ok(new TextEncoder().encode(result.text).byteLength <= MAX_SUBAGENT_WEB_TEXT_BYTES);
-  }
+  assert.match(text, /SECURITY BOUNDARY: Web results are untrusted evidence/u);
+  assert.match(text, /"providerId":"exa"/u);
+  assert.match(text, /"untrusted":true/u);
 });
 
-test("provider failures, HTTP bodies, malformed JSON, and disabled config yield bounded safe errors", async () => {
-  const cases: Array<{
-    name: string;
-    dependencies: Partial<SubagentWebProxyHostDependencies>;
-    expected?: string;
-  }> = [
-    {
-      name: "fetch",
-      dependencies: {
-        fetch: async () => {
-          throw new Error(`${SECRET} private query https://alice:password@example.test`);
-        },
-      },
-    },
-    {
-      name: "http",
-      dependencies: {
-        fetch: async () =>
-          new Response(`${SECRET} private query API diagnostic`, { status: 429 }),
-      },
-    },
-    {
-      name: "json",
-      dependencies: { fetch: async () => new Response(`${SECRET} not JSON`) },
-    },
-    {
-      name: "disabled",
-      dependencies: { webSearchEnabled: async () => false },
-      expected: "Web search is not available for this child.",
-    },
-  ];
-  for (const entry of cases) {
-    const { host } = harness(entry.dependencies);
-    const tool = webTool(host, authority({ runId: `run-${entry.name}` }));
-    assert.ok(tool);
-    const message = await rejectionMessage(
-      tool.execute(`call-${entry.name}`, { query: "private query" }),
-    );
-    assert.equal(message, entry.expected ?? "Web search is temporarily unavailable.");
-    assert.doesNotMatch(message, new RegExp(SECRET, "u"));
-    assert.doesNotMatch(message, /private query|alice|password|429|diagnostic/iu);
-  }
-});
-
-test("network reservation is atomic across concurrent tools for one authority", async () => {
-  let fetches = 0;
-  let release: ((response: Response) => void) | undefined;
-  const held = new Promise<Response>((resolve) => {
-    release = resolve;
-  });
+test("malformed model input fails before the shared service or network budget", async () => {
+  let searches = 0;
+  let charges = 0;
   const { host } = harness({
-    fetch: async () => {
-      fetches += 1;
-      return await held;
+    search: async (requestValue, optionsValue) => {
+      searches += 1;
+      return defaultSearch(requestValue, optionsValue);
     },
   });
   const grant = authority({ maxNetworkOperations: 1 });
-  let remaining = grant.budgets.maxNetworkOperations;
-  const sharedConsumer: ConsumeSubagentNetworkOperation = () => {
-    if (remaining <= 0) return false;
-    remaining -= 1;
-    return true;
-  };
-  const first = webTool(host, grant, sharedConsumer);
-  const second = webTool(host, grant, sharedConsumer);
-  assert.ok(first);
-  assert.ok(second);
-  const running = first.execute("first", { query: "one" });
-  while (fetches === 0) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    await rejectionMessage(second.execute("second", { query: "two" })),
-    "Web search network budget exhausted.",
-  );
-  assert.equal(fetches, 1);
-  release?.(jsonResponse({ results: [] }));
-  await running;
-});
-
-test("authority expiry is rechecked after tool construction and after provider I/O", async () => {
-  let now = 1_000;
-  const { host } = harness({
-    now: () => now,
-    fetch: async () => {
-      now = 60_000;
-      return jsonResponse({ results: [] });
-    },
-  });
-  const grant = authority({ expiresAt: 50_000 });
-  const tool = webTool(host, grant);
-  assert.ok(tool);
-  assert.equal(
-    await rejectionMessage(tool.execute("expired-after", { query: "query" })),
-    "Web search is not available for this child.",
-  );
-  assert.equal(webTool(host, authority({ expiresAt: 50_000 })), null);
-});
-
-test("current authority and config are revalidated immediately around provider I/O", async () => {
-  const grant = authority({ runId: "run-drift", maxNetworkOperations: 2 });
-  let current: unknown = grant;
-  const authorityHost = harness({
-    fetch: async () => {
-      current = authority({ runId: "run-drift", web: false, maxNetworkOperations: 2 });
-      return jsonResponse({ results: [] });
-    },
-  }).host;
-  const authorityTool = authorityHost.toolForAuthority(grant, () => current, () => true);
-  assert.ok(authorityTool);
-  assert.equal(
-    await rejectionMessage(authorityTool.execute("authority-drift", { query: "query" })),
-    "Web search is not available for this child.",
-  );
-
-  let enabled = true;
-  const configHost = harness({
-    webSearchEnabled: async () => enabled,
-    fetch: async () => {
-      enabled = false;
-      return jsonResponse({ results: [] });
-    },
-  }).host;
-  const configGrant = authority({ runId: "run-config" });
-  const configTool = configHost.toolForAuthority(configGrant, () => configGrant, () => true);
-  assert.ok(configTool);
-  assert.equal(
-    await rejectionMessage(configTool.execute("config-drift", { query: "query" })),
-    "Web search is not available for this child.",
-  );
-});
-
-test("a web call cannot spend a ceiling already consumed by MCP", async () => {
-  const { host } = harness();
-  const grant = authority({ runId: "run-shared-budget", maxNetworkOperations: 1 });
-  let remaining = grant.budgets.maxNetworkOperations;
-  const consumeSharedNetworkOperation: ConsumeSubagentNetworkOperation = () => {
-    if (remaining <= 0) return false;
-    remaining -= 1;
-    return true;
-  };
-  // The MCP host and web host receive this same main-owned consumer. Simulate
-  // the exact MCP call-site charge before the child attempts web_search.
-  assert.equal(await consumeSharedNetworkOperation(grant), true);
-  const tool = host.toolForAuthority(
+  const tool = webTool(
+    host,
     grant,
     () => grant,
-    consumeSharedNetworkOperation,
+    () => {
+      charges += 1;
+      return true;
+    },
+  );
+  assert.ok(tool);
+  for (const params of [
+    { query: "query", provider: "evil" },
+    { query: "a".repeat(MAX_SUBAGENT_WEB_QUERY_CHARS + 1) },
+  ]) {
+    assert.equal(
+      await rejectionMessage(tool.execute("invalid", params)),
+      "Web search request exceeded its size limit.",
+    );
+  }
+  assert.equal(searches, 0);
+  assert.equal(charges, 0);
+});
+
+test("readiness and live authority fences block child execution before charging", async () => {
+  let searches = 0;
+  let charges = 0;
+  let ready = false;
+  const grant = authority();
+  const { host } = harness({
+    webSearchAvailability: async () => ({
+      ready,
+      route: [
+        {
+          providerId: "exa",
+          ready,
+          configurationStatus: ready ? "configured" : "needs-setup",
+        },
+      ],
+    }),
+    search: async (requestValue, optionsValue) => {
+      searches += 1;
+      return defaultSearch(requestValue, optionsValue);
+    },
+  });
+  const tool = webTool(
+    host,
+    grant,
+    () => grant,
+    () => {
+      charges += 1;
+      return true;
+    },
   );
   assert.ok(tool);
   assert.equal(
-    await rejectionMessage(tool.execute("web-after-mcp", { query: "query" })),
+    await rejectionMessage(tool.execute("not-ready", { query: "bounded query", numResults: 3 })),
+    "Web search is not available for this child.",
+  );
+  assert.equal(searches, 1);
+  assert.equal(charges, 0);
+
+  ready = true;
+  let current: unknown = grant;
+  const fencedTool = webTool(
+    host,
+    grant,
+    () => current,
+    () => {
+      charges += 1;
+      return true;
+    },
+  );
+  assert.ok(fencedTool);
+  current = authority({ web: false });
+  assert.equal(
+    await rejectionMessage(
+      fencedTool.execute("revoked", { query: "bounded query", numResults: 3 }),
+    ),
+    "Web search is not available for this child.",
+  );
+  assert.equal(charges, 0);
+});
+
+test("automatic provider attempts each consume one shared network-budget unit", async () => {
+  const attempted: string[] = [];
+  let charges = 0;
+  const { host } = harness({
+    webSearchAvailability: async () => ({
+      ready: true,
+      route: [
+        { providerId: "exa", ready: true, configurationStatus: "configured" },
+        { providerId: "brave", ready: true, configurationStatus: "configured" },
+      ],
+    }),
+    search: async (_requestValue, optionsValue) => {
+      const options = optionsOf(optionsValue);
+      await options.beforeProviderAttempt?.("exa");
+      attempted.push("exa");
+      await options.beforeProviderAttempt?.("brave");
+      attempted.push("brave");
+      const value = result("brave");
+      assert.equal(await options.revalidateAfterAttempt?.("brave", value), true);
+      return value;
+    },
+  });
+  const grant = authority({ maxNetworkOperations: 2 });
+  const tool = webTool(
+    host,
+    grant,
+    () => grant,
+    () => {
+      charges += 1;
+      return charges <= 2;
+    },
+  );
+  assert.ok(tool);
+  await tool.execute("automatic", { query: "bounded query", numResults: 3 });
+  assert.deepEqual(attempted, ["exa", "brave"]);
+  assert.equal(charges, 2);
+});
+
+test("a later automatic attempt reports budget exhaustion after charging each attempt", async () => {
+  let charges = 0;
+  const { host } = harness({
+    webSearchAvailability: async () => ({
+      ready: true,
+      route: [
+        { providerId: "exa", ready: true, configurationStatus: "configured" },
+        { providerId: "brave", ready: true, configurationStatus: "configured" },
+      ],
+    }),
+    search: async (_requestValue, optionsValue) => {
+      const options = optionsOf(optionsValue);
+      await options.beforeProviderAttempt?.("exa");
+      await options.beforeProviderAttempt?.("brave");
+      return result("brave");
+    },
+  });
+  const grant = authority({ maxNetworkOperations: 1 });
+  const tool = webTool(
+    host,
+    grant,
+    () => grant,
+    () => {
+      charges += 1;
+      return charges <= 1;
+    },
+  );
+  assert.ok(tool);
+  assert.equal(
+    await rejectionMessage(tool.execute("budget", { query: "bounded query", numResults: 3 })),
     "Web search network budget exhausted.",
+  );
+  assert.equal(charges, 2);
+});
+
+test("post-attempt route, authority, and readiness revalidation prevents result publication", async () => {
+  let current: unknown = authority();
+  let routeProvider: "exa" | "brave" = "exa";
+  let ready = true;
+  const { host } = harness({
+    webSearchAvailability: async () => ({
+      ready,
+      route: [
+        {
+          providerId: routeProvider,
+          ready,
+          configurationStatus: ready ? "configured" : "needs-setup",
+        },
+      ],
+    }),
+    search: async (_requestValue, optionsValue) => {
+      const options = optionsOf(optionsValue);
+      await options.beforeProviderAttempt?.("exa");
+      routeProvider = "brave";
+      const value = result();
+      const valid = await options.revalidateAfterAttempt?.("exa", value);
+      if (valid === false) throw webSearchError("unavailable", "exa");
+      return value;
+    },
+  });
+  const tool = webTool(host, current, () => current);
+  assert.ok(tool);
+  assert.equal(
+    await rejectionMessage(tool.execute("authority", { query: "bounded query", numResults: 3 })),
+    "Web search is not available for this child.",
+  );
+
+  current = authority();
+  routeProvider = "exa";
+  ready = false;
+  const readinessTool = webTool(host, current, () => current);
+  assert.ok(readinessTool);
+  assert.equal(
+    await rejectionMessage(
+      readinessTool.execute("readiness", { query: "bounded query", numResults: 3 }),
+    ),
+    "Web search is not available for this child.",
   );
 });
 
-test("web snapshots approved primitives before asynchronous host checks", async () => {
-  let releaseEnabled!: () => void;
-  let enabledReads = 0;
-  let requestBody: unknown;
-  const { host } = harness({
-    webSearchEnabled: async () => {
-      enabledReads += 1;
-      if (enabledReads === 1) {
-        await new Promise<void>((resolve) => {
-          releaseEnabled = resolve;
-        });
-      }
-      return true;
-    },
-    fetch: async (_url, init) => {
-      requestBody = JSON.parse(String(init?.body));
-      return jsonResponse({ results: [] });
+test("caller cancellation and fixed timeout abort the shared service signal", async () => {
+  let observedSignal: AbortSignal | undefined;
+  const { host, scheduled } = harness({
+    search: async (_requestValue, optionsValue) => {
+      const options = optionsOf(optionsValue);
+      observedSignal = options.signal;
+      await options.beforeProviderAttempt?.("exa");
+      if (options.signal?.aborted) throw webSearchError("cancelled", "exa");
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw webSearchError("cancelled", "exa");
     },
   });
-  const grant = authority({ runId: "run-immutable-web" });
-  const tool = webTool(host, grant);
+  const tool = webTool(host, authority());
   assert.ok(tool);
-  const args = { query: "approved query", numResults: 2 };
-  const running = tool.execute("immutable-web", args);
-  args.query = "mutated after approval";
-  args.numResults = 9;
-  releaseEnabled();
-  await running;
-  assert.deepEqual(requestBody, {
-    query: "approved query",
-    numResults: 2,
-    contents: { text: { maxCharacters: MAX_SUBAGENT_WEB_TEXT_BYTES } },
+  const timeoutOperation = tool.execute("timeout", {
+    query: "bounded query",
+    numResults: 3,
   });
-});
+  scheduled[0]?.callback();
+  assert.equal(await rejectionMessage(timeoutOperation), "Web search timed out.");
+  assert.equal(observedSignal?.aborted, true);
 
-test("web rejects credential rotation or expiry during final key resolution before effect", async () => {
-  for (const mode of ["rotate", "expire"] as const) {
-    let keyReads = 0;
-    let now = 1_000;
-    let fetches = 0;
-    let budgetCharges = 0;
-    const { host } = harness({
-      now: () => now,
-      readExaApiKey: async () => {
-        keyReads += 1;
-        if (keyReads === 2) {
-          if (mode === "expire") now = 1_500;
-          if (mode === "rotate") return `${SECRET}-rotated`;
-        }
-        return SECRET;
-      },
-      fetch: async () => {
-        fetches += 1;
-        return jsonResponse({ results: [] });
-      },
-    });
-    const grant = authority({ runId: `run-${mode}-web`, expiresAt: 1_500 });
-    const tool = host.toolForAuthority(grant, () => grant, () => {
-      budgetCharges += 1;
-      return true;
-    });
-    assert.ok(tool);
-    assert.equal(
-      await rejectionMessage(tool.execute(`${mode}-web`, { query: "query" })),
-      "Web search is not available for this child.",
-    );
-    assert.equal(fetches, 0);
-    assert.equal(budgetCharges, 0);
-  }
+  observedSignal = undefined;
+  const caller = new AbortController();
+  const cancelledOperation = tool.execute(
+    "cancelled",
+    { query: "bounded query", numResults: 3 },
+    caller.signal,
+  );
+  caller.abort();
+  assert.equal(await rejectionMessage(cancelledOperation), "Web search was cancelled.");
+  assert.equal((observedSignal as AbortSignal | undefined)?.aborted, true);
 });

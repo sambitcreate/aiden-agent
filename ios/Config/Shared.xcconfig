@@ -1,0 +1,17 @@
+// Shared app-identity and signing defaults, attached to the project as the
+// base configuration for both build configurations (Debug and Release).
+//
+// Contributors: never edit this file or project.pbxproj to sign with your own
+// Apple team. Create Config/Local.xcconfig (gitignored) instead — see
+// CONTRIBUTING.md ("Code signing for contributors").
+
+DEVELOPMENT_TEAM = 5WP229CBB8
+APP_IDENTIFIER_SUFFIX =
+APP_BUNDLE_IDENTIFIER = sbtbiswas.AidenOnTheGo$(APP_IDENTIFIER_SUFFIX)
+APP_GROUP_IDENTIFIER = group.sbtbiswas.AidenOnTheGo$(APP_IDENTIFIER_SUFFIX)
+KEYCHAIN_SERVICE = sbtbiswas.AidenOnTheGo.pairing$(APP_IDENTIFIER_SUFFIX)
+APP_URL_SCHEME = aiden-otg$(APP_URL_SCHEME_SUFFIX)
+
+// Optional per-machine overrides. This include must stay last: later
+// assignments win, so Local.xcconfig values override the defaults above.
+#include? "Local.xcconfig"

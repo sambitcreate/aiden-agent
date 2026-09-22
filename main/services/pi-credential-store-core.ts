@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { readRegularUtf8File } from "./regular-file-read.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -30,6 +30,8 @@ interface EncryptedPiCredentialStoreOptions {
   /** A committed write stays successful when directory fsync is unsupported. */
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
+  beforeWritePublish?(): void;
+  afterWritePublish?(): void;
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -58,6 +60,42 @@ class AsyncMutex {
       release();
     }
   }
+}
+
+/** Cancel callers promptly without releasing locks held by unfinished work. */
+function credentialOperation<T>(
+  options: AuthOperationOptions | undefined,
+  operation: (beginPublication: () => void) => Promise<T>,
+): Promise<T> {
+  const signal = options?.signal;
+  if (!signal) return operation(() => undefined);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason);
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    const beginPublication = (): void => {
+      signal.throwIfAborted();
+      // Atomic rename is the point of no return. Its result, including any
+      // persistence failure, must win over cancellation from this point on.
+      signal.removeEventListener("abort", abort);
+    };
+    void Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return operation(beginPublication);
+    }).then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** Aiden is single-instance; share locks across every store object in that process. */
@@ -162,7 +200,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
     }
   }
 
-  private async writeDocument(document: CredentialDocument): Promise<void> {
+  private async writeDocument(
+    document: CredentialDocument,
+    beginPublication: () => void,
+  ): Promise<void> {
     const destination = await this.resolvedFilePath();
     const directory = path.dirname(destination);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -175,7 +216,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       await handle.sync();
       await handle.close();
       handle = undefined;
+      this.options.beforeWritePublish?.();
+      beginPublication();
       await fs.rename(temporary, destination);
+      this.options.afterWritePublish?.();
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -227,57 +271,76 @@ export class EncryptedPiCredentialStore implements CredentialStore {
     return { type: validated.type, ciphertext: Buffer.from(encrypted).toString("base64") };
   }
 
-  async read(providerId: string): Promise<Credential | undefined> {
+  async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     validateProviderId(providerId);
-    const entry = (await this.readDocument()).entries[providerId];
-    return entry ? this.decrypt(entry) : undefined;
+    return credentialOperation(options, async () => {
+      const entry = (await this.readDocument()).entries[providerId];
+      options?.signal?.throwIfAborted();
+      return entry ? this.decrypt(entry) : undefined;
+    });
   }
 
-  async list(): Promise<readonly CredentialInfo[]> {
-    const document = await this.readDocument();
-    return Object.entries(document.entries)
-      .map(([providerId, entry]) => ({ providerId, type: entry.type }))
-      .sort((left, right) => left.providerId.localeCompare(right.providerId));
+  async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+    return credentialOperation(options, async () => {
+      const document = await this.readDocument();
+      return Object.entries(document.entries)
+        .map(([providerId, entry]) => ({ providerId, type: entry.type }))
+        .sort((left, right) => left.providerId.localeCompare(right.providerId));
+    });
   }
 
   async modify(
     providerId: string,
     modifier: (current: Credential | undefined) => Promise<Credential | undefined>,
+    options?: AuthOperationOptions,
   ): Promise<Credential | undefined> {
     validateProviderId(providerId);
-    const providerMutex = await this.mutex(`provider:${providerId}`);
-    return providerMutex.run(
-      async () => {
-        const current = await this.read(providerId);
-        const next = await modifier(current);
-        if (next === undefined) return current;
-        const encrypted = await this.encrypt(next);
-        const documentMutex = await this.mutex("document");
-        await documentMutex.run(async () => {
-          const document = await this.readDocument();
-          document.entries[providerId] = encrypted;
-          await this.writeDocument(document);
-        });
-        return next;
-      },
-      () => this.options.onLockQueued?.(`provider:${providerId}`),
-    );
+    return credentialOperation(options, async (beginPublication) => {
+      const providerMutex = await this.mutex(`provider:${providerId}`);
+      return providerMutex.run(
+        async () => {
+          options?.signal?.throwIfAborted();
+          const current = await this.read(providerId, options);
+          options?.signal?.throwIfAborted();
+          const next = await modifier(current);
+          options?.signal?.throwIfAborted();
+          if (next === undefined) return current;
+          const encrypted = await this.encrypt(next);
+          options?.signal?.throwIfAborted();
+          const documentMutex = await this.mutex("document");
+          await documentMutex.run(async () => {
+            options?.signal?.throwIfAborted();
+            const document = await this.readDocument();
+            options?.signal?.throwIfAborted();
+            document.entries[providerId] = encrypted;
+            await this.writeDocument(document, beginPublication);
+          });
+          return next;
+        },
+        () => this.options.onLockQueued?.(`provider:${providerId}`),
+      );
+    });
   }
 
-  async delete(providerId: string): Promise<void> {
+  async delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
     validateProviderId(providerId);
-    const providerMutex = await this.mutex(`provider:${providerId}`);
-    await providerMutex.run(
-      async () => {
-        const documentMutex = await this.mutex("document");
-        await documentMutex.run(async () => {
-          const document = await this.readDocument();
-          if (!document.entries[providerId]) return;
-          delete document.entries[providerId];
-          await this.writeDocument(document);
-        });
-      },
-      () => this.options.onLockQueued?.(`provider:${providerId}`),
-    );
+    return credentialOperation(options, async (beginPublication) => {
+      const providerMutex = await this.mutex(`provider:${providerId}`);
+      await providerMutex.run(
+        async () => {
+          options?.signal?.throwIfAborted();
+          const documentMutex = await this.mutex("document");
+          await documentMutex.run(async () => {
+            options?.signal?.throwIfAborted();
+            const document = await this.readDocument();
+            options?.signal?.throwIfAborted();
+            if (!document.entries[providerId]) return;
+            delete document.entries[providerId];
+            await this.writeDocument(document, beginPublication);
+          });
+        },
+        () => this.options.onLockQueued?.(`provider:${providerId}`),
+      );
+    });
   }
 }

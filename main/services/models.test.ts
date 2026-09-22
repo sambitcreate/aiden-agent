@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ArtificialAnalysisCatalog } from "./artificial-analysis-catalog-core.js";
+import { buildOpenRouterBenchmarkCache } from "./openrouter-benchmark-catalog-core.js";
 import {
   CONSERVATIVE_RUNTIME_LIMITS,
   createModelCatalogLoader,
@@ -11,7 +12,14 @@ import {
   resolveProviderRuntimeLimits,
   resolveRuntimeLimits,
 } from "./models-catalog-core.js";
-import { discoverOllamaModels, normalizeProviderBaseUrl, testConnection } from "./models.js";
+import {
+  discoverOllamaModels,
+  MAX_DISCOVERED_MODELS,
+  MAX_MODEL_DISCOVERY_RESPONSE_BYTES,
+  normalizeProviderBaseUrl,
+  assertOnboardingTailnetBaseUrl,
+  testConnection,
+} from "./models.js";
 import { canonicalGoogleProvider } from "./google-provider.js";
 
 const lmStudioProvider = {
@@ -61,9 +69,13 @@ test("Google discovery validates the native endpoint and returns only Pi-support
       JSON.stringify({
         models: [
           {
-            name: "models/gemini-2.5-pro",
+            name: "models/gemini-3.5-flash",
             supportedGenerationMethods: ["generateContent"],
           },
+          ...["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"].map((id) => ({
+            name: `models/${id}`,
+            supportedGenerationMethods: ["generateContent"],
+          })),
         ],
       }),
       { status: 200 },
@@ -71,10 +83,10 @@ test("Google discovery validates the native endpoint and returns only Pi-support
   }) as typeof fetch;
 
   const result = await testConnection(canonicalGoogleProvider(), "google-key");
-  assert.deepEqual(result.models, ["gemini-2.5-pro"]);
+  assert.deepEqual(result.models, ["gemini-3.5-flash"]);
   assert.equal(result.modelCount, 1);
-  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.reasoning, true);
-  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.vision, true);
+  assert.equal(result.modelMetadata["gemini-3.5-flash"]?.reasoning, true);
+  assert.equal(result.modelMetadata["gemini-3.5-flash"]?.vision, true);
   assert.equal(requests.length, 2);
 });
 
@@ -169,6 +181,66 @@ test("LM Studio falls back to the OpenAI-compatible list only when its native ro
   ]);
   assert.deepEqual(result.models, ["a-model", "z-model"]);
   assert.equal(result.modelMetadata["a-model"]?.source, "provider");
+});
+
+test("generic discovery preserves and excludes provider-declared non-chat model types", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (input) => {
+    assert.equal(String(input), "https://models.example.test/v1/models");
+    return new Response(
+      JSON.stringify({
+        data: [
+          { id: "chat-v1", type: "llm" },
+          { id: "opaque-score-v1", type: "reranker" },
+          { id: "opaque-capability-score", capabilities: ["reranking"] },
+          { id: "opaque-pixels-v1", type: "image" },
+          { id: "opaque-sound-v1", type: "audio" },
+          { id: "opaque-motion-v1", type: "video" },
+          {
+            id: "conflicting-pixels-array",
+            type: "text-generation",
+            capabilities: ["image_generation"],
+          },
+          {
+            id: "conflicting-motion-object",
+            type: "llm",
+            capabilities: { video_generation: true },
+          },
+          {
+            id: "conflicting-sound-object",
+            type: "chat",
+            capabilities: { audio_generation: true },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  const result = await testConnection(
+    {
+      id: "custom:openai",
+      kind: "openai",
+      label: "Custom",
+      baseUrl: "https://models.example.test/v1",
+      models: [],
+      needsKey: false,
+    },
+    null,
+  );
+  assert.deepEqual(result.models, ["chat-v1"]);
+  assert.equal(result.modelCount, 1);
+  assert.equal(result.modelMetadata["opaque-score-v1"]?.type, "reranker");
+  assert.equal(result.modelMetadata["opaque-capability-score"]?.type, "reranker");
+  assert.equal(result.modelMetadata["opaque-pixels-v1"]?.type, "image");
+  assert.equal(result.modelMetadata["opaque-sound-v1"]?.type, "audio");
+  assert.equal(result.modelMetadata["opaque-motion-v1"]?.type, "video");
+  assert.equal(result.modelMetadata["conflicting-pixels-array"]?.type, "image");
+  assert.equal(result.modelMetadata["conflicting-motion-object"]?.type, "video");
+  assert.equal(result.modelMetadata["conflicting-sound-object"]?.type, "audio");
 });
 
 test("Ollama custom connections enrich chat models with show metadata and filter embeddings", async (t) => {
@@ -386,6 +458,137 @@ test("keyless Anthropic discovery omits x-api-key while retaining its protocol v
   );
 });
 
+test("hosted onboarding discovery sends provider-native credential headers", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requests: Array<{ url: string; headers: HeadersInit | undefined }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ url: String(input), headers: init?.headers });
+    return new Response(JSON.stringify({ data: [{ id: "supported-model" }] }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  await testConnection(
+    {
+      ...lmStudioProvider,
+      id: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    "openai-secret",
+  );
+  await testConnection(
+    {
+      ...lmStudioProvider,
+      id: "anthropic",
+      kind: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+    },
+    "anthropic-secret",
+  );
+
+  assert.deepEqual(requests, [
+    {
+      url: "https://api.openai.com/v1/models",
+      headers: { Authorization: "Bearer openai-secret" },
+    },
+    {
+      url: "https://api.anthropic.com/v1/models",
+      headers: {
+        "x-api-key": "anthropic-secret",
+        "anthropic-version": "2023-06-01",
+      },
+    },
+  ]);
+});
+
+test("generic discovery ignores malformed and blank model identifiers", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        data: [{ id: {} }, { id: 42 }, { id: "   " }, { id: "  valid-model  " }],
+      }),
+      { status: 200 },
+    )) as typeof fetch;
+
+  const result = await testConnection(
+    { ...lmStudioProvider, id: "custom:hosted", baseUrl: "https://provider.example/v1" },
+    null,
+  );
+  assert.deepEqual(result.models, ["valid-model"]);
+  assert.equal(result.modelCount, 1);
+});
+
+test("credential-bearing discovery rejects redirects and never exposes upstream error bodies", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_input, init) => {
+    assert.equal(init?.redirect, "error");
+    return new Response('{"secret":"upstream-account-detail"}', { status: 401 });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    testConnection(
+      {
+        ...lmStudioProvider,
+        id: "custom:hosted",
+        baseUrl: "https://provider.example/v1",
+        needsKey: true,
+      },
+      "candidate-key",
+    ),
+    (error: unknown) => {
+      assert.match(String(error), /rejected those credentials/u);
+      assert.doesNotMatch(String(error), /upstream-account-detail|candidate-key/u);
+      return true;
+    },
+  );
+});
+
+test("model discovery bounds response bytes, model count, and identifier length", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let oversized = true;
+  globalThis.fetch = (async () => {
+    if (oversized) {
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-length": String(MAX_MODEL_DISCOVERY_RESPONSE_BYTES + 1) },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        data: [
+          ...Array.from({ length: MAX_DISCOVERED_MODELS + 25 }, (_, index) => ({
+            id: `model-${index}`,
+          })),
+          { id: "x".repeat(300) },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  await assert.rejects(testConnection(lmStudioProvider, null), /catalog is too large/u);
+  oversized = false;
+  const result = await testConnection(lmStudioProvider, null);
+  assert.equal(result.models.length, MAX_DISCOVERED_MODELS);
+  assert.equal(
+    result.models.some((id) => id.length > 256),
+    false,
+  );
+});
+
 test("normalizes safe provider URLs and rejects credentials or request decorations", () => {
   assert.equal(
     normalizeProviderBaseUrl(" https://tailnet.example.ts.net/v1/// "),
@@ -400,6 +603,58 @@ test("normalizes safe provider URLs and rejects credentials or request decoratio
     /query string/u,
   );
   assert.throws(() => normalizeProviderBaseUrl("ftp://example.test/v1"), /HTTP or HTTPS/u);
+  for (const target of [
+    "http://169.254.169.254/latest",
+    "http://169.254.170.2/credentials",
+    "http://metadata.google.internal/v1",
+    "http://[fe80::1]/v1",
+    "http://[::ffff:169.254.169.254]/v1",
+  ]) {
+    assert.throws(() => normalizeProviderBaseUrl(target), /metadata service/u);
+  }
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("https://model.tailnet.ts.net/v1"));
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("http://model.tailnet.ts.net:11434/v1"));
+  assert.doesNotThrow(() => assertOnboardingTailnetBaseUrl("http://100.64.20.5:11434/v1"));
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("ftp://model.tailnet.ts.net/v1"),
+    /HTTP or HTTPS/u,
+  );
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://foo.100.100.100.200.nip.io/v1"),
+    /Tailscale/u,
+  );
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://user:secret@model.tailnet.ts.net/v1"),
+    /API key field/u,
+  );
+  assert.throws(
+    () => assertOnboardingTailnetBaseUrl("http://model.tailnet.ts.net/v1?key=secret"),
+    /query string/u,
+  );
+});
+
+test("transport failures never echo credential material", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_input, init) => {
+    const authorization = new Headers(init?.headers).get("authorization") ?? "missing";
+    throw new Error(`transport rejected ${authorization}`);
+  }) as typeof fetch;
+  const canary = "CANARY_PROVIDER_SECRET";
+  await assert.rejects(
+    testConnection(
+      { ...lmStudioProvider, id: "custom:hosted", baseUrl: "https://provider.example/v1" },
+      canary,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Couldn't reach the provider model endpoint.");
+      assert.doesNotMatch(error.message, new RegExp(canary, "u"));
+      return true;
+    },
+  );
 });
 
 test("models.dev lookups retain unknown flags for unmatched model ids", () => {
@@ -452,6 +707,52 @@ test("models.dev lookups retain unknown flags for unmatched model ids", () => {
     metadataSource: "fallback",
     matched: false,
   });
+});
+
+test("models.dev preserves authoritative non-chat families and descriptions", () => {
+  const catalog = parseModelCatalog({
+    local: {
+      models: {
+        "all-mini-lm-l6-v2": {
+          name: "All-MiniLM-L6-v2",
+          family: "text-embedding",
+        },
+        "nvidia--llama-3.2-nv-embedqa-1b": {
+          name: "NV EmbedQA",
+          description: "Embedding model for semantic search and retrieval",
+        },
+        "ordinary-chat": {
+          name: "Ordinary Chat",
+          description: "Chat model that can discuss embedding models",
+        },
+        "voyage/rerank-2.5-lite": {
+          name: "Voyage Rerank 2.5 Lite",
+          description: "Reranking model for improving retrieval quality",
+        },
+        "black-forest-labs/flux.1-dev": {
+          name: "FLUX.1 Dev",
+          modalities: { input: ["text"], output: ["image"] },
+        },
+      },
+    },
+  });
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "all-mini-lm-l6-v2").modelType,
+    "embedding",
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "nvidia--llama-3.2-nv-embedqa-1b").modelType,
+    "embedding",
+  );
+  assert.equal(lookupCatalogModelInfo(catalog, "lmstudio", "ordinary-chat").modelType, undefined);
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "voyage/rerank-2.5-lite").modelType,
+    "reranker",
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "black-forest-labs/flux.1-dev").modelType,
+    "image",
+  );
 });
 
 test("runtime limits use provider-scoped bundled metadata with conservative partial fallbacks", () => {
@@ -731,6 +1032,40 @@ test("local discovery metadata takes precedence over catalog metadata", () => {
   assert.equal(info.ranking, undefined);
 });
 
+test("catalog non-chat types survive a local provider's generic LLM classification", () => {
+  const catalog = parseModelCatalog({
+    local: {
+      models: {
+        "opaque-embedding": {
+          name: "Opaque Embedding",
+          family: "text-embedding",
+        },
+        "voyage/rerank-2.5-lite": {
+          name: "Voyage Rerank 2.5 Lite",
+          description: "Reranking model for improving retrieval quality",
+        },
+      },
+    },
+  });
+  const provider = {
+    id: "lmstudio",
+    baseUrl: "http://localhost:1234/v1",
+    modelMetadata: {
+      "opaque-embedding": { source: "lmstudio" as const, type: "llm" as const },
+      "voyage/rerank-2.5-lite": { source: "lmstudio" as const, type: "llm" as const },
+    },
+  };
+
+  assert.equal(
+    resolveModelInfo(catalog, snapshot([]), provider, "opaque-embedding").modelType,
+    "embedding",
+  );
+  assert.equal(
+    resolveModelInfo(catalog, snapshot([]), provider, "voyage/rerank-2.5-lite").modelType,
+    "reranker",
+  );
+});
+
 test("Artificial Analysis takes precedence for hosted models and models.dev fills gaps", () => {
   const catalog = parseModelCatalog({
     openai: {
@@ -780,6 +1115,118 @@ test("Artificial Analysis takes precedence for hosted models and models.dev fill
   assert.equal(info.ranking?.capabilityPercentile, 0.9);
   assert.equal(info.ranking?.responseTimePercentile, 0.2);
   assert.equal(info.ranking?.sourceUrl, "https://artificialanalysis.ai");
+});
+
+test("OpenRouter benchmark evidence attaches independently without changing capability authority", () => {
+  const catalog = parseModelCatalog({
+    openai: { models: { "openai/gpt-example": { name: "GPT Example", reasoning: true } } },
+  });
+  const benchmarks = buildOpenRouterBenchmarkCache({
+    data: [
+      {
+        source: "artificial-analysis",
+        model_permaslug: "openai/gpt-example",
+        display_name: "GPT Example",
+        intelligence_index: 70,
+        coding_index: 80,
+        agentic_index: 60,
+      },
+    ],
+    meta: {
+      as_of: "2026-06-03T12:00:00.000Z",
+      version: "v1",
+      source: "artificial-analysis",
+      source_url: "https://artificialanalysis.ai",
+      citation: "Source: Artificial Analysis via OpenRouter.",
+      model_count: 1,
+    },
+  });
+  const info = resolveModelInfo(
+    catalog,
+    snapshot([]),
+    { id: "openai", baseUrl: "https://api.openai.com/v1" },
+    "openai/gpt-example",
+    benchmarks,
+  );
+  assert.equal(info.metadataSource, "models-dev");
+  assert.equal(info.reasoning, true);
+  assert.equal(info.benchmark?.coding, 80);
+  assert.equal(info.benchmark?.license, "CC BY 4.0");
+});
+
+test("models.dev normalizes versioned benchmark IDs for direct and catalog-backed gateway models", () => {
+  const catalog = parseModelCatalog({
+    anthropic: {
+      models: {
+        "claude-opus-4-8": { name: "Claude Opus 4.8", reasoning: true },
+      },
+    },
+    moonshotai: {
+      models: {
+        "kimi-k3": { name: "Kimi K3", reasoning: true },
+      },
+    },
+    "opencode-go": {
+      models: {
+        "kimi-k3": { name: "Kimi K3", reasoning: true },
+      },
+    },
+  });
+  const benchmarks = buildOpenRouterBenchmarkCache({
+    data: [
+      {
+        source: "artificial-analysis",
+        model_permaslug: "anthropic/claude-4.8-opus-20260528",
+        display_name: "Claude Opus 4.8 (Adaptive Reasoning, Max Effort)",
+        coding_index: 74.3,
+      },
+      {
+        source: "artificial-analysis",
+        model_permaslug: "moonshotai/kimi-k3-20260715",
+        display_name: "Kimi K3 (max)",
+        coding_index: 76.2,
+      },
+    ],
+    meta: {
+      as_of: "2026-08-26T12:00:00.000Z",
+      version: "v1",
+      source: "artificial-analysis",
+      source_url: "https://artificialanalysis.ai",
+      citation: "Source: Artificial Analysis via OpenRouter.",
+      model_count: 2,
+    },
+  });
+
+  assert.equal(
+    resolveModelInfo(
+      catalog,
+      snapshot([]),
+      { id: "anthropic", baseUrl: "https://api.anthropic.com" },
+      "claude-opus-4-8",
+      benchmarks,
+    ).benchmark?.coding,
+    74.3,
+  );
+  assert.equal(
+    resolveModelInfo(
+      catalog,
+      snapshot([]),
+      { id: "opencode-go", baseUrl: "https://opencode.ai" },
+      "kimi-k3",
+      benchmarks,
+    ).benchmark?.coding,
+    76.2,
+  );
+  assert.equal(
+    resolveModelInfo(
+      catalog,
+      snapshot([]),
+      { id: "custom:untrusted", baseUrl: "https://example.invalid" },
+      "kimi-k3",
+      benchmarks,
+    ).benchmark,
+    undefined,
+  );
 });
 
 test("runtime metadata stays offline and only models.dev data is packaged", async () => {

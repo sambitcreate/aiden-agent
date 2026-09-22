@@ -7,7 +7,10 @@ export class ByteBoundedLru<Value extends ByteSizedValue> {
   private readonly entries = new Map<string, Value>();
   private retainedBytes = 0;
 
-  constructor(private readonly maxBytes: number) {
+  constructor(private readonly maxBytes: number, private readonly maxEntries = 1024) {
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+      throw new Error("Cache entry capacity must be a positive integer.");
+    }
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
       throw new Error("Thumbnail cache capacity must be a positive integer byte count.");
     }
@@ -27,7 +30,7 @@ export class ByteBoundedLru<Value extends ByteSizedValue> {
     }
     this.delete(key);
     if (value.byteLength > this.maxBytes) return;
-    while (this.retainedBytes + value.byteLength > this.maxBytes) {
+    while (this.retainedBytes + value.byteLength > this.maxBytes || this.entries.size >= this.maxEntries) {
       const oldest = this.entries.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       this.delete(oldest);

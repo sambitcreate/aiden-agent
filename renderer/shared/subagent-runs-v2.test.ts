@@ -11,9 +11,7 @@ import {
   type SubagentRunSnapshotV2,
 } from "./subagent-runs.js";
 
-function v1(
-  state: SubagentRunSnapshotV1["state"] = "completed",
-): SubagentRunSnapshotV1 {
+function v1(state: SubagentRunSnapshotV1["state"] = "completed"): SubagentRunSnapshotV1 {
   return {
     version: 1,
     runId: "run-1",
@@ -40,9 +38,7 @@ function v1(
   };
 }
 
-function v2(
-  state: SubagentRunSnapshotV2["state"] = "completed",
-): SubagentRunSnapshotV2 {
+function v2(state: SubagentRunSnapshotV2["state"] = "completed"): SubagentRunSnapshotV2 {
   return {
     ...v1(
       state === "needs_attention"
@@ -74,14 +70,8 @@ test("V1 parsers remain exact while the dispatcher accepts exact V2", () => {
   assert.equal(parseSubagentRunSnapshotV1(snapshot), undefined);
   assert.deepEqual(parseSubagentRunSnapshotV2(snapshot), snapshot);
   assert.deepEqual(parseSubagentRunSnapshot(snapshot), snapshot);
-  assert.equal(
-    parseSubagentRunSnapshot({ ...snapshot, privateGrantId: "grant-1" }),
-    undefined,
-  );
-  assert.equal(
-    parseSubagentRunSnapshot({ ...snapshot, version: 3 }),
-    undefined,
-  );
+  assert.equal(parseSubagentRunSnapshot({ ...snapshot, privateGrantId: "grant-1" }), undefined);
+  assert.equal(parseSubagentRunSnapshot({ ...snapshot, version: 3 }), undefined);
 });
 
 test("V1 migration preserves terminal presentation and interrupts active evidence", () => {
@@ -97,6 +87,24 @@ test("V1 migration preserves terminal presentation and interrupts active evidenc
   assert.equal(active?.finishedAt, active?.updatedAt);
 });
 
+test("projection provenance is optional, closed, cloned, and preserved across adapters", () => {
+  const source = {
+    ...v1(),
+    projectionNotices: ["task_truncated", "report_truncated", "display_filtered"] as const,
+  };
+  const parsedV1 = parseSubagentRunSnapshotV1(source);
+  assert.deepEqual(parsedV1?.projectionNotices, source.projectionNotices);
+  assert.notEqual(parsedV1?.projectionNotices, source.projectionNotices);
+
+  const projectedV2 = parsedV1 && adaptSubagentRunSnapshotV1ToV2(parsedV1);
+  assert.deepEqual(projectedV2?.projectionNotices, source.projectionNotices);
+  assert.deepEqual(projectedV2 && adaptSubagentRunSnapshotV2ToV1(projectedV2), parsedV1);
+  assert.equal(
+    parseSubagentRunSnapshotV2({ ...v2(), projectionNotices: ["not_a_notice"] }),
+    undefined,
+  );
+});
+
 test("V2 lifecycle-only states project through the unchanged V1 parser", () => {
   const attention = v2("needs_attention");
   const attentionV1 = adaptSubagentRunSnapshotV2ToV1(attention);
@@ -110,10 +118,7 @@ test("V2 lifecycle-only states project through the unchanged V1 parser", () => {
 });
 
 test("V2 lineage and retry identities are exact and non-self-referential", () => {
-  assert.equal(
-    parseSubagentRunSnapshotV2({ ...v2(), parentRunId: "run-parent" }),
-    undefined,
-  );
+  assert.equal(parseSubagentRunSnapshotV2({ ...v2(), parentRunId: "run-parent" }), undefined);
   assert.equal(
     parseSubagentRunSnapshotV2({
       ...v2(),
@@ -130,10 +135,7 @@ test("V2 lineage and retry identities are exact and non-self-referential", () =>
       retryOfRunId: "run-prior",
     }),
   );
-  assert.equal(
-    parseSubagentRunSnapshotV2({ ...v2(), retryOfRunId: "run-1" }),
-    undefined,
-  );
+  assert.equal(parseSubagentRunSnapshotV2({ ...v2(), retryOfRunId: "run-1" }), undefined);
 });
 
 test("needs-attention activity is exact evidence and never silently normalized", () => {
@@ -163,8 +165,7 @@ test("history detail accepts only bounded sanitized effect activity envelopes", 
         version: 1,
         kind: "mcp_mutation",
         state: "unknown",
-        label:
-          "Remote change outcome unknown. Check the remote system before retrying.",
+        label: "Remote change outcome unknown. Check the remote system before retrying.",
         updatedAt: 2_100,
       },
     ],
@@ -177,10 +178,7 @@ test("history detail accepts only bounded sanitized effect activity envelopes", 
     }),
     undefined,
   );
-  assert.equal(
-    parseSubagentHistoryDetailV1({ ...detail, rawResult: "secret" }),
-    undefined,
-  );
+  assert.equal(parseSubagentHistoryDetailV1({ ...detail, rawResult: "secret" }), undefined);
   assert.equal(
     parseSubagentHistoryDetailV1({
       ...detail,

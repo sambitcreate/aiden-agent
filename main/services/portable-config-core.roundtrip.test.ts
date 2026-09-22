@@ -39,6 +39,11 @@ const populated: PortableConfigShape = {
       id: "custom-vllm",
       kind: "openai",
       label: "vLLM",
+      artwork: {
+        mimeType: "image/png",
+        dataBase64:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      },
       baseUrl: "http://10.0.0.4:8000/v1",
       needsKey: false,
       deployment: "local",

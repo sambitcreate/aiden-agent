@@ -5,10 +5,12 @@ import { ipcMain, logger } from "../platform.js";
 import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
+import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseParams } from "./chat-params.js";
+import { geminiLiveService } from "../services/gemini-live/service-main.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -46,6 +48,11 @@ export function registerChatGenerationHandlers(): void {
                 },
               }),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
+            rememberSelection: (providerId, model) => {
+              void configStore
+                .setSettings({ lastProviderId: providerId, lastModel: model })
+                .catch(() => undefined);
+            },
           },
           id,
           parsed,
@@ -78,23 +85,37 @@ export function registerChatGenerationHandlers(): void {
       }
       return;
     }
-    if (
-      llmClient.cancel(streamId, "user_stop", owner.documentId) &&
-      isExplicitUserStop(parsedOrigin)
-    ) {
+    const cancelled = llmClient.cancel(streamId, "user_stop", owner.documentId);
+    if (cancelled && isExplicitUserStop(parsedOrigin)) {
       // This structured lifecycle event is intentionally content-free. Besides
       // normal diagnostics, packaged acceptance accepts it only when the
       // renderer identifies the visible Stop control as the cancellation origin.
       logger.info("chat", JSON.stringify({ event: "renderer_user_stop", streamId }));
     }
+    return cancelled;
   });
 
   // Resolve a pending tool-approval request ("ask" mode).
   ipcMain.handle("chat:approve", async (event, approvalId: unknown, decision: unknown) => {
     if (typeof approvalId !== "string" || !approvalId) return;
     const owner = chatGenerationOwner(event);
-    if (!llmClient.approve(approvalId, decision === "allow" ? "allow" : "deny", owner.documentId)) {
+    const allowed = decision === "allow";
+    if (
+      !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId) &&
+      !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
+    ) {
       throw new Error("This renderer document does not own that approval.");
     }
   });
+
+  ipcMain.handle(
+    "chat:answerQuestionnaire",
+    async (event, promptId: unknown, response: unknown) => {
+      if (typeof promptId !== "string" || !promptId) return;
+      const owner = chatGenerationOwner(event);
+      if (!llmClient.answerQuestionnaire(promptId, response, owner.documentId)) {
+        throw new Error("This renderer document does not own that questionnaire.");
+      }
+    },
+  );
 }

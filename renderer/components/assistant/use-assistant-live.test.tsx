@@ -1,0 +1,1783 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { LiveAudioDeviceError } from "../../lib/live-audio-devices.js";
+import type { DisplayMediaStream } from "../../lib/gemini-live-media-core.js";
+
+test("Live device preparation failure prevents provider start and surfaces recovery", async () => {
+  const fixture = await mountHook({ prepareAudioSession: async () => { throw new LiveAudioDeviceError("Choose another output in Aiden Live settings."); } });
+  try {
+    await fixture.controller().start();
+    await settle();
+    assert.equal(fixture.startCalls(), 0);
+    assert.match(fixture.controller().error ?? "", /Choose another output/);
+  } finally { await fixture.unmount(); }
+});
+
+test("cancelling device preparation fences provider start", async () => {
+  const pending = deferred<void>();
+  const fixture = await mountHook({ prepareAudioSession: () => pending.promise });
+  try {
+    const starting = fixture.controller().start();
+    await settle();
+    await fixture.controller().cancelSetup();
+    pending.resolve();
+    await starting;
+    assert.equal(fixture.startCalls(), 0);
+  } finally { await fixture.unmount(); }
+});
+
+test("output preparation closes its context when cancelled during sink selection", async () => {
+  const pending = deferred<void>();
+  let closed = false;
+  const context = { setSinkId: () => pending.promise, close: async () => { closed = true; } } as unknown as AudioContext;
+  const player = new PcmPlayer(() => context);
+  const abort = new AbortController();
+  const preparing = player.prepareOutput("speaker", abort.signal);
+  await settle();
+  abort.abort();
+  pending.resolve();
+  await preparing;
+  assert.equal(closed, true);
+});
+import { DOMImplementation } from "@xmldom/xmldom";
+import type {
+  AssistantLiveRendererEvent,
+  AssistantLiveSnapshot,
+} from "../../shared/assistant-live.js";
+import type { ComputerUseStatus } from "../../lib/types.js";
+import {
+  assistantLiveRuntimeErrorDetail,
+  assistantLiveStartErrorDetail,
+  PcmPlayer,
+  reconcileAssistantLiveCaption,
+  sealAssistantLiveCaption,
+  type AssistantLiveController,
+  type AssistantLiveDependencies,
+  useAssistantLiveWithDependencies,
+} from "./use-assistant-live.js";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
+async function settle(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+class FakeAudioNode {
+  disconnected = false;
+  connect<T>(destination: T): T {
+    return destination;
+  }
+  disconnect(): void {
+    this.disconnected = true;
+  }
+}
+
+class FakeTrack {
+  stopped = false;
+  stop(): void {
+    this.stopped = true;
+  }
+}
+
+class FakeWorklet extends FakeAudioNode {
+  readonly port = {
+    onmessage: null as ((event: MessageEvent<unknown>) => void) | null,
+  };
+  emit(data: unknown): void {
+    this.port.onmessage?.({ data } as MessageEvent<unknown>);
+  }
+}
+
+class FakeCaptureContext {
+  readonly destination = new FakeAudioNode();
+  readonly source = new FakeAudioNode();
+  readonly gain = Object.assign(new FakeAudioNode(), { gain: { value: 1 } });
+  closed = false;
+  resumed = false;
+  createMediaStreamSource(): MediaStreamAudioSourceNode {
+    return this.source as unknown as MediaStreamAudioSourceNode;
+  }
+  createGain(): GainNode {
+    return this.gain as unknown as GainNode;
+  }
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+  async resume(): Promise<void> {
+    this.resumed = true;
+  }
+}
+
+class RecordingPlayer extends PcmPlayer {
+  pauses = 0;
+  resumes = 0;
+  closes = 0;
+  enqueues = 0;
+  override enqueue(_pcm: Uint8Array): void {
+    this.enqueues += 1;
+  }
+  override pauseAndFlush(): void {
+    this.pauses += 1;
+  }
+  override resume(): void {
+    this.resumes += 1;
+  }
+  override async close(): Promise<void> {
+    this.closes += 1;
+  }
+}
+
+interface HookFixture {
+  controller(): AssistantLiveController;
+  emit(event: AssistantLiveRendererEvent): void;
+  emitBatch(events: readonly AssistantLiveRendererEvent[]): void;
+  startCalls(): number;
+  stopCalls(): number;
+  worklets: FakeWorklet[];
+  contexts: FakeCaptureContext[];
+  tracks: FakeTrack[];
+  player: RecordingPlayer;
+  startIntents(): Array<{ microphone: boolean; screen?: boolean; computerUseAuthorization: string | null }>;
+  refreshAvailability(): Promise<void>;
+  refreshApi(): Promise<void>;
+  unmount(): Promise<void>;
+}
+
+async function mountHook(overrides: Partial<AssistantLiveDependencies> = {}): Promise<HookFixture> {
+  const document = new DOMImplementation().createDocument(
+    null,
+    "html",
+    null,
+  ) as unknown as Document;
+  const body = document.createElement("body");
+  const container = document.createElement("div");
+  body.appendChild(container);
+  document.documentElement.appendChild(body);
+  const elementPrototype = Object.getPrototypeOf(container) as HTMLElement &
+    Record<string, unknown>;
+  elementPrototype.addEventListener = () => undefined;
+  elementPrototype.removeEventListener = () => undefined;
+  Object.defineProperty(elementPrototype, "style", {
+    configurable: true,
+    get: () => ({}),
+  });
+  const documentPrototype = Object.getPrototypeOf(document) as Document;
+  documentPrototype.addEventListener = () => undefined;
+  documentPrototype.removeEventListener = () => undefined;
+  Object.defineProperty(document, "body", { configurable: true, value: body });
+  const windowValue = {
+    document,
+    event: undefined,
+    HTMLIFrameElement: class HTMLIFrameElement {},
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  };
+  Object.defineProperty(document, "defaultView", {
+    configurable: true,
+    value: windowValue,
+  });
+  const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
+  const previous = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
+  const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
+  Object.defineProperties(globalThis, {
+    window: { configurable: true, value: windowValue },
+    document: { configurable: true, value: document },
+    navigator: {
+      configurable: true,
+      value: { userAgent: "assistant-live-test" },
+    },
+    Node: { configurable: true, value: ElementConstructor },
+    Element: { configurable: true, value: ElementConstructor },
+    HTMLElement: { configurable: true, value: ElementConstructor },
+  });
+
+  let handler: (event: AssistantLiveRendererEvent) => void = () => undefined;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  let starts = 0;
+  let stops = 0;
+  const startIntents: Array<{
+    microphone: boolean;
+    computerUseAuthorization: string | null;
+  }> = [];
+  const tracks: FakeTrack[] = [];
+  const worklets: FakeWorklet[] = [];
+  const contexts: FakeCaptureContext[] = [];
+  const player = new RecordingPlayer();
+  const readyComputerUseStatus: ComputerUseStatus = {
+    enabled: true,
+    beta: true,
+    state: "ready",
+    detail: "Accessibility and Screen Recording are available to Aiden Computer Use.",
+    ready: true,
+    available: true,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: true, screenRecording: true },
+  };
+  const api = {
+    status: async () => snapshot,
+    authorizeComputerUse: async () => "test-authorization",
+    start: async (intent: { microphone: boolean; computerUseAuthorization: string | null }) => {
+      startIntents.push(intent);
+      starts += 1;
+      snapshot = { ...snapshot, sessionId: `session-${starts}`, state: "open" };
+      return snapshot;
+    },
+    stop: async () => {
+      stops += 1;
+      snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+      return snapshot;
+    },
+    sendAudio: async () => true,
+    onEvent: (next: (event: AssistantLiveRendererEvent) => void) => {
+      handler = next;
+      return () => {
+        handler = () => undefined;
+      };
+    },
+  };
+  let dependencies: AssistantLiveDependencies = {
+    geminiLive: true,
+    api,
+    askForMicrophone: async () => true,
+    getMicrophoneStatus: async () => "granted",
+    getUserMedia: async () => {
+      const track = new FakeTrack();
+      tracks.push(track);
+      return { getTracks: () => [track] } as unknown as MediaStream;
+    },
+    createCaptureContext: () => {
+      const context = new FakeCaptureContext();
+      contexts.push(context);
+      return context as unknown as AudioContext;
+    },
+    createWorklet: () => {
+      const worklet = new FakeWorklet();
+      worklets.push(worklet);
+      return worklet as unknown as AudioWorkletNode;
+    },
+    loadWorklet: async () => undefined,
+    createPlayer: () => player,
+    computerUse: { status: async () => readyComputerUseStatus },
+    ...overrides,
+  };
+  let latest!: AssistantLiveController;
+  function Harness() {
+    latest = useAssistantLiveWithDependencies(dependencies);
+    return <div />;
+  }
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(container);
+  flushSync(() => root.render(<Harness />));
+  await settle();
+  flushSync(() => undefined);
+
+  return {
+    controller: () => latest,
+    emit: (event) => flushSync(() => handler(event)),
+    emitBatch: (events) => flushSync(() => events.forEach((event) => handler(event))),
+    startCalls: () => starts,
+    stopCalls: () => stops,
+    worklets,
+    contexts,
+    tracks,
+    player,
+    startIntents: () => [...startIntents],
+    refreshAvailability: async () => {
+      dependencies = {
+        ...dependencies,
+        availabilityRefreshReady: false,
+      };
+      flushSync(() => root.render(<Harness />));
+      await settle();
+      dependencies = {
+        ...dependencies,
+        availabilityRefreshReady: true,
+        availabilityRefreshToken: (dependencies.availabilityRefreshToken ?? 0) + 1,
+      };
+      flushSync(() => root.render(<Harness />));
+      await settle();
+      flushSync(() => undefined);
+    },
+    refreshApi: async () => {
+      dependencies = {
+        ...dependencies,
+        api: { ...dependencies.api },
+      };
+      flushSync(() => root.render(<Harness />));
+      await settle();
+      flushSync(() => undefined);
+    },
+    unmount: async () => {
+      flushSync(() => root.unmount());
+      await settle();
+      for (const key of keys) {
+        const descriptor = previous.get(key);
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+    },
+  };
+}
+
+test("connection cues wait for microphone readiness, deduplicate resume, and sound on stop", async () => {
+  const cues: string[] = [];
+  const media = deferred<MediaStream>();
+  const fixture = await mountHook({
+    getUserMedia: () => media.promise,
+    playConnectionCue: async (cue) => { cues.push(cue); },
+  });
+  try {
+    const starting = fixture.controller().start();
+    await settle();
+    assert.deepEqual(cues, []);
+    media.resolve({ getTracks: () => [new FakeTrack()] } as unknown as MediaStream);
+    await starting;
+    await settle();
+    await settle();
+    assert.deepEqual(cues, ["connected"]);
+    for (const state of ["resuming", "open", "open"] as const) {
+      fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state } });
+      await settle();
+    }
+    assert.deepEqual(cues, ["connected"]);
+    await fixture.controller().stop();
+    await settle();
+    await settle();
+    assert.deepEqual(cues, ["connected", "disconnected"]);
+  } finally { await fixture.unmount(); }
+});
+
+test("unexpected disconnect sounds once even if cue playback fails", async () => {
+  const cues: string[] = [];
+  const fixture = await mountHook({ playConnectionCue: async (cue) => {
+    cues.push(cue);
+    throw new Error("audio unavailable");
+  } });
+  try {
+    await fixture.controller().start();
+    await settle();
+    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state: "disconnected" } });
+    await settle();
+    fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", state: "disconnected" } });
+    await settle();
+    assert.deepEqual(cues, ["connected", "disconnected"]);
+    assert.equal(fixture.controller().microphoneActive, false);
+  } finally { await fixture.unmount(); }
+});
+
+test("provider refresh rechecks Live availability without remounting or reconnecting", async () => {
+  let hasGoogleCredential = false;
+  let statusCalls = 0;
+  let starts = 0;
+  const status = async (): Promise<AssistantLiveSnapshot> => {
+    statusCalls += 1;
+    return hasGoogleCredential
+      ? {
+          available: true,
+          reason: "available",
+          model: "gemini-live-test",
+          state: "idle",
+        }
+      : {
+          available: false,
+          reason: "missing_google_credential",
+          state: "idle",
+        };
+  };
+  const fixture = await mountHook({
+    availabilityRefreshToken: 1,
+    api: {
+      status,
+      start: async () => {
+        starts += 1;
+        return {
+          available: true,
+          reason: "available",
+          model: "gemini-live-test",
+          sessionId: "unexpected-session",
+          state: "open",
+        };
+      },
+      stop: status,
+      sendAudio: async () => true,
+      onEvent: () => () => undefined,
+    },
+  });
+  assert.equal(fixture.controller().available, false);
+  assert.match(fixture.controller().availabilityDetail, /Connect Google with an API key/u);
+
+  hasGoogleCredential = true;
+  await fixture.refreshAvailability();
+
+  assert.equal(statusCalls, 2);
+  assert.equal(fixture.controller().available, true);
+  assert.match(fixture.controller().availabilityDetail, /Approved model: gemini-live-test/u);
+  assert.equal(starts, 0, "a credential refresh must never start Live");
+  assert.equal(fixture.controller().active, false);
+  await fixture.unmount();
+});
+
+test("fixed provider-start diagnostics remain actionable without exposing raw detail", () => {
+  const message =
+    "Error invoking remote method: Google Live quota is unavailable for this API key or project. Check its usage tier and billing.";
+  assert.equal(assistantLiveStartErrorDetail(new Error(message)), message);
+  const networkMessage =
+    "Error invoking remote method: Aiden could not establish a connection to Google Live. Check your network, VPN, or firewall and try again.";
+  assert.equal(assistantLiveStartErrorDetail(new Error(networkMessage)), networkMessage);
+  assert.equal(
+    assistantLiveStartErrorDetail(new Error("wss://private.example?key=SECRET provider internals")),
+    "Live could not start. Nothing is capturing; try again when you’re ready.",
+  );
+});
+
+test("runtime diagnostics preserve fixed actionable categories without raw detail", () => {
+  assert.match(assistantLiveRuntimeErrorDetail("idle_timeout"), /stopped responding/iu);
+  assert.match(assistantLiveRuntimeErrorDetail("malformed_server_event"), /unsupported event/iu);
+  assert.equal(
+    assistantLiveRuntimeErrorDetail("private-provider-secret"),
+    "The Live session encountered a provider error.",
+  );
+});
+
+test("an availability refresh begun during start cannot overwrite the opened session", async () => {
+  const staleStatus = deferred<AssistantLiveSnapshot>();
+  const opening = deferred<AssistantLiveSnapshot>();
+  let statusCalls = 0;
+  let current: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => {
+      statusCalls += 1;
+      return statusCalls === 1 ? current : staleStatus.promise;
+    },
+    start: async () => {
+      current = await opening.promise;
+      return current;
+    },
+    stop: async () => {
+      current = { ...current, sessionId: undefined, state: "idle" };
+      return current;
+    },
+    sendAudio: async () => true,
+    onEvent: () => () => undefined,
+  };
+  const fixture = await mountHook({ api });
+  const starting = fixture.controller().start();
+  await settle();
+  await fixture.refreshAvailability();
+  assert.equal(statusCalls, 2);
+
+  opening.resolve({ ...current, sessionId: "fresh-session", state: "open" });
+  await starting;
+  await settle();
+  assert.equal(fixture.controller().active, true);
+  staleStatus.resolve({ ...current, sessionId: undefined, state: "idle" });
+  await settle();
+  assert.equal(
+    fixture.controller().active,
+    true,
+    "the stale idle status must not hide Stop while main remains live",
+  );
+  await fixture.controller().stop();
+  await fixture.unmount();
+});
+
+test("an availability refresh begun during stop cannot restore a stale open session", async () => {
+  const staleOpenStatus = deferred<AssistantLiveSnapshot>();
+  const stoppingMain = deferred<void>();
+  let statusCalls = 0;
+  let current: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => {
+      statusCalls += 1;
+      return statusCalls === 2 ? staleOpenStatus.promise : current;
+    },
+    start: async () => {
+      current = { ...current, sessionId: "closing-session", state: "open" };
+      return current;
+    },
+    stop: async () => {
+      await stoppingMain.promise;
+      current = { ...current, sessionId: undefined, state: "idle" };
+      return current;
+    },
+    sendAudio: async () => true,
+    onEvent: () => () => undefined,
+  };
+  const fixture = await mountHook({ api });
+  await fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().active, true);
+
+  const stopping = fixture.controller().stop();
+  await settle();
+  await fixture.refreshAvailability();
+  assert.equal(statusCalls, 2);
+  stoppingMain.resolve();
+  await stopping;
+  await settle();
+  assert.equal(fixture.controller().active, false);
+
+  staleOpenStatus.resolve({
+    ...current,
+    sessionId: "closing-session",
+    state: "open",
+  });
+  await settle();
+  assert.equal(
+    fixture.controller().active,
+    false,
+    "a stale open status must not restore Live after Stop is confirmed",
+  );
+  await fixture.unmount();
+});
+
+test("Computer Use restores the one-time setup opt in after readiness is revalidated", async () => {
+  const fixture = await mountHook();
+  assert.equal(fixture.controller().computerUseEnabled, true);
+  assert.equal(fixture.controller().computerUseReady, true);
+  assert.match(fixture.controller().computerUseDetail, /Accessibility and Screen Recording/u);
+  await fixture.controller().start();
+  assert.deepEqual(fixture.startIntents(), [
+    { microphone: true, computerUseAuthorization: "test-authorization", screen: false },
+  ]);
+  await fixture.controller().stop();
+  await fixture.controller().setComputerUse(false);
+  await settle();
+  assert.equal(fixture.controller().computerUseEnabled, false);
+  await fixture.unmount();
+});
+
+test("cancelling while Computer Use authorization is pending never starts Live", async () => {
+  const authorization = deferred<string | null>();
+  let starts = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      authorizeComputerUse: () => authorization.promise,
+      start: async () => {
+        starts += 1;
+        snapshot = { ...snapshot, sessionId: "must-not-start", state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => true,
+      onEvent: () => () => undefined,
+    },
+  });
+
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().busy, true);
+  const cancelling = fixture.controller().cancelSetup();
+  authorization.resolve("late-authorization");
+  await Promise.all([starting, cancelling]);
+
+  assert.equal(starts, 0, "cancelled authorization must be fenced before provider start");
+  assert.equal(fixture.controller().active, false);
+  await fixture.unmount();
+});
+
+test("Computer Use cannot be enabled when the global helper is unavailable", async () => {
+  const unavailable: ComputerUseStatus = {
+    enabled: false,
+    beta: true,
+    state: "disabled",
+    detail: "Turn on the Computer Use beta to make it available in individual chats.",
+    ready: false,
+    available: false,
+    retryable: false,
+    canRequestPermissions: false,
+    permissions: { accessibility: null, screenRecording: null },
+  };
+  const fixture = await mountHook({
+    computerUse: { status: async () => unavailable },
+  });
+  assert.equal(fixture.controller().computerUseReady, false);
+  assert.match(fixture.controller().computerUseDetail, /Turn on the Computer Use beta/u);
+  await fixture.controller().setComputerUse(true);
+  assert.equal(fixture.controller().computerUseEnabled, false);
+  await fixture.unmount();
+});
+
+test("mounted Live hook allows readiness review but blocks start during an ordinary collision", async () => {
+  for (const reason of [
+    "Finish or stop the current Aiden response before starting Live.",
+    "Decide the pending automation approval before starting Live.",
+  ]) {
+    const fixture = await mountHook({ ordinaryBusyReason: reason });
+    fixture.controller().setSetupOpen(true);
+    await fixture.controller().start();
+    await settle();
+    assert.equal(fixture.controller().setupOpen, true);
+    assert.equal(fixture.startCalls(), 0);
+    assert.equal(fixture.controller().startBlockedReason, reason);
+    await fixture.unmount();
+  }
+});
+
+test("a gate-revocation terminal snapshot stops local media and leaves manual restart", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  await settle();
+  assert.equal(fixture.contexts[0]?.resumed, true);
+  assert.equal(fixture.controller().microphoneActive, true);
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "output",
+    text: "Session-only caption",
+    final: true,
+  });
+  assert.equal(fixture.controller().captions.length, 1);
+  fixture.emit({
+    type: "snapshot",
+    snapshot: {
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      sessionId: "session-1",
+      state: "closed",
+    },
+  });
+  await settle();
+  assert.equal(fixture.controller().active, false);
+  assert.equal(fixture.controller().visible, true);
+  assert.equal(fixture.controller().reconnectRequired, false);
+  assert.equal(fixture.controller().microphoneActive, false);
+  assert.deepEqual(fixture.controller().captions, []);
+  assert.equal(fixture.tracks[0]?.stopped, true);
+  assert.equal(fixture.startCalls(), 1, "a terminal event must never auto-restart Live");
+  await fixture.unmount();
+});
+
+test("successful Stop clears session-only captions after main confirms termination", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  await settle();
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "input",
+    text: "Do not retain me",
+    final: true,
+  });
+  assert.equal(fixture.controller().captions.length, 1);
+  await fixture.controller().stop();
+  await settle();
+  assert.deepEqual(fixture.controller().captions, []);
+  await fixture.unmount();
+});
+
+test("enabled experimental Live stays visible but blocked for unavailable model and microphone permission", async () => {
+  const unavailableFixture = await mountHook({
+    api: {
+      status: async () => ({
+        available: false,
+        reason: "missing_google_credential",
+        state: "idle",
+      }),
+      start: async () => {
+        throw new Error("must not start");
+      },
+      stop: async () => ({
+        available: false,
+        reason: "missing_google_credential",
+        state: "idle",
+      }),
+      sendAudio: async () => false,
+      onEvent: () => () => undefined,
+    },
+  });
+  await settle();
+  assert.equal(unavailableFixture.controller().visible, true);
+  assert.equal(unavailableFixture.controller().available, false);
+  assert.match(unavailableFixture.controller().startBlockedReason ?? "", /Connect Google/u);
+  unavailableFixture.controller().setSetupOpen(true);
+  await unavailableFixture.controller().start();
+  assert.equal(unavailableFixture.controller().setupOpen, false);
+  await unavailableFixture.unmount();
+
+  const deniedFixture = await mountHook({
+    getMicrophoneStatus: async () => "denied",
+  });
+  assert.equal(deniedFixture.controller().microphonePermission, "denied");
+  assert.equal(deniedFixture.controller().microphonePermissionReady, false);
+  assert.match(deniedFixture.controller().startBlockedReason ?? "", /System Settings/u);
+  await deniedFixture.controller().start();
+  assert.equal(deniedFixture.startCalls(), 0);
+  await deniedFixture.unmount();
+});
+
+test("a busy setup close transition aborts pending microphone permission and stops main", async () => {
+  const permission = deferred<boolean>();
+  const fixture = await mountHook({
+    askForMicrophone: () => permission.promise,
+  });
+  await settle();
+  fixture.controller().setSetupOpen(true);
+  const starting = fixture.controller().start();
+  for (let attempt = 0; attempt < 3 && !fixture.controller().busy; attempt += 1) {
+    await settle();
+  }
+  assert.equal(fixture.controller().busy, true);
+  fixture.controller().setSetupOpen(false);
+  permission.resolve(true);
+  await starting;
+  await settle();
+  assert.equal(fixture.stopCalls() >= 1, true);
+  assert.equal(fixture.tracks.length, 0, "cancelled permission must not proceed to getUserMedia");
+  assert.equal(fixture.controller().active, false);
+  await fixture.unmount();
+});
+
+test("controlled resumption drops playback while preserving and resuming the microphone graph", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().microphoneActive, true);
+  const resumeCountBeforeResumption = fixture.player.resumes;
+  fixture.emit({
+    type: "snapshot",
+    snapshot: {
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      sessionId: "session-1",
+      state: "resuming",
+    },
+  });
+  assert.equal(fixture.player.pauses, 1);
+  assert.equal(fixture.tracks[0]?.stopped, false);
+  fixture.emit({
+    type: "snapshot",
+    snapshot: {
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      sessionId: "session-1",
+      state: "open",
+    },
+  });
+  assert.equal(fixture.player.resumes, resumeCountBeforeResumption + 1);
+  assert.equal(fixture.controller().microphoneActive, true);
+  await fixture.unmount();
+});
+
+test("a busy setup close transition aborts pending worklet setup and releases its microphone", async () => {
+  const workletLoad = deferred<void>();
+  const fixture = await mountHook({ loadWorklet: () => workletLoad.promise });
+  fixture.controller().setSetupOpen(true);
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.tracks.length, 1);
+  fixture.controller().setSetupOpen(false);
+  workletLoad.resolve();
+  await starting;
+  await settle();
+  assert.equal(fixture.tracks[0]?.stopped, true);
+  assert.equal(fixture.controller().microphoneActive, false);
+  assert.equal(fixture.stopCalls() >= 1, true);
+  await fixture.unmount();
+});
+
+test("old audio rejection cannot tear down replacement media and reconnect never auto-starts", async () => {
+  const oldSend = deferred<boolean>();
+  let starts = 0;
+  let sends = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  let handler: (event: AssistantLiveRendererEvent) => void = () => undefined;
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => snapshot,
+    start: async () => {
+      starts += 1;
+      snapshot = {
+        ...snapshot,
+        sessionId: `replacement-${starts}`,
+        state: "open",
+      };
+      return snapshot;
+    },
+    stop: async () => {
+      snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+      return snapshot;
+    },
+    sendAudio: async () => {
+      sends += 1;
+      if (sends === 1) return oldSend.promise;
+      return true;
+    },
+    onEvent: (next) => {
+      handler = next;
+      return () => {
+        handler = () => undefined;
+      };
+    },
+  };
+  const fixture = await mountHook({ api });
+  await fixture.controller().start();
+  fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(2) });
+  await settle();
+  await fixture.controller().stop();
+  await fixture.controller().start();
+  const replacementTrack = fixture.tracks[1];
+  oldSend.reject(new Error("old request rejected"));
+  await settle();
+  assert.equal(replacementTrack?.stopped, false, "old rejection cannot stop replacement capture");
+  handler({
+    type: "reconnect_required",
+    sessionId: "replacement-2",
+    reason: "unexpected_disconnect",
+  });
+  await settle();
+  assert.equal(starts, 2, "reconnect is explicit and must not call start");
+  assert.equal(fixture.controller().reconnectRequired, true);
+  assert.equal(fixture.controller().active, false);
+  await fixture.unmount();
+});
+
+test("audio rejection stops capture and the provider session instead of claiming to listen", async () => {
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  let stops = 0;
+  let starts = 0;
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        starts += 1;
+        snapshot = { ...snapshot, sessionId: `audio-failure-${starts}`, state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        stops += 1;
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return { available: false, reason: "live_model_unverified", state: "idle" };
+      },
+      sendAudio: async () => false,
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(640) });
+  await settle();
+  await settle();
+  assert.equal(fixture.controller().microphoneActive, false);
+  assert.equal(fixture.controller().active, false);
+  assert.equal(fixture.tracks[0]?.stopped, true);
+  assert.equal(stops, 1);
+  assert.match(fixture.controller().error ?? "", /audio could not be sent/iu);
+  assert.equal(fixture.controller().available, true, "recovery re-reads authoritative status");
+  await fixture.controller().start();
+  await settle();
+  assert.equal(starts, 2, "Live can restart without an unrelated providers refresh");
+  assert.equal(fixture.controller().active, true);
+  await fixture.unmount();
+});
+
+test("microphone activity is measured locally, throttled, and reset on Stop", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  const oldWorklet = fixture.worklets[0];
+  const data = new ArrayBuffer(640);
+  const view = new DataView(data);
+  for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, 8_192, true);
+  fixture.worklets[0]?.emit({ type: "pcm", data });
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel > 0.7, true);
+  await fixture.controller().stop();
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel, 0);
+  oldWorklet?.emit({ type: "pcm", data: data.slice(0) });
+  await settle();
+  assert.equal(
+    fixture.controller().microphoneLevel,
+    0,
+    "stale post-teardown PCM cannot restore microphone activity",
+  );
+  await fixture.unmount();
+});
+
+test("local microphone activity keeps decaying while four audio sends are backpressured", async () => {
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const pendingSends: Array<ReturnType<typeof deferred<boolean>>> = [];
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        snapshot = {
+          ...snapshot,
+          sessionId: "meter-backpressure",
+          state: "open",
+        };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => {
+        const pending = deferred<boolean>();
+        pendingSends.push(pending);
+        return pending.promise;
+      },
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  const signal = new ArrayBuffer(640);
+  const signalView = new DataView(signal);
+  for (let offset = 0; offset < signal.byteLength; offset += 2)
+    signalView.setInt16(offset, 8_192, true);
+  for (let index = 0; index < 4; index += 1)
+    fixture.worklets[0]?.emit({ type: "pcm", data: signal.slice(0) });
+  await settle();
+  const loudLevel = fixture.controller().microphoneLevel;
+  assert.equal(pendingSends.length, 4);
+  for (let index = 0; index < 4; index += 1)
+    fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(640) });
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel < loudLevel, true);
+  for (const pending of pendingSends) pending.resolve(true);
+  await fixture.unmount();
+});
+
+test("provider turn boundaries seal same-speaker transcript turns exactly once", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  for (const text of ["Feel", "free to ask"]) {
+    fixture.emit({
+      type: "caption",
+      sessionId: "session-1",
+      direction: "output",
+      text,
+      final: true,
+    });
+  }
+  assert.equal(fixture.controller().captions.length, 1);
+  assert.equal(fixture.controller().captions[0]?.text, "Feel free to ask");
+  assert.equal(fixture.controller().captions[0]?.sealed, false);
+  fixture.emit({
+    type: "turn",
+    sessionId: "session-1",
+    state: "turn_complete",
+  });
+  assert.equal(fixture.controller().captions[0]?.sealed, true);
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "output",
+    text: "What else?",
+    final: true,
+  });
+  assert.equal(fixture.controller().captions.length, 2);
+  assert.equal(fixture.controller().captions[1]?.sealed, false);
+  await fixture.unmount();
+});
+
+test("stale availability cannot restore an open session after audio-failure shutdown", async () => {
+  const staleOpen = deferred<AssistantLiveSnapshot>();
+  let statusCalls = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const fixture = await mountHook({
+    api: {
+      status: async () => {
+        statusCalls += 1;
+        return statusCalls === 2 ? staleOpen.promise : snapshot;
+      },
+      start: async () => {
+        snapshot = { ...snapshot, sessionId: "audio-race", state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => false,
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  await fixture.refreshAvailability();
+  assert.equal(statusCalls, 2);
+  fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(640) });
+  await settle();
+  await settle();
+  assert.equal(fixture.controller().active, false);
+  staleOpen.resolve({
+    ...snapshot,
+    sessionId: "audio-race",
+    state: "open",
+  });
+  await settle();
+  assert.equal(
+    fixture.controller().active,
+    false,
+    "a refresh started before audio rejection must not restore stale open state",
+  );
+  await fixture.unmount();
+});
+
+test("audio-failure stop rejection preserves a conservative open-session warning", async () => {
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        snapshot = {
+          ...snapshot,
+          sessionId: "audio-stop-failure",
+          state: "open",
+        };
+        return snapshot;
+      },
+      stop: async () => {
+        throw new Error("ipc failed");
+      },
+      sendAudio: async () => false,
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(640) });
+  await settle();
+  assert.equal(fixture.controller().active, true);
+  assert.equal(fixture.controller().microphoneActive, false);
+  assert.match(fixture.controller().error ?? "", /provider session may still be open.*Stop Live/iu);
+  await fixture.unmount();
+});
+
+test("deferred disconnect cleanup cannot close replacement playback after reconnect audio", async () => {
+  const oldContextClose = deferred<void>();
+  let contexts = 0;
+  const fixture = await mountHook({
+    createCaptureContext: () => {
+      contexts += 1;
+      const context = new FakeCaptureContext();
+      if (contexts === 1) context.close = () => oldContextClose.promise;
+      return context as unknown as AudioContext;
+    },
+  });
+  await fixture.controller().start();
+  fixture.emit({
+    type: "reconnect_required",
+    sessionId: "session-1",
+    reason: "unexpected_disconnect",
+  });
+  await settle();
+  await fixture.controller().start();
+  fixture.emit({
+    type: "audio",
+    sessionId: "session-2",
+    pcm: new Uint8Array([0, 0]),
+    sampleRate: 24_000,
+  });
+  oldContextClose.resolve();
+  await settle();
+  assert.equal(fixture.player.closes, 0, "stale cleanup must not close replacement playback");
+  assert.equal(fixture.player.enqueues, 1, "replacement session audio remains admitted");
+  assert.equal(fixture.tracks[1]?.stopped, false, "replacement microphone remains active");
+  await fixture.unmount();
+});
+
+test("stop failure reconciles an open provider session and leaves a truthful retry state", async () => {
+  let handler: (event: AssistantLiveRendererEvent) => void = () => undefined;
+  let started = false;
+  const open: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    sessionId: "session-failure",
+    state: "open",
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () =>
+      started
+        ? open
+        : {
+            available: true,
+            reason: "available",
+            model: "gemini-live-test",
+            state: "idle",
+          },
+    start: async () => {
+      started = true;
+      return open;
+    },
+    stop: async () => {
+      throw new Error("ipc failed");
+    },
+    sendAudio: async () => true,
+    onEvent: (next) => {
+      handler = next;
+      return () => {
+        handler = () => undefined;
+      };
+    },
+  };
+  void handler;
+  const fixture = await mountHook({ api });
+  await fixture.controller().start();
+  await fixture.controller().stop();
+  await settle();
+  assert.equal(fixture.controller().active, true);
+  assert.equal(fixture.controller().microphoneActive, false);
+  assert.match(
+    fixture.controller().error ?? "",
+    /provider session may still be open.*Stop again/iu,
+  );
+  await fixture.unmount();
+});
+
+test("unmount during a pending start stops main and fences the stale start response", async () => {
+  const pendingStart = deferred<AssistantLiveSnapshot>();
+  let stops = 0;
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => ({
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      state: "idle",
+    }),
+    start: () => pendingStart.promise,
+    stop: async () => {
+      stops += 1;
+      return {
+        available: false,
+        reason: "live_model_unverified",
+        state: "idle",
+      };
+    },
+    sendAudio: async () => true,
+    onEvent: () => () => undefined,
+  };
+  const fixture = await mountHook({ api });
+  const starting = fixture.controller().start();
+  await settle();
+  const unmounting = fixture.unmount();
+  pendingStart.resolve({
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    sessionId: "late",
+    state: "open",
+  });
+  await Promise.all([starting, unmounting]);
+  assert.equal(stops >= 1, true, "cleanup stops main while the stale response stays inert");
+});
+
+test("a stale start response cannot stop or replace a newer renderer session", async () => {
+  const firstStart = deferred<AssistantLiveSnapshot>();
+  let starts = 0;
+  let stops = 0;
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => snapshot,
+    start: async () => {
+      starts += 1;
+      if (starts === 1) return firstStart.promise;
+      snapshot = { ...snapshot, sessionId: "new-session", state: "open" };
+      return snapshot;
+    },
+    stop: async () => {
+      stops += 1;
+      snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+      return snapshot;
+    },
+    sendAudio: async () => true,
+    onEvent: () => () => undefined,
+  };
+  const fixture = await mountHook({ api });
+  const stale = fixture.controller().start();
+  await settle();
+  await fixture.controller().cancelSetup();
+  await settle();
+  await fixture.controller().start();
+  firstStart.resolve({
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    sessionId: "old-session",
+    state: "open",
+  });
+  await stale;
+  await settle();
+  assert.equal(fixture.controller().active, true);
+  assert.equal(stops, 1, "only the explicit cancellation stops main");
+  assert.equal(fixture.tracks[0]?.stopped, false, "replacement media remains active");
+  await fixture.unmount();
+});
+
+test("caption reconciliation updates one interim utterance and finalizes its stable identity", () => {
+  let id = 0;
+  const event = (
+    text: string,
+    final: boolean,
+  ): Extract<AssistantLiveRendererEvent, { type: "caption" }> => ({
+    type: "caption",
+    sessionId: "s",
+    direction: "input",
+    text,
+    final,
+  });
+  let captions = reconcileAssistantLiveCaption([], event("hel", false), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("hello", false), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("hello", true), () => ++id);
+  captions = reconcileAssistantLiveCaption(captions, event("world", true), () => ++id);
+  assert.deepEqual(captions, [
+    {
+      id: 1,
+      direction: "input",
+      text: "hello world",
+      final: true,
+      sealed: false,
+    },
+  ]);
+  captions = sealAssistantLiveCaption(captions);
+  captions = reconcileAssistantLiveCaption(captions, event("A separate turn", true), () => ++id);
+  assert.equal(captions.length, 2);
+  assert.equal(captions[0]?.sealed, true);
+  assert.equal(captions[1]?.text, "A separate turn");
+});
+
+test("final input receipt sequence advances synchronously at event delivery", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "input",
+    text: "Deny",
+    final: true,
+  });
+  assert.equal(
+    fixture.controller().latestVoiceApprovalReceiptId(),
+    1,
+    "an approval arriving before React commits still fences this utterance",
+  );
+  await fixture.unmount();
+});
+
+test("batched finalized input events retain every approval receipt in FIFO order", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once",
+      final: true,
+    },
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Deny",
+      final: true,
+    },
+  ]);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
+    { id: 1, text: "Allow once" },
+    { id: 2, text: "Deny" },
+  ]);
+  await fixture.unmount();
+});
+
+test("a pending exact voice approval survives bounded receipt eviction", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  fixture.controller().retainVoiceApprovalReceiptsAfter(0);
+  fixture.emitBatch([
+    {
+      type: "caption",
+      sessionId: "session-1",
+      direction: "input",
+      text: "Allow once.",
+      final: true,
+    },
+    ...Array.from({ length: 300 }, (_, index) => ({
+      type: "caption" as const,
+      sessionId: "session-1",
+      direction: "input" as const,
+      text: `noise ${index}`,
+      final: true,
+    })),
+  ]);
+  assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
+  assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
+    id: 1,
+    text: "Allow once.",
+  });
+  await fixture.unmount();
+});
+
+test("caption turns preserve a long response beyond the former fragment cap", () => {
+  let captions: AssistantLiveController["captions"] = [];
+  let id = 0;
+  for (let index = 0; index < 64; index += 1) {
+    captions = reconcileAssistantLiveCaption(
+      captions,
+      {
+        type: "caption",
+        sessionId: "s",
+        direction: "output",
+        text: `word${index}`,
+        final: true,
+      },
+      () => ++id,
+    );
+  }
+  assert.equal(captions.length, 1);
+  assert.match(captions[0]?.text ?? "", /^word0 word1/u);
+  assert.match(captions[0]?.text ?? "", /word63$/u);
+});
+
+test("playback interruption invalidates a pending resume before a source can start", async () => {
+  const resume = deferred<void>();
+  let sources = 0;
+  let starts = 0;
+  const context = {
+    state: "suspended",
+    destination: {},
+    resume: () => resume.promise,
+    close: async () => undefined,
+    createBuffer: () => ({ copyToChannel: () => undefined }),
+    createBufferSource: () => {
+      sources += 1;
+      return {
+        buffer: null,
+        connect: () => undefined,
+        disconnect: () => undefined,
+        onended: null,
+        start: () => {
+          starts += 1;
+        },
+        stop: () => undefined,
+      };
+    },
+  } as unknown as AudioContext;
+  const player = new PcmPlayer(() => context);
+  player.enqueue(new Uint8Array([0, 0]));
+  player.pauseAndFlush();
+  resume.resolve();
+  await settle();
+  assert.equal(sources, 0);
+  assert.equal(starts, 0);
+  await player.close();
+});
+
+test("playback interruption stops an already active source", async () => {
+  let stops = 0;
+  const context = {
+    state: "running",
+    destination: {},
+    resume: async () => undefined,
+    close: async () => undefined,
+    createBuffer: () => ({ copyToChannel: () => undefined }),
+    createBufferSource: () => ({
+      buffer: null,
+      connect: () => undefined,
+      disconnect: () => undefined,
+      onended: null,
+      start: () => undefined,
+      stop: () => {
+        stops += 1;
+      },
+    }),
+  } as unknown as AudioContext;
+  const player = new PcmPlayer(() => context);
+  player.enqueue(new Uint8Array([0, 0]));
+  await settle();
+  player.pauseAndFlush();
+  assert.equal(stops, 1);
+  await player.close();
+});
+
+class FakeDisplayTrack {
+  readyState = "live";
+  stops = 0;
+  readonly listeners = new Set<() => void>();
+
+  constructor(readonly label = "Aiden window") {}
+
+  addEventListener(_type: "ended", listener: () => void): void {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener(_type: "ended", listener: () => void): void {
+    this.listeners.delete(listener);
+  }
+
+  stop(): void {
+    this.stops += 1;
+    this.readyState = "ended";
+  }
+
+  end(): void {
+    this.readyState = "ended";
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
+interface ScreenFixtureOptions {
+  snapshot: AssistantLiveSnapshot;
+  startCalls: Array<{ screen: boolean }>;
+  framesSent: Array<{ sessionId: string; frame: Uint8Array }>;
+  binds: number[];
+  releases: string[];
+  admitFrames: boolean;
+  displayTrack: FakeDisplayTrack;
+  frameSource: {
+    captures: number;
+    stops: number;
+    capture(): Promise<Uint8Array | null>;
+    stop(): void;
+  };
+}
+
+function screenDependencies(): {
+  dependencies: Partial<AssistantLiveDependencies>;
+  state: ScreenFixtureOptions;
+} {
+  const displayTrack = new FakeDisplayTrack();
+  const state: ScreenFixtureOptions = {
+    snapshot: {
+      available: true,
+      reason: "available",
+      model: "gemini-live-test",
+      screenShareAllowed: true,
+      state: "idle",
+    },
+    startCalls: [],
+    framesSent: [],
+    binds: [],
+    releases: [],
+    admitFrames: true,
+    displayTrack,
+    frameSource: {
+      captures: 0,
+      stops: 0,
+      capture: async () => {
+        state.frameSource.captures += 1;
+        return new Uint8Array([0xff, 0xd8, 0x2a, 0xff, 0xd9]);
+      },
+      stop: () => {
+        state.frameSource.stops += 1;
+      },
+    },
+  };
+  const api: AssistantLiveDependencies["api"] = {
+    status: async () => state.snapshot,
+    start: async (intent) => {
+      state.startCalls.push({ screen: intent.screen === true });
+      state.snapshot = {
+        ...state.snapshot,
+        sessionId: `screen-${state.startCalls.length}`,
+        state: "open",
+      };
+      return state.snapshot;
+    },
+    stop: async () => {
+      state.snapshot = { ...state.snapshot, sessionId: undefined, state: "idle" };
+      return state.snapshot;
+    },
+    sendAudio: async () => true,
+    bindDisplay: async () => {
+      state.binds.push(1);
+      return `binding-${state.binds.length}`;
+    },
+    releaseDisplay: async (bindingId) => {
+      state.releases.push(bindingId);
+      return true;
+    },
+    sendFrame: async (sessionId, frame) => {
+      state.framesSent.push({ sessionId, frame });
+      return state.admitFrames;
+    },
+    onEvent: () => () => undefined,
+  };
+  return {
+    state,
+    dependencies: {
+      api,
+      getDisplayMedia: async () => ({
+        getTracks: () => [state.displayTrack],
+      }),
+      createDisplayFrameSource: async () => state.frameSource,
+    },
+  };
+}
+
+test("a chosen screen source shares one bounded frame only while its session runs", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  assert.equal(fixture.controller().screenShareAvailable, true);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 1);
+  assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  assert.equal(state.startCalls.length, 0, "the picker alone never starts Live");
+  assert.equal(state.framesSent.length, 0, "no frame flows before a session exists");
+
+  await fixture.controller().start();
+  await settle();
+  assert.deepEqual(state.startCalls, [{ screen: true }]);
+  assert.equal(fixture.controller().screenActive, true);
+  assert.equal(state.framesSent.length, 1);
+  assert.equal(state.framesSent[0]?.sessionId, "screen-1");
+  assert.equal(state.frameSource.stops, 0);
+  assert.equal(state.displayTrack.stops, 0);
+
+  await fixture.controller().stop();
+  await settle();
+  const sentAtStop = state.framesSent.length;
+  assert.equal(state.displayTrack.stops, 1);
+  assert.equal(state.frameSource.stops, 1);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await settle();
+  assert.equal(state.framesSent.length, sentAtStop, "no frame flows after Stop");
+  await fixture.unmount();
+});
+
+test("the picker is unavailable until the screen gate admits this document", async () => {
+  const { dependencies, state } = screenDependencies();
+  state.snapshot = { ...state.snapshot, screenShareAllowed: false };
+  const fixture = await mountHook(dependencies);
+  assert.equal(fixture.controller().screenShareAvailable, false);
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 0);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("a cancelled picker is nonfatal and releases unused binding authority", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      throw new DOMException("cancelled", "NotAllowedError");
+    },
+  });
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.binds.length, 1);
+  assert.equal(state.releases.length, 1, "a failed first pick releases authority");
+  assert.equal(fixture.controller().screenError, null);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  assert.equal(fixture.controller().screenBusy, false);
+  await fixture.unmount();
+});
+
+test("a picker failure that is not cancellation surfaces an accessible error", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      throw new Error("display denied");
+    },
+  });
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(state.releases.length, 1);
+  assert.match(fixture.controller().screenError ?? "", /screen picker/iu);
+  await fixture.unmount();
+});
+
+test("releasing setup fences and stops a display stream returned by a late picker", async () => {
+  const { dependencies, state } = screenDependencies();
+  const picker = deferred<DisplayMediaStream>();
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: () => picker.promise,
+  });
+  const choosing = fixture.controller().chooseScreenSource();
+  await settle();
+  assert.deepEqual(state.binds, [1]);
+  assert.equal(fixture.controller().screenBusy, true);
+
+  await fixture.controller().start();
+  assert.equal(state.startCalls.length, 0, "Live cannot start while its picker is pending");
+
+  fixture.controller().releaseScreen();
+  await settle();
+  assert.equal(fixture.controller().screenBusy, false);
+  picker.resolve({ getTracks: () => [state.displayTrack] });
+  await choosing;
+  await settle();
+
+  assert.equal(state.displayTrack.stops, 1, "the late stream is stopped immediately");
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenBusy, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("an API refresh cancels a pending picker and re-arms screen choice", async () => {
+  const { dependencies, state } = screenDependencies();
+  const firstPicker = deferred<DisplayMediaStream>();
+  let picks = 0;
+  const fixture = await mountHook({
+    ...dependencies,
+    getDisplayMedia: async () => {
+      picks += 1;
+      if (picks === 1) return firstPicker.promise;
+      return { getTracks: () => [state.displayTrack] };
+    },
+  });
+  const staleChoice = fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(fixture.controller().screenBusy, true);
+
+  await fixture.refreshApi();
+  assert.equal(fixture.controller().screenBusy, false);
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  assert.equal(picks, 2, "the replacement effect accepts a new picker");
+
+  firstPicker.resolve({ getTracks: () => [new FakeDisplayTrack()] });
+  await staleChoice;
+  await settle();
+  assert.equal(fixture.controller().screenSourceLabel, "Aiden window");
+  await fixture.unmount();
+});
+
+test("a rejected screen frame stops capture and releases its exact binding", async () => {
+  const { dependencies, state } = screenDependencies();
+  state.admitFrames = false;
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  await settle();
+  await fixture.controller().start();
+  await settle();
+  await settle();
+
+  assert.equal(state.framesSent.length, 1);
+  assert.equal(state.frameSource.stops, 1);
+  assert.equal(state.displayTrack.stops, 1);
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("a pending Live start blocks display-source replacement", async () => {
+  const { dependencies, state } = screenDependencies();
+  const opening = deferred<AssistantLiveSnapshot>();
+  dependencies.api!.start = async (intent) => {
+    state.startCalls.push({ screen: intent.screen === true });
+    return opening.promise;
+  };
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  const starting = fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().busy, true);
+
+  await fixture.controller().chooseScreenSource();
+  assert.deepEqual(state.binds, [1], "busy start owns the selected binding");
+
+  opening.reject(new Error("provider rejected start"));
+  await starting;
+  await settle();
+  assert.deepEqual(state.releases, ["binding-1"]);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("an externally ended display source stops the Live session instead of streaming a dead feed", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().chooseScreenSource();
+  await fixture.controller().start();
+  await settle();
+  assert.equal(fixture.controller().screenActive, true);
+
+  state.displayTrack.end();
+  await settle();
+  await settle();
+  assert.equal(fixture.controller().active, false, "the session stops with its source");
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(fixture.controller().screenSourceLabel, null);
+  await fixture.unmount();
+});
+
+test("Live without a chosen source starts audio-only and the picker stays re-armable", async () => {
+  const { dependencies, state } = screenDependencies();
+  const fixture = await mountHook(dependencies);
+  await fixture.controller().start();
+  await settle();
+  assert.deepEqual(state.startCalls, [{ screen: false }]);
+  assert.equal(fixture.controller().screenActive, false);
+  assert.equal(state.frameSource.captures, 0);
+  await fixture.controller().stop();
+  await fixture.unmount();
+});

@@ -13,6 +13,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
   Separator,
   Select,
   SelectContent,
@@ -22,17 +25,19 @@ import {
   Text,
   toast,
 } from "../ui";
-import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
+import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
 import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
 import {
   queryKeys,
   useFoundationModelsConnection,
+  useModelCatalogStatus,
   useProviders,
   useSettings,
 } from "../../lib/queries";
@@ -40,24 +45,27 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   type ChatTitleProviderId,
   type FoundationModelsConnectionStatus,
+  type GeminiUsageScope,
   type Provider,
 } from "../../lib/types";
+import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
+import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (p.isBuiltin) {
-    return p.hasKey ? <Badge color="green">Ready</Badge> : <Badge color="secondary">Set up</Badge>;
+    return p.hasKey ? <Badge color="green" icon={<Check />}>Ready</Badge> : null;
   }
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
-  if (p.hasKey) return <Badge color="green">Key set</Badge>;
+  if (p.hasKey) return <Badge color="green" icon={<Check />}>Key set</Badge>;
   return <Badge color="secondary">No key</Badge>;
 }
 
 function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.ReactNode {
   switch (status.state) {
     case "ready":
-      return <Badge color="green">Ready</Badge>;
+      return <Badge color="green" icon={<Check />}>Ready</Badge>;
     case "model_preparing":
-      return <Badge color="blue">Preparing</Badge>;
+      return <Badge color="blue" icon={<Loader2 className="animate-spin motion-reduce:animate-none" />}>Preparing</Badge>;
     case "apple_intelligence_disabled":
       return <Badge color="secondary">Apple Intelligence off</Badge>;
     case "device_not_eligible":
@@ -70,21 +78,54 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
   }
 }
 
+function ProviderInfo({
+  label,
+  title,
+  children,
+}: React.PropsWithChildren<{ label: string; title: string }>) {
+  return (
+    <HoverCard openDelay={250} closeDelay={100}>
+      <HoverCardTrigger asChild>
+        <Button iconOnly size="small" variant="transparent" aria-label={label} className="size-7">
+          <span aria-hidden className="text-xs font-semibold leading-none">
+            i
+          </span>
+        </Button>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" className="w-80">
+        <Text variant="small-strong">{title}</Text>
+        <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
+          {children}
+        </Text>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+const CHAT_TITLE_PROVIDER_LABELS: Record<ChatTitleProviderId, string> = {
+  automatic: "Automatic",
+  "apple-foundation-models": "On-device only",
+  "chat-model": "Selected chat model",
+};
+
 function BuiltinProviderRows({
   providers,
   onSetUp,
+  geminiUsageScope,
 }: {
   providers: readonly Provider[];
   onSetUp: (provider: Provider) => void;
+  geminiUsageScope?: GeminiUsageScope;
 }) {
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
-      <div className="flex items-center gap-3 px-3.5 py-3">
+      <div className="flex items-center gap-3 px-4 py-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
           <ProviderIcon
             providerId={provider.id}
             providerLabel={provider.label}
+            artwork={provider.artwork}
             className="size-4.5"
           />
         </div>
@@ -96,7 +137,9 @@ function BuiltinProviderRows({
             {statusBadge(provider)}
           </div>
           <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-            {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"}
+            {provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
+              ? "Transcription only · chat models hidden"
+              : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`}
           </Text>
         </div>
         <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
@@ -112,14 +155,21 @@ export function ProvidersSettings() {
   const providers = useProviders();
   const settings = useSettings();
   const foundationModels = useFoundationModelsConnection();
+  const modelCatalogStatus = useModelCatalogStatus();
   const [editing, setEditing] = React.useState<Provider | null>(null);
   const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
   const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const [settingUp, setSettingUp] = React.useState<Provider | null>(null);
+  const [geminiDialogOpen, setGeminiDialogOpen] = React.useState(false);
+  const [geminiScope, setGeminiScope] = React.useState<GeminiUsageScope>("transcription_only");
+  const [geminiBusy, setGeminiBusy] = React.useState(false);
+  const [geminiError, setGeminiError] = React.useState<string | null>(null);
   const [removing, setRemoving] = React.useState<Provider | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
   const [refreshingProviders, setRefreshingProviders] = React.useState(false);
+  const [catalogOutcome, setCatalogOutcome] = React.useState<string | null>(null);
+  const [catalogDetailsOpen, setCatalogDetailsOpen] = React.useState(false);
   const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
@@ -130,6 +180,55 @@ export function ProvidersSettings() {
   const customProviders = list.filter((provider) => !provider.isBuiltin);
   const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
+
+  const openBuiltinSetup = (provider: Provider) => {
+    if (provider.id !== GOOGLE_PROVIDER_ID) {
+      setSettingUp(provider);
+      return;
+    }
+    setGeminiScope(
+      defaultGeminiUsageScope(settings.data?.geminiUsageScope, provider.hasKey === true),
+    );
+    setGeminiError(null);
+    setGeminiDialogOpen(true);
+  };
+
+  const saveGeminiSetup = async () => {
+    const saved = await settingsApi.setGeminiUsageScope(geminiScope);
+    qc.setQueryData(queryKeys.settings, saved);
+    await invalidate();
+  };
+
+  const confirmGeminiSetup = async () => {
+    const google = list.find((provider) => provider.id === GOOGLE_PROVIDER_ID);
+    if (!google) {
+      setGeminiError("Google provider details are not available yet. Refresh and try again.");
+      return;
+    }
+    if (!google.hasKey) {
+      setGeminiDialogOpen(false);
+      setSettingUp(google);
+      return;
+    }
+    setGeminiBusy(true);
+    setGeminiError(null);
+    try {
+      await saveGeminiSetup();
+      setGeminiDialogOpen(false);
+      toast.success("Gemini access updated.");
+    } catch (error) {
+      setGeminiError(error instanceof Error ? error.message : "Couldn't update Gemini access.");
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
+  const manageGeminiCredential = () => {
+    const google = list.find((provider) => provider.id === GOOGLE_PROVIDER_ID);
+    if (!google) return;
+    setGeminiDialogOpen(false);
+    setSettingUp(google);
+  };
 
   const setTitleProvider = async (value: ChatTitleProviderId) => {
     setSavingTitleProvider(true);
@@ -161,12 +260,28 @@ export function ProvidersSettings() {
 
   const refreshProviders = async () => {
     setRefreshingProviders(true);
+    setCatalogOutcome(null);
     try {
-      const refreshed = await providersApi.refresh();
-      qc.setQueryData(queryKeys.providers, refreshed);
-      toast.success("Pi provider models refreshed.");
+      const result = await providersApi.updateCatalogs();
+      qc.setQueryData(queryKeys.providers, result.providers);
+      qc.setQueryData(queryKeys.modelCatalogStatus, result.modelsDev.status);
+      if (result.modelsDev.ok) {
+        await qc.invalidateQueries({ queryKey: ["modelInfo"] });
+      }
+      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+      const inventoryOk = result.inventoryErrors.length === 0;
+      if (inventoryOk && result.modelsDev.ok) {
+        setCatalogOutcome("Provider inventory and model details are up to date.");
+        toast.success("Model catalogs updated.");
+      } else {
+        const outcome = `${inventoryOk ? "Provider inventory updated" : "Provider inventory kept cached data"}; ${result.modelsDev.ok ? "model details updated" : "model details kept cached data"}.`;
+        setCatalogOutcome(outcome);
+        toast.warning(outcome);
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't refresh Pi provider models.");
+      const message = error instanceof Error ? error.message : "Couldn't update model catalogs.";
+      setCatalogOutcome("Catalog update failed; cached data is still available.");
+      toast.error(message);
     } finally {
       setRefreshingProviders(false);
     }
@@ -195,7 +310,7 @@ export function ProvidersSettings() {
           : template === "ollama"
             ? "http://localhost:11434/v1"
             : template === "tailnet"
-              ? "https://your-machine.your-tailnet.ts.net/v1"
+              ? "http://your-machine.your-tailnet.ts.net:11434/v1"
               : "http://localhost:8000/v1",
       models: [],
       // A user may opt into API-key auth in the editor. Tailscale controls
@@ -217,25 +332,29 @@ export function ProvidersSettings() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
+    <div className="providers-settings flex flex-col gap-6">
+      <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <Text variant="strong">Providers</Text>
+          <div className="flex items-center gap-1">
+            <Text as="h1" variant="heading1">Providers</Text>
+            <ProviderInfo label="About provider connections" title="Provider connections">
+              Aiden manages built-in provider endpoints and model catalogs. Use Add provider for a
+              local, private, or vendor-compatible endpoint.
+            </ProviderInfo>
+          </div>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Pi-native providers need only their credentials; Pi owns their endpoints, models, and
-            request transport. Add a custom connection for local or private servers.
+            Connect models to Aiden and manage the providers you already use.
           </Text>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           <Button
-            variant="transparent"
+            variant="muted"
             size="small"
-            iconOnly
-            aria-label="Refresh Pi provider models"
             disabled={refreshingProviders}
             onClick={() => void refreshProviders()}
           >
             <RefreshCw className={`size-4 ${refreshingProviders ? "animate-spin" : ""}`} />
+            {refreshingProviders ? "Updating…" : "Update model catalogs"}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -248,49 +367,53 @@ export function ProvidersSettings() {
             <DropdownMenuContent align="end" className="w-72">
               <DropdownMenuLabel>Local model servers</DropdownMenuLabel>
               <DropdownMenuItem
+                className="group"
                 disabled={customProviders.some((provider) => provider.id === "custom:lmstudio")}
                 onSelect={() => addCustom("lmstudio")}
               >
                 <ProviderIcon
                   providerId="custom:lmstudio"
                   providerLabel="LM Studio"
-                  className="size-4 text-tertiary"
+                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>LM Studio</span>
-                  <span className="text-small text-tertiary">OpenAI-compatible local server</span>
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+                    OpenAI-compatible local server
+                  </span>
                 </span>
               </DropdownMenuItem>
               <DropdownMenuItem
+                className="group"
                 disabled={customProviders.some((provider) => provider.id === "custom:ollama")}
                 onSelect={() => addCustom("ollama")}
               >
                 <ProviderIcon
                   providerId="custom:ollama"
                   providerLabel="Ollama"
-                  className="size-4 text-tertiary"
+                  className="size-4 text-tertiary group-data-[highlighted]:text-accent-foreground"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span>Ollama</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     Local server with Ollama-aware model discovery
                   </span>
                 </span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Private or custom</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => addCustom("tailnet")}>
+              <DropdownMenuItem className="group" onSelect={() => addCustom("tailnet")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Model server over Tailscale</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     OpenAI-compatible, no authentication by default
                   </span>
                 </span>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => addCustom("custom")}>
+              <DropdownMenuItem className="group" onSelect={() => addCustom("custom")}>
                 <span className="flex min-w-0 flex-col">
                   <span>Other custom endpoint</span>
-                  <span className="text-small text-tertiary">
+                  <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
                     Choose protocol and authentication
                   </span>
                 </span>
@@ -300,14 +423,57 @@ export function ProvidersSettings() {
         </div>
       </div>
 
+      <div className="-mt-4 settings-card rounded-card border border-separator px-4 py-3" aria-live="polite">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Text variant="small" color="secondary">
+            {catalogOutcome ??
+              "Provider catalogs determine what can run; model details improve names and capability hints."}
+          </Text>
+          <Button
+            variant="transparent"
+            size="small"
+            aria-expanded={catalogDetailsOpen}
+            aria-controls="provider-catalog-details"
+            onClick={() => setCatalogDetailsOpen((open) => !open)}
+          >
+            Catalog details
+            <ChevronDown
+              className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
+            />
+          </Button>
+        </div>
+        <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
+          This foreground update contacts built-in catalog services and models.dev. It sends no
+          prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
+          identifier.
+        </Text>
+        {catalogDetailsOpen ? (
+          <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
+            <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
+              Downloaded models.dev data affects display details only, never which models can run or
+              their runtime limits.
+            </Text>
+            <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
+              Model details:{" "}
+              {modelCatalogStatus.data?.source === "device-cache"
+                ? "device cache"
+                : "bundled snapshot"}
+              {modelCatalogStatus.data?.fetchedAt
+                ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                : ""}
+            </Text>
+          </div>
+        ) : null}
+      </div>
+
       <CodexProviderSettings />
 
       {foundationModels.data ? (
         <div
-          className="rounded-card border border-separator"
+          className="settings-card rounded-card border border-separator"
           aria-busy={refreshingFoundationModels}
         >
-          <div className="flex items-start gap-3 px-3.5 py-3">
+          <div className="flex items-start gap-3 px-4 py-3">
             <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
               <ProviderIcon
                 providerId="apple-foundation-models"
@@ -318,6 +484,13 @@ export function ProvidersSettings() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Text variant="strong">Apple Foundation Models</Text>
+                <ProviderInfo
+                  label="About Apple Foundation Models in Aiden"
+                  title="Background title generation"
+                >
+                  This on-device connection is used only for background chat titles. It never
+                  appears in the chat model picker.
+                </ProviderInfo>
                 <Badge color="blue">On-device</Badge>
                 {foundationModelsBadge(foundationModels.data)}
               </div>
@@ -326,10 +499,6 @@ export function ProvidersSettings() {
                   {foundationModels.data.detail}
                 </Text>
               </div>
-              <Text variant="small" color="secondary" className="mt-1 block">
-                This native connection is used only for background chat titles and never appears in
-                the chat model picker.
-              </Text>
             </div>
             <Button
               variant="transparent"
@@ -342,52 +511,68 @@ export function ProvidersSettings() {
               <RefreshCw className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`} />
             </Button>
           </div>
-          <Separator />
-          <div className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <Text variant="small-strong" as="p">
-                Chat title provider
-              </Text>
-              <Text variant="small" color="tertiary" as="p" className="mt-0.5">
+          <details className="group border-t border-separator">
+            <summary className="flex min-h-12 cursor-default list-none items-center gap-3 px-4 py-2.5 outline-none hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
+              <span className="min-w-0 flex-1">
+                <span className="block text-small-strong text-primary">Chat title generation</span>
+                <span className="mt-0.5 block text-small text-tertiary">
+                  {CHAT_TITLE_PROVIDER_LABELS[titleProviderId]}
+                </span>
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180" />
+            </summary>
+            <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
+              <Text variant="small" color="tertiary" as="p" className="max-w-md">
                 Automatic prefers this Mac, then uses the selected chat model only when Apple is
                 unavailable. On-device only never falls back to a network provider.
               </Text>
-            </div>
-            <Select
-              value={titleProviderId}
-              disabled={savingTitleProvider}
-              onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
-            >
-              <SelectTrigger
-                size="small"
-                className="w-full shrink-0 sm:w-48"
-                aria-label="Chat title provider"
+              <Select
+                value={titleProviderId}
+                disabled={savingTitleProvider}
+                onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="automatic">Automatic</SelectItem>
-                <SelectItem value="apple-foundation-models">On-device only</SelectItem>
-                <SelectItem value="chat-model">Selected chat model</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+                <SelectTrigger
+                  size="small"
+                  className="w-full shrink-0 sm:w-48"
+                  aria-label="Chat title provider"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="automatic">Automatic</SelectItem>
+                  <SelectItem value="apple-foundation-models">On-device only</SelectItem>
+                  <SelectItem value="chat-model">Selected chat model</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </details>
         </div>
       ) : null}
 
-      <div className="grid gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-2">
         <div className="px-1">
-          <Text variant="small-strong">Built into Pi</Text>
+          <div className="flex items-center gap-1">
+            <Text variant="small-strong">Built into Aiden</Text>
+            <ProviderInfo label="About providers built into Aiden" title="Managed by Aiden">
+              Aiden maintains these providers’ endpoints, model catalogs, and connection transport.
+              You provide credentials when required; managed connection details stay locked to
+              prevent accidental misconfiguration.
+            </ProviderInfo>
+          </div>
           <Text variant="small" color="tertiary" className="mt-0.5 block">
-            These providers update with Pi. Their connection details are intentionally not editable.
+            Connect with credentials when required; Aiden keeps their model catalogs current.
           </Text>
         </div>
-        <div className="rounded-card border border-separator">
-          <BuiltinProviderRows providers={featuredBuiltins} onSetUp={setSettingUp} />
+        <div className="settings-card rounded-card border border-separator">
+          <BuiltinProviderRows
+            providers={featuredBuiltins}
+            onSetUp={openBuiltinSetup}
+            geminiUsageScope={settings.data?.geminiUsageScope}
+          />
           {moreBuiltins.length > 0 ? (
             <>
               {featuredBuiltins.length > 0 ? <Separator /> : null}
-              <div className="px-3.5 py-2">
+              <div className="px-4 py-2">
                 <Button
                   variant="transparent"
                   size="small"
@@ -407,38 +592,43 @@ export function ProvidersSettings() {
           ) : null}
         </div>
         {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
-          <div id="more-pi-providers" className="rounded-card border border-separator">
-            <div className="px-3.5 py-3">
-              <Text variant="small-strong">More Pi providers</Text>
+          <div id="more-pi-providers" className="settings-card rounded-card border border-separator">
+            <div className="px-4 py-3">
+              <Text variant="small-strong">More built-in providers</Text>
               <Text variant="small" color="tertiary" className="mt-0.5 block">
-                These stay Pi-native and can be set up whenever you need them.
+                These are also managed by Aiden and can be set up whenever you need them.
               </Text>
             </div>
             <Separator />
-            <BuiltinProviderRows providers={moreBuiltins} onSetUp={setSettingUp} />
+            <BuiltinProviderRows
+              providers={moreBuiltins}
+              onSetUp={openBuiltinSetup}
+              geminiUsageScope={settings.data?.geminiUsageScope}
+            />
           </div>
         ) : null}
       </div>
 
-      <div className="grid gap-2">
-        <div className="px-1">
-          <Text variant="small-strong">Custom connections</Text>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Configure local, private, and vendor-compatible endpoints here.
-          </Text>
-        </div>
-        <div className="rounded-card border border-separator">
-          {customProviders.length === 0 ? (
-            <Text variant="small" color="tertiary" className="block px-3.5 py-3">
-              No custom connections yet.
+      {customProviders.length > 0 ? (
+        <div className="grid min-w-0 grid-cols-1 gap-2">
+          <div className="px-1">
+            <Text variant="small-strong">Custom connections</Text>
+            <Text variant="small" color="tertiary" className="mt-0.5 block">
+              Configure local, private, and vendor-compatible endpoints here.
             </Text>
-          ) : (
-            customProviders.map((p, i) => (
+          </div>
+          <div className="settings-card rounded-card border border-separator">
+            {customProviders.map((p, i) => (
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
-                <div className="flex items-center gap-3 px-3.5 py-3">
+                <div className="flex items-center gap-3 px-4 py-3">
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-                    <ProviderIcon providerId={p.id} providerLabel={p.label} className="size-4.5" />
+                    <ProviderIcon
+                      providerId={p.id}
+                      providerLabel={p.label}
+                      artwork={p.artwork}
+                      className="size-4.5"
+                    />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -472,10 +662,10 @@ export function ProvidersSettings() {
                   </Button>
                 </div>
               </React.Fragment>
-            ))
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {editing ? (
         <ProviderEditor
@@ -492,9 +682,31 @@ export function ProvidersSettings() {
           provider={settingUp}
           open={settingUp !== null}
           onOpenChange={(open) => !open && setSettingUp(null)}
-          onSaved={invalidate}
+          requireChatModel={settingUp.id !== GOOGLE_PROVIDER_ID}
+          onSaved={settingUp.id === GOOGLE_PROVIDER_ID ? saveGeminiSetup : invalidate}
         />
       ) : null}
+
+      <GeminiVoiceSetupDialog
+        open={geminiDialogOpen}
+        scope={geminiScope}
+        activatesVoice={false}
+        hasKey={list.some(
+          (provider) => provider.id === GOOGLE_PROVIDER_ID && provider.hasKey === true,
+        )}
+        provider={list.find((provider) => provider.id === GOOGLE_PROVIDER_ID)}
+        busy={geminiBusy}
+        error={geminiError}
+        onScopeChange={setGeminiScope}
+        onOpenChange={(open) => {
+          if (!geminiBusy) {
+            setGeminiDialogOpen(open);
+            if (!open) setGeminiError(null);
+          }
+        }}
+        onConfirm={confirmGeminiSetup}
+        onManageCredential={manageGeminiCredential}
+      />
 
       <AlertDialog
         open={removing !== null}

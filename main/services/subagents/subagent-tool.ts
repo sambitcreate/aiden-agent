@@ -4,6 +4,7 @@ import {
   MAX_SUBAGENT_LABEL_CHARS,
   MAX_SUBAGENT_REQUESTED_MCP_SERVERS,
   MAX_SUBAGENT_REQUESTED_MCP_TOOLS_PER_SERVER,
+  MAX_SUBAGENT_REQUESTED_TURNS,
   MAX_SUBAGENT_TASK_CHARS,
   MAX_SUBAGENT_TASKS_PER_CALL,
   SUBAGENT_SAFE_LABEL_PATTERN,
@@ -160,7 +161,7 @@ export function createSubagentTool(
   return {
     name: "subagent",
     label: "Delegate to Subagents",
-    description: `Delegate 1–4 independent, bounded investigations to scout, planner, or reviewer agents. Omitted capabilities preserve workspace-read-only behavior. ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. Task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, resource limits, and run IDs are host-owned: never send execution, limits, deadline, or budget fields. Each task contains only role, label, task, and optional narrower capabilities. Use for parallel evidence gathering, comparison, planning, or fresh review—not trivial work. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
+    description: `Delegate 1–4 independent, bounded investigations to scout, planner, or reviewer agents. Omitted capabilities preserve workspace-read-only behavior. When the batch root is omitted but tasks explicitly request capabilities, Aiden infers only their exact union and keeps capability-less siblings workspace-read-only. ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. When supplied, task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, deadlines, and run IDs are host-owned. A read-only task may request maxTurns up to 128; omission keeps 24 turns. Never send execution, deadline, or other budget fields. Each task contains role, label, task, optional maxTurns, and optional narrower capabilities. Use for parallel evidence gathering, comparison, planning, or fresh review—not trivial work. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
     parameters: Type.Object(
       {
         context: Type.Optional(
@@ -193,6 +194,11 @@ export function createSubagentTool(
                 maxLength: MAX_SUBAGENT_TASK_CHARS,
                 description: "One self-contained investigation for the child.",
               }),
+              maxTurns: Type.Optional(Type.Integer({
+                minimum: 1,
+                maximum: MAX_SUBAGENT_REQUESTED_TURNS,
+                description: "Read-only investigation turn budget; default 24. Other host limits still apply.",
+              })),
               capabilities: Type.Optional(capabilities),
             },
             { additionalProperties: false },

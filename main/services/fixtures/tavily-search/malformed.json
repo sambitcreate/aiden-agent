@@ -1,0 +1,4 @@
+{
+  "query": "malformed",
+  "results": { "not": "an-array" }
+}

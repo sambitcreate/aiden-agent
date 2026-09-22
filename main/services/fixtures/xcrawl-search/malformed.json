@@ -1,0 +1,7 @@
+{
+  "search_id": "xcrawl_fixture_malformed",
+  "endpoint": "search",
+  "version": "1.0",
+  "status": "completed",
+  "data": { "data": { "not": "an-array" } }
+}

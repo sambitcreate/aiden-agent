@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
+  canConfigureOnboardingBuiltinProvider,
   getOnboardingMoreProviders,
+  isOnboardingBuiltinProviderReady,
+  onboardingBuiltinProviderSetupLabel,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
@@ -16,6 +19,7 @@ function occurrences(source: string, value: string): number {
 test("keeps the selected Pi providers first in product order and puts every other provider under More", () => {
   const providers = [
     { id: "cloudflare-workers-ai" },
+    { id: "concentrate" },
     { id: "opencode-go" },
     { id: "groq" },
     { id: "openai" },
@@ -31,7 +35,15 @@ test("keeps the selected Pi providers first in product order and puts every othe
 
   assert.deepEqual(
     featured.map((provider) => provider.id),
-    ["openai", "anthropic", "opencode", "opencode-go", "zai-coding-cn", "kimi-coding"],
+    [
+      "openai",
+      "anthropic",
+      "concentrate",
+      "opencode",
+      "opencode-go",
+      "zai-coding-cn",
+      "kimi-coding",
+    ],
   );
   assert.deepEqual(
     more.map((provider) => provider.id),
@@ -73,8 +85,58 @@ test("onboarding reveals every other Pi provider in stable product order", () =>
   );
 });
 
+test("onboarding can configure every provider with an interactive credential method", () => {
+  const apiKeyProvider = {
+    hasKey: false,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: true }],
+  };
+  const oauthProvider = {
+    ...apiKeyProvider,
+    authMethods: [{ type: "oauth" as const, canLogin: true }],
+  };
+  const flexibleProvider = {
+    ...apiKeyProvider,
+    authMethods: [
+      { type: "api_key" as const, canLogin: true },
+      { type: "oauth" as const, canLogin: true },
+    ],
+  };
+
+  assert.equal(canConfigureOnboardingBuiltinProvider(apiKeyProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(apiKeyProvider), "Add your API key");
+  assert.equal(canConfigureOnboardingBuiltinProvider(oauthProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(oauthProvider), "Sign in to connect");
+  assert.equal(canConfigureOnboardingBuiltinProvider(flexibleProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(flexibleProvider), "Add an API key or sign in");
+});
+
+test("onboarding distinguishes ready providers from unavailable setup methods", () => {
+  const readyProvider = {
+    hasKey: true,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: false }],
+  };
+  const unavailableProvider = {
+    hasKey: false,
+    models: ["chat-model"],
+    authMethods: [{ type: "api_key" as const, canLogin: false }],
+  };
+
+  assert.equal(isOnboardingBuiltinProviderReady(readyProvider), true);
+  assert.equal(canConfigureOnboardingBuiltinProvider(readyProvider), true);
+  assert.equal(onboardingBuiltinProviderSetupLabel(readyProvider), "Ready to use");
+  assert.equal(isOnboardingBuiltinProviderReady(unavailableProvider), false);
+  assert.equal(canConfigureOnboardingBuiltinProvider(unavailableProvider), false);
+  assert.equal(
+    onboardingBuiltinProviderSetupLabel(unavailableProvider),
+    "Available in Settings after onboarding",
+  );
+});
+
 test("resolves provider logos without branding unknown custom or future providers", () => {
   assert.equal(resolveProviderIconSlug("openai"), "openai");
+  assert.equal(resolveProviderIconSlug("concentrate"), "concentrate");
   assert.equal(resolveProviderIconSlug("together"), "together");
   assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");
   assert.equal(resolveProviderIconSlug("custom:ollama"), "ollama");
@@ -160,6 +222,15 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
   assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
+  assert.match(
+    providerIconSource,
+    /if \(artwork\) \{\s*return \(\s*<img[\s\S]*data-provider-icon="custom"[\s\S]*src=\{providerArtworkDataUrl\(artwork\)\}/u,
+  );
+  assert.doesNotMatch(
+    providerIconSource,
+    /<ThemedProviderMark[\s\S]*mark="custom"/u,
+  );
   assert.doesNotMatch(
     `${providersSettingsSource}\n${codexProviderSettingsSource}`,
     /bg-surface-subtle/u,
@@ -168,5 +239,16 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.equal(
     occurrences(codexProviderSettingsSource, "rounded-control bg-well text-secondary"),
     1,
+  );
+  assert.match(providersSettingsSource, />Built into Aiden</u);
+  assert.doesNotMatch(providersSettingsSource, /Built into Pi|Pi model|Pi-native/u);
+  assert.match(providersSettingsSource, /className="providers-settings flex flex-col gap-6"/u);
+  assert.match(providersSettingsSource, /<ProviderInfo[\s\S]*About providers built into Aiden/u);
+  assert.match(providersSettingsSource, /<details className="group border-t border-separator">/u);
+  assert.match(providersSettingsSource, /Chat title generation/u);
+  assert.match(providersSettingsSource, /customProviders\.length > 0/u);
+  assert.equal(
+    occurrences(providersSettingsSource, "group-data-[highlighted]:text-accent-foreground"),
+    6,
   );
 });

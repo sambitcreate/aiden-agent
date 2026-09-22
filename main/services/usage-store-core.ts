@@ -9,10 +9,14 @@ export type UsageRequestSource =
   | "chat"
   | "chat-title"
   | "workflow-proposal"
+  | "bot-avatar"
+  | "vision"
   | "voice-transcription"
   | "scheduled"
   | "subagent"
   | "telegram"
+  | "btw"
+  | "advisor"
   | "compaction";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
@@ -75,10 +79,14 @@ const RANGE_DAYS: Record<Exclude<UsageDateRange, "all">, number> = {
 const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "chat",
   "chat-title",
+  "bot-avatar",
+  "vision",
   "voice-transcription",
   "scheduled",
   "subagent",
   "telegram",
+  "btw",
+  "advisor",
   "compaction",
 ]);
 
@@ -487,4 +495,3 @@ export function createUsageStore(
     },
   };
 }
-

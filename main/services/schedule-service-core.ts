@@ -7,7 +7,7 @@ import type {
 } from "./types.js";
 
 interface ScheduleExecutionLike {
-  run(task: ScheduledTask): Promise<ScheduledRun>;
+  run(task: ScheduledTask, runId?: string): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
 }
@@ -15,9 +15,21 @@ interface ScheduleExecutionLike {
 interface RunningTask {
   promise: Promise<ScheduledRun>;
   cancelRequested: boolean;
+  automatic: boolean;
+  executionStarted: boolean;
+  isCurrent(): boolean;
   workspaceId?: string;
   workspaceReady: Promise<void>;
 }
+
+type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
+  | { automatic: true; isCurrent: () => boolean }
+  | { automatic: false }
+);
+
+type DispatchResult =
+  | { kind: "skipped"; reason: "already-running" }
+  | { kind: "dispatched"; completion: Promise<ScheduledRun> };
 
 export interface ScheduleServiceDependencies {
   store: ScheduleStore;
@@ -38,6 +50,7 @@ export function createScheduleServiceCore(
   const blockedWorkspaces = new Set<string>();
   let started = false;
   let globallyEnabled = true;
+  let startupRevision = 0;
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
     if (signal?.aborted)
@@ -69,23 +82,24 @@ export function createScheduleServiceCore(
     jobs.delete(taskId);
   }
 
-  async function advanceBeforeRun(task: ScheduledTask): Promise<ScheduledTask> {
+  async function advanceBeforeRun(
+    task: ScheduledTask,
+    isCurrent: () => boolean,
+  ): Promise<ScheduledTask> {
     return store.updateRuntime(task.id, {
       nextRunAt: task.enabled
         ? nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1))
         : undefined,
-    });
+    }, isCurrent);
   }
 
   async function recordUnexpectedFailure(
     task: ScheduledTask,
     cause: unknown,
+    isCurrent: () => boolean,
   ): Promise<void> {
+    if (!isCurrent()) return;
     const message = cause instanceof Error ? cause.message : String(cause);
-    dependencies.error(
-      `Scheduled task ${task.id} failed outside its execution boundary.`,
-      cause,
-    );
     try {
       await store.recordRun({
         taskId: task.id,
@@ -95,9 +109,15 @@ export function createScheduleServiceCore(
         output: "",
         error: message,
         chatId: task.chatId,
-      });
+      }, isCurrent);
+      if (!isCurrent()) return;
+      dependencies.error(
+        `Scheduled task ${task.id} failed outside its execution boundary.`,
+        cause,
+      );
       dependencies.broadcast({ taskId: task.id });
     } catch (recordError) {
+      if (!isCurrent()) return;
       dependencies.error(
         `Could not record failure for scheduled task ${task.id}.`,
         recordError,
@@ -107,24 +127,43 @@ export function createScheduleServiceCore(
 
   function dispatch(
     taskId: string,
-    options: { automatic: boolean },
-  ): Promise<ScheduledRun> {
-    if (runningTasks.has(taskId)) {
-      throw new Error("This scheduled task is already running.");
+    options: DispatchOptions,
+  ): DispatchResult {
+    if (options.automatic && !options.isCurrent()) {
+      throw new Error("This scheduled task was cancelled.");
+    }
+    const previous = runningTasks.get(taskId);
+    if (previous) {
+      if (!previous.automatic || previous.executionStarted || previous.isCurrent()) {
+        return { kind: "skipped", reason: "already-running" };
+      }
+      // Supersede only obsolete automatic preparation. It cannot enter execution
+      // or publish its pending claim once cancelled; real runs retain their slot.
+      previous.cancelRequested = true;
     }
     let resolveWorkspaceReady: () => void = () => {};
     let workspaceResolved = false;
     const state: RunningTask = {
       cancelRequested: false,
+      automatic: options.automatic,
+      executionStarted: false,
+      isCurrent: () => !state.cancelRequested && (!options.automatic || options.isCurrent()),
       promise: Promise.resolve(undefined as never),
       workspaceReady: new Promise<void>((resolve) => {
         resolveWorkspaceReady = resolve;
       }),
     };
+    const isCurrent = state.isCurrent;
     const operation = (async () => {
       try {
         const task = await store.get(taskId);
         if (!task) throw new Error(`Scheduled task ${taskId} not found.`);
+        if (
+          options.expectedUpdatedAt !== undefined &&
+          task.updatedAt !== options.expectedUpdatedAt
+        ) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         state.workspaceId = task.workspaceId;
         workspaceResolved = true;
         resolveWorkspaceReady();
@@ -139,10 +178,13 @@ export function createScheduleServiceCore(
         ) {
           throw new Error("This scheduled task is paused.");
         }
-        const claimed = options.automatic ? await advanceBeforeRun(task) : task;
-        if (state.cancelRequested)
+        if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
-        return execution.run(claimed);
+        const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
+        if (!isCurrent())
+          throw new Error("This scheduled task was cancelled.");
+        state.executionStarted = true;
+        return execution.run(claimed, options.runId);
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;
@@ -154,7 +196,7 @@ export function createScheduleServiceCore(
       if (runningTasks.get(taskId) === state) runningTasks.delete(taskId);
     });
     runningTasks.set(taskId, state);
-    return state.promise;
+    return { kind: "dispatched", completion: state.promise };
   }
 
   async function cancelAndSettle(taskId?: string): Promise<void> {
@@ -175,12 +217,16 @@ export function createScheduleServiceCore(
     );
     for (const [taskId, state] of selected) {
       state.cancelRequested = true;
-      execution.cancel(taskId);
+      if (runningTasks.get(taskId) === state) execution.cancel(taskId);
     }
     await Promise.allSettled(selected.map(([, state]) => state.promise));
   }
 
-  async function schedule(task: ScheduledTask): Promise<void> {
+  async function schedule(
+    task: ScheduledTask,
+    isCurrent: () => boolean = () => true,
+    preserveNextRunAt = false,
+  ): Promise<void> {
     stopJob(task.id);
     if (
       !started ||
@@ -203,20 +249,30 @@ export function createScheduleServiceCore(
             `Skipped overlapping cron callback for task ${task.id}.`,
           );
         },
-        catch: (error) => {
-          void store.get(task.id).then((latest) => {
-            if (latest) return recordUnexpectedFailure(latest, error);
-          });
+        catch: async (error) => {
+          if (!ownsJob()) return;
+          try {
+            const latest = await store.get(task.id);
+            if (latest) await recordUnexpectedFailure(latest, error, ownsJob);
+          } catch (readError) {
+            if (ownsJob()) {
+              dependencies.error(`Could not read failed scheduled task ${task.id}.`, readError);
+            }
+          }
         },
       },
       async () => {
-        await dispatch(task.id, { automatic: true });
+        const result = dispatch(task.id, { automatic: true, isCurrent: ownsJob });
+        if (result.kind === "dispatched") await result.completion;
       },
     );
+    const ownsJob = () =>
+      isCurrent() && started && globallyEnabled && jobs.get(task.id) === job;
     jobs.set(task.id, job);
     const nextRunAt = job.nextRun()?.getTime();
-    await store.updateRuntime(task.id, { nextRunAt });
-    if (jobs.get(task.id) !== job || !started || !globallyEnabled) {
+    // An overdue startup task stays due until dispatch publishes its claim.
+    if (!preserveNextRunAt) await store.updateRuntime(task.id, { nextRunAt }, isCurrent);
+    if (!ownsJob()) {
       job.stop();
       return;
     }
@@ -240,47 +296,68 @@ export function createScheduleServiceCore(
     async start(): Promise<void> {
       if (started) return;
       started = true;
+      const revision = ++startupRevision;
+      const isCurrent = () => started && startupRevision === revision;
       try {
-        globallyEnabled = await dependencies.globallyEnabled();
+        const enabled = await dependencies.globallyEnabled();
+        if (!isCurrent()) return;
+        globallyEnabled = enabled;
         if (!globallyEnabled) return;
         const now = Date.now();
         const tasks = await store.list();
+        if (!isCurrent()) return;
         for (const task of tasks) {
           if (!task.enabled) continue;
           let latest: ScheduledTask | undefined;
           latest = await withTaskLifecycle(task.id, async () => {
+            if (!isCurrent()) return undefined;
             try {
+              // A restart must not lose its catch-up to the cancelled predecessor
+              // still occupying runningTasks while its persistence settles.
+              if (runningTasks.get(task.id)?.cancelRequested) await cancelAndSettle(task.id);
+              if (!isCurrent()) return undefined;
               const current = await store.get(task.id);
-              if (!current?.enabled) return undefined;
-              await schedule(current);
+              if (!isCurrent() || !current?.enabled) return undefined;
+              const missed = current.nextRunAt !== undefined && current.nextRunAt < now;
+              await schedule(current, isCurrent, missed);
               return current;
             } catch (error) {
+              if (!isCurrent()) return undefined;
               stopJob(task.id);
               const message =
                 error instanceof Error ? error.message : String(error);
-              dependencies.error(
-                `Could not schedule task ${task.id}; it was disabled.`,
-                error,
-              );
               await store.updateRuntime(task.id, {
                 enabled: false,
                 nextRunAt: undefined,
                 lastResult: "error",
                 lastError: `Needs attention: ${message}`,
-              });
+              }, isCurrent);
+              if (!isCurrent()) return undefined;
+              dependencies.error(
+                `Could not schedule task ${task.id}; it was disabled.`,
+                error,
+              );
               return undefined;
             }
           });
+          if (!isCurrent()) return;
           if (!latest) continue;
           const missed =
             latest.nextRunAt !== undefined && latest.nextRunAt < now;
           if (missed) {
-            void dispatch(latest.id, { automatic: true }).catch((error) =>
-              recordUnexpectedFailure(latest, error),
-            );
+            const job = jobs.get(latest.id);
+            if (!job) continue;
+            const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
+            const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
+            if (result.kind === "dispatched") {
+              void result.completion.catch((error) =>
+                recordUnexpectedFailure(latest, error, ownsCatchup),
+              );
+            }
           }
         }
       } catch (error) {
+        if (!isCurrent()) return;
         started = false;
         for (const job of jobs.values()) job.stop();
         jobs.clear();
@@ -289,6 +366,7 @@ export function createScheduleServiceCore(
     },
 
     stop(): void {
+      startupRevision += 1;
       started = false;
       for (const job of jobs.values()) job.stop();
       jobs.clear();
@@ -374,10 +452,13 @@ export function createScheduleServiceCore(
 
     async remove(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<void> {
       await withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "removal");
         stopJob(id);
         await cancelAndSettle(id);
@@ -392,10 +473,13 @@ export function createScheduleServiceCore(
 
     async pause(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledTask> {
       return withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "pause");
         stopJob(id);
         await cancelAndSettle(id);
@@ -419,10 +503,13 @@ export function createScheduleServiceCore(
 
     async resume(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledTask> {
       return withTaskLifecycle(id, async () => {
         const current = await store.get(id);
+        if (options.expectedUpdatedAt !== undefined && current?.updatedAt !== options.expectedUpdatedAt) {
+          throw new Error("This automation changed. Refresh it before trying again.");
+        }
         throwIfAborted(options.signal, "resume");
         const task = await store.setEnabled(id, true);
         const restore = async () => {
@@ -448,13 +535,20 @@ export function createScheduleServiceCore(
 
     runNow(
       id: string,
-      options: { signal?: AbortSignal } = {},
+      options: { signal?: AbortSignal; runId?: string; expectedUpdatedAt?: number } = {},
     ): Promise<ScheduledRun> {
       throwIfAborted(options.signal, "run");
-      const operation = dispatch(id, { automatic: false });
+      const result = dispatch(id, {
+        automatic: false,
+        runId: options.runId,
+        expectedUpdatedAt: options.expectedUpdatedAt,
+      });
+      if (result.kind === "skipped") throw new Error("This scheduled task is already running.");
+      const operation = result.completion;
       if (!options.signal) return operation;
+      const state = runningTasks.get(id);
       const cancel = () => {
-        const state = runningTasks.get(id);
+        if (runningTasks.get(id) !== state) return;
         if (state) state.cancelRequested = true;
         execution.cancel(id);
       };
@@ -465,6 +559,9 @@ export function createScheduleServiceCore(
     },
 
     async setGlobalEnabled(enabled: boolean): Promise<void> {
+      // Explicit settings changes own scheduling from this point onward;
+      // pending startup reads must not restore old settings or dispatch catch-up.
+      startupRevision += 1;
       globallyEnabled = enabled;
       if (!enabled) {
         for (const job of jobs.values()) job.stop();

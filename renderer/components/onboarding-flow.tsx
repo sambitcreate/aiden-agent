@@ -1,7 +1,8 @@
 import {
+  AudioWaveform,
   Bot,
   Blocks,
-  BrainCircuit,
+  Lightbulb,
   CalendarClock,
   ChartBar,
   ChartScatter,
@@ -18,6 +19,7 @@ import {
   Globe2,
   Images,
   Lock,
+  LoaderCircle,
   MessageSquare,
   Mic2,
   MousePointer2,
@@ -27,6 +29,7 @@ import {
   Send,
   ShieldCheck,
   SquareTerminal,
+  Smartphone,
   UserRound,
   UsersRound,
   Wand2,
@@ -36,20 +39,36 @@ import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
+import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
-import { Button, Input, Text, toast } from "./ui";
-import { providersApi, profileApi } from "../lib/ipc";
-import { markOnboardingComplete, shouldShowOnboarding } from "../lib/onboarding-state";
+import { CodexProviderSettings } from "./settings/codex-provider-settings";
+import { Button, Dialog, Field, Input, Switch, Text, toast } from "./ui";
+import { appApi, profileApi, providersApi, webSearchApi } from "../lib/ipc";
+import {
+  clearLegacyOnboardingCompletion,
+  markOnboardingComplete,
+  shouldShowOnboarding,
+} from "../lib/onboarding-state";
 import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
-import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
-import { queryKeys, useProviders } from "../lib/queries";
+import {
+  canConfigureOnboardingBuiltinProvider,
+  getOnboardingMoreProviders,
+  isOnboardingBuiltinProviderReady,
+  onboardingBuiltinProviderSetupLabel,
+} from "../lib/pi-provider-display";
+import { queryKeys, useCodexProviderStatus, useProviders, useWebSearch } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
+import {
+  onboardingStepIndex,
+  shouldOpenOnboarding,
+  type OnboardingSnapshot,
+} from "../shared/onboarding";
 
 type Step = "profile" | "provider" | "tour";
 const steps: Step[] = ["profile", "provider", "tour"];
@@ -65,6 +84,7 @@ const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
   createImages: new URL("../assets/onboarding/features/create-images.png", import.meta.url).href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
+  browser: new URL("../assets/onboarding/features/browser.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
   filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
   reviewDiffs: new URL("../assets/onboarding/features/review-diffs.png", import.meta.url).href,
@@ -79,7 +99,8 @@ const FEATURE_ILLUSTRATIONS = {
   webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
-  assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
+  bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
   voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
@@ -89,6 +110,7 @@ const FEATURE_ILLUSTRATIONS = {
   themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
   telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
     .href,
+  aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url).href,
 } as const;
 
 const providerChoices: Array<{
@@ -107,7 +129,7 @@ const providerChoices: Array<{
   },
   {
     id: "openai-signin",
-    title: "ChatGPT sign in",
+    title: "ChatGPT",
     description: "Connect through browser sign-in.",
     iconProviderId: "openai-codex",
   },
@@ -131,9 +153,14 @@ const providerChoices: Array<{
     iconProviderId: "ollama",
   },
   {
+    id: "custom",
+    title: "Other Custom Provider",
+    description: "Connect your endpoint, choose models, and customize their capabilities.",
+  },
+  {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect to a private model on your tailnet.",
+    description: "Connect a private server and choose models and capabilities in More options.",
   },
 ];
 
@@ -162,7 +189,7 @@ const featureBentos: FeatureBento[] = [
     id: "workspace",
     group: "create",
     title: "Workspace Agent",
-    description: "Read, search, edit, and run commands inside the workspace you choose.",
+    description: "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response.",
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",
@@ -190,9 +217,18 @@ const featureBentos: FeatureBento[] = [
     id: "subagents",
     group: "create",
     title: "Native Subagents",
-    description: "Delegate scout, planner, and reviewer jobs, then inspect their live results.",
+    description: "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
+    size: "standard",
+  },
+  {
+    id: "browser",
+    group: "create",
+    title: "Browser & Annotations",
+    description: "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
+    icon: Globe2,
+    imageUrl: FEATURE_ILLUSTRATIONS.browser,
     size: "standard",
   },
   {
@@ -236,7 +272,8 @@ const featureBentos: FeatureBento[] = [
     id: "workspaces",
     group: "create",
     title: "Workspaces & Worktrees",
-    description: "Use folders, scratch spaces, and isolated worktrees while preserving context.",
+    description:
+      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
     size: "wide",
@@ -245,7 +282,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or local endpoints.",
+    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -254,7 +291,8 @@ const featureBentos: FeatureBento[] = [
     id: "modelPad",
     group: "extend",
     title: "Personal Model Pad",
-    description: "Arrange favorite models on your own map of capability and response pace.",
+    description:
+      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog. Live catalog checks happen only when you choose provider setup or Update model catalogs; ordinary browsing stays offline.",
     icon: ChartScatter,
     imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
     size: "tall",
@@ -264,7 +302,7 @@ const featureBentos: FeatureBento[] = [
     group: "extend",
     title: "Thinking Controls",
     description: "Tune supported models' reasoning effort and follow thinking as it streams.",
-    icon: BrainCircuit,
+    icon: Lightbulb,
     imageUrl: FEATURE_ILLUSTRATIONS.thinking,
     size: "standard",
   },
@@ -272,7 +310,8 @@ const featureBentos: FeatureBento[] = [
     id: "vision",
     group: "extend",
     title: "Attachments & Vision",
-    description: "Attach text and images for vision-capable models to inspect in conversation.",
+    description:
+      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -281,7 +320,8 @@ const featureBentos: FeatureBento[] = [
     id: "webSearch",
     group: "extend",
     title: "Web Search",
-    description: "Give the workspace agent live Exa search when you choose to connect it.",
+    description:
+      "Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings.",
     icon: Globe2,
     imageUrl: FEATURE_ILLUSTRATIONS.webSearch,
     size: "standard",
@@ -290,7 +330,7 @@ const featureBentos: FeatureBento[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Create reusable instructions, then type $ to attach one to your next message.",
+    description: "Create reusable instructions, then type $ to attach one. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     imageUrl: FEATURE_ILLUSTRATIONS.skills,
     size: "wide",
@@ -299,25 +339,37 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect services or any MCP server and expose only the tools you enable.",
+    description: "Browse plugins, connect hosted MCP servers, and expose only the tools you enable.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
   },
   {
-    id: "assistant",
+    id: "geminiLive",
     group: "control",
-    title: "Aiden Assistant",
-    description: "Ask about the app and prepare confirmed automations from a private dock.",
-    icon: Bot,
-    imageUrl: FEATURE_ILLUSTRATIONS.assistant,
+    title: "Aiden Live",
+    description:
+      "Talk to Aiden, share screen context, and approve each app action one at a time from the new orb.",
+    icon: AudioWaveform,
+    imageUrl: FEATURE_ILLUSTRATIONS.geminiLive,
     size: "hero",
+  },
+  {
+    id: "bots",
+    group: "control",
+    title: "Reusable Bots",
+    description:
+      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
+    icon: Bot,
+    imageUrl: FEATURE_ILLUSTRATIONS.bots,
+    size: "standard",
   },
   {
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",
-    description: "Schedule recurring model work or trusted scripts, then run or pause anytime.",
+    description:
+      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
     icon: CalendarClock,
     imageUrl: FEATURE_ILLUSTRATIONS.schedules,
     size: "tall",
@@ -326,7 +378,8 @@ const featureBentos: FeatureBento[] = [
     id: "voice",
     group: "control",
     title: "Voice & Dictation",
-    description: "Speak into the composer or dictate system-wide with cloud or on-device voice.",
+    description:
+      "Speak in the composer or dictate system-wide. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     imageUrl: FEATURE_ILLUSTRATIONS.voice,
     size: "standard",
@@ -344,9 +397,19 @@ const featureBentos: FeatureBento[] = [
     id: "telegram",
     group: "control",
     title: "Aiden in Telegram",
-    description: "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
+    description:
+      "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
+    size: "standard",
+  },
+  {
+    id: "aidenOnTheGo",
+    group: "control",
+    title: "Aiden On The Go",
+    description: "Connect your phone or tablet with a guided setup and one-time code.",
+    icon: Smartphone,
+    imageUrl: FEATURE_ILLUSTRATIONS.aidenOnTheGo,
     size: "standard",
   },
   {
@@ -410,9 +473,11 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-60 bg-background" />
         <DialogPrimitive.Content
+          data-slot="dialog-content"
+          data-onboarding-active="true"
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed inset-0 z-60 grid place-items-center bg-background p-4 outline-none max-[760px]:p-0"
+          className="fixed inset-0 z-60 grid place-items-center bg-background px-4 pb-4 pt-11 outline-none max-[520px]:px-3 max-[520px]:pb-3"
         >
           <DialogPrimitive.Title className="sr-only">Set up Aiden</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">
@@ -425,52 +490,110 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   );
 }
 
-function builtinProviderSetupLabel(provider: Provider): string {
-  if (provider.hasKey) return "Ready on this Mac";
-  const methods = (provider.authMethods ?? [])
-    .filter((method) => method.canLogin)
-    .map((method) => method.label);
-  if (methods.length > 0) return methods.slice(0, 2).join(" or ");
-  return "Requires system credentials";
-}
-
-function canChooseBuiltinProvider(provider: Provider): boolean {
-  return provider.hasKey || (provider.authMethods ?? []).some((method) => method.canLogin);
-}
-
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const providers = useProviders();
-  const [open, setOpen] = React.useState(() => shouldShowOnboarding());
+  const codexStatus = useCodexProviderStatus();
+  const webSearch = useWebSearch();
+  // Main-owned state is authoritative. Block the workbench until it has been
+  // checked so a stale legacy renderer marker cannot expose a bypass window.
+  const [open, setOpen] = React.useState(true);
+  const [stateReady, setStateReady] = React.useState(false);
+  const [onboardingLoadError, setOnboardingLoadError] = React.useState<string | null>(null);
   const [index, setIndex] = React.useState(0);
   const [name, setName] = React.useState("");
   const [choice, setChoice] = React.useState<OnboardingProviderChoice | null>("openai-signin");
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
   const [showMoreProviders, setShowMoreProviders] = React.useState(false);
   const [settingUpProvider, setSettingUpProvider] = React.useState<Provider | null>(null);
+  const [customProvider, setCustomProvider] = React.useState<Provider | null>(null);
+  const [apiKeyDialogChoice, setApiKeyDialogChoice] = React.useState<
+    "openai-key" | "anthropic" | null
+  >(null);
   const [apiKey, setApiKey] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [discovering, setDiscovering] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
+  const [providerSkipped, setProviderSkipped] = React.useState(false);
+  const [webSearchSaving, setWebSearchSaving] = React.useState(false);
+  const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
+  const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
+  const webSearchSavingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
+  const profileInitializedRef = React.useRef(false);
+  const loadGenerationRef = React.useRef(0);
+
+  const loadOnboarding = React.useCallback(
+    async (reopen = false) => {
+      const generation = loadGenerationRef.current + 1;
+      loadGenerationRef.current = generation;
+      setStateReady(false);
+      setOnboardingLoadError(null);
+      try {
+        const snapshot = reopen
+          ? await appApi.setOnboardingOutcome("incomplete")
+          : await appApi.getOnboardingState(!shouldShowOnboarding());
+        if (loadGenerationRef.current !== generation) return;
+        onboardingSnapshotRef.current = snapshot;
+        readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
+        setProviderSkipped(false);
+        setIndex(onboardingStepIndex(snapshot));
+        setOpen(shouldOpenOnboarding(snapshot.outcome));
+        if (snapshot.profileReady && !profileInitializedRef.current) {
+          const current = await profileApi.get();
+          profileInitializedRef.current = true;
+          setName(current.name);
+          queryClient.setQueryData(queryKeys.profile, current);
+        }
+        setStateReady(true);
+        if (reopen) clearLegacyOnboardingCompletion();
+      } catch (error) {
+        if (loadGenerationRef.current !== generation) return;
+        setOnboardingLoadError(
+          error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
+        );
+        setOpen(true);
+      }
+    },
+    [queryClient],
+  );
+
+  React.useEffect(() => {
+    void loadOnboarding();
+    const reopen = () => void loadOnboarding(true);
+    window.addEventListener("aiden:show-onboarding", reopen);
+    return () => window.removeEventListener("aiden:show-onboarding", reopen);
+  }, [loadOnboarding]);
 
   React.useEffect(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [index]);
+    const frame = requestAnimationFrame(() => {
+      scrollContainerRef.current?.querySelector<HTMLElement>("h2")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [index, open]);
 
   if (!open) return null;
   const step = steps[index];
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
-  const chatGptProvider = (providers.data ?? []).find(
-    (provider) => provider.id === "openai-codex" && provider.isBuiltin === true,
-  );
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
-  const canContinue =
-    step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
+  const codexReady =
+    codexStatus.data?.configured === true &&
+    codexStatus.data.needsAttention === false &&
+    codexStatus.data.models.length > 0;
+  const canContinue = !stateReady
+    ? false
+    : step === "profile"
+      ? name.trim().length > 0
+      : step === "provider"
+        ? choice === "openai-signin"
+          ? codexReady
+          : hasProviderChoice
+        : true;
 
   const selectProviderChoice = (nextChoice: OnboardingProviderChoice | null) => {
     const nextFields = fieldsAfterProviderChoiceChange(choice, nextChoice, { apiKey, baseUrl });
@@ -480,6 +603,92 @@ export function OnboardingFlow() {
     setProviderError(null);
   };
 
+  const setWebSearchEnabled = async (enabled: boolean) => {
+    if (!webSearch.data || webSearchSavingRef.current) return;
+    const focusTarget =
+      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    webSearchSavingRef.current = true;
+    setWebSearchSaving(true);
+    try {
+      // The migration/default decision stays main-owned. Onboarding only
+      // persists an explicit user choice through the fenced generic seam.
+      const next = await webSearchApi.setEnabled(enabled);
+      queryClient.setQueryData(queryKeys.webSearch, next);
+    } catch (error) {
+      if (focusTarget?.isConnected) requestAnimationFrame(() => focusTarget.focus());
+      toast.error(error instanceof Error ? error.message : "Couldn’t update Web Search.");
+    } finally {
+      webSearchSavingRef.current = false;
+      setWebSearchSaving(false);
+    }
+  };
+
+  const completeProviderStep = async (providerId: string) => {
+    const snapshot = await appApi.setOnboardingProgress("provider", providerId);
+    onboardingSnapshotRef.current = snapshot;
+    readyProviderIdRef.current = providerId;
+    setProviderSkipped(false);
+    setIndex(2);
+  };
+
+  const validateHostedApiKey = async () => {
+    const hostedChoice = apiKeyDialogChoice;
+    if (!hostedChoice || savingRef.current) return;
+    const key = apiKey.trim();
+    if (!key) {
+      setProviderError("Paste an API key before continuing.");
+      return;
+    }
+    const providerId = hostedChoice === "openai-key" ? "openai" : "anthropic";
+    savingRef.current = true;
+    setSaving(true);
+    setDiscovering(true);
+    setProviderError(null);
+    try {
+      const validation = await providersApi.validateOnboardingApiKey(providerId, key);
+      const saved = validation.provider;
+      queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
+        const without = (current ?? []).filter((item) => item.id !== saved.id);
+        return [...without, saved];
+      });
+      const model = saved.defaultModel ?? saved.models[0];
+      if (!model) throw new Error("Credentials were accepted, but no chat models are available.");
+      persistModelSelection(saved.id, model);
+      setApiKeyDialogChoice(null);
+      setApiKey("");
+      setProviderSkipped(false);
+      await completeProviderStep(saved.id);
+      if (validation.catalogWarning) toast.warning(validation.catalogWarning);
+      else toast.success(`${saved.label} credentials accepted.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Couldn't validate that API key.";
+      setProviderError(message);
+      toast.error(message);
+    } finally {
+      setDiscovering(false);
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const skipProvider = () => {
+    if (!stateReady || savingRef.current) return;
+    selectProviderChoice(null);
+    setBuiltinChoiceId(null);
+    setApiKeyDialogChoice(null);
+    setShowMoreProviders(false);
+    setProviderSkipped(true);
+    readyProviderIdRef.current = null;
+    setIndex(2);
+  };
+
+  const openCustomProvider = () => setCustomProvider((current) => current ?? ({
+    id: `custom:${crypto.randomUUID()}`, kind: "openai", label: "Custom Provider", baseUrl: "",
+    models: [], needsKey: true, hasKey: false, deployment: "hosted",
+  }));
+
   const next = async () => {
     if (!canContinue || savingRef.current) return;
     if (step === "profile") {
@@ -487,7 +696,10 @@ export function OnboardingFlow() {
       setSaving(true);
       try {
         const saved = await profileApi.setName(name);
+        profileInitializedRef.current = true;
         queryClient.setQueryData(queryKeys.profile, saved);
+        const snapshot = await appApi.setOnboardingProgress("profile");
+        onboardingSnapshotRef.current = snapshot;
         setIndex(1);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't save your profile name.");
@@ -499,8 +711,10 @@ export function OnboardingFlow() {
     }
     if (step === "provider") {
       if (selectedBuiltinProvider) {
-        if (selectedBuiltinProvider.hasKey) {
-          setIndex(2);
+        if (isOnboardingBuiltinProviderReady(selectedBuiltinProvider)) {
+          const model = selectedBuiltinProvider.defaultModel ?? selectedBuiltinProvider.models[0];
+          persistModelSelection(selectedBuiltinProvider.id, model);
+          await completeProviderStep(selectedBuiltinProvider.id);
         } else {
           setSettingUpProvider(selectedBuiltinProvider);
         }
@@ -511,26 +725,22 @@ export function OnboardingFlow() {
         return;
       }
       if (choice === "openai-signin") {
-        if (providers.isLoading) {
-          toast.info("Aiden is still loading the ChatGPT sign-in option. Try again in a moment.");
+        const model = codexStatus.data?.models[0]?.id;
+        if (!codexReady || !model) {
+          setProviderError("Complete ChatGPT sign-in before continuing.");
           return;
         }
-        if (!chatGptProvider) {
-          toast.error(
-            "ChatGPT sign-in is unavailable. Refresh the provider catalog or choose another option.",
-          );
-          return;
-        }
-        if (chatGptProvider.hasKey) setIndex(2);
-        else setSettingUpProvider(chatGptProvider);
+        persistModelSelection("openai-codex", model);
+        await completeProviderStep("openai-codex");
         return;
       }
+      if (choice === "custom") { openCustomProvider(); return; }
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
       }
-      if (selected.requiresKey && !apiKey.trim()) {
-        toast.error("Paste an API key or choose a sign-in/local option.");
+      if (choice === "openai-key" || choice === "anthropic") {
+        setApiKeyDialogChoice(choice);
         return;
       }
       savingRef.current = true;
@@ -538,6 +748,7 @@ export function OnboardingFlow() {
       setProviderError(null);
       try {
         const isLocalRuntime = choice === "lmstudio" || choice === "ollama";
+        const needsEndpointDiscovery = isLocalRuntime || choice === "tailscale";
         // Resolve reserved local identities from a fresh main-process snapshot.
         // The query cache may still be loading or stale when the user clicks Next.
         const currentProviders = isLocalRuntime
@@ -547,7 +758,7 @@ export function OnboardingFlow() {
           queryClient.setQueryData(queryKeys.providers, currentProviders);
         }
         let providerToSave = makeOnboardingProvider(choice, baseUrl.trim(), currentProviders);
-        if (providerToSave && isLocalRuntime) {
+        if (providerToSave && needsEndpointDiscovery) {
           let discovery: Awaited<ReturnType<typeof providersApi.test>>;
           try {
             setDiscovering(true);
@@ -584,24 +795,40 @@ export function OnboardingFlow() {
             const without = (current ?? []).filter((item) => item.id !== saved.id);
             return [...without, saved];
           });
-          if (isLocalRuntime) {
-            persistModelSelection(saved.id, saved.defaultModel ?? providerToSave.defaultModel!);
-          }
+          persistModelSelection(saved.id, saved.defaultModel ?? providerToSave.defaultModel!);
+          await completeProviderStep(saved.id);
           toast.success(`${saved.label} added.`);
         }
-        setIndex(2);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Couldn't add that provider.";
         setProviderError(message);
         toast.error(message);
       } finally {
+        setDiscovering(false);
         savingRef.current = false;
         setSaving(false);
       }
       return;
     }
-    markOnboardingComplete();
-    setOpen(false);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const selectedProviderId = providerSkipped
+        ? undefined
+        : (readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId);
+      const snapshot = await appApi.setOnboardingOutcome(
+        providerSkipped || !selectedProviderId ? "deferred" : "completed",
+        selectedProviderId,
+      );
+      onboardingSnapshotRef.current = snapshot;
+      markOnboardingComplete();
+      setOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't finish onboarding.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
@@ -609,7 +836,7 @@ export function OnboardingFlow() {
       <section
         aria-busy={saving || undefined}
         aria-label="Set up Aiden"
-        className="relative grid h-[min(600px,calc(100vh-32px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-modal max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1 max-[760px]:rounded-none max-[760px]:shadow-none"
+        className="relative grid h-[min(600px,calc(100vh-60px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-onboarding max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1"
       >
         <div className="drag-region absolute left-0 right-0 top-0 h-10" />
         <aside className="border-r border-separator bg-sidebar px-5 pb-5 pt-7 max-[760px]:hidden">
@@ -622,7 +849,7 @@ export function OnboardingFlow() {
                 src={APP_ICON_URL}
                 className="size-14"
               />
-              <Text as="h1" variant="heading1" className="mt-5 block text-[20px] leading-6">
+              <Text as="h1" variant="heading1" className="mt-5 block text-heading2">
                 Set up Aiden
               </Text>
               <Text as="p" variant="small" color="secondary" className="mt-2 block leading-5">
@@ -633,10 +860,11 @@ export function OnboardingFlow() {
               {steps.map((item, itemIndex) => (
                 <li
                   key={item}
+                  aria-current={itemIndex === index ? "step" : undefined}
                   className={`flex items-center gap-2 ${itemIndex <= index ? "text-primary" : "text-tertiary"}`}
                 >
                   <span
-                    className={`grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
+                    className={`grid size-5 shrink-0 place-items-center rounded-full text-mini font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
                   >
                     {itemIndex < index ? <Check className="size-3" /> : itemIndex + 1}
                   </span>
@@ -662,18 +890,21 @@ export function OnboardingFlow() {
                 Step {index + 1} of {steps.length}
               </Text>
             </div>
-            <Button
-              className="no-drag"
-              variant="transparent"
-              size="small"
-              disabled={saving}
-              onClick={() => {
-                markOnboardingComplete();
-                setOpen(false);
-              }}
-            >
-              Skip
-            </Button>
+            {step === "provider" ? (
+              <Button
+                className="no-drag h-7 px-2"
+                size="small"
+                variant="transparent"
+                disabled={!stateReady || saving}
+                onClick={skipProvider}
+              >
+                Skip provider
+              </Button>
+            ) : (
+              <Text variant="small" color="tertiary">
+                Profile and provider setup required
+              </Text>
+            )}
           </header>
 
           <main
@@ -681,12 +912,42 @@ export function OnboardingFlow() {
             data-onboarding-scroll
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 max-[520px]:px-4"
           >
-            {step === "profile" ? (
+            {onboardingLoadError ? (
+              <div role="alert" className="mb-4 rounded-card bg-status-red-surface p-3">
+                <Text variant="small" color="status-red">
+                  {onboardingLoadError}
+                </Text>
+                <Button
+                  className="mt-2"
+                  size="small"
+                  variant="filled"
+                  onClick={() => void loadOnboarding()}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+            {!stateReady && !onboardingLoadError ? (
+              <div className="grid min-h-48 place-items-center" role="status" aria-live="polite">
+                <div className="flex items-center gap-2 text-secondary">
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                  <Text variant="small" color="secondary">
+                    Checking setup…
+                  </Text>
+                </div>
+              </div>
+            ) : null}
+            {stateReady && step === "profile" ? (
               <div className="max-w-md">
                 <div className="flex items-start gap-3">
                   <UserRound className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-heading2 outline-none"
+                    >
                       What should Aiden call you?
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
@@ -697,8 +958,7 @@ export function OnboardingFlow() {
                 <label className="mt-6 block">
                   <Text variant="small-strong">Name</Text>
                   <Input
-                    autoFocus
-                    className="mt-2 h-10"
+                    className="mt-2 h-10 border-transparent bg-input hover:border-transparent focus:border-transparent"
                     disabled={saving}
                     value={name}
                     maxLength={80}
@@ -715,16 +975,97 @@ export function OnboardingFlow() {
                     Stored privately on this Mac.
                   </Text>
                 </div>
+                <section
+                  data-onboarding-web-search
+                  aria-busy={webSearchSaving || webSearch.isFetching || undefined}
+                  aria-labelledby="onboarding-web-search-title"
+                  className="mt-6 rounded-card border border-separator bg-well p-4 shadow-control motion-reduce:transition-none"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-status-accent-surface text-status-accent">
+                      <Globe2 aria-hidden="true" className="size-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <Text id="onboarding-web-search-title" variant="small-strong">
+                            Web Search
+                          </Text>
+                          <Text
+                            as="span"
+                            variant="small"
+                            color="tertiary"
+                            className="ml-2"
+                            aria-live="polite"
+                          >
+                            {webSearch.data
+                              ? webSearch.data.settings.enabled
+                                ? "On"
+                                : "Off"
+                              : webSearch.isError
+                                ? "Unavailable"
+                                : "Checking local setting…"}
+                          </Text>
+                        </div>
+                        <Switch
+                          checked={webSearch.data?.settings.enabled === true}
+                          onCheckedChange={(enabled) => void setWebSearchEnabled(enabled)}
+                          disabled={!webSearch.data || webSearch.isFetching || webSearchSaving}
+                          aria-label="Allow Web Search in attended chats"
+                          aria-describedby="onboarding-web-search-description"
+                          className="motion-reduce:transition-none motion-reduce:[&_*]:transition-none"
+                        />
+                      </div>
+                      <Text
+                        id="onboarding-web-search-description"
+                        as="p"
+                        variant="small"
+                        color="secondary"
+                        className="mt-2 leading-5"
+                      >
+                        Fresh profiles start with Web Search on; anonymous Exa is the initial
+                        recipient. Existing opt-outs and routes stay unchanged. Aiden may derive a
+                        search query from this conversation and send that query and your network
+                        address to Exa only when the model invokes search. This screen makes no
+                        network request.
+                      </Text>
+                      <Text as="p" variant="small" color="tertiary" className="mt-2 leading-5">
+                        Turn it off here, or choose another provider later in Settings → Web Search.
+                      </Text>
+                      {webSearch.isError && !webSearch.data ? (
+                        <Text role="alert" variant="small" color="red" className="mt-2 block">
+                          The local Web Search setting could not be read. No change was made.
+                        </Text>
+                      ) : null}
+                      {webSearchSaving ? (
+                        <Text
+                          role="status"
+                          aria-live="polite"
+                          variant="small"
+                          color="tertiary"
+                          className="mt-2 block"
+                        >
+                          Saving Web Search preference…
+                        </Text>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
               </div>
             ) : null}
 
-            {step === "provider" ? (
+            {stateReady && step === "provider" ? (
               <div>
                 <div className="flex items-start gap-3">
                   <Network className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
-                      Add a model provider
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-heading2 outline-none"
+                    >
+                      Connect your AI
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
                       Choose one connection to get started.
@@ -732,16 +1073,21 @@ export function OnboardingFlow() {
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
-                  {providerChoices.map((item) => (
+                  {providerChoices.filter((item) => ["openai-signin", "lmstudio", "ollama", "custom"].includes(item.id)).map((item) => (
                     <button
                       key={item.id}
                       type="button"
                       disabled={saving}
                       aria-pressed={choice === item.id}
-                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control border px-3 py-2.5 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well hover:bg-control"}`}
+                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
                       onClick={() => {
                         selectProviderChoice(item.id);
                         setBuiltinChoiceId(null);
+                        setProviderSkipped(false);
+                        if (item.id === "custom") openCustomProvider();
+                        if (item.id === "openai-key" || item.id === "anthropic") {
+                          setApiKeyDialogChoice(item.id);
+                        }
                       }}
                     >
                       <span className="grid size-8 shrink-0 place-items-center text-primary">
@@ -770,13 +1116,18 @@ export function OnboardingFlow() {
                     </button>
                   ))}
                 </div>
+                {choice === "openai-signin" ? (
+                  <div className="mt-3">
+                    <CodexProviderSettings layer="onboarding" />
+                  </div>
+                ) : null}
                 <button
                   data-onboarding-more-provider-trigger
                   type="button"
                   disabled={saving}
                   aria-controls="onboarding-more-providers"
                   aria-expanded={showMoreProviders}
-                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-field bg-well px-3 py-2 text-left transition-[background-color,border-color] duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-transparent bg-well px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
                   onClick={() => setShowMoreProviders((visible) => !visible)}
                 >
                   <span className="grid size-8 shrink-0 place-items-center text-secondary">
@@ -784,14 +1135,14 @@ export function OnboardingFlow() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <Text variant="small-strong" className="block">
-                      Choose from more
+                      Other ways
                     </Text>
                     <Text variant="small" color="secondary" className="mt-0.5 block leading-4">
                       {providers.isLoading
                         ? "Loading provider catalog…"
                         : selectedBuiltinProvider
                           ? `${selectedBuiltinProvider.label} selected`
-                          : `${moreProviders.length} additional provider${moreProviders.length === 1 ? "" : "s"}`}
+                          : "API keys and more AI services"}
                     </Text>
                   </span>
                   <ChevronDown
@@ -805,8 +1156,17 @@ export function OnboardingFlow() {
                     id="onboarding-more-providers"
                     data-onboarding-more-providers
                     aria-live="polite"
-                    className="mt-2 rounded-card border border-separator bg-well p-2"
+                    className="mt-2 rounded-card bg-well p-2"
                   >
+                    <div className="grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
+                      {providerChoices.filter((item) => ["openai-key", "anthropic", "tailscale"].includes(item.id)).map((item) => (
+                        <Button key={item.id} variant="transparent" disabled={saving}
+                          aria-pressed={choice === item.id} onClick={() => {
+                            selectProviderChoice(item.id); setBuiltinChoiceId(null); setProviderSkipped(false);
+                            if (item.id === "openai-key" || item.id === "anthropic") setApiKeyDialogChoice(item.id);
+                          }}>{item.title}</Button>
+                      ))}
+                    </div>
                     {providers.isLoading && moreProviders.length === 0 ? (
                       <Text variant="small" color="secondary" className="block px-2 py-3">
                         Loading provider catalog…
@@ -834,7 +1194,7 @@ export function OnboardingFlow() {
                     ) : (
                       <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
                         {moreProviders.map((provider) => {
-                          const canChoose = canChooseBuiltinProvider(provider);
+                          const canChoose = canConfigureOnboardingBuiltinProvider(provider);
                           const isSelected = builtinChoiceId === provider.id;
                           return (
                             <button
@@ -842,10 +1202,14 @@ export function OnboardingFlow() {
                               type="button"
                               disabled={!canChoose || saving}
                               aria-pressed={isSelected}
-                              className={`flex min-h-14 items-center gap-2.5 rounded-control border px-2.5 py-2 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "border-accent bg-accent/10" : "border-transparent bg-transparent hover:border-field hover:bg-control"}`}
+                              className={`flex min-h-14 items-center gap-2.5 rounded-control border border-transparent px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "bg-list-selection" : "bg-transparent hover:bg-control"}`}
                               onClick={() => {
                                 selectProviderChoice(null);
                                 setBuiltinChoiceId(provider.id);
+                                setProviderSkipped(false);
+                                if (!isOnboardingBuiltinProviderReady(provider)) {
+                                  setSettingUpProvider(provider);
+                                }
                               }}
                             >
                               <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-primary shadow-control">
@@ -865,7 +1229,7 @@ export function OnboardingFlow() {
                                   truncate
                                   className="mt-0.5 block"
                                 >
-                                  {builtinProviderSetupLabel(provider)}
+                                  {onboardingBuiltinProviderSetupLabel(provider)}
                                 </Text>
                               </span>
                               <Check
@@ -880,33 +1244,14 @@ export function OnboardingFlow() {
                   </div>
                 ) : null}
                 <div className="mt-4 grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
-                  {selected?.requiresKey ? (
+                  {choice === "tailscale" ? (
                     <label>
-                      <Text variant="small-strong">API key</Text>
+                      <Text variant="small-strong">Model URL</Text>
                       <Input
-                        className="mt-2"
-                        type="password"
-                        disabled={saving}
-                        value={apiKey}
-                        placeholder="Paste key"
-                        onChange={(event) => setApiKey(event.currentTarget.value)}
-                      />
-                    </label>
-                  ) : null}
-                  {choice === "tailscale" || choice === "openai-key" || choice === "anthropic" ? (
-                    <label>
-                      <Text variant="small-strong">
-                        {choice === "tailscale" ? "Model URL" : "Base URL (optional)"}
-                      </Text>
-                      <Input
-                        className="mt-2"
+                        className="mt-2 border-transparent bg-input hover:border-transparent focus:border-transparent"
                         disabled={saving}
                         value={baseUrl}
-                        placeholder={
-                          choice === "tailscale"
-                            ? "https://model.tailnet.ts.net/v1"
-                            : "Use provider default"
-                        }
+                        placeholder={"http://model.tailnet.ts.net:11434/v1"}
                         onChange={(event) => setBaseUrl(event.currentTarget.value)}
                       />
                     </label>
@@ -920,17 +1265,35 @@ export function OnboardingFlow() {
               </div>
             ) : null}
 
-            {step === "tour" ? (
+            {stateReady && step === "tour" ? (
               <div>
+                {providerSkipped ? (
+                  <div className="mb-4 rounded-card bg-well px-4 py-3">
+                    <Text variant="small-strong" className="block">
+                      Provider setup skipped
+                    </Text>
+                    <Text variant="small" color="secondary" className="mt-1 block">
+                      Add one anytime from Settings → Providers.
+                    </Text>
+                  </div>
+                ) : null}
                 <div className="flex items-start gap-3">
                   <Check className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-heading2 outline-none"
+                    >
                       Everything Aiden brings together
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
                       Explore all {featureBentos.length} shipped features. Scroll, then hover or
                       focus a tile to learn more.
+                    </Text>
+                    <Text as="p" variant="small" color="tertiary" className="mt-1 block">
+                      Phone and tablet access starts off. After setup, choose Connect a device in Settings → Aiden On The Go; Aiden must stay running, and Tailscale is optional.
                     </Text>
                   </div>
                 </div>
@@ -948,7 +1311,7 @@ export function OnboardingFlow() {
                           <Text id={headingId} as="h3" variant="small-strong" color="secondary">
                             {group.title}
                           </Text>
-                          <Text variant="small" color="tertiary" className="text-[11px]">
+                          <Text variant="small" color="tertiary" className="text-mini">
                             {features.length} features
                           </Text>
                         </div>
@@ -958,9 +1321,8 @@ export function OnboardingFlow() {
                             return (
                               <article
                                 key={feature.id}
-                                tabIndex={0}
                                 aria-label={`${feature.title}. ${feature.description}`}
-                                className={`group relative overflow-hidden rounded-card border border-field bg-well shadow-control outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control-hover focus-visible:border-focus-ring focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
+                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
                               >
                                 <div
                                   aria-hidden="true"
@@ -997,7 +1359,7 @@ export function OnboardingFlow() {
                                     <Text
                                       variant="small"
                                       color="secondary"
-                                      className="mt-1 block text-[12px] leading-4"
+                                      className="mt-1 block text-small leading-4"
                                     >
                                       {feature.description}
                                     </Text>
@@ -1021,14 +1383,21 @@ export function OnboardingFlow() {
           >
             <Button
               variant="transparent"
-              disabled={index === 0 || saving}
+              disabled={!stateReady || index === 0 || saving}
               onClick={() => setIndex((value) => Math.max(0, value - 1))}
             >
               <ChevronLeft /> Back
             </Button>
-            <Button variant="accent" disabled={!canContinue || saving} onClick={() => void next()}>
+            <Button
+              variant="accent"
+              pressFeedback
+              disabled={!stateReady || !canContinue || saving}
+              onClick={() => void next()}
+            >
               {discovering
-                ? "Discovering models…"
+                ? choice === "openai-key" || choice === "anthropic"
+                  ? "Validating key…"
+                  : "Discovering models…"
                 : saving && step === "provider"
                   ? "Adding provider…"
                   : step === "tour"
@@ -1039,6 +1408,19 @@ export function OnboardingFlow() {
           </footer>
         </div>
       </section>
+      {customProvider ? (
+        <ProviderEditor provider={customProvider} open layer="onboarding" requireReady
+          onOpenChange={(open) => { if (!open) setCustomProvider(null); }}
+          onSaved={async () => {
+            const refreshed = await providersApi.list();
+            queryClient.setQueryData(queryKeys.providers, refreshed);
+            const ready = refreshed.find((provider) => provider.id === customProvider.id);
+            const model = ready?.defaultModel;
+            if (!ready || !model || !ready.models.includes(model)) throw new Error("Choose an available default model before continuing.");
+            await completeProviderStep(ready.id);
+            persistModelSelection(ready.id, model);
+          }} />
+      ) : null}
       {settingUpProvider ? (
         <BuiltinProviderEditor
           provider={settingUpProvider}
@@ -1048,11 +1430,80 @@ export function OnboardingFlow() {
             if (!nextOpen) setSettingUpProvider(null);
           }}
           onSaved={() => {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
-            setIndex(2);
+            void (async () => {
+              const refreshed = await providersApi.list();
+              queryClient.setQueryData(queryKeys.providers, refreshed);
+              const ready = refreshed.find(
+                (provider) =>
+                  provider.id === settingUpProvider.id &&
+                  isOnboardingBuiltinProviderReady(provider),
+              );
+              if (!ready) {
+                setProviderError(
+                  `${settingUpProvider.label} is configured but does not have an available chat model yet.`,
+                );
+                return;
+              }
+              const model = ready.defaultModel ?? ready.models[0];
+              persistModelSelection(ready.id, model);
+              await completeProviderStep(ready.id);
+              setSettingUpProvider(null);
+            })().catch((error: unknown) => {
+              setProviderError(
+                error instanceof Error ? error.message : "Couldn't verify that provider.",
+              );
+            });
           }}
         />
       ) : null}
+      <Dialog
+        open={apiKeyDialogChoice !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !saving) {
+            setApiKeyDialogChoice(null);
+            setApiKey("");
+            setProviderError(null);
+          }
+        }}
+        layer="onboarding"
+        title={`Connect ${apiKeyDialogChoice === "openai-key" ? "OpenAI" : "Anthropic"}`}
+        description="Paste your API key to verify the connection. Validation does not send a chat message, and the key is stored encrypted on this Mac."
+        confirmLabel={discovering ? "Validating…" : "Validate & continue"}
+        confirmDisabled={!apiKey.trim()}
+        dismissDisabled={saving}
+        busy={saving}
+        onConfirm={validateHostedApiKey}
+      >
+        <Field
+          label="API key"
+          description="You can replace or remove this key later in Settings → Providers."
+          orientation="vertical"
+          className="rounded-card bg-well p-4 after:hidden"
+        >
+          <Input
+            autoFocus
+            type="password"
+            autoComplete="off"
+            aria-invalid={providerError ? true : undefined}
+            className="border-transparent bg-input hover:border-transparent focus:border-transparent"
+            disabled={saving}
+            value={apiKey}
+            placeholder="Paste your API key"
+            onChange={(event) => {
+              setApiKey(event.currentTarget.value);
+              setProviderError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void validateHostedApiKey();
+            }}
+          />
+          {providerError ? (
+            <Text role="alert" variant="small" color="red" className="block">
+              {providerError}
+            </Text>
+          ) : null}
+        </Field>
+      </Dialog>
     </OnboardingDialogShell>
   );
 }

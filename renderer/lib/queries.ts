@@ -9,14 +9,16 @@ import {
 } from "@tanstack/react-query";
 import {
   assistantApi,
+  aidenRemoteApi,
+  botsApi,
   chatsApi,
-  artificialAnalysisApi,
   computerUseApi,
   createImagesApi,
   exaApi,
   gitApi,
   localVoiceApi,
   mcpApi,
+  modelInsightsApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -27,20 +29,29 @@ import {
   telegramApi,
   titleProvidersApi,
   usageApi,
+  webSearchApi,
   workspacesApi,
 } from "./ipc";
 import type {
-  ArtificialAnalysisStatus,
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
   ModelInfo,
+  ModelInsightsStatus,
   Provider,
+  Chat,
   UsageDateRange,
 } from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  bots: ["bots"] as const,
+  bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
+  botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botCapabilityCatalog: ["bot-capability-catalog"] as const,
+  botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
+  botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
+  botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
@@ -50,8 +61,8 @@ export const queryKeys = {
   scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
-  artificialAnalysisStatus: ["artificialAnalysisStatus"] as const,
-  artificialAnalysisModelInfo: ["modelInfo"] as const,
+  modelInsightsStatus: ["modelInsightsStatus"] as const,
+  modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
   usage: (range: UsageDateRange) => ["usage", range] as const,
@@ -60,11 +71,15 @@ export const queryKeys = {
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
+  webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
+  aidenRemote: ["aidenRemote"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
+  gitPullRequestStatus: (workspaceId: string | undefined) =>
+    ["git-pull-request-status", workspaceId ?? "none"] as const,
   gitReview: (workspaceId: string | undefined) => ["git-review", workspaceId ?? "none"] as const,
   gitPushCapability: (workspaceId: string | undefined) =>
     ["git-push-capability", workspaceId ?? "none"] as const,
@@ -89,51 +104,46 @@ export const queryKeys = {
     ["createImagesRun", workflowId ?? "none", runId ?? "none"] as const,
 };
 
-async function cancelArtificialAnalysisReads(queryClient: QueryClient): Promise<void> {
+/** Keep a pre-append read from replacing the durable new user turn. */
+export async function installAppendedChatSnapshot(
+  queryClient: QueryClient,
+  chatId: string,
+  updated: Chat,
+): Promise<void> {
+  const chatKey = queryKeys.chat(chatId);
+  await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+  queryClient.setQueryData(chatKey, updated);
+}
+
+async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
   await Promise.all([
-    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisStatus }),
-    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisModelInfo }),
+    queryClient.cancelQueries({ queryKey: queryKeys.modelInsightsStatus }),
+    queryClient.cancelQueries({ queryKey: ["modelInfo"] }),
   ]);
 }
 
-/** Freeze device-local AA reads before a connect, refresh, or disconnect mutation. */
-export async function beginArtificialAnalysisAction(queryClient: QueryClient): Promise<void> {
-  await cancelArtificialAnalysisReads(queryClient);
+export async function beginModelInsightsAction(queryClient: QueryClient): Promise<void> {
+  await cancelModelInsightsReads(queryClient);
 }
 
-/** Make an action result authoritative without retaining rankings from a prior credential. */
-export async function commitArtificialAnalysisState(
+export async function commitModelInsightsState(
   queryClient: QueryClient,
-  status: ArtificialAnalysisStatus,
+  status: ModelInsightsStatus,
 ): Promise<void> {
-  await cancelArtificialAnalysisReads(queryClient);
-  queryClient.removeQueries({
-    queryKey: queryKeys.artificialAnalysisModelInfo,
-    type: "inactive",
-  });
-  queryClient.setQueryData(queryKeys.artificialAnalysisStatus, status);
-  await queryClient.resetQueries({
-    queryKey: queryKeys.artificialAnalysisModelInfo,
-    type: "active",
-  });
+  await cancelModelInsightsReads(queryClient);
+  queryClient.removeQueries({ queryKey: ["modelInfo"], type: "inactive" });
+  queryClient.setQueryData(queryKeys.modelInsightsStatus, status);
+  await queryClient.resetQueries({ queryKey: ["modelInfo"], type: "active" });
 }
 
-/** Re-read only local credential/cache state after a failed or partially applied mutation. */
-export async function refreshArtificialAnalysisState(
+export async function refreshModelInsightsState(
   queryClient: QueryClient,
-  readStatus: () => Promise<ArtificialAnalysisStatus> = artificialAnalysisApi.status,
-): Promise<ArtificialAnalysisStatus> {
-  await cancelArtificialAnalysisReads(queryClient);
-  try {
-    const status = await readStatus();
-    await commitArtificialAnalysisState(queryClient, status);
-    return status;
-  } catch (error) {
-    await cancelArtificialAnalysisReads(queryClient);
-    queryClient.removeQueries({ queryKey: queryKeys.artificialAnalysisModelInfo });
-    await queryClient.invalidateQueries({ queryKey: queryKeys.artificialAnalysisStatus });
-    throw error;
-  }
+  readStatus: () => Promise<ModelInsightsStatus> = modelInsightsApi.status,
+): Promise<ModelInsightsStatus> {
+  await cancelModelInsightsReads(queryClient);
+  const status = await readStatus();
+  await commitModelInsightsState(queryClient, status);
+  return status;
 }
 
 export function useProviders() {
@@ -179,6 +189,10 @@ export function useCreateImagesWorkflow(workflowId: string, enabled = true) {
     retry: false,
     refetchOnWindowFocus: false,
   });
+}
+
+export function useModelCatalogStatus() {
+  return useQuery({ queryKey: queryKeys.modelCatalogStatus, queryFn: providersApi.catalogStatus });
 }
 
 export function useCodexProviderStatus() {
@@ -293,6 +307,72 @@ export function useChats(workspaceId?: string) {
   });
 }
 
+/** Every regular chat that belongs to the registered workspace navigation surface. */
+export function useAllRegularChats(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatsIn(undefined),
+    queryFn: () => chatsApi.list(),
+    enabled,
+  });
+}
+
+export function useBots(includeArchived = false) {
+  return useQuery({
+    queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
+    queryFn: () => botsApi.list(includeArchived),
+  });
+}
+
+export function useBot(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.bot(botId),
+    queryFn: () => botsApi.get(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotChats(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botChats(botId),
+    queryFn: () => botsApi.listChats(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+/** Bot capability catalog for the desktop audience; refreshed after saves. */
+export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
+  return useQuery({
+    queryKey: [...queryKeys.botCapabilityCatalog, botId],
+    queryFn: () => botsApi.getCapabilityCatalog(botId),
+    enabled,
+  });
+}
+
+/** Current Bot access policy and its model selection. */
+export function useBotAccess(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botAccess(botId),
+    queryFn: () => botsApi.getBotAccess(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramBinding(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramBinding(botId),
+    queryFn: () => botsApi.getTelegramBinding(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramTargets(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramTargets,
+    queryFn: botsApi.listTelegramTargets,
+    enabled,
+  });
+}
+
 export function useWorkspaces() {
   return useQuery({ queryKey: queryKeys.workspaces, queryFn: workspacesApi.list });
 }
@@ -349,6 +429,16 @@ export function useGitInfo(workspaceId: string | undefined) {
     enabled: Boolean(workspaceId),
     refetchInterval: 5_000,
     staleTime: 1_000,
+  });
+}
+
+export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    refetchInterval: enabled ? 30_000 : false,
+    staleTime: 30_000,
   });
 }
 
@@ -453,11 +543,11 @@ export function useScheduledTaskSettings() {
   return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
 }
 
-/** Reads only device-local credential/cache state; this query never fetches catalog data. */
-export function useArtificialAnalysisStatus() {
+/** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */
+export function useModelInsightsStatus() {
   return useQuery({
-    queryKey: queryKeys.artificialAnalysisStatus,
-    queryFn: artificialAnalysisApi.status,
+    queryKey: queryKeys.modelInsightsStatus,
+    queryFn: modelInsightsApi.status,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
@@ -511,8 +601,26 @@ export function useExaConfig() {
   return useQuery({ queryKey: queryKeys.exa, queryFn: exaApi.get });
 }
 
+/** Renderer-safe Web Search catalog/settings snapshot; main owns all secrets. */
+export function useWebSearch() {
+  return useQuery({ queryKey: queryKeys.webSearch, queryFn: webSearchApi.get });
+}
+
+/** Compatibility name for Settings callers that prefer an explicit suffix. */
+export const useWebSearchSettings = useWebSearch;
+
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+}
+
+export function useAidenRemoteSettings() {
+  return useQuery({
+    queryKey: queryKeys.aidenRemote,
+    queryFn: aidenRemoteApi.get,
+    retry: false,
+    refetchOnWindowFocus: true,
+    refetchInterval: 10_000,
+  });
 }
 
 export function useEngineStatus(enabled = true) {

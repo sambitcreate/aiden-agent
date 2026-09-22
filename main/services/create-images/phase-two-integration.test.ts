@@ -177,7 +177,7 @@ test("large content-addressed images and workflows survive restart and recovery 
   );
 });
 
-test("asset protocol falls back to the validated source when thumbnail generation is unavailable", async (t) => {
+test("asset protocol never falls back to original bytes for unavailable canvas renditions", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-create-images-preview-fallback-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = largeStaticPng(0);
@@ -206,10 +206,9 @@ test("asset protocol falls back to the validated source when thumbnail generatio
     displayName: "fallback-reference.png",
   });
 
-  const response = await service.assetResponse(imported.asset.assetId);
-  assert.equal(response?.status, 200);
-  assert.equal(response?.headers.get("content-type"), "image/png");
-  assert.deepEqual(new Uint8Array(await response!.arrayBuffer()), source);
+  for (const rendition of ["preview", "preview-128", "preview-256", "preview-512"] as const) {
+    assert.equal(await service.assetResponse(imported.asset.assetId, rendition), undefined);
+  }
 
   const originalResponse = await service.assetResponse(imported.asset.assetId, "original");
   assert.equal(originalResponse?.status, 200);

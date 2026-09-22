@@ -60,8 +60,12 @@ test("two no-capability scouts need no model-supplied resource budget", () => {
 
   assert.equal(validate(noCapabilityRhymes), true);
   assert.equal(validate({ ...noCapabilityRhymes, deadlineMs: 60_000 }), false);
-  assert.match(delegated.description, /resource limits, and run IDs are host-owned/u);
-  assert.match(delegated.description, /never send execution, limits, deadline, or budget fields/u);
+  assert.match(delegated.description, /read-only task may request maxTurns/u);
+  assert.match(delegated.description, /Never send execution, deadline, or other budget fields/u);
+  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 128 }] }), true);
+  assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 129 }] }), false);
+  assert.match(delegated.description, /infers only their exact union/u);
+  assert.match(delegated.description, /capability-less siblings workspace-read-only/u);
 });
 
 test("Phase 5E exposes shell only after the complete positive production gate", async () => {

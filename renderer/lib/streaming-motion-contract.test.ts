@@ -52,7 +52,7 @@ test("streaming and persisted messages reserve the same action and timeline shel
 
   const transientShell = between(
     list,
-    "{timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (",
+    "const streamingRowVisible",
     "<AgentActivityTransition",
   );
   assert.match(transientShell, /<AssistantResponse[\s\S]*timeline=\{timeline\}/u);
@@ -77,7 +77,8 @@ test("main and subagent activity share Aiden's orb wrapper", () => {
 test("reasoning keeps its status and disclosure without a brain glyph", () => {
   const reasoning = source("../components/reasoning-block.tsx");
   assert.doesNotMatch(reasoning, /\bBrainCircuit\b/u);
-  assert.match(reasoning, /active \? "Thinking…" : "Thinking"/u);
+  assert.match(reasoning, /active && "agent-thinking-shimmer"/u);
+  assert.doesNotMatch(reasoning, /`\$\{label\}…`/u);
   assert.match(reasoning, /<ChevronRight/u);
   assert.match(reasoning, /aria-expanded=\{expanded\}/u);
 });
@@ -86,7 +87,7 @@ test("local deployments receive a presentation-only reasoning switch", () => {
   const pane = source("../main/chat-pane.tsx");
   const control = source("../components/reasoning-visibility-control.tsx");
   assert.match(pane, /isLocalProviderDeployment\(selectedProvider\)/u);
-  assert.match(pane, /settingsApi\.set\(\{ showLocalModelReasoning: visible \}\)/u);
+  assert.match(pane, /settingsApi\.set\(\{\s*showLocalModelReasoning: visible,?\s*\}\)/u);
   assert.match(pane, /<ReasoningVisibilityControl/u);
   assert.match(control, /role="switch"/u);
   assert.match(control, /This changes presentation only/u);
@@ -101,5 +102,8 @@ test("a persistence error retains the only rendered partial response", () => {
     errorCleanup,
     /if \(!partial \|\| updatedChat\) \{\s*setGenerationTimeline\(null\)/u,
   );
-  assert.match(errorCleanup, /setHasUnpersistedResponse\(Boolean\(partial && !updatedChat\)\)/u);
+  assert.match(
+    errorCleanup,
+    /Boolean\(\(partial \|\| hasUnpersistedArtifact\) && !updatedChat\)/u,
+  );
 });

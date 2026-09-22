@@ -1,0 +1,15 @@
+{
+  "id": "resp_wave1_malformed",
+  "object": "response",
+  "output": [
+    {
+      "type": "message",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "This response has no completed web search call."
+        }
+      ]
+    }
+  ]
+}

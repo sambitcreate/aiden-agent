@@ -14,6 +14,13 @@ await fs.rm("build/main", { recursive: true, force: true });
 await Promise.all([
   build({
     ...common,
+    entryPoints: ["main/services/pi-vcc/worker.ts"],
+    outfile: "build/main/pi-vcc-worker.js",
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: { index: "main/bootstrap.ts" },
     outdir: "build/main",
     entryNames: "[name]",
@@ -34,6 +41,13 @@ await Promise.all([
     ...common,
     entryPoints: ["main/services/subagents/subagent-inference-worker.ts"],
     outfile: "build/main/subagent-inference-worker-runtime.js",
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
+    entryPoints: ["main/services/parakeet-worker.ts"],
+    outfile: "build/main/parakeet-worker.js",
     format: "esm",
     packages: "external",
   }),

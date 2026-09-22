@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  AgentStep,
-  AgentThinkingStep,
-  AgentToolStep,
-  GenerationTimeline,
+import {
+  isToolStep,
+  hasActiveThinkingStep,
+  hasActiveToolStep,
+  type AgentStep,
+  type AgentThinkingStep,
+  type AgentToolStep,
+  type GenerationTimeline,
 } from "../shared/generation-timeline.js";
 import {
   activityIssueCount,
@@ -13,6 +16,7 @@ import {
   activityTrailNeedsAttention,
   formatThinkingDuration,
   isActiveStep,
+  reasoningActivityLabel,
   summarizeActivity,
 } from "./agent-steps.js";
 import {
@@ -40,6 +44,14 @@ function step(
     ...extra,
   };
 }
+
+test("all browser actions have readable activity labels", () => {
+  const expected = [["browser","Loading browser tools","Loaded browser tools"],["browser_status","Checking browser","Checked browser"],["browser_open","Opening browser","Opened browser"],["browser_navigate","Navigating browser","Navigated browser"],["browser_resize","Resizing browser","Resized browser"],["browser_set_appearance","Setting browser appearance","Set browser appearance"],["browser_snapshot","Inspecting browser","Inspected browser"],["browser_click","Clicking in browser","Clicked in browser"],["browser_type","Typing in browser","Typed in browser"],["browser_press","Pressing browser keys","Pressed browser keys"],["browser_scroll","Scrolling browser","Scrolled browser"],["browser_evaluate","Evaluating page","Evaluated page"],["browser_wait_for","Waiting for page","Waited for page"],["browser_recording_start","Starting browser recording","Started browser recording"],["browser_recording_stop","Stopping browser recording","Stopped browser recording"]];
+  for (const [name, active, complete] of expected) {
+    assert.equal(activityLine(step(name, 0, name, "running")).verb, active);
+    assert.equal(activityLine(step(name, 0, name, "completed")).verb, complete);
+  }
+});
 
 function thinking(id: string, order: number, durationMs?: number): AgentThinkingStep {
   return {
@@ -126,6 +138,20 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
       ["text", "After."],
     ],
   );
+});
+
+test("reasoning milestones stay in the dedicated disclosure instead of activity rows", () => {
+  const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
+  const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
+  assert.deepEqual(
+    rows?.map((row) => (row.kind === "text" ? [row.kind, row.content] : [row.kind])),
+    [["text", "Before.After."]],
+  );
+  assert.equal(
+    reasoningActivityLabel(timeline("running", [thinking("think-2", 0)]), true),
+    "Thinking",
+  );
+  assert.equal(reasoningActivityLabel(timeline("completed", [thought]), false), "Thought briefly");
 });
 
 test("assistant presentation fails closed for legacy or invalid offsets", () => {
@@ -298,4 +324,18 @@ test("issues surface for review without reopening a healthy trail", () => {
   ]);
   assert.equal(activityIssueCount(failed), 2);
   assert.equal(activityTrailNeedsAttention(failed), true);
+});
+
+test("active thinking and named tool helpers match live timeline steps", () => {
+  const liveThink = timeline("running", [thinking("think-1", 0)]);
+  const doneThink = timeline("completed", [thinking("think-1", 0, 3_000)]);
+  const rendering = timeline("running", [
+    step("render", 0, "render_artifact", "running"),
+  ]);
+  assert.equal(hasActiveThinkingStep(liveThink), true);
+  assert.equal(hasActiveThinkingStep(doneThink), false);
+  assert.equal(hasActiveThinkingStep(null), false);
+  assert.equal(hasActiveToolStep(rendering, "render_artifact"), true);
+  assert.equal(hasActiveToolStep(rendering, "read_file"), false);
+  assert.equal(isToolStep(rendering.steps[0]!), true);
 });

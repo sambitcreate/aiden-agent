@@ -175,11 +175,11 @@ interface ShellSpawnOptions {
  *
  * Ported from t3code's `trySpawn` (Manager.ts:1830).
  */
-async function trySpawnShell(
+function trySpawnShell(
   candidates: string[],
   spawnPty: typeof spawn,
   options: ShellSpawnOptions,
-): Promise<{ pty: IPty; shell: string; preferredShellSkipped: boolean }> {
+): { pty: IPty; shell: string; preferredShellSkipped: boolean } {
   let lastError: unknown = null;
   for (let index = 0; index < candidates.length; index += 1) {
     const shell = candidates[index];
@@ -212,6 +212,11 @@ async function trySpawnShell(
 }
 
 export class TerminalService {
+  private outputObserver?: (workspaceId: string, data: string) => void;
+
+  setOutputObserver(observer: (workspaceId: string, data: string) => void): void {
+    this.outputObserver = observer;
+  }
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
@@ -259,10 +264,19 @@ export class TerminalService {
     if (ownerInvalidated()) {
       throw new Error("The workspace changed before the terminal could start.");
     }
+    // Finish disk I/O before launching a shell: output and exit can arrive as
+    // soon as spawn returns. Revalidate access after this asynchronous work.
+    const restoredHistory = await this.historyStore?.read(workspaceId);
+    if (ownerInvalidated()) {
+      throw new Error("The workspace changed before the terminal could start.");
+    }
     await revalidateAccess?.();
     if (ownerInvalidated()) {
       throw new Error("The workspace changed before the terminal could start.");
     }
+    // Keep admission, spawn, ownership, and listener registration synchronous.
+    // An await here would allow concurrent creates to pass the same cap check
+    // or leave a live PTY without output/exit listeners during initialization.
     const sessionsForOwner = [...this.sessions.values()].filter(
       (session) =>
         session.ownerWebContentsId === owner.id && session.ownerDocumentId === owner.documentId,
@@ -285,7 +299,7 @@ export class TerminalService {
           .join(", ")}). Set $SHELL to an installed shell, or reinstall macOS.`,
       );
     }
-    const { pty, shell: resolvedShell, preferredShellSkipped } = await trySpawnShell(
+    const { pty, shell: resolvedShell, preferredShellSkipped } = trySpawnShell(
       executableCandidates,
       this.options.spawnPty ?? spawn,
       {
@@ -293,14 +307,6 @@ export class TerminalService {
         env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
       },
     );
-    if (ownerInvalidated()) {
-      this.terminatePty(pty);
-      throw new Error("The workspace changed before the terminal could start.");
-    }
-    // Restore the sanitized prior-session output so the terminal reopens with
-    // its history. The renderer writes this buffer to xterm on hydrate, so no
-    // renderer change is required for the seed.
-    const restoredHistory = await this.historyStore?.read(workspaceId);
     if (ownerInvalidated()) {
       this.terminatePty(pty);
       throw new Error("The workspace changed before the terminal could start.");
@@ -342,6 +348,7 @@ export class TerminalService {
       current.sequence += 1;
       // Persist new output (the store sanitizes and debounces the disk write).
       this.historyStore?.append(workspaceId, data);
+      try { this.outputObserver?.(workspaceId, data); } catch { /* Browser suggestions cannot interrupt terminal output. */ }
       try {
         owner.send("terminal:data", { sessionId: id, sequence: current.sequence, data });
       } catch {

@@ -1,0 +1,7 @@
+{
+  "choices": [{ "message": { "content": "Answer is not emitted." } }],
+  "citations": [
+    "https://example.test/perplexity-citation-one",
+    "https://example.test/perplexity-citation-two"
+  ]
+}

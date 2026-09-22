@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  captureDetachedLifecycleChat,
+  clearInactiveDetachedLifecycleChat,
+  detachedLifecycleChatProjection,
+  detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
   isDetachedLifecycleChatDraining,
   parseChatReadResponse,
   parseChatSettlementNotification,
+  pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
   rememberChatReadReconciliation,
@@ -15,6 +20,7 @@ import {
   waitForDetachedLifecycleSettlement,
 } from "./chat-terminal-sync.js";
 import type { Chat } from "./types.js";
+import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
 
 function chat(id: string, content: string): Chat {
   return {
@@ -37,6 +43,105 @@ function chat(id: string, content: string): Chat {
 function detached(streamId: string, chatId = "chat-a", workspaceId = "workspace-1") {
   return { streamId, chatId, workspaceId };
 }
+
+function subagent(
+  streamId: string,
+  revision = 1,
+  state: SubagentRunSnapshotV1["state"] = "running",
+): SubagentRunSnapshotV1 {
+  return {
+    version: 1,
+    runId: "run-1",
+    groupId: `${streamId}:group-1`,
+    generationId: streamId,
+    childId: "child-1",
+    chatId: "chat-a",
+    workspaceId: "workspace-1",
+    revision,
+    role: "scout",
+    label: "Inspect renderer lifecycle",
+    taskPreview: "Check chat switching.",
+    state,
+    startedAt: 1_000,
+    updatedAt: 1_000 + revision,
+    ...(state === "running" ? {} : { finishedAt: 1_000 + revision }),
+    modelId: "model-1",
+    turns: revision,
+    tools: 0,
+    tokens: 0,
+    warnings: [],
+  };
+}
+
+test("a revisited chat retains and advances its detached answer and subagent projection", async () => {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  let cachedTerminalChat: Chat | undefined;
+  let settleCache!: () => void;
+  const cacheSettlement = new Promise<void>((resolve) => {
+    settleCache = resolve;
+  });
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    (updated) => {
+      cachedTerminalChat = updated;
+      return cacheSettlement;
+    },
+  );
+  const owner = detached("stream-projection");
+  rememberDetachedLifecycleStream(owner, {
+    content: "Partial answer",
+    reasoning: "Initial reasoning",
+    timeline: null,
+    artifacts: [],
+    subagents: [subagent(owner.streamId)],
+  });
+
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.content, "Partial answer");
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.revision, 1);
+  const beforeDelta = Date.now();
+  for (const handler of listeners.get("chat:delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: " continues" });
+  }
+  for (const handler of listeners.get("chat:subagents") ?? []) {
+    handler({ streamId: owner.streamId, snapshot: subagent(owner.streamId, 2, "completed") });
+  }
+  assert.equal(
+    detachedLifecycleChatProjection("chat-a", "workspace-1")?.content,
+    "Partial answer continues",
+  );
+  assert.ok(
+    (detachedLifecycleChatProjection("chat-a", "workspace-1")?.lastTextDeltaAt ?? 0) >= beforeDelta,
+  );
+  assert.equal(
+    detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.state,
+    "completed",
+  );
+
+  for (const handler of listeners.get("chat:done") ?? []) {
+    handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });
+  }
+  assert.equal(cachedTerminalChat?.messages[cachedTerminalChat.messages.length - 1]?.role, "assistant");
+  // The pane must mask Stop/steer using the durable cache while this raw
+  // projection remains retained until terminal reconciliation finishes.
+  assert.notEqual(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
+  settleCache();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
+  assert.equal(isDetachedLifecycleChatDraining("chat-a", "workspace-1"), false);
+  unsubscribe();
+});
+
+test("detached text streaming expires relative to the last prose delta", () => {
+  assert.equal(detachedTextStreamingRemaining(null, 5_000, 2_000), 0);
+  assert.equal(detachedTextStreamingRemaining(4_250, 5_000, 2_000), 1_250);
+  assert.equal(detachedTextStreamingRemaining(2_000, 5_000, 2_000), 0);
+  assert.equal(detachedTextStreamingRemaining(6_000, 5_000, 2_000), 2_000);
+});
 
 test("a late terminal handoff repairs a refetched chat after A to B to A navigation", () => {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -92,7 +197,10 @@ test("terminal cache sync ignores attached, malformed, and replayed payloads", (
   const emitError = (payload: unknown) => {
     for (const handler of listeners.get("chat:error") ?? []) handler(payload);
   };
-  emitError({ streamId: "still-visible", chat: chat("chat-visible", "visible") });
+  emitError({
+    streamId: "still-visible",
+    chat: chat("chat-visible", "visible"),
+  });
   rememberDetachedLifecycleStream(detached("detached"));
   emitError({ streamId: "detached", chat: { id: "incomplete" } });
   emitError({ streamId: "detached", chat: chat("chat-a", "late") });
@@ -197,6 +305,7 @@ test("the 65th detached stream stays draining until its fallback refetch settles
 
   assert.deepEqual(fallbacks, ["overflow-0"]);
   assert.equal(isDetachedLifecycleChatDraining("chat-overflow-0", "workspace-1"), true);
+  assert.equal(detachedLifecycleChatProjection("chat-overflow-0", "workspace-1"), null);
   assert.equal(isDetachedLifecycleChatDraining("chat-overflow-1", "workspace-1"), true);
   settleFallback?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -284,7 +393,10 @@ test("a rejected fallback listener keeps the chat draining until retry succeeds"
 
 test("settlement notifications expose only validated bounded ownership", () => {
   assert.deepEqual(
-    parseChatSettlementNotification({ chatId: "chat-a", workspaceId: "workspace-1" }),
+    parseChatSettlementNotification({
+      chatId: "chat-a",
+      workspaceId: "workspace-1",
+    }),
     { chatId: "chat-a", workspaceId: "workspace-1" },
   );
   for (const payload of [
@@ -344,6 +456,8 @@ test("a provisional stale read survives a missed settlement event until authorit
   const durable = chat("chat-missed-settlement", "durable with subagent references");
   const response = parseChatReadResponse({
     chat: stale,
+    imageArtifactRecoveryPending: false,
+    imageArtifactRecoveryUnavailable: false,
     reconciliation: {
       chatId: stale.id,
       workspaceId: stale.workspaceId,
@@ -392,24 +506,105 @@ test("a provisional stale read survives a missed settlement event until authorit
   unsubscribe();
 });
 
+test("an inactive snapshot repairs a missed terminal without clearing active work", () => {
+  const staleOwner = detached("missed-terminal", "chat-missed-terminal", "workspace-1");
+  const activeOwner = detached("still-running", "chat-still-running", "workspace-1");
+  rememberDetachedLifecycleStream(staleOwner, {
+    content: "Durable response that outlived the route",
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+  });
+  rememberDetachedLifecycleStream(activeOwner);
+
+  assert.deepEqual(pendingDetachedLifecycleChats(), [
+    { chatId: staleOwner.chatId, workspaceId: staleOwner.workspaceId, streamIds: [staleOwner.streamId] },
+    { chatId: activeOwner.chatId, workspaceId: activeOwner.workspaceId, streamIds: [activeOwner.streamId] },
+  ]);
+  const staleTarget = captureDetachedLifecycleChat(staleOwner);
+  const activeTarget = captureDetachedLifecycleChat(activeOwner);
+  assert.ok(staleTarget);
+  assert.ok(activeTarget);
+  const activeChatIds = new Set([activeOwner.chatId]);
+  assert.equal(clearInactiveDetachedLifecycleChat(activeTarget, activeChatIds), false);
+  assert.equal(isDetachedLifecycleChatDraining(activeOwner.chatId, activeOwner.workspaceId), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(staleTarget, activeChatIds), true);
+  assert.equal(detachedLifecycleChatProjection(staleOwner.chatId, staleOwner.workspaceId), null);
+  assert.equal(isDetachedLifecycleChatDraining(staleOwner.chatId, staleOwner.workspaceId), false);
+  assert.equal(clearInactiveDetachedLifecycleChat(activeTarget, new Set()), true);
+});
+
+test("authoritative recovery is stream-exact when newer work starts in the same chat", () => {
+  const owner = detached("fallback-missed", "chat-fallback-missed", "workspace-1");
+  rememberDetachedLifecycleStream(owner);
+  assert.equal(fallbackDetachedLifecycleStream(owner.streamId), true);
+  const captured = captureDetachedLifecycleChat(owner);
+  assert.ok(captured);
+
+  const newerOwner = detached("newer-detached-work", owner.chatId, owner.workspaceId);
+  rememberDetachedLifecycleStream(newerOwner);
+  rememberDetachedLifecycleStream(detached("other-workspace", owner.chatId, "workspace-2"));
+  assert.equal(clearInactiveDetachedLifecycleChat(captured, new Set()), true);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), true);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, "workspace-2"), true);
+
+  const newerTarget = captureDetachedLifecycleChat(newerOwner);
+  const otherTarget = captureDetachedLifecycleChat({ chatId: owner.chatId, workspaceId: "workspace-2" });
+  assert.ok(newerTarget);
+  assert.ok(otherTarget);
+  assert.equal(clearInactiveDetachedLifecycleChat(newerTarget, new Set()), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(otherTarget, new Set()), true);
+});
+
 test("chat read reconciliation metadata is bounded, content-free, and owner-bound", () => {
   const stale = chat("chat-a", "stale transcript remains only inside chat");
-  assert.deepEqual(parseChatReadResponse({ chat: stale, reconciliation: null }), {
-    chat: stale,
-    reconciliation: null,
-  });
+  assert.deepEqual(
+    parseChatReadResponse({
+      chat: stale,
+      imageArtifactRecoveryPending: true,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }),
+    {
+      chat: stale,
+      imageArtifactRecoveryPending: true,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    },
+  );
+  assert.deepEqual(
+    parseChatReadResponse({
+      chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: true,
+      reconciliation: null,
+    }),
+    {
+      chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: true,
+      reconciliation: null,
+    },
+  );
   for (const response of [
     { chat: stale },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: { chatId: "chat-b", workspaceId: "workspace-1" },
     },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: { chatId: "chat-a", workspaceId: "/private/path" },
     },
     {
       chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
       reconciliation: {
         chatId: "chat-a",
         workspaceId: "x".repeat(500),

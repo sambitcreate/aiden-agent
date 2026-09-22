@@ -1,3 +1,4 @@
+import { writeDevLog } from "../dev-log.js";
 import path from "node:path";
 import * as electron from "electron";
 import type {
@@ -443,7 +444,7 @@ export class CreateImagesService {
         // committed. Persisted accounting is rebuildable and GC still consults
         // the authoritative snapshot, so do not misreport a successful save as
         // a CAS failure that the renderer should retry.
-        console.warn("[create-images] Asset reference accounting needs a rebuild.");
+        writeDevLog("warn", "create-images", ["Asset reference accounting needs a rebuild."]);
       }
       return result;
     } catch (error) {
@@ -545,33 +546,9 @@ export class CreateImagesService {
           throw error;
         }
 
-        // A derived thumbnail is an optimization, not the authority for whether
-        // an otherwise-valid reference can be shown. When the isolated thumbnail
-        // worker is temporarily unavailable, stream the already-validated
-        // canonical PNG/JPEG through the same opaque protocol grant instead of
-        // leaving the canvas with a permanent blank preview.
-        const ownerId = "asset-protocol-fallback";
-        let lease: AssetPreviewLeaseDto | undefined;
-        try {
-          lease = await this.assets.acquirePreviewLease(assetId, ownerId, 1_000);
-          const original = await this.assets.readPreview(lease.token, ownerId);
-          preview = {
-            bytes: original.bytes,
-            byteLength: original.bytes.byteLength,
-            mediaType: original.asset.mediaType,
-          };
-        } catch (fallbackError) {
-          if (
-            fallbackError instanceof AssetStoreError &&
-            fallbackError.code === "asset_source_missing"
-          ) {
-            this.noteAssetMissing(assetId);
-            return undefined;
-          }
-          throw fallbackError;
-        } finally {
-          if (lease) await this.assets.releasePreviewLease(lease.token, ownerId).catch(() => false);
-        }
+        // Canvas previews must never decode the canonical image on a cache miss.
+        // The renderer's bounded retry lifecycle handles a temporarily unavailable rendition.
+        return undefined;
       }
     }
     const body = new Uint8Array(preview.bytes.byteLength);
@@ -604,7 +581,7 @@ export class CreateImagesService {
       if (released) return;
       released = true;
       void this.assets.releasePreviewLease(lease.token, leaseOwnerId).catch(() => {
-        console.warn("[create-images] Asset preview lease cleanup needs reconciliation.");
+        writeDevLog("warn", "create-images", ["Asset preview lease cleanup needs reconciliation."]);
       });
     };
     try {

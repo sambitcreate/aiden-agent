@@ -23,6 +23,18 @@ test("the Electron build enters through the profile bootstrap", () => {
   assert.match(buildScript, /splitting: true/u);
 });
 
+test("crash capture is off at bootstrap and only the explicit diagnostics handler can enable it", () => {
+  const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
+  const diagnostics = readFileSync(new URL("./handlers/diagnostics.ts", import.meta.url), "utf8");
+  const fixture = readFileSync(new URL("../tests/e2e/fixtures.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(bootstrap, /crashReporter\.start/u);
+  assert.match(diagnostics, /"diagnostics:mode-enable"[\s\S]*?crashReporter\.start/u);
+  assert.match(diagnostics, /uploadToServer:\s*false/u);
+  assert.match(fixture, /"--disable-gpu"/u);
+  assert.match(fixture, /"--force-prefers-reduced-motion=reduce"/u);
+  assert.match(fixture, /testInfo\.attach\("aiden-dev-log"/u);
+});
+
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {
   const shortcut = readFileSync(
     new URL("./services/shortcut.ts", import.meta.url),
@@ -41,6 +53,25 @@ test("visible main-process branding derives from the configured app name", () =>
   assert.match(main, /title: app\.getName\(\)/u);
   assert.match(main, /label: app\.getName\(\)/u);
   assert.match(main, /app\.dock\?\.setBadge\("DEV"\)/u);
+});
+
+test("optional background services cannot close an already visible desktop window", () => {
+  const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const mainWindow = main.indexOf("await createMainWindow()");
+  const scheduleStart = main.indexOf("await scheduleService.start()", mainWindow);
+  const telegramStart = main.indexOf("await telegramService.start()", scheduleStart);
+  const updaterStart = main.indexOf("appUpdateService.start()", telegramStart);
+
+  assert.ok(mainWindow >= 0 && scheduleStart > mainWindow);
+  assert.ok(telegramStart > scheduleStart && updaterStart > telegramStart);
+  assert.match(
+    main.slice(mainWindow, updaterStart),
+    /try \{[\s\S]*?await scheduleService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
+  assert.match(
+    main.slice(scheduleStart, updaterStart),
+    /try \{[\s\S]*?await telegramService\.start\(\)[\s\S]*?catch \(error\)[\s\S]*?desktop app will remain available for repair/u,
+  );
 });
 
 test("packaged test launches retain their explicit private user-data directory", () => {

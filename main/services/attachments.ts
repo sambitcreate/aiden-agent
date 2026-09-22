@@ -7,11 +7,14 @@ import { constants as fsConstants } from "node:fs";
 import * as path from "path";
 import type { Attachment } from "./types.js";
 import {
+  type CanonicalRasterImageMimeType,
+  isCanonicalRasterImageMimeType,
   MAX_ATTACHMENT_INLINE_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_INLINE_IMAGE_BYTES,
 } from "../../renderer/shared/attachment-contract.js";
 
-export const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB
+export const MAX_IMAGE_BYTES = MAX_INLINE_IMAGE_BYTES;
 export const MAX_TEXT_CHARS = 100_000;
 export const MAX_TEXT_READ_BYTES = MAX_TEXT_CHARS * 4;
 export const MAX_ATTACHMENT_BATCH_BYTES = MAX_ATTACHMENT_INLINE_BYTES;
@@ -22,25 +25,11 @@ export const MAX_ATTACHMENT_INGESTION_REPRESENTATION_BYTES =
   MAX_ATTACHMENTS_PER_MESSAGE * ATTACHMENT_REPRESENTATION_OVERHEAD_BYTES;
 const TEXT_TRUNCATION_SUFFIX = "\n… [truncated]";
 
-export const CANONICAL_RASTER_IMAGE_MIME_TYPES = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/bmp",
-  "image/heic",
-  "image/heif",
-] as const;
-
-export type CanonicalRasterImageMimeType = (typeof CANONICAL_RASTER_IMAGE_MIME_TYPES)[number];
-
-const CANONICAL_RASTER_IMAGE_MIME_TYPE_SET = new Set<string>(CANONICAL_RASTER_IMAGE_MIME_TYPES);
-
-export function isCanonicalRasterImageMimeType(
-  value: unknown,
-): value is CanonicalRasterImageMimeType {
-  return typeof value === "string" && CANONICAL_RASTER_IMAGE_MIME_TYPE_SET.has(value);
-}
+export {
+  CANONICAL_RASTER_IMAGE_MIME_TYPES,
+  isCanonicalRasterImageMimeType,
+} from "../../renderer/shared/attachment-contract.js";
+export type { CanonicalRasterImageMimeType } from "../../renderer/shared/attachment-contract.js";
 
 function ascii(bytes: Uint8Array, offset: number, length: number): string {
   if (offset < 0 || length < 0 || offset + length > bytes.byteLength) return "";
@@ -373,7 +362,12 @@ async function capturePickedPathIdentity(
       if (directory && !stat.isDirectory()) {
         throw new Error("The selected file path contains a non-directory ancestor.");
       }
-      lexicalEntries.push({ path: lexical, dev: stat.dev, ino: stat.ino, directory });
+      lexicalEntries.push({
+        path: lexical,
+        dev: stat.dev,
+        ino: stat.ino,
+        directory,
+      });
       if (!directory) {
         selected = {
           dev: stat.dev,

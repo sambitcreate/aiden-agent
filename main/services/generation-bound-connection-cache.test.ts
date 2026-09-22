@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   closeAgainAfterSettled,
   GenerationBoundConnectionAttempts,
@@ -221,4 +225,128 @@ test("post-settlement teardown runs after either resolve or reject", async () =>
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(closes, 1);
   }
+});
+
+test("transport closure evicts the client and expires its lease without revoking configuration", async () => {
+  type Client = { id: number; onclose?: () => void; isCurrent?: () => boolean };
+  const cache = new GenerationBoundConnectionCache<Client>();
+  let created = 0;
+  let closes = 0;
+  const generation = cache.generation("server");
+  const acquire = () => cache.getOrConnect(
+    "server",
+    () => ({ id: ++created }),
+    async (client, isCurrent, onClosed) => {
+      client.onclose = onClosed;
+      client.isCurrent = isCurrent;
+    },
+    async (client) => {
+      closes += 1;
+      client.onclose?.();
+    },
+    generation,
+  );
+
+  const first = await acquire();
+  assert.equal(await acquire(), first);
+  assert.equal(first.isCurrent?.(), true);
+  assert.equal(typeof first.onclose, "function");
+  first.onclose?.();
+  assert.equal(first.isCurrent?.(), false);
+  assert.deepEqual(cache.ids(), []);
+  assert.equal(closes, 0, "an SDK close callback must not recursively close the client");
+  assert.equal(cache.generation("server"), generation);
+
+  const [second, concurrent] = await Promise.all([acquire(), acquire()]);
+  assert.equal(second.id, 2);
+  assert.equal(concurrent, second, "recovery deduplicates concurrent discovery");
+  first.onclose?.();
+  assert.equal(await acquire(), second, "a late old callback cannot evict its replacement");
+  assert.equal(second.isCurrent?.(), true);
+  await cache.disconnect("server");
+  assert.equal(second.isCurrent?.(), false);
+  assert.equal(closes, 1);
+  await assert.rejects(acquire(), /superseded/u);
+});
+
+test("closure during connect cannot publish a dead client or remove a pending replacement", async () => {
+  type Client = { id: number; onclose?: () => void };
+  const cache = new GenerationBoundConnectionCache<Client>();
+  let created = 0;
+  const clients: Client[] = [];
+  const releases: Array<() => void> = [];
+  const acquire = () => cache.getOrConnect(
+    "server",
+    () => ({ id: ++created }),
+    async (client, _isCurrent, onClosed) => {
+      client.onclose = onClosed;
+      clients.push(client);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    },
+    async (client) => { client.onclose?.(); },
+  );
+
+  const first = acquire();
+  const rejected = assert.rejects(first, /superseded/u);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(typeof clients[0].onclose, "function");
+  clients[0].onclose?.();
+  const second = acquire();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(clients.length, 2);
+  clients[0].onclose?.();
+  releases[0]();
+  await rejected;
+  releases[1]();
+  const replacement = await second;
+  assert.equal(replacement.id, 2);
+  assert.equal(await acquire(), replacement);
+  await cache.disconnect("server");
+});
+
+test("an immediate close at the end of connect is rejected instead of cached", async () => {
+  const cache = new GenerationBoundConnectionCache<object>();
+  let closes = 0;
+  await assert.rejects(cache.getOrConnect(
+    "server",
+    () => ({}),
+    async (_client, _isCurrent, onClosed) => { onClosed(); },
+    async () => { closes += 1; },
+  ), /superseded/u);
+  assert.deepEqual(cache.ids(), []);
+  assert.equal(closes, 1, "failed setup retains its best-effort cleanup");
+});
+
+test("real SDK server closure allows the next discovery to establish a fresh session", async (t) => {
+  const cache = new GenerationBoundConnectionCache<Client>();
+  const servers: Server[] = [];
+  t.after(async () => {
+    await cache.disconnect("server");
+    await Promise.all(servers.map((server) => server.close()));
+  });
+  const acquire = () => cache.getOrConnect(
+    "server",
+    () => new Client({ name: "cache-regression", version: "1" }),
+    async (client, _isCurrent, onClosed) => {
+      client.onclose = onClosed;
+      const server = new Server({ name: "fixture", version: "1" }, { capabilities: { tools: {} } });
+      const session = servers.push(server);
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
+        { name: `session_${session}`, inputSchema: { type: "object" } },
+      ] }));
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+    },
+    async (client) => client.close(),
+  );
+
+  const first = await acquire();
+  assert.equal((await first.listTools()).tools[0].name, "session_1");
+  await servers[0].close();
+  await assert.rejects(first.listTools(), /not connected/i);
+  const second = await acquire();
+  assert.notEqual(second, first);
+  assert.equal((await second.listTools()).tools[0].name, "session_2");
+  assert.equal(servers.length, 2);
 });

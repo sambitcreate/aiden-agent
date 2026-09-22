@@ -21,6 +21,7 @@ const ALLOWED_CHAT_START_KEYS = new Set([
   "providerId",
   "thinkingLevel",
   "workspaceId",
+  "visualize",
 ]);
 
 function boundedString(
@@ -101,6 +102,9 @@ export function parseParams(value: unknown): ChatStartParams {
   const thinkingLevel = isGenerationThinkingLevel(p.thinkingLevel)
     ? p.thinkingLevel
     : undefined;
+  if (p.visualize !== undefined && p.visualize !== true) {
+    throw new Error("Invalid generation fields.");
+  }
 
   return {
     chatId,
@@ -109,6 +113,7 @@ export function parseParams(value: unknown): ChatStartParams {
     model,
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(p.mode === "assistant" ? { mode: "assistant" as const } : {}),
+    ...(p.visualize === true ? { visualize: true as const } : {}),
     messages: [],
   };
 }

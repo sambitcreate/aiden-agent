@@ -111,7 +111,7 @@ function codexAccessToken(accountId: string): string {
 
 function terminalStream(
   model: Model<Api>,
-  stopReason: AssistantMessage["stopReason"],
+  stopReason: Exclude<AssistantMessage["stopReason"], "pending">,
   errorMessage?: string,
 ) {
   const stream = createAssistantMessageEventStream();
@@ -685,7 +685,7 @@ test("logout invalidates an auth preflight before the old token can dispatch", a
   assert.equal(dispatches, 0);
 });
 
-test("account switch during async request setup dispatches only the replacement token", async () => {
+test("account switch escapes a stalled header hook and dispatches only the replacement token", { timeout: 2_000 }, async () => {
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai-codex", async () => oauthCredential("old-access"));
   const builtin = builtinModels({ credentials });
@@ -725,14 +725,15 @@ test("account switch during async request setup dispatches only the replacement 
     .result();
   await firstTransformStarted.promise;
   await service.commitCredential(oauthCredential("replacement-access"));
-  releaseFirstTransform.resolve();
 
   assert.equal((await result).stopReason, "stop");
+  releaseFirstTransform.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(dispatchedKeys, ["replacement-access"]);
   assert.equal(transformCalls, 2);
 });
 
-test("account switch during Pi lazy setup cannot construct a stale WebSocket handshake", async (t) => {
+test("account switch escapes a stalled payload hook without a stale handshake", { timeout: 2_000 }, async (t) => {
   const credentials = new InMemoryCredentialStore();
   const oldAccess = codexAccessToken("old-account");
   await credentials.modify("openai-codex", async () => oauthCredential(oldAccess));
@@ -777,9 +778,10 @@ test("account switch during Pi lazy setup cannot construct a stale WebSocket han
     .result();
   await payloadStarted.promise;
   await service.commitCredential(oauthCredential(codexAccessToken("replacement-account")));
-  releasePayload.resolve();
 
   assert.equal((await result).stopReason, "aborted");
+  releasePayload.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(websocketConstructorReads, 0);
   assert.equal(fetchCalls, 0);
 });
@@ -953,7 +955,7 @@ test("observes WebSocket auth rejection and recovery without an HTTP response ca
   await credentials.modify("openai-codex", async () => oauthCredential("locally-valid"));
   const builtin = builtinModels({ credentials });
   const results: Array<{
-    stopReason: AssistantMessage["stopReason"];
+    stopReason: Exclude<AssistantMessage["stopReason"], "pending">;
     errorMessage?: string;
   }> = [
     {
@@ -1361,3 +1363,37 @@ test("a completed older auth failure remains visible while a newer check is pend
   assert.equal((await newerAttempt).id, "gpt-5.4");
   assert.equal((await service.snapshot()).needsAttention, false);
 });
+
+for (const hook of ["transformHeaders", "onPayload", "onResponse"] as const) {
+  test(`cancelling a stalled Codex ${hook} hook settles before its late rejection`, { timeout: 2_000 }, async (t) => {
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("openai-codex", async () => oauthCredential(codexAccessToken("account")));
+    const service = new CodexProviderService(builtinModels({ credentials }), credentials);
+    const model = service.getModel("gpt-5.4");
+    assert.ok(model);
+    const started = deferred<void>();
+    const blocked = deferred<never>();
+    const controller = new AbortController();
+    let fetchCalls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      fetchCalls += 1;
+      return new Response("", { status: 200 });
+    });
+    const result = service.streamSimple(model, { messages: [] }, {
+      signal: controller.signal,
+      [hook]: () => {
+        started.resolve();
+        return blocked.promise;
+      },
+    }).result();
+    await started.promise;
+    controller.abort(new Error("user cancelled"));
+    const terminal = await result;
+    assert.equal(terminal.stopReason, hook === "transformHeaders" ? "error" : "aborted");
+    assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
+    blocked.reject(new Error("late hook rejection"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
+    assert.equal((await service.snapshot()).needsAttention, false);
+  });
+}

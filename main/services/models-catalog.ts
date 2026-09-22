@@ -1,17 +1,16 @@
-// Capability metadata comes from the packaged models.dev snapshot plus the
-// user's device-local Artificial Analysis cache. Reading model info never
-// performs a network request; only explicit connect/refresh actions update it.
+// Capability metadata comes from the packaged models.dev snapshot. Optional
+// benchmark evidence comes from the dedicated device-local OpenRouter cache.
+// Reading model info never performs a network request.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, logger } from "../platform.js";
-import {
-  EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
-  type ArtificialAnalysisCatalog,
-} from "./artificial-analysis-catalog-core.js";
-import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
+import { EMPTY_ARTIFICIAL_ANALYSIS_CATALOG } from "./artificial-analysis-catalog-core.js";
+import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
+import { modelsDevCacheRuntime } from "./models-dev-cache.js";
 import {
   createModelCatalogLoader,
+  lookupCatalogModelInfo,
   resolveModelInfo,
   resolveProviderRuntimeLimits,
   type ModelCatalogProvider,
@@ -38,16 +37,27 @@ const getModelsDev = createModelCatalogLoader(
   },
 );
 
-async function loadArtificialAnalysis(): Promise<ArtificialAnalysisCatalog> {
+async function getDisplayModelsDev() {
+  const bundled = await getModelsDev();
   try {
-    const local = await artificialAnalysisRuntime.catalog();
-    if (local) return local;
+    return await modelsDevCacheRuntime.catalog(bundled);
   } catch (error) {
-    logger.warn("models-catalog", "Could not read the device-local Artificial Analysis cache.", {
+    logger.warn("models-catalog", "Could not read the device-local models.dev cache.", {
       error: error instanceof Error ? error.message : String(error),
     });
+    return bundled;
   }
-  return EMPTY_ARTIFICIAL_ANALYSIS_CATALOG;
+}
+
+async function loadOpenRouterBenchmarks() {
+  try {
+    return await openRouterBenchmarkRuntime.catalog();
+  } catch (error) {
+    logger.warn("models-catalog", "Could not read the device-local OpenRouter benchmark cache.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 export const modelsCatalog = {
@@ -60,13 +70,24 @@ export const modelsCatalog = {
     return resolveProviderRuntimeLimits(await getModelsDev(), provider, modelId, exact);
   },
 
+  /** Bundled-only capability lookup for request admission; never reads user credentials/caches. */
+  async bundledInfo(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
+    return lookupCatalogModelInfo(await getModelsDev(), provider.id, modelId);
+  },
+
   /** Capability info for one model. */
   async info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
-    const [modelsDev, artificialAnalysis] = await Promise.all([
-      getModelsDev(),
-      loadArtificialAnalysis(),
+    const [modelsDev, openRouterBenchmarks] = await Promise.all([
+      getDisplayModelsDev(),
+      loadOpenRouterBenchmarks(),
     ]);
-    return resolveModelInfo(modelsDev, artificialAnalysis, provider, modelId);
+    return resolveModelInfo(
+      modelsDev,
+      EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
+      provider,
+      modelId,
+      openRouterBenchmarks,
+    );
   },
 
   /** Capability info for many models under one provider. */
@@ -74,12 +95,21 @@ export const modelsCatalog = {
     provider: ModelCatalogProvider,
     modelIds: string[],
   ): Promise<Record<string, ModelInfo>> {
-    const [modelsDev, artificialAnalysis] = await Promise.all([
-      getModelsDev(),
-      loadArtificialAnalysis(),
+    const [modelsDev, openRouterBenchmarks] = await Promise.all([
+      getDisplayModelsDev(),
+      loadOpenRouterBenchmarks(),
     ]);
     return Object.fromEntries(
-      modelIds.map((id) => [id, resolveModelInfo(modelsDev, artificialAnalysis, provider, id)]),
+      modelIds.map((id) => [
+        id,
+        resolveModelInfo(
+          modelsDev,
+          EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
+          provider,
+          id,
+          openRouterBenchmarks,
+        ),
+      ]),
     );
   },
 };

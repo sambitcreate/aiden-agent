@@ -31,8 +31,6 @@ function logGemini(
   message: string,
   metadata: Readonly<Record<string, unknown>>,
 ): void {
-  const method = level === "info" ? console.info : console.warn;
-  method(`[create-images] ${message}`, metadata);
   writeDevLog(level, "create-images", [message, metadata]);
 }
 

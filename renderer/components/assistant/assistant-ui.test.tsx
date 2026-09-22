@@ -1,259 +1,327 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { createRef } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { AssistantAutomationApproval } from "./assistant-automation-approval.js";
-import { AssistantPanel } from "./assistant-panel.js";
-import { AssistantThread } from "./assistant-thread.js";
-import type { AssistantChat } from "./use-assistant-chat.js";
+import { LiveAudioDeviceFields } from "../settings/live-audio-settings.js";
 
-const idleAssistantChat: AssistantChat = {
-  messages: [],
-  streaming: false,
-  streamComplete: false,
+test("Live settings expose labeled input and output selectors with system defaults", () => {
+  const html = renderToStaticMarkup(<LiveAudioDeviceFields value={{ input: "default", output: "default" }} devices={[]} onChange={() => undefined} />);
+  assert.match(html, /Live input device/);
+  assert.match(html, /Live output device/);
+  assert.match(html, /System default/);
+  assert.match(html, /replies and start\/stop sounds/);
+});
+
+test("Live audio player ownership survives asynchronous capability refresh", () => {
+  const source = readFileSync(new URL("./use-assistant-live.ts", import.meta.url), "utf8");
+  assert.match(source, /\[audioDependencies\] = React\.useState\(\(\) => defaultDependencies\(false\)\)/);
+  assert.match(source, /\.\.\.audioDependencies,\s+geminiLive,/);
+});
+import { renderToStaticMarkup } from "react-dom/server";
+import { AssistantDockPresentation, liveDockClickAction } from "./assistant-dock.js";
+import { aidenLiveOrbVisual, AidenLiveOrb } from "./aiden-live-orb.js";
+import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
+import {
+  assistantLiveVoiceApprovalDecision,
+  assistantLiveVoiceApprovalForReceipt,
+  assistantLiveVoiceApprovalFromReceipts,
+} from "./use-assistant-live-approvals.js";
+import type { AssistantLiveController } from "./use-assistant-live.js";
+
+const idleLive: AssistantLiveController = {
+  visible: true,
+  available: true,
+  availabilityDetail: "Approved model: gemini-live-reviewed",
+  active: false,
+  setupOpen: false,
+  busy: false,
+  microphone: true,
+  microphoneActive: false,
+  microphoneLevel: 0,
+  microphonePermission: "granted",
+  microphonePermissionReady: true,
+  microphonePermissionDetail: "Microphone permission is allowed.",
+  model: "gemini-live-reviewed",
+  state: "idle",
+  captions: [],
+  voiceApprovalReceipts: [],
+  latestVoiceApprovalReceiptId: () => 0,
+  retainVoiceApprovalReceiptsAfter: () => undefined,
   error: null,
-  ready: true,
-  readiness: "ready",
-  canChangeThread: true,
-  threads: [],
-  activeChatId: null,
-  lastNotice: null,
-  approvals: [],
-  decidingApprovalId: null,
-  send: () => undefined,
-  stop: () => undefined,
-  finishStreamHandoff: () => undefined,
-  decideApproval: async () => undefined,
-  openThread: () => undefined,
-  newThread: () => undefined,
+  reconnectRequired: false,
+  startBlockedReason: null,
+  computerUseEnabled: true,
+  computerUseActing: false,
+  computerUseReady: true,
+  computerUseBusy: false,
+  computerUseDetail: "Ready",
+  computerUsePermissions: { accessibility: true, screenRecording: true },
+  computerUseError: null,
+  screenShareAvailable: false,
+  screenSourceLabel: null,
+  screenActive: false,
+  screenBusy: false,
+  screenError: null,
+  setupComplete: true,
+  setSetupOpen: () => undefined,
+  setMicrophone: () => undefined,
+  setComputerUse: async () => undefined,
+  requestMicrophonePermission: async () => true,
+  prepareComputerUse: async () => undefined,
+  chooseScreenSource: async () => undefined,
+  releaseScreen: () => undefined,
+  start: async () => undefined,
+  stop: async () => undefined,
+  cancelSetup: async () => undefined,
 };
 
-test("Aiden replies use the main chat Markdown renderer", () => {
-  const html = renderToStaticMarkup(
-    <AssistantThread
-      messages={[
-        { role: "user", content: "Show me a list" },
-        { role: "assistant", content: "**Key directories**\n\n- `src`\n- `tests`" },
-      ]}
-      streaming={false}
-      streamComplete={false}
-      onStreamHandoffComplete={() => undefined}
-      error={null}
-    />,
-  );
-  assert.match(html, /<strong>Key directories<\/strong>/u);
-  assert.match(html, /<ul>/u);
-  assert.match(html, /<code[^>]*>src<\/code>/u);
-  assert.doesNotMatch(html, /\*\*Key directories\*\*/u);
+test("duplex visuals remain stable through voice and action changes", () => {
+  for (const state of ["listening", "thinking", "speaking", "acting"] as const) {
+    assert.equal(aidenLiveOrbVisual(state), "duplex");
+    const markup = renderToStaticMarkup(<AidenLiveOrb state={state} level={NaN} />);
+    assert.match(markup, /data-visual="duplex"/);
+    assert.doesNotMatch(markup, /NaN/);
+  }
+  assert.equal(aidenLiveOrbVisual("error"), "rest");
+  assert.equal(aidenLiveOrbVisual("connecting"), "connecting");
+  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
+  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
 });
 
-test("Aiden composer reuses chat controls and grows for wrapped multiline drafts", () => {
-  const html = renderToStaticMarkup(
-    <AssistantPanel
-      chat={idleAssistantChat}
-      draft={"First line\nSecond line\nThird line\nA-very-long-unbroken-value-that-must-wrap"}
-      inputRef={createRef<HTMLTextAreaElement>()}
-      onDraftChange={() => undefined}
-      onMinimize={() => undefined}
-    />,
-  );
-  assert.match(html, /field-sizing-content/u);
-  assert.match(html, /min-h-7/u);
-  assert.match(html, /max-h-32/u);
-  assert.match(html, /overflow-x-hidden/u);
-  assert.match(html, /overflow-y-auto/u);
-  assert.match(html, /whitespace-pre-wrap/u);
-  assert.match(html, /break-words/u);
-  assert.match(html, /wrap="soft"/u);
-  assert.match(html, /aria-label="Send message"/u);
-  assert.match(html, /First line\nSecond line\nThird line/u);
+test("dock requires reveal then stop, including mic-off and first-session startup", () => {
+  const active = { ...idleLive, active: true, state: "open" as const };
+  assert.equal(liveDockClickAction(active, true, false), "reveal-stop");
+  assert.equal(liveDockClickAction(active, true, true), "stop");
+  assert.equal(liveDockClickAction(active, false, false), "reveal-stop");
+  assert.equal(liveDockClickAction({ ...active, state: "closing", busy: true }, true, true), "none");
+  assert.equal(liveDockClickAction({ ...idleLive, busy: true }, true, false), "none");
+  assert.equal(liveDockClickAction(idleLive, true, false), "start");
+  assert.equal(liveDockClickAction(idleLive, false, false), "setup");
+  assert.equal(liveDockClickAction({ ...idleLive, setupComplete: false }, true, false), "settings");
 });
 
-test("automation confirmation shows the approved scope with check and cross actions", () => {
-  const html = renderToStaticMarkup(
-    <AssistantAutomationApproval
-      prompt={{
-        approvalId: "approval-1",
-        toolCallId: "tool-1",
-        toolName: "schedule_task",
-        summary: "Create Morning brief",
-        details: {
-          kind: "assistant-automation",
-          action: "create",
-          name: "Morning brief",
-          prompt: "Summarize <private> updates.",
-          cron: "0 9 * * *",
-          timezone: "UTC",
-          nextRunAt: 1_800_000_000_000,
-          notify: true,
-          mode: "llm",
-          permission: "read-only",
-          workspaceId: null,
-          workspaceName: null,
-          mcpServerIds: [],
-          mcpServerNames: [],
-          providerId: "local-provider",
-          providerName: "Local Provider",
-          model: "local-model",
-          modelName: "Local Model",
-          schedulerEnabled: false,
-        },
-      }}
-      deciding={false}
-      onDecision={() => undefined}
-    />,
+test("Aiden Live orb state prioritizes errors, approvals, and connection work", () => {
+  assert.equal(assistantLiveOrbState(idleLive), "ready");
+  assert.equal(
+    assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
+    "listening",
   );
-  assert.match(html, /aria-label="Decline automation"/u);
-  assert.match(html, /aria-label="Confirm automation"/u);
-  assert.match(html, /Every day at 9:00 AM/u);
-  assert.match(html, />Read-only</u);
-  assert.match(html, /saved but will not run/u);
+  assert.equal(
+    assistantLiveOrbState({ ...idleLive, active: true, state: "connecting", busy: true }),
+    "connecting",
+  );
+  assert.equal(assistantLiveOrbState({ ...idleLive, active: true }, true), "approval");
+  assert.equal(
+    assistantLiveOrbState({ ...idleLive, active: true, computerUseActing: true }),
+    "acting",
+  );
+  assert.equal(assistantLiveOrbState({ ...idleLive, error: "Disconnected" }), "error");
+  assert.equal(
+    assistantLiveOrbState({ ...idleLive, available: false, setupComplete: false }),
+    "unavailable",
+  );
+});
+
+test("a final user caption moves the active orb to thinking", () => {
+  assert.equal(
+    assistantLiveOrbState({
+      ...idleLive,
+      active: true,
+      state: "open",
+      microphoneActive: true,
+      captions: [{ id: 1, direction: "input", text: "Open settings", final: true, sealed: false }],
+    }),
+    "thinking",
+  );
+});
+
+test("an active output caption moves the orb to speaking", () => {
+  assert.equal(
+    assistantLiveOrbState({
+      ...idleLive,
+      active: true,
+      state: "open",
+      microphoneActive: true,
+      captions: [{ id: 1, direction: "output", text: "Opening Settings", final: false, sealed: false }],
+    }),
+    "speaking",
+  );
+});
+
+test("Live transcript follows only when the viewport remains near the latest turn", () => {
+  assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 776, 200), true);
+  assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 700, 200), false);
+});
+
+test("voice approvals accept only the two explicit finalized command phrases", () => {
+  assert.equal(assistantLiveVoiceApprovalDecision("Allow once."), "allow");
+  assert.equal(assistantLiveVoiceApprovalDecision("  DENY! "), "deny");
+  assert.equal(assistantLiveVoiceApprovalDecision("allow"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("yes, allow once"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("do not deny"), null);
+});
+
+test("voice approval ignores stale and consumed receipts", () => {
+  const receipt = {
+    id: 7,
+    text: "Allow once",
+  };
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, false), "allow");
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 7, false), null);
+  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, true), null);
+});
+
+test("batched voice receipts are examined FIFO and the earliest exact command wins", () => {
+  assert.deepEqual(
+    assistantLiveVoiceApprovalFromReceipts(
+      [
+        { id: 2, text: "Allow once" },
+        { id: 3, text: "Deny" },
+      ],
+      1,
+      new Set(),
+    ),
+    {
+      examinedReceiptIds: [2],
+      match: { receiptId: 2, decision: "allow" },
+    },
+  );
+  assert.deepEqual(
+    assistantLiveVoiceApprovalFromReceipts(
+      [
+        { id: 2, text: "keep going" },
+        { id: 3, text: "Deny" },
+      ],
+      1,
+      new Set(),
+    ),
+    {
+      examinedReceiptIds: [2, 3],
+      match: { receiptId: 3, decision: "deny" },
+    },
+  );
+});
+
+test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
+  const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
+  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
+  assert.match(dock, /AIDEN_LIVE_SETUP_COMPLETE_KEY/u);
   assert.match(
-    html,
-    /Runs with Local Provider \(local-provider\) · Local Model \(local-model\) while Aiden is open/u,
+    dock,
+    /if \(!live\.active \|\| !live\.microphoneActive \|\| setupCompleted\) return/u,
   );
-  assert.match(html, /Summarize &lt;private&gt; updates\./u);
-  assert.doesNotMatch(html, /0 9 \* \* \*/u);
-  assert.doesNotMatch(html, /No project|Notifications on|MCP:/u);
-  assert.doesNotMatch(html, /<private>/u);
+  assert.match(dock, /AssistantLiveSetupDialog/u);
+  assert.match(dock, /AidenLiveOrb/u);
+  assert.match(dock, /AssistantComputerUseApproval/u);
+  assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
+  assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
+  assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
+  assert.doesNotMatch(dock, /onDecision=/u);
+  assert.doesNotMatch(dock, /useAssistantChat/u);
+  assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
 
-test("Full automation confirmation names the project and write scope", () => {
-  const html = renderToStaticMarkup(
-    <AssistantAutomationApproval
-      prompt={{
-        approvalId: "approval-full",
-        toolCallId: "tool-full",
-        toolName: "schedule_task",
-        summary: "Update report",
-        details: {
-          kind: "assistant-automation",
-          action: "create",
-          name: "Update report",
-          prompt: "Update the project report.",
-          cron: "0 9 * * *",
-          timezone: "UTC",
-          nextRunAt: 1_800_000_000_000,
-          notify: true,
-          mode: "llm",
-          permission: "full",
-          workspaceId: "workspace-1",
-          workspaceName: "Website",
-          mcpServerIds: [],
-          mcpServerNames: [],
-          providerId: "local-provider",
-          providerName: "Local Provider",
-          model: "local-model",
-          modelName: "Local Model",
-          schedulerEnabled: true,
-        },
+test("a disabled Live capability renders no dock or setup affordance", () => {
+  let commandEnabled = true;
+  const markup = renderToStaticMarkup(
+    <AssistantDockPresentation
+      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+      live={{ ...idleLive, visible: false }}
+      useCommand={(_commandId, _handler, enabled = true) => {
+        commandEnabled = enabled;
       }}
-      deciding={false}
-      onDecision={() => undefined}
     />,
   );
-  assert.match(html, /Full access · Website/u);
-  assert.match(html, /Can edit files and run commands in Website/u);
-  assert.doesNotMatch(html, /Notifications on/u);
+  assert.equal(markup, "");
+  assert.equal(commandEnabled, false);
 });
 
-test("MCP automation confirmation names the exact unattended connector scope", () => {
-  const html = renderToStaticMarkup(
-    <AssistantAutomationApproval
-      prompt={{
-        approvalId: "approval-mcp",
-        toolCallId: "tool-mcp",
-        toolName: "schedule_task",
-        summary: "Create Morning email brief",
-        details: {
-          kind: "assistant-automation",
-          action: "create",
-          name: "Morning email brief",
-          prompt: "Summarize new email.",
-          cron: "0 9 * * *",
-          timezone: "UTC",
-          nextRunAt: 1_800_000_000_000,
-          notify: true,
-          mode: "llm",
-          permission: "full",
-          workspaceId: null,
-          workspaceName: null,
-          mcpServerIds: ["personal-gmail", "work-gmail"],
-          mcpServerNames: ["Gmail", "Gmail"],
-          providerId: "local-provider",
-          providerName: "Local Provider",
-          model: "local-model",
-          modelName: "Local Model",
-          schedulerEnabled: true,
-        },
-      }}
-      deciding={false}
-      onDecision={() => undefined}
+test("a disconnected Live error stays visible and microphone status is screen-reader-only", () => {
+  const render = (live: AssistantLiveController) => renderToStaticMarkup(
+    <AssistantDockPresentation
+      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+      live={live}
+      useCommand={() => undefined}
     />,
   );
-  assert.match(html, /aria-label="Decline Full access automation"/u);
-  assert.match(html, /aria-label="Confirm Full access automation"/u);
-  assert.match(html, />Full access · MCP: Gmail \(personal-gmail\), Gmail \(work-gmail\)</u);
-  assert.match(html, /Can call Gmail \(personal-gmail\), Gmail \(work-gmail\) unattended/u);
+  assert.match(render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }), /The Live provider sent an invalid event\./);
+  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /Listening · mic on/);
+  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /class="sr-only"/);
 });
 
-test("automation edits use a save confirmation and describe paused state truthfully", () => {
-  const html = renderToStaticMarkup(
-    <AssistantAutomationApproval
-      prompt={{
-        approvalId: "approval-edit",
-        toolCallId: "tool-edit",
-        toolName: "edit_automation",
-        summary: "Edit Morning email brief",
-        details: {
-          kind: "assistant-automation",
-          action: "edit",
-          taskId: "task-1",
-          enabled: false,
-          name: "Morning email brief",
-          prompt: "Summarize new email.",
-          cron: "0 9 * * *",
-          timezone: "America/New_York",
-          nextRunAt: 1_800_000_000_000,
-          notify: true,
-          mode: "llm",
-          permission: "full",
-          workspaceId: null,
-          workspaceName: null,
-          mcpServerIds: ["gmail"],
-          mcpServerNames: ["Gmail"],
-          providerId: "local-provider",
-          providerName: "Local Provider",
-          model: "local-model",
-          modelName: "Local Model",
-          schedulerEnabled: true,
-        },
-      }}
-      deciding={false}
-      onDecision={() => undefined}
-    />,
+test("legacy voice approval presentation remains isolated from the direct-action dock", () => {
+  const approval = readFileSync(
+    new URL("./assistant-computer-use-approval.tsx", import.meta.url),
+    "utf8",
   );
-  assert.match(html, /Save these changes\?/u);
-  assert.match(html, /aria-label="Decline Full access automation changes"/u);
-  assert.match(html, /aria-label="Confirm Full access automation changes"/u);
-  assert.match(html, /Remains paused/u);
-  assert.doesNotMatch(html, /Create this automation|Next run:/u);
+  const hook = readFileSync(new URL("./use-assistant-live-approvals.ts", import.meta.url), "utf8");
+  assert.match(approval, /Say “Allow once” or “Deny\.”/u);
+  assert.match(approval, /\{prompt\.summary\}/u);
+  assert.doesNotMatch(approval, /<Button|onClick/u);
+  assert.match(hook, /receipt\.id <= baselineReceiptId/u);
+  assert.match(hook, /latestVoiceApprovalReceiptId\(\)/u);
+  assert.match(hook, /consumedReceiptIds/u);
 });
 
-test("automation confirmation fails closed when normalized details are missing", () => {
-  const html = renderToStaticMarkup(
-    <AssistantAutomationApproval
-      prompt={{
-        approvalId: "approval-invalid",
-        toolCallId: "tool-invalid",
-        toolName: "schedule_task",
-        summary: "Create something else",
-      }}
-      deciding={false}
-      onDecision={() => undefined}
-    />,
+test("setup discloses macOS access and direct actions until Stop", () => {
+  const live = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  assert.match(live, /Google Live model/u);
+  assert.match(live, /Screen and Accessibility/u);
+  assert.match(live, /Scheduled tasks/u);
+  assert.match(live, /without per-action prompts until you stop/u);
+  assert.match(live, /role="log"/u);
+  assert.match(live, /aria-live="polite"/u);
+});
+
+test("screen sharing is opt-in, source-labelled, and visibly active in the HUD", () => {
+  const live = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  assert.match(live, /live\.screenShareAvailable/u);
+  assert.match(live, /title="Screen share"/u);
+  assert.match(live, /live\.chooseScreenSource/u);
+  assert.match(live, /live\.releaseScreen/u);
+  assert.match(live, /busy=\{live\.screenBusy \|\| live\.busy\}/u);
+  assert.match(live, /disabled=\{live\.screenBusy \|\| live\.busy\}/u);
+  assert.match(live, /confirmDisabled=\{!live\.setupComplete \|\| live\.busy \|\| live\.screenBusy/u);
+  assert.match(live, /Sharing \{live\.screenSourceLabel \?\? "screen"\}/u);
+  assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
+});
+
+test("Aiden Live is visibly marked beta in setup and settings", () => {
+  const setup = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
+  const settings = readFileSync(
+    new URL("../settings/gemini-live-settings.tsx", import.meta.url),
+    "utf8",
   );
-  assert.match(html, /invalid and cannot be confirmed/u);
-  assert.match(html, /aria-label="Confirm automation"[^>]*disabled=""/u);
-  assert.doesNotMatch(html, /Create something else/u);
+  assert.match(setup, /<Badge color="blue">Beta<\/Badge>/u);
+  assert.match(settings, /<Badge color="blue">Beta<\/Badge>/u);
+  assert.match(settings, /Availability and\s+supported actions may change during beta\./u);
+});
+
+test("the Live orb maps all user-visible states onto the shared Libraries.dev orb", () => {
+  const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+  const packageJson = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
+  for (const state of [
+    "ready",
+    "connecting",
+    "listening",
+    "thinking",
+    "speaking",
+    "acting",
+    "approval",
+    "error",
+    "unavailable",
+  ]) {
+    assert.match(orb, new RegExp(`\\b${state}\\b`, "u"));
+  }
+  assert.match(orb, /import \{ AidenOrb \} from "\.\.\/aiden-orb"/u);
+  assert.match(orb, /state="listening"/u);
+  assert.match(orb, /state="weaving"/u);
+  assert.doesNotMatch(orb, /Rive|\.riv/u);
+  assert.match(styles, /\.aiden-live-orb-canvas[\s\S]*filter:[\s\S]*hue-rotate\(209deg\)/u);
+  assert.match(
+    styles,
+    /\.aiden-live-trigger\[data-kind="orb"\][\s\S]*background: transparent;[\s\S]*box-shadow: none;/u,
+  );
+  assert.match(packageJson, /"thinking-orbs": "0\.3\.1"/u);
+  assert.doesNotMatch(packageJson, /@rive-app/u);
 });

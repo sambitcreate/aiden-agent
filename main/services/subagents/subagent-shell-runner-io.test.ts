@@ -220,18 +220,48 @@ test("a deliberate setsid double-fork proves the documented containment limit an
     "native",
     "aiden-subagent-shell-setsid-fixture",
   );
-  const result = await run(t, `${fixture} ${marker}`);
-  assert.equal(result.outcome, "exited");
   let pid = 0;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      pid = Number.parseInt(await readFile(marker, "utf8"), 10);
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+  let cleaned = false;
+  const cleanup = async () => {
+    if (cleaned) return;
+    const deadline = Date.now() + 5_000;
+    while (pid <= 1 && Date.now() < deadline) {
+      try {
+        const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+        if (candidate > 1) pid = candidate;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (pid <= 1) await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    if (pid <= 1) return;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    cleaned = true;
+  };
+  t.after(cleanup);
+  try {
+    const result = await run(t, `${fixture} ${marker}`);
+    assert.equal(result.outcome, "exited");
+    const markerDeadline = Date.now() + 20_000;
+    while (Date.now() < markerDeadline) {
+      try {
+        const candidate = Number.parseInt(await readFile(marker, "utf8"), 10);
+        if (candidate > 1) {
+          pid = candidate;
+          break;
+        }
+      } catch {
+        // The intermediate process publishes the marker asynchronously.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(pid > 1, "detached fixture must publish its PID");
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  } finally {
+    await cleanup();
   }
-  assert.ok(pid > 1, "detached fixture must publish its PID");
-  assert.doesNotThrow(() => process.kill(pid, 0));
-  process.kill(pid, "SIGKILL");
 });

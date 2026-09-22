@@ -4,6 +4,40 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
+import { selectedHtmlArtifactMediaIds } from "./chat-copy-artifacts.js";
+import type { ChatMessage } from "./types.js";
+
+test("artifact selection stops at a fork boundary in one pass", () => {
+  const messageCount = 20_000;
+  const messages = Array.from({ length: messageCount }, (_, index): ChatMessage => ({
+    id: `message-${index}`,
+    role: "assistant",
+    content: "",
+    createdAt: index,
+    htmlArtifacts: [{
+      version: 1,
+      kind: "html",
+      id: `artifact-${index}`,
+      title: `Artifact ${index}`,
+      mimeType: "text/html",
+      size: 1,
+      mediaId: `html_${String(index).padStart(43, "0")}`,
+    }],
+  }));
+  Object.defineProperty(messages, "findIndex", {
+    value: () => {
+      throw new Error("artifact selection must not rescan the message list");
+    },
+  });
+
+  const selected = selectedHtmlArtifactMediaIds(messages, `message-${messageCount - 1}`);
+  assert.equal(selected.length, messageCount);
+  assert.equal(selected[selected.length - 1], `html_${String(messageCount - 1).padStart(43, "0")}`);
+  assert.throws(
+    () => selectedHtmlArtifactMediaIds(messages, "missing-boundary"),
+    /completed assistant turn/iu,
+  );
+});
 
 test("clone and fork copy visible linear history with fresh identities", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-"));
@@ -138,6 +172,32 @@ test("bulk copies use collision-resistant identities even when Math.random repea
   } finally {
     Math.random = originalRandom;
   }
+});
+
+test("dependent copy preparation fails before the target chat is installed", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-prepare-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const source = await store.create({ title: "Prepared copy", workspaceId: "workspace-copy" });
+  await store.appendMessage(source.id, { role: "user", content: "Copy me" });
+  const targetChatId = "prepared-target";
+  let preparedChatId: string | undefined;
+
+  await assert.rejects(
+    store.copyVisibleHistory({
+      sourceChatId: source.id,
+      targetChatId,
+      beforeInstall: (copy) => {
+        preparedChatId = copy.id;
+        throw new Error("artifact preparation failed");
+      },
+    }),
+    /artifact preparation failed/iu,
+  );
+
+  assert.equal(preparedChatId, targetChatId);
+  assert.equal(await store.get(targetChatId), null);
+  assert.equal((await store.list()).some((chat) => chat.id === targetChatId), false);
 });
 
 test("copy rejects malformed visible fields and unbounded retained metadata", async (t) => {

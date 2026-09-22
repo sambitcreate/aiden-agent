@@ -1,19 +1,132 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createChatModelProviders,
   createModelEntries,
   decodeSelection,
   encodeSelection,
   findDirectionalModel,
   modelGridSize,
   nearestModel,
+  modelBenchmarkPercentiles,
   orderModelEntries,
   parseModel,
   positionSavedModels,
   positionModels,
+  visibleModelEntries,
+  resolveExplicitModelSelection,
   type ModelEntry,
 } from "./model-picker-data";
 import type { Provider } from "./types";
+import {
+  firstVisibleModelForProvider,
+  hideAllProviderModels,
+  isModelHidden,
+  normalizeHiddenModelsByProvider,
+  remapHiddenModelProvider,
+  withModelVisibility,
+  withoutProviderVisibility,
+} from "../shared/model-visibility";
+import { normalizeProviderArtwork } from "../shared/provider-artwork";
+
+test("provider artwork accepts only bounded normalized PNG payloads", () => {
+  const artwork = normalizeProviderArtwork({
+    mimeType: "image/png",
+    dataBase64:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  });
+  assert.equal(artwork?.mimeType, "image/png");
+  assert.equal(
+    normalizeProviderArtwork({ mimeType: "image/svg+xml", dataBase64: "PHN2Zz4=" }),
+    undefined,
+  );
+  assert.equal(
+    normalizeProviderArtwork({ mimeType: "image/png", dataBase64: "not base64" }),
+    undefined,
+  );
+});
+
+test("new defaults skip hidden preferred models while explicit execution stays separate", () => {
+  assert.equal(
+    firstVisibleModelForProvider(
+      { google: ["gemini-pro"] },
+      "google",
+      ["gemini-pro", "gemini-flash"],
+      ["gemini-pro"],
+    ),
+    "gemini-flash",
+  );
+  assert.equal(
+    firstVisibleModelForProvider({ google: ["gemini-pro", "gemini-flash"] }, "google", [
+      "gemini-pro",
+      "gemini-flash",
+    ]),
+    undefined,
+  );
+});
+
+test("model visibility normalizes invalid, duplicate, and empty entries", () => {
+  assert.deepEqual(
+    normalizeHiddenModelsByProvider({
+      google: ["gemini-pro", "gemini-pro", " gemini-flash", 3],
+      empty: [],
+      "": ["model"],
+    }),
+    { google: { defaultVisibility: "shown", exceptions: ["gemini-pro"] } },
+  );
+  assert.equal(normalizeHiddenModelsByProvider({}), undefined);
+});
+
+test("model visibility toggles one model without dropping other preferences", () => {
+  let hidden = withModelVisibility(undefined, "google", "gemini-pro", true);
+  hidden = withModelVisibility(hidden, "anthropic", "claude-sonnet", true);
+  hidden = withModelVisibility(hidden, "google", "gemini-flash", true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", false);
+
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), false);
+  assert.equal(isModelHidden(hidden, "google", "gemini-flash"), true);
+  assert.equal(isModelHidden(hidden, "anthropic", "claude-sonnet"), true);
+});
+
+test("hide all covers future models while explicit shown exceptions remain reversible", () => {
+  let hidden = hideAllProviderModels(undefined, "google");
+  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", false);
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), false);
+  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", true);
+  assert.deepEqual(hidden, {
+    google: { defaultVisibility: "hidden", exceptions: [] },
+  });
+});
+
+test("provider removal and identity migration keep visibility scoped correctly", () => {
+  const hidden = { old: ["alpha", "beta"], target: ["beta", "gamma"], keep: ["delta"] };
+  assert.deepEqual(remapHiddenModelProvider(hidden, "old", "target"), {
+    keep: { defaultVisibility: "shown", exceptions: ["delta"] },
+    target: { defaultVisibility: "shown", exceptions: ["alpha", "beta", "gamma"] },
+  });
+  assert.deepEqual(withoutProviderVisibility(hidden, "old"), {
+    keep: { defaultVisibility: "shown", exceptions: ["delta"] },
+    target: { defaultVisibility: "shown", exceptions: ["beta", "gamma"] },
+  });
+});
+
+test("picker entries omit hidden models without mutating the full catalog", () => {
+  const entries = createModelEntries([
+    provider({ id: "google", label: "Google", models: ["gemini-pro", "gemini-flash"] }),
+  ]);
+  const visible = visibleModelEntries(entries, { google: ["gemini-pro"] });
+
+  assert.deepEqual(
+    visible.map((entry) => entry.model),
+    ["gemini-flash"],
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.model),
+    ["gemini-pro", "gemini-flash"],
+  );
+});
 
 function provider(overrides: Partial<Provider> & Pick<Provider, "id" | "label">): Provider {
   return {
@@ -49,6 +162,25 @@ test("selection encoding preserves model ids and format parsing isolates quantiz
     format: "Q4_K_M",
   });
   assert.deepEqual(parseModel("gpt-4.1"), { label: "gpt-4.1", format: null });
+});
+
+test("picker entries carry custom provider artwork into the model list and pad", () => {
+  const artwork = normalizeProviderArtwork({
+    mimeType: "image/png",
+    dataBase64:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  });
+  const entries = createModelEntries([
+    provider({
+      id: "custom:connection-abc",
+      label: "Home Lab",
+      artwork,
+      models: ["local-chat"],
+    }),
+  ]);
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0]?.providerArtwork, artwork);
 });
 
 test("entry creation includes every usable model, keeps hosted providers first, and ignores pins", () => {
@@ -151,15 +283,83 @@ test("bundled rankings flow into the pad and stale embedding ids stay out of the
   assert.equal(positionModels(entries)[0].confidence, "benchmark");
 });
 
-test("saved personal placements alone determine membership and exact Pad geometry", () => {
+test("saved personal placements alone determine membership and snap to Pad geometry", () => {
   const entries = [entry("first"), entry("second")];
   const positioned = positionSavedModels(entries, {
-    first: { x: 0.17, y: 0.83, source: "user" },
+    first: { x: 0.17, y: 0.83, xSource: "user", ySource: "user" },
   });
   assert.deepEqual(
     positioned.map(({ value, x, y, confidence }) => ({ value, x, y, confidence })),
-    [{ value: "first", x: 0.17, y: 0.83, confidence: "personal" }],
+    [
+      {
+        value: "first",
+        x: 1 / 6,
+        y: 5 / 6,
+        confidence: "personal",
+      },
+    ],
   );
+});
+
+test("saved geometry uses all visible chat models for sizing while hidden placements reserve no dot", () => {
+  const entries = Array.from({ length: 40 }, (_, index) => entry(`model-${index}`));
+  const positioned = positionSavedModels(entries, {
+    "model-0": { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
+    hidden: { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
+  });
+
+  assert.equal(modelGridSize(entries.length), 17);
+  assert.deepEqual(
+    positioned.map(({ value, x, y }) => ({ value, x, y })),
+    [{ value: "model-0", x: 3 / 16, y: 0.5 }],
+  );
+});
+
+test("colliding OpenRouter suggestions snap to distinct dots without outranking personal geometry", () => {
+  const entries = [entry("a-suggested"), entry("b-suggested"), entry("z-personal")];
+  const positioned = positionSavedModels(entries, {
+    "a-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
+    "b-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
+    "z-personal": { x: 0.5, y: 0.92, xSource: "user", ySource: "user" },
+  });
+  const personal = positioned.find(({ value }) => value === "z-personal")!;
+  const cells = positioned.map(({ x, y }) => `${x}:${y}`);
+
+  assert.deepEqual({ x: personal.x, y: personal.y }, { x: 0.5, y: 1 });
+  assert.equal(new Set(cells).size, positioned.length);
+});
+
+test("OpenRouter benchmark percentiles average ties and axis-aware suggestions disclose neutral pace", () => {
+  const models = [entry("low"), entry("tied-a"), entry("tied-b"), entry("high")];
+  const values = [10, 20, 20, 40];
+  models.forEach((model, index) => {
+    model.info = {
+      id: model.model,
+      matched: true,
+      metadataSource: "models-dev",
+      benchmark: {
+        source: "openrouter",
+        datasetSource: "artificial-analysis",
+        sourceLabel: "Artificial Analysis via OpenRouter",
+        sourceUrl: "https://artificialanalysis.ai",
+        citation: "Source: Artificial Analysis via OpenRouter.",
+        asOf: "2026-06-03T12:00:00.000Z",
+        license: "CC BY 4.0",
+        coding: values[index],
+      },
+    };
+  });
+  assert.deepEqual(Object.fromEntries(modelBenchmarkPercentiles(models, "coding")), {
+    low: 0,
+    "tied-a": 0.5,
+    "tied-b": 0.5,
+    high: 1,
+  });
+  const [suggested] = positionSavedModels(models, {
+    low: { x: 0.5, y: 0.08, xSource: "neutral", ySource: "benchmark" },
+  });
+  assert.equal(suggested.confidence, "suggested");
+  assert.equal(suggested.positionSource, "Benchmark capability · pace unmeasured");
 });
 
 test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {
@@ -172,6 +372,199 @@ test("embedding-like ids stay out when stale discovery metadata is unavailable",
   assert.deepEqual(
     createModelEntries([local]).map((model) => model.model),
     ["chat-model"],
+  );
+});
+
+test("known embedding families stay out without excluding harmless similar chat ids", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: [
+      "intfloat/multilingual-e5-large-instruct",
+      "baai/bge-m3",
+      "thenlper/gte-large",
+      "nvidia--llama-3.2-nv-embedqa-1b",
+      "nvidia/nv-embedcode-7b-v1",
+      "all-mini-lm-l6-v2",
+      "multi-qa-mpnet-base-dot-v1",
+      "hkunlp/instructor-large",
+      "acme/bgeography-e5x-chat",
+    ],
+  });
+  assert.deepEqual(
+    createChatModelProviders([local]).flatMap(({ models }) => models),
+    ["acme/bgeography-e5x-chat"],
+  );
+});
+
+test("rerank-only models stay out while authoritative chat classifications override names", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: [
+      "voyage/rerank-2.5-lite",
+      "qwen3-reranker-4b",
+      "rerank-discussion-chat",
+      "opaque-score-v1",
+      "ordinary-chat",
+    ],
+    modelMetadata: {
+      "rerank-discussion-chat": { source: "provider", type: "llm" },
+      "opaque-score-v1": { source: "provider", type: "reranker" },
+    },
+  });
+  const catalogInfo = {
+    local: {
+      "qwen3-reranker-4b": {
+        id: "qwen3-reranker-4b",
+        modelType: "reranker" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "rerank-discussion-chat": {
+        id: "rerank-discussion-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["rerank-discussion-chat", "ordinary-chat"],
+  );
+});
+
+test("offline catalog types close embedding ids that have no reliable name marker", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: ["all-mini-lm-l6-v2", "multi-qa-mpnet-base-dot-v1", "ordinary-chat"],
+  });
+  const catalogInfo = {
+    local: {
+      "all-mini-lm-l6-v2": {
+        id: "all-mini-lm-l6-v2",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "multi-qa-mpnet-base-dot-v1": {
+        id: "multi-qa-mpnet-base-dot-v1",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["ordinary-chat"],
+  );
+});
+
+test("authoritative LLM types override heuristics while any non-chat type fails closed", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: [
+      "ordinary-embedding-discussion-chat",
+      "acme/gte-chat",
+      "conflicting-catalog",
+      "conflicting-provider",
+      "conflicting-reranker",
+      "conflicting-media",
+    ],
+    modelMetadata: {
+      "ordinary-embedding-discussion-chat": { source: "provider", type: "llm" },
+      "acme/gte-chat": { source: "provider", type: "llm" },
+      "conflicting-catalog": { source: "provider", type: "llm" },
+      "conflicting-provider": { source: "provider", type: "embedding" },
+      "conflicting-reranker": { source: "provider", type: "llm" },
+      "conflicting-media": { source: "provider", type: "llm" },
+    },
+  });
+  const catalogInfo = {
+    local: {
+      "ordinary-embedding-discussion-chat": {
+        id: "ordinary-embedding-discussion-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "acme/gte-chat": {
+        id: "acme/gte-chat",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-catalog": {
+        id: "conflicting-catalog",
+        modelType: "embedding" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-provider": {
+        id: "conflicting-provider",
+        modelType: "llm" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-reranker": {
+        id: "conflicting-reranker",
+        modelType: "reranker" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+      "conflicting-media": {
+        id: "conflicting-media",
+        modelType: "image" as const,
+        metadataSource: "models-dev" as const,
+        matched: true,
+      },
+    },
+  };
+  assert.deepEqual(
+    createChatModelProviders([local], catalogInfo).flatMap(({ models }) => models),
+    ["ordinary-embedding-discussion-chat", "acme/gte-chat"],
+  );
+});
+
+test("face-generation selection excludes embeddings and never reroutes stale providers", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    models: ["chat", "text-embedding-private"],
+    defaultModel: "text-embedding-private",
+    modelMetadata: {
+      chat: { source: "provider", type: "llm" },
+      "text-embedding-private": { source: "provider", type: "embedding" },
+    },
+  });
+  const hosted = provider({ id: "hosted", label: "Hosted", models: ["cloud-chat"] });
+  const choices = createChatModelProviders([local, hosted]);
+  assert.deepEqual(
+    choices.map(({ provider: item, models }) => ({ id: item.id, models })),
+    [
+      { id: "local", models: ["chat"] },
+      { id: "hosted", models: ["cloud-chat"] },
+    ],
+  );
+  assert.deepEqual(resolveExplicitModelSelection({ providerId: "", model: "" }, choices), {
+    providerId: "local",
+    model: "chat",
+  });
+  assert.deepEqual(
+    resolveExplicitModelSelection({ providerId: "removed-local", model: "private-chat" }, choices),
+    { providerId: "", model: "" },
+  );
+  assert.deepEqual(
+    resolveExplicitModelSelection(
+      { providerId: "local", model: "text-embedding-private" },
+      choices,
+    ),
+    { providerId: "local", model: "" },
   );
 });
 

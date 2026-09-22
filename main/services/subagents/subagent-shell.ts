@@ -26,7 +26,7 @@ import {
   type SubagentShellWorkspaceRoot,
 } from "./subagent-shell-runner-io.js";
 import { subagentWorkspaceRevisionV2 } from "./subagent-workspace-write.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 
 export const SUBAGENT_RUN_COMMAND_TOOL_NAME = "run_command";
 export const SUBAGENT_SHELL_MODEL_COMMAND_CHARS = 16_384;
@@ -202,7 +202,7 @@ function terminalDigest(state: string, text: string): string {
 }
 
 function boundedStream(label: string, value: string): string {
-  const safe = sanitizeSubagentText(value);
+  const safe = normalizeSubagentModelText(value);
   const allowance = Math.floor((SUBAGENT_SHELL_MODEL_RESULT_CHARS - 512) / 2);
   if (safe.length <= allowance) return `${label}:\n${safe || "(empty)"}`;
   const half = Math.floor((allowance - 80) / 2);

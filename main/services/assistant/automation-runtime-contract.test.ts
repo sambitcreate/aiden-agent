@@ -24,9 +24,13 @@ test("project automations receive only folder-scoped coding tools and reject MCP
   assert.match(tools, /ctx\.allowMcpTools === true/u);
   assert.match(tools, /cannot use MCP connectors/u);
   assert.doesNotMatch(tools, /configuredMcpTools\(ctx\)/u);
-  assert.doesNotMatch(tools, /buildSchedulingTools|makeExaTool|skillToolKey/u);
+  assert.doesNotMatch(
+    tools,
+    /buildSchedulingTools|makeExaTool|skillToolKey|webSearchService|web_search/u,
+  );
 
   const execution = source("../schedule-execution.ts");
+  const surfaces = source("../conversation-surface-generation.ts");
   const client = source("../llm-client.ts");
   assert.match(execution, /const allowMcpTools =/u);
   assert.match(execution, /mcpServerIds,/u);
@@ -35,8 +39,16 @@ test("project automations receive only folder-scoped coding tools and reject MCP
     client,
     /assertScheduledProviderFingerprint\(\s*runtime\.provider,\s*options\.providerFingerprint/u,
   );
-  assert.match(execution, /allowComputerUse: false/u);
-  assert.match(execution, /allowSubagents: false/u);
+  const scheduledSurface = between(
+    surfaces,
+    "export function scheduledGenerationSurface",
+    "export function beginSurfaceGeneration",
+  );
+  assert.match(scheduledSurface, /allowComputerUse: false/u);
+  assert.match(scheduledSurface, /allowSubagents: false/u);
+  assert.match(execution, /scheduledTaskAllowsWebSearch\(task\)/u);
+  assert.match(execution, /await webSearchService\.availability\(\)/u);
+  assert.match(execution, /if \(!webSearchReady\) excluded\.add\("web_search"\)/u);
 });
 
 test("attended Assistant sees MCP identities but never ambient connector tools", () => {
@@ -49,11 +61,28 @@ test("attended Assistant sees MCP identities but never ambient connector tools",
   assert.match(tools, /ctx\.allowMcpTools === true/u);
   assert.match(tools, /configuredMcpTools\(ctx\)/u);
   assert.match(tools, /ctx\.allowScheduling === false/u);
+  assert.doesNotMatch(tools, /makeExaTool|webSearchService|web_search/u);
 
   const client = source("../llm-client.ts");
   assert.match(client, /assistantMcpServerInventory/u);
   assert.match(client, /mcpServers: assistantMcpInventory\.servers/u);
   assert.match(client, /mcpInventoryTruncated: assistantMcpInventory\.truncated/u);
+});
+
+test("ordinary chats can inspect bounded MCP identities before scheduling external work", () => {
+  const tools = between(
+    source("../tools.ts"),
+    "const tools: AgentTool[] = [];",
+    "// Folder-scoped coding tools",
+  );
+  assert.match(
+    tools,
+    /ctx\.allowScheduling !== false[\s\S]*createAssistantProjectTool\(\), createAssistantMcpServerTool\(\)/u,
+  );
+  assert.match(tools, /tools\.push\(\.\.\.buildSchedulingTools\(ctx\)\)/u);
+
+  const scheduleTool = source("../schedule-tool.ts");
+  assert.match(scheduleTool, /clearWorkspace[\s\S]*global scope instead of the current\/default workspace/u);
 });
 
 test("the internal project automation mode cannot be requested by the renderer", () => {

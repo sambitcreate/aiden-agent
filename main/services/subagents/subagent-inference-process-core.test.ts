@@ -4,7 +4,11 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { markPiRuntimePrivateFailure, piRuntimePrivateFailure } from "../pi-runtime-failure.js";
+import {
+  markPiRuntimePrivateFailure,
+  piRuntimePrivateDiagnostic,
+  piRuntimePrivateFailure,
+} from "../pi-runtime-failure.js";
 import {
   type KillableInferenceProcess,
   SubagentInferenceProcessOwner,
@@ -12,10 +16,13 @@ import {
 import {
   isSubagentInferenceWorkerMessage,
   isSubagentInferenceParentMessage,
+  prepareSubagentInferenceContext,
+  prepareSubagentInferenceOptions,
   compactAssistantMessageEvent,
   expandAssistantMessageEvent,
   SUBAGENT_INFERENCE_PROTOCOL_VERSION,
   SubagentInferenceOutboundBudget,
+  toSubagentInferenceWireMessage,
   type SubagentInferenceStartMessage,
 } from "./subagent-inference-protocol.js";
 import { ambientProviderEnv, withZeroActivityStartupRetry } from "./subagent-inference-process.js";
@@ -73,6 +80,7 @@ function startupFailureStream() {
 }
 
 class FakeProcess extends EventEmitter implements KillableInferenceProcess {
+  readonly readyToken = "test-owner";
   alive = true;
   sent: unknown[] = [];
   terminations = 0;
@@ -80,6 +88,10 @@ class FakeProcess extends EventEmitter implements KillableInferenceProcess {
 
   isLaunchVerified(): boolean {
     return true;
+  }
+
+  verifyReadyIdentity(launchToken: string): boolean {
+    return launchToken === this.readyToken;
   }
 
   postMessage(message: unknown): void {
@@ -111,6 +123,12 @@ class FakeProcess extends EventEmitter implements KillableInferenceProcess {
   }
 }
 
+class StructuredCloneProcess extends FakeProcess {
+  override postMessage(message: unknown): void {
+    super.postMessage(structuredClone(message));
+  }
+}
+
 class StubbornProcess extends FakeProcess {
   override killHard(): void {
     this.hardKills += 1;
@@ -118,6 +136,12 @@ class StubbornProcess extends FakeProcess {
 
   override hasExited(): boolean {
     return false;
+  }
+}
+
+class DiagnosticProcess extends FakeProcess {
+  startupDiagnostic(): string {
+    return "AIDEN_SUBAGENT_BOOTSTRAP_FAILURE Error: missing runtime";
   }
 }
 
@@ -158,8 +182,17 @@ test("worker protocol rejects unknown fields and malformed sequences", () => {
       kind: "ready",
       version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
       requestId: "r",
+      launchToken: "test-owner",
     }),
     true,
+  );
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "ready",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+    }),
+    false,
   );
   const valid = {
     kind: "failure",
@@ -168,11 +201,221 @@ test("worker protocol rejects unknown fields and malformed sequences", () => {
     message: "failed",
   };
   assert.equal(isSubagentInferenceWorkerMessage(valid), true);
+  assert.equal(
+    isSubagentInferenceWorkerMessage({ ...valid, providerFailureCategory: "network" }),
+    false,
+  );
   assert.equal(isSubagentInferenceWorkerMessage({ ...valid, secret: "leak" }), false);
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "event",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+      sequence: 0,
+      event: { type: "error", reason: "error", error: assistantError() },
+      providerFailureCategory: "rate_limit",
+    }),
+    true,
+  );
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "event",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+      sequence: 0,
+      event: { type: "error", reason: "error", error: assistantError() },
+      providerFailureCategory: "raw-provider-message",
+    }),
+    false,
+  );
   assert.equal(
     isSubagentInferenceWorkerMessage({ ...valid, kind: "event", sequence: -1, event: {} }),
     false,
   );
+});
+
+test("inference wire projection keeps Pi agent callbacks in main", () => {
+  const context = prepareSubagentInferenceContext({
+    messages: [],
+    tools: [
+      {
+        name: "read_file",
+        description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+        label: "Read file",
+        execute: async () => ({ content: [], details: null }),
+      } as never,
+    ],
+  });
+  const options = prepareSubagentInferenceOptions({
+    sessionId: "child-session",
+    reasoning: "medium",
+    signal: new AbortController().signal,
+    getApiKey: () => "must-stay-in-main",
+    convertToLlm: () => [],
+  } as never);
+  const wire = toSubagentInferenceWireMessage({ ...request, context, options });
+
+  assert.deepEqual(wire.context.tools, [
+    {
+      name: "read_file",
+      description: "Read a file",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    },
+  ]);
+  assert.deepEqual(wire.options, { sessionId: "child-session", reasoning: "medium" });
+  assert.doesNotThrow(() => structuredClone(wire));
+});
+
+test("inference option projection preserves every documented provider option", () => {
+  const metadata = { user_id: "child" };
+  const thinkingBudgets = { low: 1_024, medium: 2_048 };
+  assert.deepEqual(
+    prepareSubagentInferenceOptions({
+      temperature: 0.25,
+      maxTokens: 4_096,
+      apiKey: "secret",
+      transport: "sse",
+      cacheRetention: "long",
+      sessionId: "child-session",
+      headers: { "x-test": "present", "x-remove": null },
+      timeoutMs: 30_000,
+      websocketConnectTimeoutMs: 5_000,
+      maxRetries: 2,
+      maxRetryDelayMs: 10_000,
+      metadata,
+      env: { PI_CACHE_RETENTION: "long" },
+      reasoning: "medium",
+      thinkingBudgets,
+      signal: new AbortController().signal,
+      onPayload: async () => undefined,
+      onResponse: async () => undefined,
+      transformHeaders: async (headers: Record<string, string | null>) => headers,
+      getApiKey: () => "must-stay-in-main",
+      convertToLlm: () => [],
+    } as never),
+    {
+      temperature: 0.25,
+      maxTokens: 4_096,
+      apiKey: "secret",
+      transport: "sse",
+      cacheRetention: "long",
+      sessionId: "child-session",
+      headers: { "x-test": "present", "x-remove": null },
+      timeoutMs: 30_000,
+      websocketConnectTimeoutMs: 5_000,
+      maxRetries: 2,
+      maxRetryDelayMs: 10_000,
+      metadata,
+      env: { PI_CACHE_RETENTION: "long" },
+      reasoning: "medium",
+      thinkingBudgets,
+    },
+  );
+});
+
+test("inference wire contract rejects circular provider metadata", () => {
+  const metadata: Record<string, unknown> = {};
+  metadata.self = metadata;
+  assert.throws(
+    () =>
+      toSubagentInferenceWireMessage({
+        ...request,
+        options: { metadata },
+      }),
+    /could not be serialized/u,
+  );
+});
+
+test("process owner normalizes callback-bearing Pi input before IPC", async () => {
+  const child = new StructuredCloneProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const callbackRequest = {
+    ...request,
+    context: {
+      messages: [],
+      tools: [
+        {
+          name: "read_file",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({ content: [], details: null }),
+        },
+      ],
+    },
+    options: {
+      sessionId: "child-session",
+      signal: new AbortController().signal,
+      getApiKey: () => "must-stay-in-main",
+    },
+  } as unknown as SubagentInferenceStartMessage;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(callbackRequest, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const start = child.sent.find(
+    (message) => (message as { kind?: unknown }).kind === "start",
+  ) as SubagentInferenceStartMessage | undefined;
+  assert.ok(start);
+  assert.equal(typeof (start.context.tools?.[0] as { execute?: unknown }).execute, "undefined");
+  assert.equal(typeof (start.options as { getApiKey?: unknown }).getApiKey, "undefined");
+  assert.equal(typeof (start.options as { signal?: unknown }).signal, "undefined");
+
+  child.emit("message", {
+    kind: "failure",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    message: "The isolated provider request failed.",
+  });
+  const events = await eventsPromise;
+  assert.equal(events[events.length - 1]?.type, "error");
+});
+
+test("worker catch failures remain private host failures without provider classification", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  let providerFailureCategory: string | undefined;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, {
+      model,
+      onTerminal: (_message, metadata) => {
+        providerFailureCategory = metadata.providerFailureCategory;
+      },
+    })) {
+      events.push(event);
+    }
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "failure",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    message: "The isolated provider request failed.",
+  });
+
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateDiagnostic(terminal.error)?.code : undefined,
+    "worker_fatal",
+  );
+  assert.equal(providerFailureCategory, undefined);
 });
 
 test("worker subprocess lockdown updates later ESM named imports", () => {
@@ -346,6 +589,95 @@ test("abort escalates from cooperative cancel to TERM and verified hard kill", a
   assert.equal(await owner.shutdown(), true);
 });
 
+test("a throwing TERM still escalates to verified hard kill and delivers cancellation", async () => {
+  const child = new FakeProcess();
+  child.terminate = () => {
+    child.terminations += 1;
+    throw new Error("TERM failed");
+  };
+  let cleanupFailures = 0;
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => { cleanupFailures += 1; },
+  );
+  const stream = owner.stream(request, { model });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(await owner.shutdown(), true);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+  assert.equal(cleanupFailures, 0);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  for (const event of ["message", "exit", "process-error"]) {
+    assert.equal(child.listenerCount(event), 0);
+  }
+});
+
+test("out-of-sequence frames and cancellation share one owned shutdown", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const stream = owner.stream(request, { model });
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 1,
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  assert.equal(await owner.shutdown(), true);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  assert.equal(child.sent.filter((message) => (message as { kind?: string }).kind === "cancel").length, 1);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+});
+
+test("out-of-sequence cleanup failure stays owned even when its observer throws", { timeout: 2_000 }, async () => {
+  const child = new StubbornProcess();
+  let cleanupFailures = 0;
+  let observedFailure!: () => void;
+  const failureObserved = new Promise<void>((resolve) => { observedFailure = resolve; });
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => {
+      cleanupFailures += 1;
+      observedFailure();
+      throw new Error("Diagnostic observer failed");
+    },
+  );
+  const stream = owner.stream(request, { model });
+  let resultDelivered = false;
+  void stream.result().then(() => { resultDelivered = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 1,
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  await failureObserved;
+  assert.equal(await owner.shutdown(), false);
+  assert.equal(cleanupFailures, 1);
+  assert.equal(child.terminations, 1);
+  assert.equal(child.hardKills, 1);
+  assert.equal(resultDelivered, false, "unverified process exit must not publish a terminal result");
+  assert.equal(child.listenerCount("exit"), 1, "the unresolved child remains owned");
+
+  child.alive = false;
+  child.emit("exit", 137);
+  assert.equal((await stream.result()).stopReason, "aborted");
+  assert.equal(await owner.shutdown(), false, "late exit must not erase the cleanup failure");
+  assert.equal(child.listenerCount("exit"), 0);
+});
+
 test("an unverified launch never receives provider request data", async () => {
   const child = new UnverifiedLaunchProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {
@@ -363,7 +695,7 @@ test("an unverified launch never receives provider request data", async () => {
 });
 
 test("only a nonzero zero-activity worker exit carries private startup provenance", async () => {
-  const child = new FakeProcess();
+  const child = new DiagnosticProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {
     termGraceMs: 2,
     killGraceMs: 2,
@@ -384,6 +716,13 @@ test("only a nonzero zero-activity worker exit carries private startup provenanc
     "inference-startup",
   );
   assert.equal(JSON.stringify(terminal).includes("inference-startup"), false);
+  const diagnostic =
+    terminal?.type === "error" ? piRuntimePrivateDiagnostic(terminal.error) : undefined;
+  assert.equal(diagnostic?.stage, "bootstrap");
+  assert.equal(diagnostic?.code, "pre_ready_exit");
+  assert.equal(diagnostic?.exitCode, 9);
+  assert.equal(diagnostic?.detail, "AIDEN_SUBAGENT_BOOTSTRAP_FAILURE Error: missing runtime");
+  assert.equal(typeof diagnostic?.durationMs, "number");
 });
 
 test("a clean zero-activity worker exit is never retryable startup evidence", async () => {
@@ -426,6 +765,7 @@ test("worker readiness closes startup retry before any provider event", async ()
     kind: "ready",
     version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
     requestId: request.requestId,
+    launchToken: child.readyToken,
   });
   assert.equal(
     child.sent.some((message) => (message as { kind?: string }).kind === "ready-ack"),
@@ -439,6 +779,37 @@ test("worker readiness closes startup retry before any provider event", async ()
   assert.equal(
     terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
     "inference",
+  );
+});
+
+test("worker readiness rejects a mismatched launch identity before provider activity", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "ready",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    launchToken: "wrong-owner",
+  });
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateDiagnostic(terminal.error)?.code : undefined,
+    "invalid_message",
+  );
+  assert.equal(
+    child.sent.some((message) => (message as { kind?: string }).kind === "ready-ack"),
+    false,
   );
 });
 
@@ -501,7 +872,11 @@ test("protocol and main-owned hook faults carry closed host provenance", async (
 
 test("startup retry is bounded to four zero-activity launches and emits only the final error", async () => {
   let launches = 0;
-  const privateFailures: string[] = [];
+  const privateFailures: Array<{
+    failure: string;
+    attempts: number;
+    diagnostics: readonly unknown[];
+  }> = [];
   const stream = withZeroActivityStartupRetry(
     model,
     () => {
@@ -511,14 +886,16 @@ test("startup retry is bounded to four zero-activity launches and emits only the
     undefined,
     true,
     [0, 0, 0],
-    (failure) => privateFailures.push(failure),
+    (report) => privateFailures.push(report),
   );
   const events = [];
   for await (const event of stream) events.push(event);
   assert.equal(launches, 4);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.type, "error");
-  assert.deepEqual(privateFailures, ["inference-startup"]);
+  assert.deepEqual(privateFailures, [
+    { failure: "inference-startup", attempts: 4, diagnostics: [] },
+  ]);
 });
 
 test("startup retry never repeats after model activity", async () => {
@@ -574,6 +951,36 @@ test("cancellation owns startup retry backoff", async () => {
   const terminal = events[events.length - 1];
   assert.equal(terminal?.type, "error");
   if (terminal?.type === "error") assert.equal(terminal.reason, "aborted");
+});
+
+test("startup wrapper exceptions retain closed host diagnostics", async () => {
+  const reports: Array<{
+    failure: string;
+    attempts: number;
+    diagnostics: readonly { code: string; detail?: string }[];
+  }> = [];
+  const stream = withZeroActivityStartupRetry(
+    model,
+    () => {
+      throw new Error("private wrapper detail");
+    },
+    undefined,
+    true,
+    [0, 0, 0],
+    (report) => reports.push(report),
+  );
+  const events = [];
+  for await (const event of stream) events.push(event);
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+  assert.equal(JSON.stringify(events).includes("private wrapper detail"), false);
+  assert.equal(reports[0]?.attempts, 1);
+  assert.equal(reports[0]?.diagnostics[0]?.code, "unknown");
+  assert.equal(reports[0]?.diagnostics[0]?.detail, "private wrapper detail");
 });
 
 test("a provider terminal frame racing cancellation cannot become success", async () => {
@@ -662,13 +1069,19 @@ test("indeterminate exit verification fails closed", async () => {
   assert.equal(cleanupFailures, 1);
 });
 
-test("terminal acknowledgement failures become a bounded provider error", async () => {
+test("terminal acknowledgement failures clear stale provider classification", async () => {
   const child = new AckThrowProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {
     termGraceMs: 2,
     killGraceMs: 2,
   });
-  const stream = owner.stream(request, { model });
+  let providerFailureCategory: string | undefined;
+  const stream = owner.stream(request, {
+    model,
+    onTerminal: (_message, metadata) => {
+      providerFailureCategory = metadata.providerFailureCategory;
+    },
+  });
   const eventsPromise = (async () => {
     const seen = [];
     for await (const event of stream) seen.push(event);
@@ -680,6 +1093,7 @@ test("terminal acknowledgement failures become a bounded provider error", async 
     version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
     requestId: request.requestId,
     sequence: 0,
+    providerFailureCategory: "rate_limit",
     event: {
       type: "done",
       reason: "stop",
@@ -705,6 +1119,11 @@ test("terminal acknowledgement failures become a bounded provider error", async 
   const events = await eventsPromise;
   assert.equal(events.length, 1);
   assert.equal(events[0]?.type, "error");
+  assert.equal(
+    events[0]?.type === "error" ? piRuntimePrivateFailure(events[0].error) : undefined,
+    "inference",
+  );
+  assert.equal(providerFailureCategory, undefined);
 });
 
 test("terminal provider event is delivered only through an exited owned process", async () => {
@@ -771,6 +1190,41 @@ test("terminal provider event is delivered only through an exited owned process"
   assert.equal(events[0]?.type, "done");
   assert.equal(child.terminations, 0);
   assert.equal(child.hardKills, 0);
+});
+
+test("closed provider failure categories reach only the main-owned terminal hook", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  let providerFailureCategory: string | undefined;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, {
+      model,
+      onTerminal: (_message, metadata) => {
+        providerFailureCategory = metadata.providerFailureCategory;
+      },
+    })) {
+      events.push(event);
+    }
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 0,
+    providerFailureCategory: "rate_limit",
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  const events = await eventsPromise;
+  assert.equal(events[events.length - 1]?.type, "error");
+  assert.equal(providerFailureCategory, "rate_limit");
+  assert.doesNotMatch(JSON.stringify(events), /rate_limit/u);
 });
 
 test("a worker that lingers after terminal ACK is still terminated and verified", async () => {

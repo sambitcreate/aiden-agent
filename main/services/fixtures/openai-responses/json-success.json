@@ -1,0 +1,55 @@
+{
+  "id": "resp_wave1_fixture",
+  "object": "response",
+  "output": [
+    {
+      "type": "web_search_call",
+      "id": "ws_wave1_fixture",
+      "status": "completed",
+      "action": {
+        "type": "search",
+        "sources": [
+          {
+            "type": "url",
+            "title": "OpenAI web search documentation",
+            "url": "https://platform.openai.com/docs/guides/tools-web-search"
+          },
+          {
+            "type": "url",
+            "title": "Second source",
+            "url": "https://example.test/openai-second"
+          }
+        ]
+      }
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "OpenAI web search returns current evidence from the public web.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "start_index": 0,
+              "end_index": 20,
+              "title": "OpenAI web search documentation",
+              "url": "https://platform.openai.com/docs/guides/tools-web-search"
+            },
+            {
+              "type": "url_citation",
+              "url_citation": {
+                "start_index": 21,
+                "end_index": 44,
+                "title": "Second source",
+                "url": "https://example.test/openai-second"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

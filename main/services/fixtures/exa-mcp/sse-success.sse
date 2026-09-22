@@ -1,0 +1,10 @@
+: deterministic hosted MCP fixture
+
+event: ping
+data: {"ignored":true}
+
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Title: First result\nURL: https://example.test/first\nText: First line.\nSecond line.\n---\nTitle: Second result\nURL: http://example.test/second\nHighlights:\nSecond highlight.\n---"}],"isError":false}}
+
+data: [DONE]
+

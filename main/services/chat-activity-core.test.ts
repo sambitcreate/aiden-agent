@@ -60,9 +60,12 @@ test("generation ownership wires activity start, settlement, and reload snapshot
   );
   assert.match(settlement, /chatActivityRegistry\.settle\(streamId\);/u);
   assert.match(settlement, /ipcMain\.broadcast\("chats:settled"/u);
-  assert.equal((llm.match(/broadcastChatSettled\(streamId, params\.chatId,/gu) ?? []).length, 7);
+  assert.equal(
+    (llm.match(/broadcastChatSettled\(\s*streamId,\s*params\.chatId,/gu) ?? []).length,
+    7,
+  );
   assert.match(
     handlers,
-    /ipcMain\.handle\("chats:activitySnapshot", \(\) => chatActivityRegistry\.snapshot\(\)\)/u,
+    /ipcMain\.handle\(\s*"chats:activitySnapshot",\s*\(\)\s*=>\s*chatActivityRegistry\.snapshot\(\),?\s*\)/u,
   );
 });

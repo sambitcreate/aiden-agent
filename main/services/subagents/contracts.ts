@@ -1,6 +1,6 @@
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 import type { SubagentContextMode } from "./forked-context.js";
-import { sanitizeSubagentText } from "./safe-text.js";
+import { normalizeSubagentModelText } from "./model-text.js";
 import { types as utilTypes } from "node:util";
 
 export const MAX_SUBAGENT_TASKS_PER_CALL = 4;
@@ -9,6 +9,7 @@ export const MAX_SUBAGENT_LABEL_CHARS = 120;
 export const MAX_SUBAGENT_TASK_CHARS = 8_000;
 export const MAX_SUBAGENT_SUMMARY_CHARS = 8_000;
 export const MAX_SUBAGENT_TOOL_RESULT_CHARS = 24_000;
+export const MAX_SUBAGENT_REQUESTED_TURNS = 128;
 export const MAX_SUBAGENT_REQUESTED_MCP_SERVERS = 16;
 export const MAX_SUBAGENT_REQUESTED_MCP_TOOLS_PER_SERVER = 32;
 export const SUBAGENT_SAFE_LABEL_PATTERN =
@@ -37,6 +38,8 @@ export interface SubagentTaskRequest {
   role: SubagentRole;
   label: string;
   task: string;
+  /** Explicit budget for a read-only investigation; omission keeps the default. */
+  maxTurns?: number;
   /** Optional strict subset of the root request; omission inherits the root request. */
   capabilities?: SubagentRequestedCapabilities;
 }
@@ -55,6 +58,8 @@ export interface SubagentTaskResult {
   label: string;
   status: SubagentTaskStatus;
   summary: string;
+  /** Present only when the completed-summary producer shortened the authored report. */
+  summaryTruncated?: true;
   warning?: string;
 }
 
@@ -124,7 +129,11 @@ function boundedText(value: unknown, field: "label" | "task", maximum: number): 
   if (field === "label" && hasDisallowedLabelCharacter(value)) {
     throw new Error("Subagent label must be a single line without control characters.");
   }
-  return sanitizeSubagentText(value);
+  const normalized = normalizeSubagentModelText(value);
+  if (normalized.trim().length === 0) {
+    throw new Error(`Subagent ${field} must contain visible text.`);
+  }
+  return normalized;
 }
 
 function boundedIdentifier(value: unknown, field: string): string {
@@ -239,6 +248,67 @@ function assertTaskCapabilitiesNarrowRoot(
   }
 }
 
+const LEGACY_SUBAGENT_CAPABILITIES: SubagentRequestedCapabilities = {
+  workspaceRead: true,
+  workspaceWrite: false,
+  shell: false,
+  delegate: false,
+  web: false,
+  mcp: [],
+};
+
+function mergeRequestedMcpScopes(
+  values: readonly SubagentRequestedCapabilities[],
+  lane: "mcp" | "mcpMutations",
+): SubagentRequestedMcpScope[] {
+  const servers = new Map<string, string[]>();
+  for (const value of values) {
+    for (const scope of value[lane] ?? []) {
+      const tools = servers.get(scope.serverId) ?? [];
+      for (const tool of scope.tools) {
+        if (!tools.includes(tool)) tools.push(tool);
+      }
+      servers.set(scope.serverId, tools);
+    }
+  }
+  return [...servers].map(([serverId, tools]) => ({ serverId, tools }));
+}
+
+/**
+ * A task-level positive request is already explicit model intent. When the
+ * optional batch root is omitted, infer only the union needed to contain those
+ * exact lanes. Tasks that omitted capabilities are pinned to the legacy
+ * workspace-read-only lane so they never inherit an inferred privilege.
+ */
+function inferRootCapabilities(
+  taskCapabilities: readonly (SubagentRequestedCapabilities | undefined)[],
+): SubagentRequestedCapabilities | undefined {
+  const explicit = taskCapabilities.filter(
+    (value): value is SubagentRequestedCapabilities => value !== undefined,
+  );
+  if (explicit.length === 0) return undefined;
+  const requested = [LEGACY_SUBAGENT_CAPABILITIES, ...explicit];
+  const mcp = mergeRequestedMcpScopes(requested, "mcp");
+  const mcpMutations = mergeRequestedMcpScopes(requested, "mcpMutations");
+  const readPairs = requestedMcpPairs({ ...LEGACY_SUBAGENT_CAPABILITIES, mcp }, "mcp");
+  if (
+    mcpMutations.some((scope) =>
+      scope.tools.some((tool) => readPairs.has(`${scope.serverId}\0${tool}`)),
+    )
+  ) {
+    throw new Error("Subagent MCP read and mutation requests must be disjoint across the batch.");
+  }
+  return {
+    workspaceRead: requested.some((value) => value.workspaceRead),
+    workspaceWrite: requested.some((value) => value.workspaceWrite),
+    shell: requested.some((value) => value.shell === true),
+    delegate: requested.some((value) => value.delegate === true),
+    web: requested.some((value) => value.web),
+    mcp,
+    ...(mcpMutations.length > 0 ? { mcpMutations } : {}),
+  };
+}
+
 /** Revalidate model arguments independently of TypeBox/provider schema enforcement. */
 export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
   const request = exactPlainDataRecord(input, ["tasks"], ["context", "capabilities"]);
@@ -252,38 +322,58 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
   if (request.tasks.length < 1 || request.tasks.length > MAX_SUBAGENT_TASKS_PER_CALL) {
     throw new Error(`A subagent request must contain 1 to ${MAX_SUBAGENT_TASKS_PER_CALL} tasks.`);
   }
-  const capabilities =
+  const suppliedCapabilities =
     request.capabilities === undefined
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
-  const rootCapabilities: SubagentRequestedCapabilities = capabilities ?? {
-    workspaceRead: true,
-    workspaceWrite: false,
-    shell: false,
-    delegate: false,
-    web: false,
-    mcp: [],
-  };
+  const parsedTasks = request.tasks.map((entry) => {
+    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns"]);
+    if (!task) throw new Error("Invalid subagent task fields.");
+    if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
+      throw new Error("Unknown subagent role.");
+    }
+    if (task.maxTurns !== undefined &&
+      (!Number.isInteger(task.maxTurns) || (task.maxTurns as number) < 1 ||
+        (task.maxTurns as number) > MAX_SUBAGENT_REQUESTED_TURNS)) {
+      throw new Error("Invalid subagent turn budget.");
+    }
+    return {
+      role: task.role,
+      label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
+      task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+      maxTurns: task.maxTurns as number | undefined,
+      capabilities:
+        task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities),
+    };
+  });
+  const inferredCapabilities = suppliedCapabilities
+    ? undefined
+    : inferRootCapabilities(parsedTasks.map(({ capabilities }) => capabilities));
+  const rootCapabilities =
+    suppliedCapabilities ?? inferredCapabilities ?? LEGACY_SUBAGENT_CAPABILITIES;
+  const pinLegacyTaskDefaults = suppliedCapabilities === undefined && inferredCapabilities !== undefined;
   return {
     context: request.context === "fork" ? "fork" : "fresh",
-    ...(capabilities ? { capabilities } : {}),
-    tasks: request.tasks.map((entry) => {
-      const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities"]);
-      if (!task) {
-        throw new Error("Invalid subagent task fields.");
-      }
-      if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
-        throw new Error("Unknown subagent role.");
-      }
+    ...(suppliedCapabilities || inferredCapabilities
+      ? { capabilities: suppliedCapabilities ?? inferredCapabilities }
+      : {}),
+    tasks: parsedTasks.map((task) => {
       const taskCapabilities =
-        task.capabilities === undefined ? undefined : parseRequestedCapabilities(task.capabilities);
+        task.capabilities ?? (pinLegacyTaskDefaults ? structuredClone(LEGACY_SUBAGENT_CAPABILITIES) : undefined);
       if (taskCapabilities) {
         assertTaskCapabilitiesNarrowRoot(rootCapabilities, taskCapabilities);
       }
+      const effective = taskCapabilities ?? rootCapabilities;
+      if (task.maxTurns !== undefined &&
+        (effective.workspaceWrite || effective.shell === true || effective.delegate === true ||
+          (effective.mcpMutations?.length ?? 0) > 0)) {
+        throw new Error("An explicit subagent turn budget requires read-only capabilities.");
+      }
       return {
         role: task.role,
-        label: boundedText(task.label, "label", MAX_SUBAGENT_LABEL_CHARS),
-        task: boundedText(task.task, "task", MAX_SUBAGENT_TASK_CHARS),
+        label: task.label,
+        task: task.task,
+        ...(task.maxTurns === undefined ? {} : { maxTurns: task.maxTurns }),
         ...(taskCapabilities ? { capabilities: taskCapabilities } : {}),
       };
     }),
@@ -297,12 +387,7 @@ export function effectiveSubagentTaskCapabilities(
   const effective = structuredClone(
     task.capabilities ??
       request.capabilities ?? {
-        workspaceRead: true,
-        workspaceWrite: false,
-        shell: false,
-        delegate: false,
-        web: false,
-        mcp: [],
+        ...LEGACY_SUBAGENT_CAPABILITIES,
       },
   );
   return { ...effective, delegate: effective.delegate === true };

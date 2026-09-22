@@ -1,0 +1,31 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "anysearch_fixture_request",
+  "data": {
+    "results": [
+      {
+        "title": "AnySearch Search API",
+        "url": "https://docs.anysearch.com/api/search",
+        "snippet": "AnySearch returns bounded web-search results.",
+        "content": "Content is retained upstream; this adapter uses the result snippet."
+      },
+      {
+        "title": "Second AnySearch source",
+        "url": "https://example.test/anysearch-second",
+        "snippet": "A second untrusted AnySearch result."
+      },
+      {
+        "title": "Duplicate AnySearch source",
+        "url": "https://example.test/anysearch-second",
+        "snippet": "This duplicate is discarded."
+      },
+      {
+        "title": "Unsafe AnySearch source",
+        "url": "javascript:alert(1)",
+        "snippet": "This source must not escape the adapter."
+      }
+    ],
+    "metadata": { "total_results": 4, "search_time_ms": 11 }
+  }
+}

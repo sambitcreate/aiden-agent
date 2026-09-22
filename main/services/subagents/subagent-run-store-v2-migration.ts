@@ -289,9 +289,13 @@ export async function readSubagentRunStoreV1CheckpointV2(
 }
 
 function sameCheckpoint(checkpoint: V1Checkpoint, migration: SubagentRunMigrationV2): boolean {
+  // Native generations include st_dev, which macOS may reassign when the APFS
+  // data volume is mounted after a reboot. The generation remains useful for
+  // same-process compare-before-write operations, but it is not stable durable
+  // evidence. Migration equivalence is content-addressed: an identical source
+  // and digest require no merge even when filesystem identity has changed.
   return (
     checkpoint.source === migration.source &&
-    checkpoint.generation === migration.sourceGeneration &&
     checkpoint.sha256 === migration.sourceSha256
   );
 }

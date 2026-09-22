@@ -21,18 +21,25 @@ import { cn } from "../lib/ui-utils";
 import {
   createModelEntries,
   encodeSelection,
+  modelGridSize,
   orderModelEntries,
   PINNED_MODELS_KEY,
   positionSavedModels,
   positionModels,
+  visibleModelEntries,
   type ModelEntry,
   type PositionedModel,
 } from "../lib/model-picker-data";
 import { useProvidersModelInfo } from "../lib/queries";
-import { useModelPadLayout } from "../lib/model-pad-layout";
+import {
+  MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_RANGE_PERCENT,
+  useModelPadLayout,
+} from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, ChevronsUpDown, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
+import type { HiddenModelsByProvider } from "../shared/model-visibility";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -41,7 +48,10 @@ interface ModelPickerProps {
   onChange: (providerId: string, model: string) => void;
   disabled?: boolean;
   settingsBlockedReason?: string;
+  hiddenModelsByProvider?: HiddenModelsByProvider;
 }
+
+const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
 function formatTokens(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
@@ -54,6 +64,12 @@ function formatTokens(value: number | undefined): string | null {
     return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
   }
   return String(value);
+}
+
+function formatBenchmarkDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? BENCHMARK_DATE_FORMATTER.format(date) : null;
 }
 
 function formatInputs(info: ModelInfo | undefined): string {
@@ -96,6 +112,7 @@ function describeModel(entry: ModelEntry): string {
   if (context) details.push(`Context ${context} tokens`);
   if (output) details.push(`Maximum output ${output} tokens`);
   if (entry.ranking) details.push(`Benchmark ${entry.ranking.source}`);
+  if (entry.info?.benchmark) details.push(`Benchmark ${entry.info.benchmark.sourceLabel}`);
   else if (entry.info?.metadataSource === "artificial-analysis") {
     details.push("Model data Artificial Analysis");
   }
@@ -135,13 +152,14 @@ function useExternalModelDetails(): boolean {
 }
 
 function EmptyModelPad({
+  gridSize,
   onOpenSettings,
   settingsBlockedReason,
 }: {
+  gridSize: number;
   onOpenSettings: () => void;
   settingsBlockedReason?: string;
 }) {
-  const gridSize = 9;
   const blockedReasonId = React.useId();
   return (
     <div className="model-pad relative aspect-square w-full overflow-hidden rounded-card">
@@ -154,8 +172,8 @@ function EmptyModelPad({
               key={index}
               className="absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20"
               style={{
-                left: `${8 + (column / (gridSize - 1)) * 84}%`,
-                top: `${8 + (row / (gridSize - 1)) * 84}%`,
+                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
+                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
               }}
             />
           );
@@ -202,11 +220,9 @@ function EmptyModelPad({
 function ModelHoverDetails({
   model,
   metadataLoading,
-  showArtificialAnalysisAttribution,
 }: {
   model: PositionedModel | undefined;
   metadataLoading: boolean;
-  showArtificialAnalysisAttribution: boolean;
 }) {
   if (!model) return null;
 
@@ -214,13 +230,11 @@ function ModelHoverDetails({
   const context = formatTokens(info?.contextLength);
   const output = formatTokens(info?.outputLimit);
   const inputs = formatInputs(info);
+  const benchmarkAsOf = formatBenchmarkDate(info?.benchmark?.asOf);
   const attributionUrl =
+    info?.benchmark?.sourceUrl ??
     model.ranking?.sourceUrl ??
-    (info?.metadataSource === "artificial-analysis"
-      ? "https://artificialanalysis.ai"
-      : showArtificialAnalysisAttribution
-        ? "https://artificialanalysis.ai"
-        : undefined);
+    (info?.metadataSource === "artificial-analysis" ? "https://artificialanalysis.ai" : undefined);
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -234,16 +248,24 @@ function ModelHoverDetails({
     output ? ["Max output", output] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
     info?.knowledge ? ["Knowledge", info.knowledge] : null,
+    info?.benchmark?.intelligence !== undefined
+      ? ["Intelligence", info.benchmark.intelligence.toFixed(1)]
+      : null,
+    info?.benchmark?.coding !== undefined ? ["Coding", info.benchmark.coding.toFixed(1)] : null,
+    info?.benchmark?.agentic !== undefined ? ["Agentic", info.benchmark.agentic.toFixed(1)] : null,
+    benchmarkAsOf ? ["Benchmark as of", benchmarkAsOf] : null,
   ].filter((row): row is [string, string] => Boolean(row));
 
   return (
-    <aside className="pointer-events-none absolute left-[calc(100%+0.5rem)] top-0 w-56 rounded-popover bg-popover p-3 text-primary shadow-popover">
+    <aside className="pointer-events-auto flex h-[min(22.5rem,70vh)] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
       <div className="flex min-w-0 items-start gap-2">
         <span className="mt-0.5 shrink-0 text-tertiary">
           <ProviderIcon
             providerId={model.providerId}
             providerLabel={model.providerLabel}
             modelId={model.model}
+            artwork={model.providerArtwork}
             className="size-4"
           />
         </span>
@@ -259,7 +281,7 @@ function ModelHoverDetails({
         </div>
       </div>
 
-      {info?.matched ? (
+      {info?.matched || info?.benchmark ? (
         <>
           {capabilities.length > 0 ? (
             <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
@@ -290,7 +312,7 @@ function ModelHoverDetails({
 
       <div className="mt-2 border-t border-separator pt-2">
         <div
-          className="truncate font-mono text-[10px] leading-4 text-quaternary"
+          className="truncate font-mono text-mini leading-4 text-quaternary"
           title={model.model}
         >
           {model.model}
@@ -300,11 +322,14 @@ function ModelHoverDetails({
             href={attributionUrl}
             target="_blank"
             rel="noreferrer"
-            className="pointer-events-auto mt-1 inline-block text-[10px] leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+            className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
-            {model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis
+            {info?.benchmark
+              ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
+              : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
           </a>
         ) : null}
+      </div>
       </div>
     </aside>
   );
@@ -317,6 +342,7 @@ export function ModelPicker({
   onChange,
   disabled,
   settingsBlockedReason,
+  hiddenModelsByProvider,
 }: ModelPickerProps) {
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
@@ -343,16 +369,15 @@ export function ModelPicker({
     }
   });
 
-  const entries = createModelEntries(providers, infoByValue);
+  const allEntries = createModelEntries(providers, infoByValue);
+  const entries = visibleModelEntries(allEntries, hiddenModelsByProvider);
   const orderedEntries = orderModelEntries(entries, pinned);
   const detailPositions = positionModels(entries);
   const positioned = positionSavedModels(entries, modelPadLayout.placements);
+  const padGridSize = modelGridSize(entries.length);
   const hasPadModels = positioned.length > 0;
-  const usesArtificialAnalysis =
-    entries.some((entry) => entry.info?.metadataSource === "artificial-analysis") ||
-    positioned.some((entry) => entry.confidence === "suggested");
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
-  const selected = entries.find((entry) => entry.value === selectedValue);
+  const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
   const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
   const activePosition =
@@ -363,6 +388,18 @@ export function ModelPicker({
       : (detailPosition ??
         detailPositions.find((entry) => entry.value === selectedValue) ??
         detailPositions[0]);
+  const activeAttribution = activePosition?.info?.benchmark
+    ? {
+        url: activePosition.info.benchmark.sourceUrl,
+        label: `${activePosition.info.benchmark.sourceLabel} · ${activePosition.info.benchmark.license}`,
+      }
+    : activePosition?.ranking?.sourceUrl ||
+        activePosition?.info?.metadataSource === "artificial-analysis"
+      ? {
+          url: activePosition?.ranking?.sourceUrl ?? "https://artificialanalysis.ai",
+          label: `${activePosition?.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`,
+        }
+      : null;
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;
@@ -474,6 +511,7 @@ export function ModelPicker({
               providerId={selected.providerId}
               providerLabel={selected.providerLabel}
               modelId={selected.model}
+              artwork={selected.providerArtwork}
               className="size-4 text-tertiary"
             />
           ) : null}
@@ -486,7 +524,6 @@ export function ModelPicker({
                   ? "Select model"
                   : "No models"}
           </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-tertiary" />
         </Button>
       </PopoverTrigger>
 
@@ -495,13 +532,8 @@ export function ModelPicker({
         side="top"
         align="end"
         sideOffset={8}
-        collisionPadding={{
-          top: 40,
-          right: showExternalDetails && (view === "list" || hasPadModels) ? 244 : 12,
-          bottom: 12,
-          left: 12,
-        }}
-        className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-visible p-0"
+        collisionPadding={{ top: 40, right: 12, bottom: 12, left: 12 }}
+        className="flex w-max max-w-[calc(100vw-1.5rem)] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
@@ -516,6 +548,7 @@ export function ModelPicker({
           });
         }}
       >
+        <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
         <div className="p-1.5 pb-0">
           <div
             className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
@@ -530,7 +563,6 @@ export function ModelPicker({
               tabIndex={view === "list" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "list" && "bg-popover shadow-control",
@@ -548,7 +580,6 @@ export function ModelPicker({
               tabIndex={view === "pad" ? 0 : -1}
               variant="transparent"
               size="small"
-              radius="rounded"
               className={cn(
                 "h-6 justify-center px-2",
                 view === "pad" && "bg-popover shadow-control",
@@ -572,6 +603,7 @@ export function ModelPicker({
             {hasPadModels ? (
               <ModelPickerPad
                 models={positioned}
+                gridSize={padGridSize}
                 selectedValue={selectedValue}
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
@@ -579,6 +611,7 @@ export function ModelPicker({
               />
             ) : (
               <EmptyModelPad
+                gridSize={padGridSize}
                 onOpenSettings={openModelDataSettings}
                 settingsBlockedReason={settingsBlockedReason}
               />
@@ -624,6 +657,7 @@ export function ModelPicker({
                         providerId={entry.providerId}
                         providerLabel={entry.providerLabel}
                         modelId={entry.model}
+                        artwork={entry.providerArtwork}
                         className="size-4 text-tertiary"
                       />
                       <span className="min-w-0 flex-1">
@@ -653,7 +687,7 @@ export function ModelPicker({
                           togglePin(entry.value);
                         }}
                         className={cn(
-                          "shrink-0 rounded-md p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+                          "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
                           isPinned
                             ? "opacity-100"
                             : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
@@ -669,23 +703,21 @@ export function ModelPicker({
           </section>
         )}
 
-        {showExternalDetails && (view === "list" || hasPadModels) ? (
-          <ModelHoverDetails
-            model={activePosition}
-            metadataLoading={metadataLoading}
-            showArtificialAnalysisAttribution={usesArtificialAnalysis}
-          />
-        ) : usesArtificialAnalysis ? (
-          <div className="border-t border-separator px-3 py-1.5 text-[10px] leading-4">
+        {!(showExternalDetails && (view === "list" || hasPadModels)) && activeAttribution ? (
+          <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
             <a
-              href="https://artificialanalysis.ai"
+              href={activeAttribution.url}
               target="_blank"
               rel="noreferrer"
               className="text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
             >
-              Model data · Artificial Analysis
+              {activeAttribution.label}
             </a>
           </div>
+        ) : null}
+        </div>
+        {showExternalDetails && (view === "list" || hasPadModels) ? (
+          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
         ) : null}
       </PopoverContent>
     </Popover>

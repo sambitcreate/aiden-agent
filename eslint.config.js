@@ -5,9 +5,29 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["build/**", "release/**", "node_modules/**", "tmp/**", ".memory/**", ".papercuts/**"],
+    ignores: [
+      "build/**",
+      "release/**",
+      "android/**/build/**",
+      "node_modules/**",
+      ".memory/**",
+      ".papercuts/**",
+      ".agents/**",
+      "resources/generative-ui/**",
+    ],
   },
   js.configs.recommended,
+  {
+    files: [
+      "scripts/aiden-remote-*.mjs",
+      "scripts/ios-asc-monitor*.mjs",
+      "scripts/ios-live-activity-process-proof*.mjs",
+      "scripts/vendor-generative-ui-libs.mjs",
+    ],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
@@ -23,6 +43,19 @@ export default [
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
       "no-undef": "off",
+    },
+  },
+  {
+    files: ["main/**/*.{ts,tsx}"],
+    ignores: ["main/**/*.test.{ts,tsx}", "main/platform.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
+  {
+    files: ["main/platform.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
 ];

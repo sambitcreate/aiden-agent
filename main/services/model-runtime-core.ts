@@ -2,7 +2,9 @@ import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-a
 import {
   createModels,
   createProvider,
+  lazyStream,
   type Api,
+  type AuthResult,
   type Model,
   type Models,
   type ProviderHeaders,
@@ -19,6 +21,7 @@ import {
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
 } from "./generation-runtime.js";
+import { withOpenCodeSessionAttribution } from "./opencode-session-attribution.js";
 import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
@@ -44,7 +47,7 @@ function apiFor(provider: StoredProvider): Api {
   return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
 }
 
-function buildModel(
+export function buildModel(
   provider: StoredProvider,
   modelId: string,
   limits: RuntimeModelLimits,
@@ -85,6 +88,42 @@ export interface ResolvedModelRuntime {
   consumeIsolatedHostFailure?: () => "inference" | "policy" | undefined;
 }
 
+/**
+ * Freeze one already-resolved Pi auth result into a Bot request. The wrapper
+ * delegates directly to the owning provider so Models cannot re-read ambient
+ * env/profile/ADC authority after the Bot admission fence has been checked.
+ */
+export function withPinnedBotProviderAuth(
+  runtime: ResolvedModelRuntime,
+  auth: AuthResult,
+  providerStream: ProviderStreams["streamSimple"],
+): ResolvedModelRuntime {
+  return {
+    ...runtime,
+    streams: {
+      streamSimple: (model, context, options) =>
+        lazyStream(model, async () => {
+          if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) {
+            throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+          }
+          const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
+          let headers =
+            auth.auth.headers || options?.headers
+              ? { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }
+              : undefined;
+          const env =
+            auth.env || options?.env ? { ...(options?.env ?? {}), ...(auth.env ?? {}) } : undefined;
+          return providerStream(requestModel, context, {
+            ...options,
+            apiKey: auth.auth.apiKey,
+            headers,
+            env,
+          });
+        }),
+    },
+  };
+}
+
 export interface ModelRuntimeDependencies {
   getProvider(providerId: string): Promise<StoredProvider | undefined>;
   getApiKey(provider: StoredProvider): Promise<string | null>;
@@ -109,6 +148,7 @@ export async function resolveModelRuntimeWith(
   providerId: string,
   modelId: string,
   signal?: AbortSignal,
+  conversationId?: string,
 ): Promise<ResolvedModelRuntime> {
   if (providerId === OPENAI_CODEX_PROVIDER_ID) {
     const model = await dependencies.codex.prepareRuntimeModel(modelId, signal);
@@ -128,12 +168,13 @@ export async function resolveModelRuntimeWith(
   // legacy Aiden key for this path.
   const nativeProvider = dependencies.native.getProvider(providerId);
   if (nativeProvider) {
-    const model = dependencies.native.getModel(providerId, modelId);
-    if (!model) {
+    const resolvedModel = dependencies.native.getModel(providerId, modelId);
+    if (!resolvedModel) {
       throw new Error(
         `Model "${modelId}" is not available through Pi's ${nativeProvider.label} provider. Choose another model and try again.`,
       );
     }
+    const model = withOpenCodeSessionAttribution(resolvedModel, conversationId);
     return {
       provider: nativeProvider,
       model,
@@ -159,7 +200,10 @@ export async function resolveModelRuntimeWith(
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
-  const model = buildModel(provider, modelId, limits);
+  const model = withOpenCodeSessionAttribution(
+    buildModel(provider, modelId, limits),
+    conversationId,
+  );
   const headers = resolveRuntimeHeaders(provider);
   const models = createModels();
   models.setProvider(

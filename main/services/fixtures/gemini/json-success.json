@@ -1,0 +1,43 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [{ "text": "Answer prose is intentionally ignored." }],
+        "role": "model"
+      },
+      "groundingMetadata": {
+        "webSearchQueries": ["Gemini API web search"],
+        "groundingChunks": [
+          {
+            "web": {
+              "uri": "https://ai.google.dev/gemini-api/docs/google-search",
+              "title": "Grounding with Google Search"
+            }
+          },
+          {
+            "web": {
+              "uri": "javascript:alert(1)",
+              "title": "Unsafe source"
+            }
+          },
+          {
+            "web": {
+              "uri": "https://example.test/gemini-second",
+              "title": "Second Gemini source"
+            }
+          }
+        ],
+        "groundingSupports": [
+          {
+            "segment": { "text": "Google Search grounding supports this source." },
+            "groundingChunkIndices": [0]
+          },
+          {
+            "segment": { "text": "The second source has separate evidence." },
+            "groundingChunkIndices": [2]
+          }
+        ]
+      }
+    }
+  ]
+}

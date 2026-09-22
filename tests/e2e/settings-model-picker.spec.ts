@@ -1,13 +1,14 @@
-import { E2E_MODEL_DISPLAY_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOnboarding, test } from "./fixtures";
 
 const SETTINGS_SECTIONS = [
   "Providers",
   "Model Pad",
   "Skills",
-  "MCP Servers",
+  "Plugins",
   "Web Search",
+  "Aiden On The Go",
   "Scheduled tasks",
-  "Aiden",
+  "Aiden Live",
   "Computer Use",
   "Voice",
   "Keyboard shortcuts",
@@ -22,12 +23,14 @@ async function assertRenderedSettingsDestination(
   switch (section) {
     case "Providers":
       await expect(
-        page.getByText(/Pi-native providers need only their credentials/u),
+        page.getByText(
+          /Connect with credentials when required; Aiden keeps their model catalogs current/u,
+        ),
       ).toBeVisible();
       return;
     case "Model Pad":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Personal Model Pad", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Model Pad", exact: true }),
       ).toBeVisible();
       return;
     case "Skills":
@@ -35,30 +38,50 @@ async function assertRenderedSettingsDestination(
         page.getByText(/Reusable instruction sets the assistant can invoke/u),
       ).toBeVisible();
       return;
-    case "MCP Servers":
-      await expect(page.getByText(/Connect tool providers or add your own server/u)).toBeVisible();
+    case "Plugins":
+      await expect(
+        page.getByText(/Browse plugins, connect hosted MCP servers, or add your own/u),
+      ).toBeVisible();
       return;
     case "Web Search":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Web Search (Exa)", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Web Search", exact: true }),
+      ).toBeVisible();
+      return;
+    case "Aiden On The Go":
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Aiden On The Go", exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect a device", exact: true })).toBeVisible();
+      await expect(page.getByText("This Mac settings", { exact: true })).toBeVisible();
+      await page.getByText("This Mac settings", { exact: true }).click();
+      await expect(
+        page.getByRole("switch", { name: "Enable Aiden Remote Access" }),
+      ).toHaveAttribute("data-state", "unchecked");
+      await expect(
+        page
+          .getByRole("group")
+          .filter({ has: page.getByRole("switch", { name: "Enable Aiden Remote Access" }) })
+          .getByText("Off", { exact: true }),
       ).toBeVisible();
       return;
     case "Scheduled tasks":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Scheduled tasks", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Scheduled tasks", exact: true }),
       ).toBeVisible();
       return;
-    case "Aiden":
+    case "Aiden Live":
       await expect(
-        page.getByRole("heading", { level: 2, name: "How Aiden works", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Aiden Live", exact: true }),
       ).toBeVisible();
+      await expect(page.getByText("Beta", { exact: true })).toBeVisible();
       return;
     case "Computer Use":
-      await expect(page.getByRole("heading", { level: 2, name: /^Computer Use/u })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();
       return;
     case "Voice":
       await expect(
-        page.getByRole("heading", { level: 2, name: "Voice Input", exact: true }),
+        page.getByRole("heading", { level: 2, name: "Use your voice", exact: true }),
       ).toBeVisible();
       return;
     case "Keyboard shortcuts":
@@ -73,7 +96,7 @@ async function assertRenderedSettingsDestination(
       return;
     case "About":
       await expect(
-        page.getByRole("heading", { level: 2, name: "About", exact: true }),
+        page.getByRole("heading", { level: 1, name: "About", exact: true }),
       ).toBeVisible();
   }
 }
@@ -103,6 +126,70 @@ test("every Settings destination renders and a one-model local inventory stays u
     await destination.click();
     await expect(destination).toHaveAttribute("aria-current", "page");
     await assertRenderedSettingsDestination(page, section);
+    await expectSquircleButtons(page);
+    if (section === "Appearance") {
+      const light = page.locator('.appearance-mode-preview-light [data-preview-scheme="light"]');
+      const dark = page.locator('.appearance-mode-preview-dark [data-preview-scheme="dark"]');
+      const colors = async () => [await light.evaluate(el => getComputedStyle(el).backgroundColor), await dark.evaluate(el => getComputedStyle(el).backgroundColor)];
+      const assertRestingPreviews = async () => {
+        await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).click();
+        for (const preview of await page.locator('.appearance-mode-preview, .appearance-mode-scene').all()) {
+          const bounds = await preview.boundingBox();
+          expect(bounds?.width).toBeGreaterThan(40);
+          expect(bounds?.height).toBeGreaterThan(40);
+        }
+        const selected = page.locator('.appearance-mode-option[aria-checked="true"] .appearance-mode-option-label');
+        await expect(selected).toHaveCount(1);
+        const selectedFill = await selected.evaluate(el => getComputedStyle(el).backgroundColor);
+        expect(selectedFill).not.toBe('rgba(0, 0, 0, 0)');
+        for (const label of await page.locator('.appearance-mode-option[aria-checked="false"] .appearance-mode-option-label').all()) {
+          expect(await label.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(selectedFill);
+        }
+      };
+      await assertRestingPreviews();
+      const before = await colors();
+      expect(before[0]).not.toBe(before[1]);
+      await page.locator('.appearance-mode-option').filter({hasText: 'Dark'}).click();
+      await expect(page.locator('html')).toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
+      expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
+      await page.locator('.appearance-mode-option').filter({hasText: 'Light'}).click();
+      await expect(page.locator('html')).not.toHaveClass(/dark/u);
+      await expectSquircleButtons(page);
+      expect(await colors()).toEqual(before);
+      await assertRestingPreviews();
+    }
+    if (section === "Web Search") {
+      await expect(page.getByText("Current search setup", { exact: true })).toBeVisible();
+      await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(
+        0,
+      );
+
+      const routingOptions = page.getByRole("button", { name: /Routing options/u });
+      await expect(routingOptions).toHaveAttribute("aria-expanded", "false");
+      await routingOptions.click();
+      await expect(
+        page.getByRole("radiogroup", { name: "Web Search routing policy" }),
+      ).toBeVisible();
+      await routingOptions.click();
+      await expect(page.getByRole("radiogroup", { name: "Web Search routing policy" })).toHaveCount(
+        0,
+      );
+
+      const browseProviders = page.getByRole("button", { name: /Browse providers/u });
+      await browseProviders.click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Browse providers", exact: true }),
+      ).toBeFocused();
+      const exaProvider = page.getByRole("button", { name: /^Exa/u });
+      await exaProvider.click();
+      await expect(page.getByRole("heading", { level: 1, name: "Exa", exact: true })).toBeFocused();
+      await page.getByRole("button", { name: "All providers", exact: true }).click();
+      await expect(exaProvider).toBeFocused();
+      await page.getByRole("button", { name: "Back to Web Search", exact: true }).click();
+      await expect(browseProviders).toBeFocused();
+    }
   }
 
   const providers = settingsNavigation.getByRole("button", { name: "Providers", exact: true });
@@ -127,7 +214,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeVisible();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const filter = page.getByRole("combobox", { name: "Chat model" });
   await expect(filter).toBeFocused();
   await filter.fill("this-model-does-not-exist");
@@ -137,11 +224,13 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeFocused();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
   const options = page.locator("[cmdk-item]");
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText(E2E_MODEL_DISPLAY_NAME);
-  await options.first().click();
+  await expect(filter).toBeFocused();
+  await expect(options.first()).toHaveAttribute("data-selected", "true");
+  await filter.press("Enter");
   await expect(modelTrigger).toHaveAttribute(
     "aria-label",
     new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),

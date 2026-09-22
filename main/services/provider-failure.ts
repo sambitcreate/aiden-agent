@@ -3,6 +3,8 @@ import {
   PROVIDER_FAILURE_VERSION,
   type ProviderFailureV1,
 } from "../../renderer/shared/provider-failure.js";
+import { createHash } from "node:crypto";
+import type { DiagnosticSafeFields } from "./diagnostics-contract.js";
 
 export type ProviderFailureReason =
   | "request-failed"
@@ -32,6 +34,8 @@ const TIMEOUT =
   /(?:\bETIMEDOUT\b|timed? out|timeout|deadline[_ -]?exceeded|headers timeout)/iu;
 const SERVICE_UNAVAILABLE =
   /(?:\b50[0234]\b|service unavailable|temporarily unavailable|bad gateway|gateway timeout|overloaded)/iu;
+const MODEL_UNAVAILABLE =
+  /(?:(?:model|models)[^\r\n]{0,120}(?:not found|does not exist|unknown|unavailable|not available|no longer available|shut down|retired|deprecated)|(?:not found|unavailable|not available)[^\r\n]{0,120}(?:model|models))/iu;
 const NETWORK =
   /(?:\bE(?:CONNRESET|CONNREFUSED|HOSTUNREACH|NETUNREACH|NETDOWN|PIPE|AI_AGAIN|NOTFOUND)\b|network error|fetch failed|getaddrinfo|upstream connect|reset before headers|other side closed|connection (?:closed|error|failed|lost|refused|reset)|socket (?:connection (?:was )?closed|closed|hang up))/iu;
 const CONTEXT_WINDOW =
@@ -49,6 +53,7 @@ function requestFailureCategory(
   if (CONTEXT_WINDOW.test(message)) return "context_window";
   if (TIMEOUT.test(message)) return "timeout";
   if (SERVICE_UNAVAILABLE.test(message)) return "service_unavailable";
+  if (MODEL_UNAVAILABLE.test(message)) return "invalid_request";
   if (NETWORK.test(message)) return "network";
   if (INVALID_REQUEST.test(message)) return "invalid_request";
   return "unknown";
@@ -93,6 +98,25 @@ export function providerFailureChatMetadata(
   outcome: ProviderFailedTerminalOutcome,
 ): { providerFailure: ProviderFailureV1 } {
   return { providerFailure: providerFailureFromTerminalOutcome(outcome) };
+}
+
+/** Main-only: call before outcome redaction. Message-derived categories are hints, never HTTP evidence. */
+export function providerFailureDiagnosticFields(
+  outcome: ProviderFailedTerminalOutcome,
+): DiagnosticSafeFields {
+  const failure = providerFailureFromTerminalOutcome(outcome);
+  const message = outcome.finalMessage?.errorMessage;
+  const providerCategory = failure.category === "invalid_request" &&
+    typeof message === "string" && MODEL_UNAVAILABLE.test(message)
+    ? "model_unavailable" : failure.category;
+  const failurePhase = outcome.reason === "compaction-failed" ? "provider-compaction" : "provider-request";
+  // Fingerprint only closed metadata, never low-entropy provider/request text.
+  return {
+    providerCategory,
+    failurePhase,
+    attempts: failure.attempts,
+    fingerprint: createHash("sha256").update(`${failurePhase}:${providerCategory}`).digest("hex").slice(0, 16),
+  };
 }
 
 const CLOSED_NON_PROVIDER_ERRORS = new Set([

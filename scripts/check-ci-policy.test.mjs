@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { URL } from "node:url";
+
+const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
+const catalogWorkflowUrl = new URL(
+  "../.github/workflows/model-catalog-refresh.yml",
+  import.meta.url,
+);
+const pullfrogWorkflowUrl = new URL(
+  "../.github/workflows/pullfrog.yml",
+  import.meta.url,
+);
+
+function workflowStep(workflow, name) {
+  const marker = `      - name: ${name}`;
+  const start = workflow.indexOf(marker);
+  assert.notEqual(start, -1, `Missing workflow step: ${name}`);
+  const next = workflow.indexOf("\n      - name:", start + marker.length);
+  return workflow.slice(start, next === -1 ? workflow.length : next);
+}
+
+test("Android CI only runs for Android or CI workflow changes", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+
+  assert.match(workflow, /^ {2}changes:\n/mu);
+  assert.match(workflow, /fetch-depth: 0/u);
+  assert.match(workflow, /grep -E '\^\(android\(\/\|\$\)\|\\\.github\/workflows\/ci\\\.yml\$\)'/u);
+  assert.match(workflow, /diff_args=\("\$BASE_SHA\.\.\.\$HEAD_SHA"\)/u);
+  assert.match(workflow, /if ! changed_files="\$\(git diff --name-only/u);
+  assert.match(workflow, /^ {4}needs: changes$/mu);
+  assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
+  assert.match(workflow, /npm run test:model-catalog/u);
+  assert.match(
+    workflow,
+    /^ {2}e2e:\n {4}name: Deterministic Electron E2E\n {4}runs-on: macos-26\n {4}timeout-minutes: 45$/mu,
+  );
+
+  const sdkSetup = workflowStep(workflow, "Set up Android SDK tools");
+  assert.match(sdkSetup, /^ {10}packages: platform-tools$/mu);
+
+  const mainPushOnly =
+    /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/u;
+  assert.doesNotMatch(workflowStep(workflow, "Verify Android"), /:app:assembleDebug/u);
+
+  const assembly = workflowStep(workflow, "Assemble installable debug APK");
+  assert.match(assembly, mainPushOnly);
+  assert.match(assembly, /:app:assembleDebug/u);
+  assert.match(workflowStep(workflow, "Record APK checksum"), mainPushOnly);
+  assert.match(workflowStep(workflow, "Upload installable debug APK"), mainPushOnly);
+});
+
+test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {
+  const workflow = await readFile(catalogWorkflowUrl, "utf8");
+
+  assert.match(workflow, /branches:\s*\n\s*- main/u);
+  assert.match(workflow, /workflow_dispatch:/u);
+  assert.match(workflow, /permissions:\s*\n\s*contents: read/u);
+  assert.match(workflow, /publish:[\s\S]*permissions:\s*\n\s*contents: write/u);
+  assert.match(workflow, /group: model-catalog-refresh-main/u);
+  assert.match(workflow, /cancel-in-progress: true/u);
+  assert.match(workflow, /GITHUB_ACTOR.*github-actions\[bot\]/u);
+  assert.match(workflow, /chore: refresh models\.dev catalog/u);
+  assert.match(workflow, /changed_paths.*git diff-tree/u);
+  assert.match(workflow, /changed_paths.*resources\/model-capabilities\.json/u);
+  assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 2);
+  assert.match(workflow, /node-version: 22\.22\.3/u);
+  assert.match(workflow, /npm run models:refresh/u);
+  assert.match(workflow, /npm run test:model-catalog/u);
+  assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
+  assert.match(workflow, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/u);
+  assert.match(workflow, /sha256sum --check model-capabilities\.json\.sha256/u);
+  assert.match(workflow, /needs: refresh/u);
+  assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
+  assert.match(workflow, /git push.*HEAD:main/u);
+});
+
+test("Pullfrog allows aggregate release reviews to finish", async () => {
+  const workflow = await readFile(pullfrogWorkflowUrl, "utf8");
+
+  assert.match(workflow, /uses: pullfrog\/pullfrog@v0\.1\.57/u);
+  assert.match(workflow, /^ {10}timeout: 2h$/mu);
+});
+
+test("coverage collection is enabled before positional test paths", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const command = manifest.scripts["test:coverage"].split(/\s+/u);
+  const flag = command.indexOf("--experimental-test-coverage");
+  const firstTest = command.findIndex((argument) => /\.test\.[cm]?[jt]sx?$/u.test(argument));
+  assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
+});

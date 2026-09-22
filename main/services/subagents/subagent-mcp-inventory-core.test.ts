@@ -53,10 +53,15 @@ test("credential-aware inventory cache avoids repeat connections and invalidates
   assert.equal((await resolveBoundedSubagentMcpInventory(signal, dependencies)).length, 1);
   assert.equal((await resolveBoundedSubagentMcpInventory(signal, dependencies)).length, 1);
   assert.deepEqual(calls, ["list"]);
+  assert.equal((await resolveBoundedSubagentMcpInventory(signal, {
+    ...dependencies,
+    bypassCache: true,
+  })).length, 1);
+  assert.deepEqual(calls, ["list", "list"]);
 
   revisions.current = "b".repeat(64);
   assert.equal((await resolveBoundedSubagentMcpInventory(signal, dependencies)).length, 1);
-  assert.deepEqual(calls, ["list", "list"]);
+  assert.deepEqual(calls, ["list", "list", "list"]);
 });
 
 test("discovery returns completed servers at one aggregate deadline and skips stdio", async () => {

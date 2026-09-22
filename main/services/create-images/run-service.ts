@@ -1,3 +1,4 @@
+import { ByteBoundedLru } from "./asset-thumbnail-cache-core.js";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { CREATE_IMAGES_NODE_DEFINITIONS } from "../../../renderer/shared/create-images/ports.js";
@@ -551,14 +552,12 @@ export class CreateImagesRunService {
   private readonly activeByRun = new Map<string, ActiveRun>();
   private startAdmissionTail: Promise<void> = Promise.resolve();
   private shutdownAdmissionBarrier = false;
-  private readonly listeners = new Set<(workflowId: string) => void>();
-  private readonly terminalCache = new Map<
-    string,
-    {
-      history: CreateImagesTerminalRunView[];
-      latestTerminalRun?: CreateImagesRunView;
-    }
-  >();
+  private readonly listeners = new Set<(workflowId: string, kind: "active" | "snapshot") => void>();
+  private readonly terminalCache = new ByteBoundedLru<{
+    byteLength: number;
+    history: CreateImagesTerminalRunView[];
+    latestTerminalRun?: CreateImagesRunView;
+  }>(8 * 1024 * 1024, CREATE_IMAGES_MAX_CACHED_WORKFLOW_HISTORIES);
   private initializePromise: Promise<void> | undefined;
   private readonly providerConsentAuthority: CreateImagesProviderConsentAuthority = {
     secret: randomBytes(32),
@@ -585,15 +584,15 @@ export class CreateImagesRunService {
     }
   }
 
-  subscribe(listener: (workflowId: string) => void): () => void {
+  subscribe(listener: (workflowId: string, kind: "active" | "snapshot") => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  private notify(workflowId: string): void {
+  private notify(workflowId: string, kind: "active" | "snapshot" = "snapshot"): void {
     for (const listener of this.listeners) {
       try {
-        listener(workflowId);
+        listener(workflowId, kind);
       } catch {
         // Publication is already durable. Observers cannot roll it back.
       }
@@ -607,13 +606,10 @@ export class CreateImagesRunService {
       latestTerminalRun?: CreateImagesRunView;
     },
   ): void {
-    this.terminalCache.delete(workflowId);
-    this.terminalCache.set(workflowId, value);
-    while (this.terminalCache.size > CREATE_IMAGES_MAX_CACHED_WORKFLOW_HISTORIES) {
-      const oldest = this.terminalCache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.terminalCache.delete(oldest);
-    }
+    this.terminalCache.set(workflowId, {
+      ...value,
+      byteLength: Buffer.byteLength(JSON.stringify(value)),
+    });
   }
 
   private async recoveryViewsForWorkflow(
@@ -989,7 +985,7 @@ export class CreateImagesRunService {
   ): Promise<void> {
     const operation = active.mutationTail.then(async () => {
       active.journal = await mutate(active.journal);
-      this.notify(active.workflowId);
+      this.notify(active.workflowId, projectCreateImagesRun(active.journal).terminal ? "snapshot" : "active");
     });
     active.mutationTail = operation.catch(() => undefined);
     return operation;
@@ -3059,6 +3055,16 @@ export class CreateImagesRunService {
     return items;
   }
 
+  /** Volatile projection only: no filesystem, journal history reads, or credentials. */
+  activeProjection(workflowId: string): CreateImagesRunView | undefined {
+    const active = this.activeByWorkflow.get(workflowId);
+    if (!active || active.needsReconciliation) return undefined;
+    const view = runView(active.journal);
+    return ["queued", "running", "paused", "cancel_requested"].includes(view.status)
+      ? view
+      : undefined;
+  }
+
   async list(workflowId: string): Promise<CreateImagesRunListResult> {
     await this.initialize();
     if (!(await this.options.workflows.get(workflowId))) return { status: "not-found" };
@@ -3099,9 +3105,7 @@ export class CreateImagesRunService {
           latestTerminalRun ??= runView(journal);
         }
       }
-      cached = { history, ...(latestTerminalRun ? { latestTerminalRun } : {}) };
-      this.cacheTerminalHistory(workflowId, cached);
-    } else {
+      cached = { byteLength: 0, history, ...(latestTerminalRun ? { latestTerminalRun } : {}) };
       this.cacheTerminalHistory(workflowId, cached);
     }
     const recoveries = refreshedRecoveries ?? (await this.recoveryViewsForWorkflow(workflowId));

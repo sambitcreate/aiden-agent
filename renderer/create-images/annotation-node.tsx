@@ -21,6 +21,8 @@ import {
 } from "../shared/create-images/schema";
 import { useCreateImagesCanvasActions } from "./canvas-context";
 
+import { createImagesAdaptiveAssetGrantUrl } from "../shared/create-images/ipc";
+
 const STAGE_WIDTH = 264;
 const STAGE_HEIGHT = 198;
 const COLOR_VALUES: Readonly<Record<CreateImagesAnnotationColor, string>> = Object.freeze({
@@ -61,6 +63,7 @@ function usePreviewImage(
       active = false;
       next.onload = null;
       next.onerror = null;
+      next.removeAttribute("src");
     };
   }, [onError, onLoad, url]);
   return image;
@@ -112,7 +115,7 @@ export function AnnotationBody({ node }: { node: AnnotationNodeV3 }) {
     if (authority.source === "workflow") actions.assetPreviewFailed(preview.asset.assetId, preview.token);
     else actions.runAssetPreviewFailed(preview.asset.assetId, preview.token);
   }, [actions, authority, preview]);
-  const image = usePreviewImage(preview?.url, reportLoad, reportError);
+  const image = usePreviewImage(preview ? createImagesAdaptiveAssetGrantUrl(preview.token, STAGE_WIDTH) : undefined, reportLoad, reportError);
   const [tool, setTool] = React.useState<AnnotationTool>("select");
   const [selectedId, setSelectedId] = React.useState<string>();
   const drawingIdRef = React.useRef<string | undefined>(undefined);

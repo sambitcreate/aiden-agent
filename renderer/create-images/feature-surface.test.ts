@@ -31,11 +31,10 @@ test("Create Images is a lazy, fail-closed route inside the shared sidebar shell
     /React\.useEffect\(\(\) => \{\s*if \(createImagesMode\) return;\s*const unregister = shortcutAssignments/u,
   );
   assert.match(shell, /createImagesMode \? \(\s*<div[\s\S]*?<Outlet \/>/u);
-  assert.match(
-    root,
-    /<AssistantDock[\s\S]*?environmentPanel\.compactModalOpen \|\| pathname\.startsWith\("\/create-images"\)/u,
-  );
-  assert.doesNotMatch(root, /pathname\.startsWith\("\/create-images"\) \? null/u);
+  // Current main replaced the chat-assistant dock with window-level Aiden Live.
+  // Keep its connection lifecycle mounted while the route excludes workspace panels.
+  assert.match(root, /<AssistantDock rightInset=\{environmentPanel\.dockRightInset\} \/>/u);
+
 });
 
 test("the first-open image workspace gate is path-free and exposes recovery controls", () => {

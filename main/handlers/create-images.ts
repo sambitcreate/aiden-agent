@@ -1,3 +1,4 @@
+import { writeDevLog } from "../services/dev-log.js";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from "../platform.js";
@@ -220,11 +221,11 @@ function reportAssetImportFailure(error: unknown): void {
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code?: unknown }).code ?? "unknown")
       : "unknown";
-  console.warn("[create-images] Image import failed safely.", {
+  writeDevLog("warn", "create-images", ["Image import failed safely.", {
     name: error instanceof Error ? error.name : "UnknownError",
     code,
     message: error instanceof Error ? error.message : "Unknown image import failure.",
-  });
+  }]);
 }
 
 function workspaceStatusView(
@@ -375,7 +376,7 @@ export function registerCreateImagesHandlers(): void {
     safeErrorCode: "rate-limited",
     retryAfterMs: Math.max(500, readRateLimiter.retryAfterMs(readOwnerKey(owner))),
   });
-  const runPublicationStates = new Map<string, { dirty: boolean; running: boolean }>();
+  const runPublicationStates = new Map<string, { dirty: boolean; running: boolean; fullSnapshot: boolean }>();
   const runOperationsByOwner = new Map<number, number>();
   let activeRunOperations = 0;
   const acquireRunOperation = (ownerId: number): (() => void) | undefined => {
@@ -413,7 +414,7 @@ export function registerCreateImagesHandlers(): void {
     binding.releaseInvalidation();
   };
 
-  const scheduleRunPublication = (workflowId: string): void => {
+  const scheduleRunPublication = (workflowId: string, kind: "active" | "snapshot" = "snapshot"): void => {
     const service = createImagesService();
     const hasConsumer =
       [...runOwners.values()].some((binding) => binding.workflowId === workflowId) ||
@@ -423,7 +424,9 @@ export function registerCreateImagesHandlers(): void {
     const state = runPublicationStates.get(workflowId) ?? {
       dirty: false,
       running: false,
+      fullSnapshot: false,
     };
+    state.fullSnapshot ||= kind === "snapshot";
     state.dirty = true;
     runPublicationStates.set(workflowId, state);
     if (state.running) return;
@@ -431,7 +434,27 @@ export function registerCreateImagesHandlers(): void {
     void (async () => {
       try {
         while (state.dirty) {
+          // At most ten publications per second, including sustained journal writes.
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
           state.dirty = false;
+          if (![...runOwners.values(), ...runSubscriptions.values()].some(
+            (consumer) => consumer.workflowId === workflowId,
+          )) break;
+          const fullSnapshot = state.fullSnapshot;
+          state.fullSnapshot = false;
+          const activeRun = fullSnapshot ? undefined : service.runs.activeProjection(workflowId);
+          if (activeRun) {
+            for (const [subscriptionId, subscription] of runSubscriptions) {
+              if (subscription.workflowId !== workflowId) continue;
+              try {
+                subscription.streamSequence += 1;
+                subscription.send({ subscriptionId, streamSequence: subscription.streamSequence, activeRun });
+              } catch {
+                subscription.release();
+              }
+            }
+            continue;
+          }
           let snapshot: Awaited<ReturnType<typeof service.runs.list>> | undefined;
           for (let attempt = 0; attempt < 3 && !snapshot; attempt += 1) {
             try {

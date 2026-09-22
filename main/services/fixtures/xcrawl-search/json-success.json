@@ -1,0 +1,39 @@
+{
+  "search_id": "xcrawl_fixture_search",
+  "endpoint": "search",
+  "version": "1.0",
+  "status": "completed",
+  "query": "current XCrawl docs",
+  "data": {
+    "status": "success",
+    "data": [
+      {
+        "description": "XCrawl Search API returns structured web results.",
+        "position": 1,
+        "title": "XCrawl Search API",
+        "url": "https://docs.xcrawl.com/doc/api-reference/search/"
+      },
+      {
+        "description": "A second untrusted XCrawl result.",
+        "position": 2,
+        "title": null,
+        "url": "https://example.test/xcrawl-second"
+      },
+      {
+        "description": "This duplicate is discarded.",
+        "position": 3,
+        "title": "Duplicate XCrawl source",
+        "url": "https://example.test/xcrawl-second"
+      },
+      {
+        "description": "This source must not escape the adapter.",
+        "position": 4,
+        "title": "Unsafe XCrawl source",
+        "url": "javascript:alert(1)"
+      }
+    ]
+  },
+  "started_at": "2026-08-29T00:00:00Z",
+  "ended_at": "2026-08-29T00:00:01Z",
+  "total_credits_used": 1
+}

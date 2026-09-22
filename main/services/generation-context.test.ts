@@ -11,6 +11,8 @@ import {
   compactGenerationContext,
   createGenerationContextTransform,
   limitComputerUseImages,
+  limitBrowserSnapshotImages,
+  projectNextContextUsage,
   projectMessagesForModel,
 } from "./generation-context.js";
 
@@ -18,6 +20,8 @@ const options = {
   contextWindow: 128_000,
   systemPrompt: "You are a coding agent.",
   tools: [],
+  providerId: "openai-codex",
+  modelId: "gpt-5.3-codex-spark",
 };
 
 function user(content: string): UserMessage {
@@ -100,6 +104,75 @@ test("returns the original context when it fits the model window", () => {
   assert.equal(result.messages, messages);
   assert.equal(result.estimatedTokensAfter, result.estimatedTokensBefore);
   assert.equal(result.usedContextFallback, false);
+});
+
+test("projects zero-usage restored history plus the current prompt and static context", () => {
+  const messages: AgentMessage[] = [
+    user(`old ${"x".repeat(8_000)}`),
+    assistant("old-call"),
+    toolResult("old-call", "done"),
+    user(`current ${"y".repeat(4_000)}`),
+  ];
+  const projection = projectNextContextUsage(messages, {
+    contextWindow: 4_096,
+    systemPrompt: "system ".repeat(400),
+    tools: [],
+  });
+  assert.equal(projection.providerUsageTokens, 0);
+  assert.ok(projection.addedAfterUsageAnchorTokens > 0);
+  assert.ok(projection.staticTokens > 0);
+  assert.equal(projection.compressibleHistoryMessages, 3);
+  assert.equal(projection.shouldCompact, true);
+});
+
+test("does not call an irreducible first prompt compressible history", () => {
+  const projection = projectNextContextUsage(
+    [user("attachment payload ".repeat(10_000))],
+    { contextWindow: 2_048, systemPrompt: "system", tools: [] },
+  );
+  assert.equal(projection.shouldCompact, true);
+  assert.equal(projection.compressibleHistoryMessages, 0);
+});
+
+test("does not classify an active tool-loop tail as compressible history", () => {
+  const projection = projectNextContextUsage(
+    [user("active request"), assistant("active"), toolResult("active", "x".repeat(80_000))],
+    { ...options, contextWindow: 8_000 },
+  );
+  assert.equal(projection.shouldCompact, true);
+  assert.equal(projection.compressibleHistoryMessages, 0);
+});
+
+test("ignores provider usage from a different saved model binding", () => {
+  const stale = assistant("stale");
+  stale.usage.input = 100_000;
+  stale.usage.totalTokens = 100_000;
+  const projection = projectNextContextUsage([user("old"), stale, user("new")], {
+    ...options,
+    providerId: "anthropic",
+    modelId: "claude-new",
+  });
+  assert.equal(projection.providerUsageTokens, 0);
+  assert.equal(projection.usageAnchorIndex, null);
+  assert.ok(projection.contextTokens < 1_000);
+});
+
+test("adds current static context to a matching provider usage anchor", () => {
+  const anchored = assistant("anchored");
+  anchored.usage.input = 1_000;
+  anchored.usage.totalTokens = 1_000;
+  const projection = projectNextContextUsage([user("old"), anchored, user("new")], {
+    ...options,
+    systemPrompt: "expanded instructions ".repeat(1_000),
+  });
+
+  assert.equal(projection.providerUsageTokens, 1_000);
+  assert.equal(projection.usageAnchorIndex, 1);
+  assert.ok(projection.staticTokens > 1_000);
+  assert.ok(
+    projection.contextTokens >=
+      projection.providerUsageTokens + projection.staticTokens,
+  );
 });
 
 test("projects model-neutral image history only for vision requests", () => {
@@ -252,6 +325,54 @@ test("compactGenerationContext always applies computer_use image retention", () 
   assert.equal(imagesKept.length, 3);
 });
 
+test("browser image history preserves text, errors, pairing and the newest three results independently of Computer Use", () => {
+  const messages: AgentMessage[] = [user("Inspect the browser and the desktop.")];
+  for (let index = 0; index < 6; index += 1) {
+    for (const toolName of ["browser_snapshot", "computer_use"]) {
+      const id = `${toolName}-${index}`;
+      const result = toolResult(id, [{ type: "text", text: `${id}: ${index === 0 ? "Error: login failed" : "actionable locator #save"}` }, { type: "image", data: id, mimeType: "image/png" }], toolName);
+      if (index === 0) result.isError = true;
+      messages.push(assistant(id, toolName), result);
+    }
+    messages.push(assistant(`browser-text-${index}`, "browser_snapshot"), toolResult(`browser-text-${index}`, "text only; no screenshot allowance used", "browser_snapshot"));
+  }
+  const durable = JSON.stringify(messages);
+  const checkpoint = { role: "compactionSummary", summary: "Keep the user's styling decision", tokensBefore: 1_000, timestamp: 1 } as AgentMessage;
+  messages.unshift(checkpoint);
+  const projected = compactGenerationContext(messages, options);
+  assert.equal(projected.compacted, false);
+  assert.equal(projected.messages[0], checkpoint);
+  assertToolProtocolIsPaired(projected.messages);
+  for (const name of ["browser_snapshot", "computer_use"]) {
+    const results = projected.messages.filter((message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === name);
+    const images = results.flatMap((result) => result.content.filter((part) => part.type === "image").map((part) => part.data));
+    assert.deepEqual(images, [3, 4, 5].map((index) => `${name}-${index}`));
+    const oldest = results.find((result) => result.toolCallId === `${name}-0`)!;
+    assert.equal(oldest.isError, true);
+    assert.match(JSON.stringify(oldest.content), /Error: login failed/);
+  }
+  assert.equal(JSON.stringify(messages.slice(1)), durable);
+  assert.deepEqual(projectNextContextUsage(messages, options), projectNextContextUsage(projected.messages, options));
+});
+
+test("browser screenshot projection counts image-bearing results and leaves other images and journal objects intact", () => {
+  const messages: AgentMessage[] = [user("Compare snapshots")];
+  for (let index = 0; index < 4; index += 1) {
+    messages.push(assistant(`browser-${index}`, "browser_snapshot"), toolResult(`browser-${index}`, [{ type: "text", text: `page-${index}` }, { type: "image", data: `first-${index}`, mimeType: "image/png" }, { type: "image", data: `second-${index}`, mimeType: "image/png" }], "browser_snapshot"));
+  }
+  const unrelated = toolResult("read", [{ type: "image", data: "attachment", mimeType: "image/png" }]);
+  messages.push(assistant("read"), unrelated);
+  const projected = limitBrowserSnapshotImages(messages);
+  assert.equal(projected[projected.length - 1], unrelated);
+  assert.equal(projected.filter((message) => message.role === "toolResult").flatMap((message) => message.role === "toolResult" ? message.content.filter((part) => part.type === "image") : []).length, 7);
+  assert.equal((messages[2] as ToolResultMessage).content.length, 3);
+  assert.equal(limitBrowserSnapshotImages(messages, Number.POSITIVE_INFINITY), messages);
+  const textOnly = compactGenerationContext(messages, { ...options, supportsImages: false });
+  assert.equal(JSON.stringify(textOnly.messages).includes('"type":"image"'), false);
+  assert.match(JSON.stringify(textOnly.messages), /private journal/);
+  assert.equal((messages[2] as ToolResultMessage).content.length, 3);
+});
+
 test("bounds a Codex-sized discovery loop while preserving recent evidence and tool pairs", () => {
   const messages: AgentMessage[] = [user("Inspect the provider runtime.")];
   for (let index = 0; index < 38; index += 1) {
@@ -357,6 +478,11 @@ test("drops oldest complete chat turns before sacrificing the active request", (
 
   assert.equal(result.compacted, true);
   assert.ok(result.removedHistoryMessages > 0);
+  assert.deepEqual(result.emergencyProjection, {
+    kind: "history_removed",
+    removedHistoryMessages: result.removedHistoryMessages,
+    requiresDurableCheckpoint: true,
+  });
   const finalMessage = result.messages[result.messages.length - 1];
   assert.equal(finalMessage?.role, "user");
   assert.equal(
@@ -419,6 +545,8 @@ test("bounds oversized tool text while retaining image evidence without mutating
 
   assert.equal(result.compacted, true);
   assert.equal(result.truncatedToolResults, 1);
+  assert.equal(result.emergencyProjection.kind, "active_payload_reduced");
+  assert.equal(result.emergencyProjection.requiresDurableCheckpoint, false);
   assert.equal(result.usedContextFallback, false);
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
   const transformedResult = result.messages.find(
@@ -441,6 +569,11 @@ test("replaces an oversized active request with a bounded fail-safe notice", () 
 
   assert.equal(result.compacted, true);
   assert.equal(result.usedContextFallback, true);
+  assert.deepEqual(result.emergencyProjection, {
+    kind: "active_payload_replaced",
+    category: "active_context_too_large",
+    requiresDurableCheckpoint: false,
+  });
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
   assert.equal(result.messages.length, 1);
   assert.match(

@@ -51,7 +51,7 @@ export function SubagentMcpMutationApproval({
         <Text
           as="p"
           variant="small-strong"
-          className="rounded-control bg-support-warning/10 px-3 py-2 text-support-warning"
+          className="rounded-control bg-status-warning-surface px-3 py-2 text-status-warning"
           role="alert"
         >
           A prior call to this target has an unknown outcome. Inspect the remote system before

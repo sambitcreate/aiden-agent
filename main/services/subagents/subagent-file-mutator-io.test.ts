@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -130,6 +140,72 @@ test("inspect, prepare, commit, finalize, and cancel stay on one pinned helper",
   assert.equal(client.currentState, "closed");
   assert.ok(child);
   assert.equal(child.exitCode, 0);
+});
+
+test("HTML reads traverse beneath the pinned workspace root without following symlinks", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  await mkdir(path.join(rootPath, "nested"));
+  await writeFile(path.join(rootPath, "nested", "chart.html"), "<p>workspace chart</p>");
+  const root = await pinSubagentWorkspaceRoot(rootPath);
+  const client = createSubagentFileMutatorClient({
+    workspaceRoot: root,
+    binary: productionBinary,
+  });
+
+  assert.equal(
+    await client.readHtml("html-read", "nested/chart.html"),
+    "<p>workspace chart</p>",
+  );
+  await client.close();
+
+  const outside = await workspace(t);
+  await writeFile(path.join(outside, "secret.html"), "<p>outside secret</p>");
+  await symlink(outside, path.join(rootPath, "redirect"));
+  const rejectingClient = createSubagentFileMutatorClient({
+    workspaceRoot: root,
+    binary: productionBinary,
+  });
+  await assert.rejects(
+    rejectingClient.readHtml("html-symlink", "redirect/secret.html"),
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "conflict",
+  );
+  await rejectingClient.close();
+});
+
+test("HTML reads retain opened ancestors during a mid-walk symlink swap", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const selected = path.join(rootPath, "selected");
+  const displaced = path.join(rootPath, "selected-original");
+  const attacker = await workspace(t);
+  const marker = path.join(rootPath, "html-read-pause.marker");
+  await mkdir(path.join(selected, "nested"), { recursive: true });
+  await mkdir(path.join(attacker, "nested"), { recursive: true });
+  await writeFile(path.join(selected, "nested", "chart.html"), "WORKSPACE_CONTENT");
+  await writeFile(path.join(attacker, "nested", "chart.html"), "OUTSIDE_SECRET");
+  const root = await pinSubagentWorkspaceRoot(rootPath);
+  const client = createSubagentFileMutatorClient({
+    workspaceRoot: root,
+    binary: testingBinary,
+    spawnProcess: (command, args, options) =>
+      spawn(command, [...args], {
+        ...options,
+        env: {
+          ...options.env,
+          AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_DURING_HTML_READ: marker,
+        },
+      }),
+  });
+
+  const reading = client.readHtml("html-race", "selected/nested/chart.html");
+  await waitForFile(marker);
+  await rename(selected, displaced);
+  await symlink(attacker, selected);
+  await writeFile(`${marker}.continue`, "continue");
+
+  assert.equal(await reading, "WORKSPACE_CONTENT");
+  await client.close();
 });
 
 test("stale prepare errors are fixed and do not expose path or content", async (t) => {

@@ -30,19 +30,15 @@ class FailingTaskPersistence<T> extends MemoryPersistence<T> {
     const result = await mutation(draft);
     const failure = this.fail;
     this.fail = null;
-    if (failure === "before")
-      throw new Error("task mapping pre-commit failure");
+    if (failure === "before") throw new Error("task mapping pre-commit failure");
     this.data = draft;
-    if (failure === "after")
-      throw new Error("task mapping post-commit failure");
+    if (failure === "after") throw new Error("task mapping post-commit failure");
     return result;
   }
 }
 
 test("an indeterminate scheduled create preserves its exact recovered chat identity", async (t) => {
-  const directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "aiden-scheduled-chat-claim-"),
-  );
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-scheduled-chat-claim-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let failIndexWrites = true;
   const interrupted = createChatStore(async () => directory, undefined, {
@@ -93,12 +89,11 @@ test("an indeterminate scheduled create preserves its exact recovered chat ident
     [claimedChatId],
   );
 
-  const execution = await fs.readFile(
-    new URL("./schedule-execution.ts", import.meta.url),
-    "utf8",
-  );
+  const execution = await fs.readFile(new URL("./schedule-execution.ts", import.meta.url), "utf8");
   assert.match(execution, /createScheduledChatClaim\(claimedChatId, \(\) =>/u);
   assert.match(execution, /store\.ensureChatId\(task\.id, create\)/u);
+  assert.match(execution, /task\.model \?\?[\s\S]*firstVisibleModelForProvider/u);
+  assert.match(execution, /settings\.hiddenModelsByProvider/u);
 });
 
 test("schedule mapping failures happen before chat creation and cannot orphan a chat", async () => {
@@ -123,10 +118,7 @@ test("schedule mapping failures happen before chat creation and cannot orphan a 
         creates += 1;
         return { id: claimedChatId };
       }),
-      new RegExp(
-        `task mapping ${failure === "before" ? "pre" : "post"}-commit failure`,
-        "u",
-      ),
+      new RegExp(`task mapping ${failure === "before" ? "pre" : "post"}-commit failure`, "u"),
     );
     assert.equal(creates, 0);
   }

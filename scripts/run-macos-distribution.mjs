@@ -248,6 +248,7 @@ export async function runMacDistribution() {
       await npm("release:update-model-capabilities");
       await npm("computer-use:vendor");
       await npm("package:fingerprint");
+      await npm("generative-ui:vendor");
       await npm("build:native");
       await npm("build");
       await npm("package:fingerprint:verify");

@@ -12,7 +12,7 @@ Before adding or materially restyling any UI element or component, always review
 
 ## Release model metadata
 
-`npm run models:refresh` is the explicit development refresh, and `npm run dist` invokes the same release step before packaging. Those are the only paths that may contact models.dev. Never add a models.dev call to normal development, unpacked builds, or ordinary live-app reads. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
+models.dev may be contacted only by `npm run models:refresh`, the release refresh invoked by `npm run dist`, the scoped post-merge catalog workflow, or the user-initiated foreground **Update model catalogs** action in Settings → Providers. The live action may request only the fixed `https://models.dev/api.json` endpoint without credentials, cookies, prompts, chats, selections, custom endpoints, or a device identifier; its validated device-local cache is display-only and must never change runtime limits, routing, or selectable inventory. Never add a models.dev call to startup, normal development, unpacked builds, ordinary live-app reads, onboarding navigation, or background polling. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
 
 ## Papercuts
 

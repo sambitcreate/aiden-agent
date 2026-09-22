@@ -42,7 +42,10 @@ test("the models.dev updater uses the fixed endpoint and atomically replaces the
     assert.equal(requests.length, 1);
     assert.equal(requests[0].input, "https://models.dev/api.json");
     assert.deepEqual(requests[0].init?.headers, { accept: "application/json" });
+    assert.equal(requests[0].init?.method, "GET");
     assert.equal(requests[0].init?.redirect, "error");
+    assert.equal(requests[0].init?.credentials, "omit");
+    assert.equal(requests[0].init?.referrerPolicy, "no-referrer");
     assert.ok(requests[0].init?.signal instanceof AbortSignal);
     assert.deepEqual(JSON.parse(await readFile(destination, "utf8")), snapshot);
     assert.deepEqual(await readdir(path.dirname(destination)), ["model-capabilities.json"]);

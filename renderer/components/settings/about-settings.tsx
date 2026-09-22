@@ -4,6 +4,7 @@ import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
+import { DiagnosticsSettings } from "./diagnostics-settings";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
@@ -61,6 +62,7 @@ export function AboutSettings() {
   const [resetting, setResetting] = React.useState(false);
   const [resetError, setResetError] = React.useState<string | null>(null);
   const [updateActionBusy, setUpdateActionBusy] = React.useState(false);
+  const [showingOnboarding, setShowingOnboarding] = React.useState(false);
   const resetButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const updateSnapshot = useAppUpdateSnapshot();
 
@@ -96,6 +98,19 @@ export function AboutSettings() {
       setResetError(message);
       toast.error(message);
       setResetting(false);
+    }
+  };
+
+  const showOnboarding = async () => {
+    if (showingOnboarding) return;
+    setShowingOnboarding(true);
+    try {
+      await appApi.setOnboardingOutcome("incomplete");
+      window.dispatchEvent(new Event("aiden:show-onboarding"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't reopen onboarding.");
+    } finally {
+      setShowingOnboarding(false);
     }
   };
 
@@ -141,7 +156,7 @@ export function AboutSettings() {
 
   return (
     <>
-      <FieldSet title="About">
+      <FieldSet title="Application">
         <div className="settings-about-header flex items-center gap-4 p-4 max-[540px]:items-start">
           <img src={APP_ICON_URL} alt="" className="size-16 shrink-0" />
           <div className="min-w-0 flex-1">
@@ -171,6 +186,23 @@ export function AboutSettings() {
             </Button>
           </div>
         </div>
+        <Field
+          className="border-t border-separator"
+          label="Onboarding"
+          description="Reopen setup without deleting providers, credentials, preferences, or other app data."
+        >
+          <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
+            <Button
+              size="small"
+              variant="filled"
+              disabled={showingOnboarding}
+              onClick={() => void showOnboarding()}
+            >
+              {showingOnboarding ? <Loader2 className="animate-spin" /> : null}
+              {showingOnboarding ? "Opening…" : "Show onboarding"}
+            </Button>
+          </div>
+        </Field>
         <Field
           className="border-t border-separator"
           label="Software update"
@@ -241,6 +273,8 @@ export function AboutSettings() {
           </div>
         </Field>
       </FieldSet>
+
+      <DiagnosticsSettings />
 
       <AlertDialog
         open={confirmReset}

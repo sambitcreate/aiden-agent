@@ -1,10 +1,18 @@
+import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain, logger } from "../platform.js";
+import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
-import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
+import {
+  assertOnboardingTailnetBaseUrl,
+  listModels,
+  normalizeProviderBaseUrl,
+  testConnection,
+} from "../services/models.js";
 import {
   parseProviderAuthProviderId,
   parseProviderAuthResponseRequest,
@@ -13,6 +21,7 @@ import {
 import { providerAuthFlow } from "../services/provider-auth-flow.js";
 import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import { providerRegistry } from "../services/provider-registry.js";
+import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import {
   canonicalGoogleProvider,
@@ -23,7 +32,6 @@ import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
-  mergeCodexProvider,
 } from "../services/provider-list-core.js";
 import { AppearancePreviewState } from "../services/appearance-preview-core.js";
 import {
@@ -35,6 +43,9 @@ import {
   normalizeProviderCredentialInput,
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
+import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
+import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -48,6 +59,13 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
+import {
+  normalizeProviderArtworkInput,
+  persistableProviderArtwork,
+} from "../services/provider-artwork.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
+import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -71,7 +89,14 @@ function optionalPositiveNumber(value: unknown): number | undefined {
 }
 
 function optionalModelType(value: unknown): ProviderModelType | undefined {
-  return value === "llm" || value === "embedding" ? value : undefined;
+  return value === "llm" ||
+    value === "embedding" ||
+    value === "reranker" ||
+    value === "image" ||
+    value === "audio" ||
+    value === "video"
+    ? value
+    : undefined;
 }
 
 function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
@@ -90,6 +115,8 @@ function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadat
       modelId,
       {
         source,
+        overrides: parseCustomModelOptions(metadata.overrides),
+        manuallyAdded: metadata.manuallyAdded === true ? true : undefined,
         name: typeof metadata.name === "string" && metadata.name ? metadata.name : undefined,
         type: optionalModelType(metadata.type),
         vision: typeof metadata.vision === "boolean" ? metadata.vision : undefined,
@@ -118,7 +145,8 @@ function parseProvider(value: unknown): StoredProvider {
   const models = Array.isArray(p.models)
     ? p.models.filter(
         (model): model is string =>
-          typeof model === "string" && modelMetadata?.[model]?.type !== "embedding",
+          typeof model === "string" &&
+          (modelMetadata?.[model]?.type === undefined || modelMetadata[model]?.type === "llm"),
       )
     : [];
   const defaultModel =
@@ -135,6 +163,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
+    artwork: persistableProviderArtwork(p.artwork),
     baseUrl,
     models,
     modelMetadata,
@@ -146,6 +175,9 @@ function parseProvider(value: unknown): StoredProvider {
     // a renderer payload that could redirect native credentials.
     isBuiltin: false,
   };
+  if (provider.id === "custom:onboarding-tailscale") {
+    assertOnboardingTailnetBaseUrl(provider.baseUrl);
+  }
   return provider.id === GOOGLE_PROVIDER_ID ? canonicalGoogleProvider(provider) : provider;
 }
 
@@ -182,7 +214,7 @@ async function saveProvider(
 ) {
   if (providerRegistry.isBuiltinProvider(provider.id)) {
     throw new Error(
-      `${provider.label} is built into Pi and has no editable endpoint configuration.`,
+      `${provider.label} is built into Aiden and has no editable endpoint configuration.`,
     );
   }
   if (!isCustomProviderId(provider.id)) {
@@ -196,25 +228,29 @@ async function saveProvider(
 }
 
 async function listProviders() {
-  const customProviders = await listProvidersWithLegacyPiCredentialMigration();
-  const providers = [
-    ...(await providerRegistry.listBuiltinProviders()),
-    ...customProviders.filter((provider) => !providerRegistry.isBuiltinProvider(provider.id)),
-  ];
-  try {
-    return mergeCodexProvider(providers, await providerRegistry.codex.snapshot());
-  } catch {
-    logger.warn("providers", "ChatGPT / Codex status was unavailable while listing providers.");
-    return mergeCodexProvider(providers, null);
-  }
+  return listConfiguredProviders();
+}
+
+async function refreshProviderCatalogs(providerIds?: readonly string[], force = true) {
+  const errors = await providerRegistry.refreshBuiltinCatalogs(providerIds, force);
+  return {
+    providers: await listProviders(),
+    errors: projectPiCatalogRefreshErrors(errors),
+  };
 }
 
 export function registerProviderHandlers(): void {
-  forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
-    ipcMain.broadcast(channel, event),
+  forwardCodexProviderStatusChanges(
+    providerRegistry.codex,
+    (channel, event) => ipcMain.broadcast(channel, event),
+    () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
   );
 
   ipcMain.handle("providers:list", listProviders);
+
+  ipcMain.handle("providers:normalizeArtwork", (_event, input: unknown) =>
+    normalizeProviderArtworkInput(input),
+  );
 
   ipcMain.handle("providers:auth:status", async (_event, providerId: unknown) =>
     providerAuthFlow.status(parseProviderAuthProviderId(providerId)),
@@ -239,6 +275,23 @@ export function registerProviderHandlers(): void {
     return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
   });
 
+  ipcMain.handle(
+    "providers:validateOnboardingApiKey",
+    async (event, providerIdValue: unknown, keyValue: unknown) => {
+      const owner = providerAuthOwner(event);
+      if (providerIdValue !== "openai" && providerIdValue !== "anthropic") {
+        throw new Error("This provider does not support onboarding API-key validation.");
+      }
+      const key = normalizeProviderCredentialInput(keyValue);
+      if (!key) throw new Error("Enter an API key before validating the connection.");
+      return providerRegistry.validateAndStoreOnboardingApiKey(
+        providerIdValue,
+        key,
+        () => !owner.isDestroyed(),
+      );
+    },
+  );
+
   ipcMain.handle("providers:save", async (event, providerValue: unknown, keyOverride?: unknown) => {
     const owner = providerAuthOwner(event);
     return saveProvider(parseProvider(providerValue), keyOverride, () => !owner.isDestroyed());
@@ -248,7 +301,7 @@ export function registerProviderHandlers(): void {
     const owner = providerAuthOwner(event);
     const providerId = asProviderId(id);
     if (providerRegistry.isBuiltinProvider(providerId)) {
-      throw new Error("Pi built-in providers cannot be removed.");
+      throw new Error("Providers built into Aiden cannot be removed.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can be removed.");
@@ -264,7 +317,7 @@ export function registerProviderHandlers(): void {
       // rejected state-changing request to a live document for parity with
       // logout/auth, rather than accepting queued stale renderer work.
       providerAuthOwner(event);
-      throw new Error("Pi built-in providers must be set up through their native sign-in flow.");
+      throw new Error("Providers built into Aiden must use their managed sign-in flow.");
     }
     if (!isCustomProviderId(providerId)) {
       throw new Error("Only Aiden custom connections can store an endpoint key.");
@@ -281,7 +334,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native connection handling.");
+        throw new Error("Providers built into Aiden use managed connection handling.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint tests.");
@@ -297,7 +350,7 @@ export function registerProviderHandlers(): void {
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
       if (providerRegistry.isBuiltinProvider(provider.id)) {
-        throw new Error("Pi built-in providers use Pi-native model discovery.");
+        throw new Error("Providers built into Aiden use managed model discovery.");
       }
       if (!isCustomProviderId(provider.id)) {
         throw new Error("Only Aiden custom connections support endpoint model discovery.");
@@ -308,16 +361,46 @@ export function registerProviderHandlers(): void {
     },
   );
 
-  ipcMain.handle("providers:refresh", async (event) => {
+  ipcMain.handle("providers:refresh", async (event, providerValue?: unknown) => {
     // A catalog refresh can renew OAuth credentials inside Pi, so treat it as
     // a credential-affecting operation rather than accepting stale documents.
     providerAuthOwner(event);
-    const errors = await providerRegistry.refreshBuiltinCatalogs();
-    if (errors.size > 0) {
-      const [providerId, error] = errors.entries().next().value as [string, Error];
-      throw new Error(`${providerId} model refresh failed: ${error.message}`);
+    const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
+    if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
+      throw new Error("Only provider catalogs built into Aiden can be refreshed.");
     }
-    return listProviders();
+    return refreshProviderCatalogs(providerId === undefined ? undefined : [providerId]);
+  });
+
+  ipcMain.handle("providers:refreshIfStale", async (event) => {
+    providerAuthOwner(event);
+    return refreshProviderCatalogs(undefined, false);
+  });
+
+  ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
+
+  ipcMain.handle("providers:updateCatalogs", async (event) => {
+    providerAuthOwner(event);
+    const inventory = await refreshProviderCatalogs();
+    let modelsDev;
+    try {
+      const refreshed = await modelsDevCacheRuntime.refresh();
+      modelsDev = { ok: true as const, status: refreshed.status };
+    } catch (error) {
+      modelsDev = {
+        ok: false as const,
+        status: await modelsDevCacheStatus(),
+        message:
+          error instanceof Error
+            ? error.message.slice(0, 240)
+            : "The models.dev catalog could not be updated.",
+      };
+    }
+    return {
+      providers: inventory.providers,
+      inventoryErrors: inventory.errors,
+      modelsDev,
+    };
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -355,6 +438,64 @@ export function registerProviderHandlers(): void {
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
   );
+  ipcMain.handle(
+    "settings:setProviderThinking",
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, levelValue: unknown) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
+        throw new Error("Invalid provider thinking selection.");
+      }
+      const metadata = providerRegistry.builtinProvider(providerId)?.modelMetadata?.[modelId];
+      if (!metadata?.thinkingLevels?.includes(levelValue)) {
+        throw new Error("This thinking level is not supported by the selected model.");
+      }
+      return configStore.setProviderThinkingLevel(providerId, modelId, levelValue);
+    },
+  );
+  ipcMain.handle(
+    "settings:setModelVisibility",
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, hiddenValue: unknown) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || typeof hiddenValue !== "boolean") {
+        throw new Error("Invalid model visibility request.");
+      }
+      return configStore.setModelVisibility(providerId, modelId, hiddenValue);
+    },
+  );
+  ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle("settings:hideAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.hideAllProviderModels(asProviderId(providerIdValue));
+  });
+  ipcMain.handle(
+    "settings:setGeminiVoiceSetup",
+    async (_event, scopeValue: unknown, modelValue: unknown) => {
+      if (!isGeminiUsageScope(scopeValue) || typeof modelValue !== "string") {
+        throw new Error("Invalid Gemini voice setup.");
+      }
+      if (!isGeminiTranscriptionModel(modelValue)) {
+        throw new Error("Choose a supported Gemini transcription model.");
+      }
+      await listProvidersWithLegacyPiCredentialMigration();
+      if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+        throw new Error("Add a Google API key in Providers before enabling Gemini voice.");
+      }
+      return configStore.setGeminiVoiceSetup(scopeValue, modelValue);
+    },
+  );
+  ipcMain.handle("settings:setGeminiUsageScope", async (_event, scopeValue: unknown) => {
+    if (!isGeminiUsageScope(scopeValue)) {
+      throw new Error("Invalid Gemini usage scope.");
+    }
+    await listProvidersWithLegacyPiCredentialMigration();
+    if (!(await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID))) {
+      throw new Error("Add a Google API key in Providers before updating Gemini access.");
+    }
+    return configStore.setGeminiUsageScope(scopeValue);
+  });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
@@ -369,8 +510,23 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
+    if (typeof p.dictationHoldToTalk === "boolean")
+      next.dictationHoldToTalk = p.dictationHoldToTalk;
+    if (typeof p.dictationSilenceStop === "boolean")
+      next.dictationSilenceStop = p.dictationSilenceStop;
+    if (typeof p.dictationCleanup === "boolean") next.dictationCleanup = p.dictationCleanup;
+    if (typeof p.dictationSounds === "boolean") next.dictationSounds = p.dictationSounds;
     if (typeof p.showLocalModelReasoning === "boolean")
       next.showLocalModelReasoning = p.showLocalModelReasoning;
+    if (p.compactionEngine !== undefined) {
+      if (!isCompactionEngine(p.compactionEngine)) throw new Error("Invalid compaction engine.");
+      next.compactionEngine = p.compactionEngine;
+    }
+    if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    if (p.skillsEnabled !== undefined) {
+      if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
+      next.skillsEnabled = p.skillsEnabled;
+    }
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (
@@ -382,6 +538,19 @@ export function registerProviderHandlers(): void {
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     const saved = await configStore.setSettings(next);
+    if (next.skillsEnabled !== undefined) {
+      skillRegistry.invalidate();
+      invalidateBotRuntimeInventoryAuthority("skill_configuration");
+      if (!next.skillsEnabled) {
+        const { llmClient } = await import("../services/llm-client.js");
+        llmClient.cancelForSkillsDisabled();
+        const { contextLifecycleService } =
+          await import("../services/context-lifecycle-service-main.js");
+        contextLifecycleService.cancelForSkillsDisabled();
+      }
+      const { telegramService } = await import("../services/telegram/telegram-service.js");
+      void telegramService.refreshCommands();
+    }
     if (next.appearance) {
       const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
       ipcMain.broadcast("settings:appearance-changed", appearance);

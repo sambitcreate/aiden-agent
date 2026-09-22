@@ -167,12 +167,19 @@ test("production child assembly executes web and enforces one mixed web/MCP ceil
   const budget = new SubagentNetworkBudgetV2();
   let fetches = 0;
   const webHost = new SubagentWebProxyHost({
-    fetch: async () => {
+    search: async (_request, options) => {
       fetches += 1;
-      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+      const result = { providerId: "exa" as const, results: [], untrusted: true as const };
+      if (options && !(options instanceof AbortSignal)) {
+        await options.beforeProviderAttempt?.("exa");
+        assert.equal(await options.revalidateAfterAttempt?.("exa", result), true);
+      }
+      return result;
     },
-    webSearchEnabled: async () => true,
-    readExaApiKey: async () => "host-secret",
+    webSearchAvailability: async () => ({
+      ready: true,
+      route: [{ providerId: "exa", ready: true, configurationStatus: "configured" }],
+    }),
     now: () => 1_000,
     scheduleTimeout: () => () => undefined,
   });
@@ -220,9 +227,11 @@ test("MCP execution requires exact true budget consent and rechecks slow expiry 
     signal: controller.signal,
   });
   const webHost = new SubagentWebProxyHost({
-    fetch: async () => new Response(JSON.stringify({ results: [] }), { status: 200 }),
-    webSearchEnabled: async () => true,
-    readExaApiKey: async () => "host-secret",
+    search: async () => ({ providerId: "exa", results: [], untrusted: true }),
+    webSearchAvailability: async () => ({
+      ready: true,
+      route: [{ providerId: "exa", ready: true, configurationStatus: "configured" }],
+    }),
     now: () => 1_000,
     scheduleTimeout: () => () => undefined,
   });

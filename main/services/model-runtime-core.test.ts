@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createAssistantMessageEventStream,
   createModels,
   type AnthropicMessagesCompat,
   type Api,
@@ -8,7 +9,11 @@ import {
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
 
-import { resolveModelRuntimeWith, type ModelRuntimeDependencies } from "./model-runtime-core.js";
+import {
+  resolveModelRuntimeWith,
+  withPinnedBotProviderAuth,
+  type ModelRuntimeDependencies,
+} from "./model-runtime-core.js";
 import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
@@ -247,6 +252,63 @@ test("routes non-special Pi providers without reading legacy endpoint configurat
   assert.strictEqual(runtime.streams.streamSimple, googleStream);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.headers, undefined);
+});
+
+test("pins resolved Bot auth without asking Models to resolve ambient authority again", async () => {
+  const provider: StoredProvider = {
+    id: "google",
+    kind: "openai",
+    label: "Google Gemini",
+    baseUrl: googleModel.baseUrl,
+    models: [googleModel.id],
+    needsKey: true,
+    isBuiltin: true,
+  };
+  const runtime = await resolveModelRuntimeWith(
+    dependencies({ nativeProvider: provider, nativeModel: googleModel }),
+    provider.id,
+    googleModel.id,
+  );
+  let capturedModel: Model<Api> | undefined;
+  let capturedOptions: Parameters<ProviderStreams["streamSimple"]>[2];
+  const providerStream: ProviderStreams["streamSimple"] = (model, _context, options) => {
+    capturedModel = model;
+    capturedOptions = options;
+    const stream = createAssistantMessageEventStream();
+    stream.end({} as Awaited<ReturnType<typeof stream.result>>);
+    return stream;
+  };
+  const pinned = withPinnedBotProviderAuth(
+    runtime,
+    {
+      auth: {
+        apiKey: "pinned-key",
+        headers: { Authorization: "Pinned" },
+        baseUrl: "https://pinned.example.test/v1",
+      },
+      env: { GOOGLE_APPLICATION_CREDENTIALS: "/pinned/adc.json" },
+      source: "ambient",
+    },
+    providerStream,
+  );
+
+  await pinned.streams.streamSimple(
+    googleModel,
+    { messages: [] },
+    {
+      apiKey: "later-key",
+      headers: { Authorization: "Later", "X-Request": "kept" },
+      env: { GOOGLE_APPLICATION_CREDENTIALS: "/later/adc.json" },
+    },
+  ).result();
+
+  assert.equal(capturedModel?.baseUrl, "https://pinned.example.test/v1");
+  assert.equal(capturedOptions?.apiKey, "pinned-key");
+  assert.deepEqual(capturedOptions?.headers, {
+    Authorization: "Pinned",
+    "X-Request": "kept",
+  });
+  assert.equal(capturedOptions?.env?.GOOGLE_APPLICATION_CREDENTIALS, "/pinned/adc.json");
 });
 
 test("rejects models absent from Pi's native catalog", async () => {

@@ -3,11 +3,13 @@ import { isPackagedRuntime } from "../../runtime-mode.js";
 import { AssetDeliveryGrantRegistry } from "./asset-delivery-core.js";
 import {
   authorizeCreateImagesAssetRequest,
+  createImagesProtocolDocumentId,
   parseCreateImagesAssetProtocolRequest,
 } from "./asset-protocol-core.js";
-import { shouldBlockAidenRendererEgress } from "./renderer-egress-core.js";
+import { shouldBlockAidenRendererEgress, authorizeBrowserFaviconEgress } from "./renderer-egress-core.js";
 
 export interface CreateImagesAssetProtocolSource {
+  authorizeBrowserFavicon?(url: string, ownerId: number, documentId: string): boolean;
   response(
     assetId: string,
     rendition: "preview" | "preview-128" | "preview-256" | "preview-512" | "original",
@@ -115,6 +117,11 @@ export async function installCreateImagesAssetProtocol(
         requestUrl: details.url,
         rendererUrl,
         packaged: isPackagedRuntime(),
+        authorizedBrowserFavicon: source.authorizeBrowserFavicon
+          ? authorizeBrowserFaviconEgress(details,
+              details.frame ? createImagesProtocolDocumentId(details.frame) : undefined,
+              source.authorizeBrowserFavicon)
+          : false,
       });
       publishRequestObservation(details, "renderer-egress", !blocked);
       callback({ cancel: blocked });

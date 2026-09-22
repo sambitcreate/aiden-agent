@@ -1,3 +1,4 @@
+import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -18,17 +19,27 @@ import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import {
+  captureDetachedLifecycleChat,
+  clearInactiveDetachedLifecycleChat,
+  type DetachedLifecycleChatReconciliation,
+  pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
   subscribeChatReadReconciliations,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
 } from "../lib/chat-terminal-sync";
+import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { requestCreateImagesNavigation } from "../create-images/navigation-guard";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import {
+  ASSISTANT_AUTOMATION_DRAFT,
+  onAssistantAutomationComposerRequested,
+} from "../lib/assistant-dock";
 
 export function RootView() {
   useTheme();
@@ -36,19 +47,12 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <EnvironmentCommandSystemProvider>
+          <CommandSystemProvider>
             <RootContent />
-          </EnvironmentCommandSystemProvider>
+          </CommandSystemProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
-  );
-}
-
-function EnvironmentCommandSystemProvider({ children }: React.PropsWithChildren) {
-  const { compactModalOpen } = useEnvironmentPanel();
-  return (
-    <CommandSystemProvider applicationModal={compactModalOpen}>{children}</CommandSystemProvider>
   );
 }
 
@@ -104,6 +108,26 @@ function RootContent() {
     },
     [queryClient],
   );
+  const reconcileDetachedLifecycleChat = React.useCallback(
+    (
+      owner:
+        | { chatId: string; workspaceId: string }
+        | DetachedLifecycleChatReconciliation,
+    ) => {
+      const captured = "streamIds" in owner ? owner : captureDetachedLifecycleChat(owner);
+      return (async () => {
+        try {
+          await reconcileChatCacheAfterIdle(owner.chatId);
+          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot());
+          if (!snapshot || !captured) return;
+          clearInactiveDetachedLifecycleChat(captured, new Set(snapshot.activeChatIds));
+        } catch {
+          // Failure is not proof of settlement. Retained activity events retry it.
+        }
+      })();
+    },
+    [reconcileChatCacheAfterIdle],
+  );
 
   useCommandHandler(
     "terminal.toggle",
@@ -117,7 +141,18 @@ function RootContent() {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
       }
-      environmentPanel.toggle("overview");
+      environmentPanel.toggleTools();
+    },
+    workspaceCommands.environment,
+  );
+  useCommandHandler(
+    "quick-view.toggle",
+    () => {
+      if (environmentPanel.gitOperationBusy) {
+        toast.info("Wait for the current Git operation to finish before changing panels.");
+        return;
+      }
+      environmentPanel.toggleQuickView();
     },
     workspaceCommands.environment,
   );
@@ -149,10 +184,16 @@ function RootContent() {
     },
     appCapabilities.createImages,
   );
-  useCommandHandler(
-    "chat.new",
-    async () => {
-      if (!activeId) return;
+  const openNewChat = React.useCallback(
+    async (initialText?: string) => {
+      if (!activeId) {
+        toast.info("Choose a workspace before starting a chat.");
+        return;
+      }
+      if (appendReconciliationRequired) {
+        toast.error("Reload Aiden before creating another chat.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
@@ -162,11 +203,27 @@ function RootContent() {
         toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
         return;
       }
-      const chat = await chatsApi.create({ workspaceId: activeId });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
-      await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      const chat = createChatDraft(activeId, undefined, initialText).chat;
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+      } catch (error) {
+        discardChatDraft(chat.id);
+        throw error;
+      }
     },
+    [activeId, appendReconciliationRequired, navigate, navigationBlockedReason],
+  );
+  useCommandHandler(
+    "chat.new",
+    () => openNewChat(),
     Boolean(activeId) && !appendReconciliationRequired,
+  );
+  React.useEffect(
+    () =>
+      onAssistantAutomationComposerRequested(() => {
+        void openNewChat(ASSISTANT_AUTOMATION_DRAFT);
+      }),
+    [openNewChat],
   );
   React.useEffect(() => {
     void appApi.setCloseGuard({
@@ -210,13 +267,44 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(() => {
+    return onNotification("workspaces:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("chats:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("bots:changed", () => {
+      invalidateBotCanonicalPhotos();
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
+        queryClient.invalidateQueries({ queryKey: ["bot"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
+      ]);
+    });
+  }, [queryClient]);
+
   React.useEffect(
     () =>
       subscribeDetachedTerminalChats(
         onNotification,
         (chat) => {
           if (isChatCacheDeleted(chat.id)) return;
-          void (async () => {
+          return (async () => {
             if (isChatCacheDeleted(chat.id)) return;
             const chatKey = queryKeys.chat(chat.id);
             // A rapid A → B → A revisit can have a stale read in flight when the
@@ -243,11 +331,36 @@ function RootContent() {
   React.useEffect(
     () =>
       subscribeChatSettlements(onNotification, (settlement) => {
-        if (isChatCacheDeleted(settlement.chatId)) return;
-        void reconcileChatCacheAfterIdle(settlement.chatId);
+        void reconcileDetachedLifecycleChat(settlement);
       }),
-    [reconcileChatCacheAfterIdle],
+    [reconcileDetachedLifecycleChat],
   );
+
+  React.useEffect(() => {
+    let disposed = false;
+    const reconcileInactiveOwners = (payload: unknown) => {
+      const snapshot = parseChatActivitySnapshot(payload);
+      if (!snapshot) return;
+      const activeChatIds = new Set(snapshot.activeChatIds);
+      for (const owner of pendingDetachedLifecycleChats()) {
+        if (!activeChatIds.has(owner.chatId)) void reconcileDetachedLifecycleChat(owner);
+      }
+    };
+    // Subscribe before the bootstrap snapshot so no transition falls in between.
+    const unsubscribe = onNotification("chats:activity-changed", reconcileInactiveOwners);
+    void chatsApi
+      .activitySnapshot()
+      .then((payload) => {
+        if (!disposed) reconcileInactiveOwners(payload);
+      })
+      .catch(() => {
+        // Future activity or settlement events retry recovery.
+      });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [reconcileDetachedLifecycleChat]);
 
   React.useEffect(() => {
     // ~/.aiden/config.json was edited outside the app. Only the lists sourced
@@ -266,6 +379,10 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {
       if (!payload?.path) return;
+      if (document.querySelector("[data-onboarding-active='true']")) {
+        toast.info("Finish onboarding before opening another part of Aiden.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
@@ -290,11 +407,7 @@ function RootContent() {
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
       <OnboardingFlow />
-      <AssistantDock
-        interactionBlocked={
-          environmentPanel.compactModalOpen || pathname.startsWith("/create-images")
-        }
-      />
+      <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );

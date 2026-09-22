@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clearLegacyOnboardingCompletion,
   markOnboardingComplete,
   ONBOARDING_COMPLETE_STORAGE_KEY,
   shouldShowOnboarding,
@@ -16,6 +17,9 @@ function storage(initial?: string) {
     setItem(key: string, value: string) {
       values.set(key, value);
     },
+    removeItem(key: string) {
+      values.delete(key);
+    },
   };
 }
 
@@ -25,6 +29,12 @@ test("onboarding is shown until its completion marker is set", () => {
 
   markOnboardingComplete(values);
   assert.equal(shouldShowOnboarding(values), false);
+});
+
+test("the compatibility marker can be removed for non-destructive re-entry", () => {
+  const values = storage("true");
+  clearLegacyOnboardingCompletion(values);
+  assert.equal(shouldShowOnboarding(values), true);
 });
 
 test("only the exact current completion marker skips onboarding", () => {

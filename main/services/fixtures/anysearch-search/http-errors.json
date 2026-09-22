@@ -1,0 +1,10 @@
+[
+  { "status": 400, "kind": "invalid-request" },
+  { "status": 401, "kind": "auth" },
+  { "status": 402, "kind": "quota" },
+  { "status": 403, "kind": "auth" },
+  { "status": 408, "kind": "timeout" },
+  { "status": 429, "kind": "quota" },
+  { "status": 500, "kind": "transient" },
+  { "status": 503, "kind": "transient" }
+]

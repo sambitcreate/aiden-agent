@@ -109,6 +109,12 @@ export function assertProviderCredentialLength(value: string): void {
 
 export function normalizeProviderCredentialInput(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
+  if ([...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  })) {
+    throw new Error("Provider credentials cannot contain control characters.");
+  }
   const key = value.trim();
   assertProviderCredentialLength(key);
   return key;
