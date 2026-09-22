@@ -890,6 +890,81 @@ class AidenChatTest {
     }
 
     @Test
+    fun queuedHomeWriteCannotReplaceNewerAcceptedChat() {
+        val root = File(System.getProperty("java.io.tmpdir"), "aiden-queued-home-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val cache = AidenChatCache(root = root)
+            val initial = sampleChat()
+            // Model the closure queued by WorkspaceHome.accept before navigation.
+            val token = cache.reserveChatWrite()
+            val queuedHomeWrite = Runnable { cache.saveChat(initial, "instance-a", token) }
+            val final = initial.copy(title = "Settled title")
+            cache.saveChat(final, "instance-a")
+            queuedHomeWrite.run()
+            assertEquals("Settled title", AidenChatCache(root = root).loadChat("instance-a", initial.id)?.title)
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun queuedHomeWriteCannotRecreatePurgedInstallation() {
+        val root = File(System.getProperty("java.io.tmpdir"), "aiden-queued-purge-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val cache = AidenChatCache(root = root)
+            val initial = sampleChat()
+            val token = cache.reserveChatWrite()
+            val queuedHomeWrite = Runnable { cache.saveChat(initial, "instance-a", token) }
+            cache.purge("instance-a")
+            queuedHomeWrite.run()
+            assertNull(AidenChatCache(root = root).loadChat("instance-a", initial.id))
+        } finally { root.deleteRecursively() }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun homeOwnerReservesBeforeQueuedCacheWrite() {
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val queued = kotlinx.coroutines.test.StandardTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                for (purging in listOf(false, true)) {
+                    val root = File(System.getProperty("java.io.tmpdir"), "aiden-home-owner-${UUID.randomUUID()}").apply { mkdirs() }
+                    val viewModels = ViewModelStore()
+                    try {
+                        val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                        installations.addInstallation(AidenPairingExchange(
+                            instanceId = "instance-a", deviceId = "device-a",
+                            endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
+                            credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ)
+                        ), null)
+                        val cache = AidenChatCache(root = File(root, "cache"))
+                        val drafts = AidenChatDraftStore(root)
+                        val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts,
+                            scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                        coordinator.refreshClient()
+                        val home = sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceHomeViewModel(
+                            coordinator, cache, cacheWriteDispatcher = queued)
+                        viewModels.put("home", home)
+                        val initial = sampleChat()
+                        home.accept(initial)
+                        if (purging) cache.purge("instance-a")
+                        else cache.saveChat(initial.copy(title = "Settled title"), "instance-a")
+                        queued.scheduler.runCurrent()
+                        val reopened = AidenChatCache(root = File(root, "cache"))
+                        if (purging) assertNull(reopened.loadChat("instance-a", initial.id))
+                        else assertEquals("Settled title", reopened.loadChat("instance-a", initial.id)?.title)
+                        // Another installation and a fresh post-purge owner remain valid.
+                        cache.saveChat(initial, "instance-b")
+                        cache.saveChat(initial.copy(title = "New owner"), "instance-a")
+                        assertEquals("New owner", reopened.loadChat("instance-a", initial.id)?.title)
+                        assertNotNull(reopened.loadChat("instance-b", initial.id))
+                    } finally { viewModels.clear(); root.deleteRecursively() }
+                }
+            }
+        } finally { Dispatchers.resetMain(); dispatcher.close() }
+    }
+
+    @Test
     fun testChatCachePartitionAndActiveStream() {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "aiden-cache-test-${UUID.randomUUID()}").apply { mkdirs() }
         try {

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -42,7 +43,8 @@ enum class AidenChatListLoadState {
 class AidenWorkspaceHomeViewModel(
     private val coordinator: AidenRemoteCoordinator,
     private val chatCache: AidenChatCache,
-    private val usageCache: AidenUsageCache = coordinator.usageCache
+    private val usageCache: AidenUsageCache = coordinator.usageCache,
+    private val cacheWriteDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
     private val _chats = MutableStateFlow<List<AidenChatSummary>>(emptyList())
     val chats: StateFlow<List<AidenChatSummary>> = _chats.asStateFlow()
@@ -297,7 +299,8 @@ class AidenWorkspaceHomeViewModel(
         val summary = AidenChatSummary.fromChat(chat)
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
-            viewModelScope.launch(Dispatchers.IO) { runCatching { chatCache.saveChat(chat, instanceId) } }
+            val writeToken = chatCache.reserveChatWrite()
+            viewModelScope.launch(cacheWriteDispatcher) { runCatching { chatCache.saveChat(chat, instanceId, writeToken) } }
         }
     }
 
