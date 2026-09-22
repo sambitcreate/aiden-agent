@@ -1216,6 +1216,42 @@ test("checkout admission rejects filters and encodings without executing transfo
   }
 });
 
+test("checkout admission allows disabled ident without expanding content", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const content = "$Id$ remains literal\n";
+  for (const [index, attribute] of ["-ident", "ident=unset", "ident=unspecified"].entries()) {
+    await fs.writeFile(path.join(repository, "README.md"), content);
+    await fs.writeFile(path.join(repository, ".gitattributes"), `README.md ${attribute}\n`);
+    await git(repository, ["add", "."]);
+    await git(repository, ["commit", "-m", "disabled ident"]);
+    const created = await service.createWorktree(repository, root, `feature/disabled-ident-${index}`);
+    assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), content);
+  }
+});
+
+test("checkout admission rejects ambiguous filter sentinels activated only inside a worktree", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const probe = path.join(root, "config-probe");
+  await git(repository, ["worktree", "add", "--detach", probe, "HEAD"]);
+  const marker = path.join(root, "conditional-filter-ran");
+  const conditionalConfig = path.join(root, "conditional.gitconfig");
+  const smudge = `touch '${marker}'; cat`;
+  await git(repository, ["config", "--file", conditionalConfig, "filter.unset.smudge", smudge]);
+  await git(repository, ["config", "includeIf.gitdir:**/worktrees/**.path", conditionalConfig]);
+  await assert.rejects(git(repository, ["config", "--get", "filter.unset.smudge"]));
+  assert.equal(await git(probe, ["config", "--get", "filter.unset.smudge"]), smudge);
+  await fs.writeFile(path.join(repository, ".gitattributes"), "README.md filter=unset\n");
+  await git(repository, ["add", ".gitattributes"]);
+  await git(repository, ["commit", "-m", "conditional checkout filter"]);
+  await assert.rejects(new GitService({ cacheTtlMs: 0 }).createWorktree(repository, root, "feature/conditional-filter"),
+    (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope");
+  await assert.rejects(fs.stat(marker), { code: "ENOENT" });
+  await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/conditional-filter"]));
+});
+
 test("capacity admission rejects unknown numeric estimates and uses the destination's existing ancestor", async (t) => {
   const root = await temporaryDirectory(t);
   for (const estimate of [NaN, Infinity, -1, 0.5]) {
@@ -1228,28 +1264,36 @@ test("capacity admission rejects unknown numeric estimates and uses the destinat
 });
 
 
-test("worktree admission charges split volumes separately and combines a shared volume", async () => {
+test("worktree admission reserves shared or unknown pools against both volume limits", async () => {
   const checkoutBytes = 1024;
   await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", -1, async () => {
     throw new Error("invalid estimates must fail before filesystem inspection");
   }), WorktreeCapacityUnavailableError);
   const required = (bytes: number) => CREATE_CAPACITY_POLICY.reserveBytes + Math.ceil(bytes * CREATE_CAPACITY_POLICY.overheadFactor);
-  const destinationFree = required(checkoutBytes);
-  const metadataFree = required(WORKTREE_GIT_METADATA_BYTES);
-  const paths: string[] = [];
-  await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async (directory) => {
-    paths.push(directory);
-    return directory === "/destination"
-      ? { device: "destination-volume", availableBytes: destinationFree }
-      : { device: "git-volume", availableBytes: metadataFree };
-  });
-  assert.deepEqual(paths.sort(), ["/destination", "/repository/.git"]);
-  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async () =>
-    ({ device: "shared", availableBytes: destinationFree })),
-    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === checkoutBytes + WORKTREE_GIT_METADATA_BYTES);
-  await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async () =>
-    ({ device: "shared", availableBytes: required(checkoutBytes + WORKTREE_GIT_METADATA_BYTES) }));
-  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async (directory) =>
-    ({ device: directory, availableBytes: directory === "/destination" ? destinationFree : metadataFree - 1 })),
-    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === WORKTREE_GIT_METADATA_BYTES);
+  const combinedBytes = checkoutBytes + WORKTREE_GIT_METADATA_BYTES;
+  for (const sameDevice of [true, false]) {
+    const inspect = (destinationFree: number, metadataFree: number) => async (directory: string) => ({
+      device: sameDevice ? "shared" : directory,
+      availableBytes: directory === "/destination" ? destinationFree : metadataFree,
+    });
+    // Different APFS volume devices can still share a pool. Separate component
+    // budgets must not pass when their aggregate would consume the reserve.
+    await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
+      inspect(required(checkoutBytes), required(WORKTREE_GIT_METADATA_BYTES))),
+    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === combinedBytes);
+    await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
+      inspect(required(combinedBytes), required(combinedBytes)));
+    // Either volume can have a stricter quota than the underlying shared pool.
+    for (const [destinationFree, metadataFree] of [
+      [required(combinedBytes) - 1, required(combinedBytes)],
+      [required(combinedBytes), required(combinedBytes) - 1],
+    ]) {
+      await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
+        inspect(destinationFree, metadataFree)), InsufficientDiskSpaceError);
+    }
+    for (const invalid of [NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1]) {
+      await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
+        inspect(required(combinedBytes), invalid)), WorktreeCapacityUnavailableError);
+    }
+  }
 });

@@ -67,11 +67,23 @@ Evidence names are repository files and named tests so they remain useful as lin
 - Read complete committed trees even when the initiating workspace is nested or
   tracked source files are missing. Inspect checkout attributes using an isolated
   temporary index; never run filters to estimate their output. Reject unbounded
-  filters, ident and working-tree encodings. All declarations of these attributes
-  are rejected, including disabled/sentinel-looking values: Git's attribute
-  output cannot distinguish `-filter` from the literal driver `filter=unset`. Account for EOL expansion and per-file overhead.
+  filters, enabled ident and working-tree encodings. Disabled ident (`-ident`,
+  `ident=unset`, `ident=unspecified`) is allowed and tested without expansion.
+  Filter/encoding declarations remain unsupported even when disabled: Git's
+  attribute output cannot distinguish `-filter` from literal `filter=unset`,
+  and `includeIf` can activate a driver only in the new worktree. Source config
+  inspection cannot safely resolve this ambiguity. Supporting those valid but
+  ambiguous disabled declarations remains deferred. Account for EOL expansion
+  and per-file overhead.
 - Recheck the captured creation commit in Git's mutation queue on destination
-  and Git common-directory filesystems. Device IDs combine checkout/payload plus the 16 MiB metadata budget only on a shared filesystem; separate filesystems receive their own allocation. Source HEAD movement does not select a
+  and Git common-directory filesystems. Different device IDs cannot establish independent storage pools (APFS volumes
+  can share a container). Require checkout/payload plus the 16 MiB metadata
+  budget against **both** free-space readings, preserving any lower per-volume
+  quota. This deliberately overreserves metadata on an independent destination
+  and checkout/payload bytes on an independent Git volume; it may deny a valid
+  cross-volume layout. Pool-discovery support is deferred. This supersedes the
+  earlier split-volume fix: independently charging each component was unsafe
+  without evidence that their pools were independent. Source HEAD movement does not select a
   different checkout. Provisioning reserves its enforced 256 MiB bound and checks
   again immediately before copying; no mutable source-size estimate is trusted.
 - Restore admits the base tree, captured tree and validated private payload
@@ -106,9 +118,9 @@ new Remote restore/force capabilities remain out of this corrective patch.
   execution evidence.
 - PR #221 initial head `de4a898c` passed hosted verify and deterministic Electron
   E2E. Pullfrog then identified literal filter-driver sentinel collisions and
-  split-volume metadata overcharging; both are corrected with real configured
+  split-volume metadata overcharging; were initially addressed with configured
   filter-driver and deterministic filesystem-boundary tests (29 focused tests
-  passed). Both Sol reviewers independently cleared the follow-up diff. Fresh
+  passed). The later shared-pool correction above supersedes device-based splitting. Both Sol reviewers independently cleared the follow-up diff. Fresh
   hosted checks remain required for the follow-up commit.
 - The initial Pullfrog log contained a third inline finding dropped by its
   invalid line anchor: a planned restore checkout can already exist after a
@@ -122,3 +134,10 @@ new Remote restore/force capabilities remain out of this corrective patch.
   isolated test passed. Shared with the Create Images/mobile-recovery owners.
 - Old stack heads and their 22 unresolved threads remain unchanged. Owner
   disposition is supersession, not a claim that those old heads were repaired.
+
+- Follow-up Pullfrog review identified APFS shared-pool ambiguity and disabled
+  attribute overrejection. Conservative aggregate admission covers unknown pool
+  relationships and per-volume quotas; disabled ident is now admitted. Ambiguous
+  filter/encoding declarations remain explicitly unsupported, with a real
+  worktree-only conditional filter regression. 31 focused tests, TypeScript and
+  focused ESLint passed; all 130 affected Git/lifecycle/application/Remote tests passed. Fresh CI is required.

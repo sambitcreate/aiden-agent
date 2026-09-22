@@ -5574,10 +5574,14 @@ export class GitService {
           { gitIndexFile });
         const values = attributes.stdout.split("\u0000");
         for (let index = 0; index + 2 < values.length; index += 3) {
-          // --all cannot distinguish -filter from filter=unset. Refuse every
-          // declaration of an unsupported transformation, including sentinel-
-          // looking literal driver names, rather than risk executing one.
-          if (["filter", "working-tree-encoding", "ident"].includes(values[index + 1])) {
+          // Git cannot distinguish -filter from filter=unset here. A driver
+          // can also activate only in the new worktree via includeIf, so the
+          // source's filter config cannot safely resolve that ambiguity.
+          // Disabled ident is safe: its false/sentinel values do not expand.
+          const attribute = values[index + 1];
+          const value = values[index + 2];
+          if (["filter", "working-tree-encoding"].includes(attribute) ||
+              (attribute === "ident" && !["unset", "unspecified"].includes(value))) {
             throw new GitServiceError("unsupported_scope",
               "Managed worktrees cannot safely estimate checkout filters, ident expansion or working-tree encodings. Use a checkout without these transformations.");
           }

@@ -123,8 +123,10 @@ async function checkCapacity(
   return capacityReport(await statfsAvailableBytes(dir), estimatedBytes, policy);
 }
 
-/** Admit bytes exactly on the volume receiving them; combine shared volumes.
- * The inspector seam allows deterministic split-volume tests without mounts.
+/** Reserve the combined allocation against both observed free-space limits.
+ * Different device IDs do not prove independent storage pools (APFS volumes
+ * can share a container). Until independence can be established, each reading
+ * must accommodate the total, including when a per-volume quota lowers it.
  */
 export async function checkWorktreeAllocation(
   destination: string,
@@ -137,13 +139,9 @@ export async function checkWorktreeAllocation(
   }
   const [checkout, metadata] = await Promise.all([inspect(destination), inspect(commonDirectory)]);
   if (!checkout.device || !metadata.device) throw new WorktreeCapacityUnavailableError();
-  if (checkout.device === metadata.device) {
-    capacityReport(Math.min(checkout.availableBytes, metadata.availableBytes),
-      checkoutAndPayloadBytes + WORKTREE_GIT_METADATA_BYTES, CREATE_CAPACITY_POLICY);
-  } else {
-    capacityReport(checkout.availableBytes, checkoutAndPayloadBytes, CREATE_CAPACITY_POLICY);
-    capacityReport(metadata.availableBytes, WORKTREE_GIT_METADATA_BYTES, CREATE_CAPACITY_POLICY);
-  }
+  const combinedBytes = checkoutAndPayloadBytes + WORKTREE_GIT_METADATA_BYTES;
+  capacityReport(checkout.availableBytes, combinedBytes, CREATE_CAPACITY_POLICY);
+  capacityReport(metadata.availableBytes, combinedBytes, CREATE_CAPACITY_POLICY);
 }
 
 /** Admission before `mkdir` + `git worktree add`. */
