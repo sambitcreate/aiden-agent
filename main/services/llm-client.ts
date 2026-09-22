@@ -1,5 +1,6 @@
 import { buildDesignHandoffContext } from "./design-handoff-packet-authority.js";
 import { currentDesignLanguageModelContext } from "./design-language-service.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -347,8 +348,11 @@ import { AskUserQuestionCoordinator } from "./ask-user-question-coordinator.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 import { createTodoExtension, shouldEnableTodoExtension } from "./rpiv-todo/extension.js";
 import { TODO_TOOL_NAME } from "./rpiv-todo/contract.js";
-import { isTodoSnapshotFailure, replayTodoState } from "./rpiv-todo/replay.js";
-import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
+import { loadDurableTodoSnapshot } from "./rpiv-todo/snapshot.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
+import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
+import { chatProgressEvents } from "./chat-progress-events.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
@@ -515,7 +519,7 @@ function botWorkspacePromptAuthority(
 
 function botHasOrdinaryCapability(
   context: BotGenerationAuthorityContext,
-  kind: "web" | "browser" | "computer_use" | "schedules" | "subagents",
+  kind: "web" | "browser" | "computer_use" | "schedules" | "subagents" | "tasks",
 ): boolean {
   return context.admission.authority.otherCapabilities.some((grant) => grant.kind === kind);
 }
@@ -548,6 +552,7 @@ function broadcastChatSettled(
   fallbackWorkspaceId: string | undefined,
 ): void {
   chatActivityRegistry.settle(streamId);
+  chatProgressEvents.settle(chatId, streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
@@ -563,6 +568,13 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 }
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
+  const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
+  if (chatId && channel === "chat:todo") {
+    const snapshot = (payload as { snapshot?: import("../../renderer/shared/todo.js").TodoSnapshotViewV1 })?.snapshot;
+    if (snapshot) chatProgressEvents.durableTodo(chatId, streamId, snapshot);
+  } else if (chatId && channel === "chat:subagents") {
+    chatProgressEvents.changed(chatId);
+  }
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {
@@ -705,7 +717,7 @@ async function prepareGeneration(
   };
   const runtime =
     botContext?.prepared.runtime ??
-    (await resolveModelRuntime(params.providerId, params.model, signal));
+    (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -823,6 +835,8 @@ async function prepareGeneration(
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
+  assertCustomModelImageLimit(runtime.provider.modelMetadata?.[model.id]?.overrides,
+    runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1));
   if (assistantAutomationMode || params.mode === "assistant-unattended") {
     assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
   }
@@ -1191,14 +1205,20 @@ async function prepareGeneration(
       includeCodingTools: !botContext,
       imageInspectionTool:
         botContext && !supportsImages && botContext.admission.authority.visionProvider
-          ? createVisionAnalysisTool({
-              attachments: chat.messages.flatMap((message) => message.attachments ?? []),
-              authority: {
-                providerId: botContext.admission.authority.visionProvider.sourceProviderId,
-                modelId: botContext.admission.authority.visionProvider.sourceModelId,
-                revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+          ? createVisionAnalysisTool(
+              {
+                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                authority: {
+                  providerId: botContext.admission.authority.visionProvider.sourceProviderId,
+                  modelId: botContext.admission.authority.visionProvider.sourceModelId,
+                  revalidateBeforeEffect: () => botContext.admission.revalidateBeforeEffect(),
+                },
               },
-            })
+              {
+                resolveRuntime: (providerId, modelId, signal) =>
+                  resolveBotModelRuntime(providerId, modelId, signal, params.chatId),
+              },
+            )
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
@@ -1751,6 +1771,7 @@ export const llmClient = {
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
+            chatProgressEvents.begin(params.chatId, streamId);
           },
         );
     } catch (error) {
@@ -2298,6 +2319,7 @@ export const llmClient = {
         // unsupported SQLite build must remove both read and write tools.
         logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
       }
+      let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
       if (
         params.design !== true &&
         shouldEnableTodoExtension({
@@ -2306,39 +2328,44 @@ export const llmClient = {
           assistantMode: authoritativeMode !== undefined,
           botBound: preparedBotContext !== undefined,
           rendererOwner: owner.id !== 0,
+          remoteOwner: owner.kind === "remote",
+          botTaskTrackingAllowed: preparedBotContext !== undefined && botHasOrdinaryCapability(preparedBotContext, "tasks"),
           excluded: options.excludeToolNames?.has(TODO_TOOL_NAME) ?? false,
         })
       ) {
-        try {
-          const todoState = await replayTodoState(piSession);
+        const todo = await loadDurableTodoSnapshot(
+          params.chatId,
+          piJournalless ? undefined : piSession,
+        );
+        if (todo.state) {
+          const todoState = todo.state;
           const publishTodo = (state: typeof todoState) => {
             sendGeneration(streamId, "chat:todo", {
               streamId,
               snapshot: todoSnapshotForRenderer(params.chatId, state),
             });
           };
-          generationExtensions.push(
-            createTodoExtension(todoState, { onDurableSnapshot: publishTodo }),
-          );
-          publishTodo(todoState);
-        } catch (error) {
-          if (!isTodoSnapshotFailure(error)) throw error;
-          // Never log task content or fall back past a corrupt newer snapshot.
-          // The ordinary chat remains usable, but todo stays unavailable until
-          // its private journal is repaired or the chat is deleted.
-          sendGeneration(streamId, "chat:todo", {
-            streamId,
-            snapshot: unavailableTodoSnapshot(params.chatId),
-          });
-          logger.warn("pi", `Disabled todo for chat ${params.chatId}: invalid durable snapshot.`);
+          todoRuntimeExtension = createTodoExtension(todoState, { onDurableSnapshot: publishTodo });
+          if (preparedBotContext) {
+            const authority = preparedBotContext.admission;
+            todoRuntimeExtension.beforeToolCall = async (context) => {
+              if (context.toolCall.name === TODO_TOOL_NAME) await authority.revalidateBeforeEffect();
+              return undefined;
+            };
+          }
+          generationExtensions.push(todoRuntimeExtension);
         }
+        const todoDiagnostic = todoSnapshotDiagnostic(todo.snapshot);
+        if (todoDiagnostic) writeDiagnosticEvent(todoDiagnostic);
+        sendGeneration(streamId, "chat:todo", { streamId, snapshot: todo.snapshot });
       }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
-      // Runtime extensions are not yet represented in the exact Bot catalog.
-      // Omit them from Bot prompts and tool schemas instead of granting an
-      // unclassified capability through an alternate contribution path.
+      // Arbitrary runtime extensions remain outside the exact Bot catalog.
+      // Only the explicitly admitted task extension and existing memory/recall
+      // contributions enter Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
         ? [
+            ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             ...(memoryExtension ? [memoryExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
             // in-memory journal; history recall would be dishonest.
@@ -2485,12 +2512,15 @@ export const llmClient = {
               throw new Error("Bot runtime authority was not prepared.");
             })()
         : baseSystemPrompt;
-      const runtimeContributions = resolvePiAgentRuntimeContributionSnapshot(
+      const resolvedContributions = resolvePiAgentRuntimeContributionSnapshot(
         botSystemPrompt,
         tools,
         piResourcesForSkillSnapshot(skillSnapshot),
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
+      );
+      const runtimeContributions = applyCustomModelToolPolicy(
+        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
       );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
@@ -2712,7 +2742,7 @@ export const llmClient = {
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          let nextContext = browserDiscovery ? await browserDiscovery.prepare(context) : context;
+          let nextContext = await prepareCustomModelToolContext(context, browserDiscovery?.prepare.bind(browserDiscovery), runtime.provider.modelMetadata?.[model.id]?.overrides);
           let changed = nextContext !== context;
           if (changed) {
             assertGenerationContextCapacity({ ...generationContextOptions, systemPrompt: nextContext.systemPrompt, tools: nextContext.tools ?? [] });

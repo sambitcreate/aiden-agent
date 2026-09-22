@@ -37,6 +37,7 @@ import type {
   ModelInfo,
   ModelInsightsStatus,
   Provider,
+  Chat,
   UsageDateRange,
 } from "./types";
 
@@ -76,6 +77,8 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
+  gitPullRequestStatus: (workspaceId: string | undefined) =>
+    ["git-pull-request-status", workspaceId ?? "none"] as const,
   gitReview: (workspaceId: string | undefined) => ["git-review", workspaceId ?? "none"] as const,
   gitPushCapability: (workspaceId: string | undefined) =>
     ["git-push-capability", workspaceId ?? "none"] as const,
@@ -90,6 +93,17 @@ export const queryKeys = {
     ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
+
+/** Keep a pre-append read from replacing the durable new user turn. */
+export async function installAppendedChatSnapshot(
+  queryClient: QueryClient,
+  chatId: string,
+  updated: Chat,
+): Promise<void> {
+  const chatKey = queryKeys.chat(chatId);
+  await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+  queryClient.setQueryData(chatKey, updated);
+}
 
 async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
   await Promise.all([
@@ -364,6 +378,16 @@ export function useGitInfo(workspaceId: string | undefined) {
     enabled: Boolean(workspaceId),
     refetchInterval: 5_000,
     staleTime: 1_000,
+  });
+}
+
+export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitPullRequestStatus(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    refetchInterval: enabled ? 30_000 : false,
+    staleTime: 30_000,
   });
 }
 

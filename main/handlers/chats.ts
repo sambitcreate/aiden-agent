@@ -42,8 +42,15 @@ import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-m
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import { parseChatCopyRequest, parseChatOnlyRequest } from "./chat-session-params.js";
-import { safeExportFileName, writeAidenChatExportForRenderer } from "../services/chat-export.js";
+import {
+  parseChatCopyRequest,
+  parseChatOnlyRequest,
+} from "./chat-session-params.js";
+import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
+import {
+  safeExportFileName,
+  writeAidenChatExportForRenderer,
+} from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
@@ -59,8 +66,9 @@ import {
 } from "../services/design-project-store-main.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { memoryStore } from "../services/memory-store-main.js";
-import { isTodoSnapshotFailure, replayTodoState } from "../services/rpiv-todo/replay.js";
-import { todoSnapshotForRenderer, unavailableTodoSnapshot } from "../../renderer/shared/todo.js";
+import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
+import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
+import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 import { createDesignProjectConnectionService } from "../services/design-project-connection-service.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
 import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
@@ -167,29 +175,16 @@ export function registerChatHistoryHandlers(): void {
     );
     const chatId = asString(id, "id");
     const chat = await chatStore.get(chatId);
-    if (
-      !chat ||
-      chat.botId ||
-      persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID
-    ) {
+    if (!chat || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
       return null;
     }
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
-    if (!opened.session) {
-      // Rollout-ineligible chats have no durable journal to replay, so todo is
-      // unavailable exactly like a corrupt journal. Never mint a journal here.
-      return unavailableTodoSnapshot(chatId);
-    }
-    try {
-      const snapshot = todoSnapshotForRenderer(chatId, await replayTodoState(opened.session));
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      return snapshot;
-    } catch (error) {
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      if (!isTodoSnapshotFailure(error)) throw error;
-      return unavailableTodoSnapshot(chatId);
-    }
+    const { snapshot } = await loadDurableTodoSnapshot(chatId, opened.session);
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const diagnostic = todoSnapshotDiagnostic(snapshot);
+    if (diagnostic) writeDiagnosticEvent(diagnostic);
+    return snapshot;
   });
 
   ipcMain.handle("chats:waitUntilIdle", async (_event, id: unknown) =>
@@ -492,38 +487,33 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle("chats:setComputerUse", async (event, id: unknown, enabled: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Computer Use settings require the active application document."),
-    );
-    const chatId = asString(id, "id");
-    if (typeof enabled !== "boolean") throw new Error("Invalid Computer Use chat setting.");
-    const release = llmClient.beginComputerUseSettingChange(chatId);
-    if (!release) {
-      throw new Error("Finish or stop the current response before changing Computer Use.");
-    }
-    const controller = new AbortController();
-    const removeInvalidation = owner.onInvalidated(() =>
-      controller.abort(new Error("The renderer document is no longer active.")),
-    );
-    try {
-      if (enabled) {
-        const status = await computerUseStatus.status({
-          signal: controller.signal,
-        });
-        if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-        if (!status.ready) throw new Error(status.detail);
-      }
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      return chatForRenderer(
-        await chatStore.setComputerUseEnabled(chatId, enabled, () => !owner.isDestroyed()),
+  ipcMain.handle(
+    "chats:setComputerUse",
+    async (event, id: unknown, enabled: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () =>
+          new Error(
+            "Computer Use settings require the active application document.",
+          ),
       );
-    } finally {
-      removeInvalidation();
-      release();
-    }
-  });
+      const chatId = asString(id, "id");
+      if (typeof enabled !== "boolean")
+        throw new Error("Invalid Computer Use chat setting.");
+      return chatForRenderer(
+        await applyComputerUseSettingChange(owner, chatId, enabled, {
+          begin: (targetChatId) =>
+            llmClient.beginComputerUseSettingChange(targetChatId),
+          status: (signal) => computerUseStatus.status({ signal }),
+          persist: (targetChatId, nextEnabled, isCurrent) =>
+            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
+          // Aiden Live owns separate per-session authority and is unaffected
+          // by an ordinary chat's Computer Use toggle.
+          revokeLive: () => undefined,
+        }),
+      );
+    },
+  );
 
   ipcMain.handle("chats:remove", async (_event, id: unknown, confirmationValue?: unknown) => {
     const chatId = asString(id, "id");

@@ -10,7 +10,8 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("modelData"), "modelData");
   assert.equal(parseSettingsSection("computerUse"), "computerUse");
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
-  assert.equal(parseSettingsSection("assistant"), "assistant");
+  assert.equal(parseSettingsSection("geminiLive"), "geminiLive");
+  assert.equal(parseSettingsSection("assistant"), undefined);
   assert.equal(parseSettingsSection("remoteAccess"), "remoteAccess");
   assert.equal(parseSettingsSection("memory"), "memory");
   assert.equal(parseSettingsSection("about"), "about");
@@ -28,9 +29,9 @@ test("parses the Remote Access settings deep link", () => {
   });
 });
 
-test("parses the Aiden settings deep link", () => {
-  assert.deepEqual(parseSettingsSearch({ section: "assistant" }), {
-    section: "assistant",
+test("parses the Gemini Live settings deep link", () => {
+  assert.deepEqual(parseSettingsSearch({ section: "geminiLive" }), {
+    section: "geminiLive",
   });
 });
 
@@ -63,10 +64,20 @@ test("Web Search navigation advertises provider routing and privacy controls", (
   ]);
 });
 
-
 test("settings can be found by the user's task without knowing feature names", () => {
-  for (const [query, expected] of [["connect my phone", "remoteAccess"], ["use my voice", "voice"], ["connect my ai", "providers"], ["see my screen", "computerUse"], ["do this every day", "scheduledTasks"]]) {
-    assert.ok(SETTINGS_DESTINATIONS.find((entry) => entry.id === expected)?.keywords.includes(query));
+  for (const [query, expected] of [
+    ["connect my phone", "remoteAccess"],
+    ["use my voice", "voice"],
+    ["connect my ai", "providers"],
+    ["see my screen", "computerUse"],
+    ["do this every day", "scheduledTasks"],
+  ]) {
+    assert.ok(
+      SETTINGS_DESTINATIONS.find((entry) => entry.id === expected)?.keywords.includes(query),
+    );
   }
-  assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title, "Aiden On The Go");
+  assert.equal(
+    SETTINGS_DESTINATIONS.find((entry) => entry.id === "remoteAccess")?.title,
+    "Aiden On The Go",
+  );
 });

@@ -132,6 +132,10 @@ import {
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
+  geminiLiveService,
+  initializeAidenLiveService,
+} from "./services/gemini-live/service-main.js";
+import {
   getOnboardingSnapshot,
   setOnboardingOutcome,
   setOnboardingProgress,
@@ -290,6 +294,7 @@ function cleanupApplication(): void {
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
+  void geminiLiveService.shutdown();
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
@@ -311,6 +316,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       return;
     }
   }
+  await geminiLiveService.shutdown();
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
@@ -953,6 +959,7 @@ async function createMainWindow(): Promise<void> {
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
@@ -1188,6 +1195,13 @@ async function createMainWindow(): Promise<void> {
   });
   createdWindow.webContents.on("did-finish-load", () => {
     protectedAction = null;
+  });
+  let liveDiagnosticCount = 0;
+  createdWindow.webContents.on("console-message", (details) => {
+    // Only fixed local lifecycle markers; never forward arbitrary renderer console content.
+    if (liveDiagnosticCount >= 200 || !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(details.message)) return;
+    liveDiagnosticCount += 1;
+    writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
   });
 
   createdWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1632,6 +1646,15 @@ if (!ownsSingleInstanceLock) {
         logger.warn(
           "terminal",
           "Persisted terminal history is unavailable; terminals will remain session-only.",
+          error,
+        );
+      }
+      try {
+        await initializeAidenLiveService();
+      } catch (error) {
+        logger.warn(
+          "aiden-live",
+          "Aiden Live thread recovery is unavailable; Live starts will retry before writing session metadata.",
           error,
         );
       }

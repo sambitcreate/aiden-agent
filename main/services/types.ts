@@ -1,3 +1,4 @@
+import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
@@ -25,6 +26,8 @@ export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "au
 
 /** Metadata reported by the configured provider during explicit model discovery. */
 export interface ProviderModelMetadata {
+  overrides?: CustomModelOptions;
+  manuallyAdded?: boolean;
   source: "lmstudio" | "ollama" | "provider";
   name?: string;
   type?: ProviderModelType;
@@ -53,6 +56,8 @@ export interface StoredProvider {
   models: string[];
   /** Provider-reported metadata captured alongside the last explicit discovery. */
   modelMetadata?: Record<string, ProviderModelMetadata>;
+  /** User-authored model intent, portable independently of discovery cache. */
+  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
   defaultModel?: string;
   /** Whether this provider requires an API key (local backends often don't). */
   needsKey: boolean;
@@ -109,6 +114,12 @@ export interface ManagedWorktree {
   worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
+  /**
+   * Worktree-relative ignored paths Aiden provisioned at create time. This is
+   * the authoritative allowlist for snapshot/deletion classification; the
+   * `.worktreeinclude` file is never re-read for lifecycle decisions.
+   */
+  provisionedFiles?: string[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */
@@ -124,6 +135,53 @@ export interface Workspace {
   managedWorktree?: ManagedWorktree;
   createdAt: number;
   updatedAt: number;
+}
+
+/** GitHub pull request and check status reported for a workspace branch. */
+export type GitHubPullRequestCheckStatus =
+  | "pending"
+  | "action-required"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "neutral"
+  | "cancelled";
+
+export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
+
+export type GitHubPullRequestAvailability =
+  | "ready"
+  | "not-repo"
+  | "missing-tool"
+  | "unauthenticated"
+  | "no-pull-request"
+  | "not-github"
+  | "unsupported"
+  | "error";
+
+export interface GitHubPullRequestCheck {
+  name: string;
+  status: GitHubPullRequestCheckStatus;
+  description?: string;
+  url?: string;
+}
+
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  headBranch: string;
+  baseBranch: string;
+  checksState?: GitHubPullRequestChecksState | null;
+  checks: GitHubPullRequestCheck[];
+}
+
+export interface GitHubPullRequestStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequest?: GitHubPullRequestSummary;
 }
 
 /** Result of inspecting a folder for git status. */
@@ -250,6 +308,9 @@ export type ModelMetadataSource =
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
+  detectedCapabilities?: CustomModelOptions;
+  maxImages?: number;
+  video?: boolean;
   id: string;
   name?: string;
   /** Accepts image input (vision). */

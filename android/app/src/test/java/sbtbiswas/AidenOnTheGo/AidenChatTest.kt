@@ -1,23 +1,150 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.lifecycle.ViewModelStore
+import java.io.File
+import java.time.Instant
+import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.*
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
-import java.io.File
-import java.time.Instant
-import java.util.Base64
-import java.util.UUID
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    @Test
+    fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
+
+    @Test
+    fun failedSendPersistsSubmittedTextAndNewerEdits() = assertFailedSendDraft(newerText = "Newer unsent text")
+
+    @Test
+    fun failedSendCannotRestoreDraftAfterInstallationPurge() = assertFailedSendDraft(purgeWhileSending = true)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val turnArrived = CountDownLatch(1)
+        val releaseTurn = CountDownLatch(1)
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-draft", workspaceId = "workspace-draft", title = "Draft recovery",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-draft"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-draft/turns" -> {
+                    assertEquals("POST", request.method)
+                    turnArrived.countDown()
+                    check(releaseTurn.await(5, TimeUnit.SECONDS)) { "Send response was not released" }
+                    MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-draft","retryable":true}}""")
+                }
+                "/api/aiden/v1/chats/chat-draft" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                val installation = installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-draft", deviceId = "device-draft",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                // Use the production client binding without unrelated /server refresh work.
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Original unsent text")
+                assertTrue(model.canSend)
+                model.send()
+                withContext(Dispatchers.IO) { assertTrue(turnArrived.await(5, TimeUnit.SECONDS)) }
+                assertTrue(model.isStarting.value)
+                assertEquals("", model.draft.value)
+                // Sending intentionally clears persistence until a response is known.
+                assertNull(AidenChatDraftStore(directory).getDraft(installation.instanceId, initialChat.id))
+                if (newerText.isNotEmpty()) model.updateDraft(newerText)
+                if (purgeWhileSending) coordinator.removeInstallation(installation.id)
+                releaseTurn.countDown()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                val expected = if (newerText.isEmpty()) "Original unsent text" else "Original unsent text\n\n$newerText"
+                assertEquals(expected, model.draft.value)
+                assertEquals("Try again", model.presentedError.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+                viewModels.clear()
+                // A fresh store is the process-restart read path, not the ViewModel's memory.
+                val reopened = AidenChatDraftStore(directory)
+                assertEquals(
+                    if (purgeWhileSending) null else expected,
+                    reopened.getDraft(installation.instanceId, initialChat.id)
+                )
+            }
+        } finally {
+            releaseTurn.countDown()
+            runBlocking(dispatcher) { viewModels.clear() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCustomModelOverridesPreserveImageAndVisibilityFlags() {
+        val catalog = json.decodeFromString<AidenModelCatalog>("""
+            {"providers":[{"id":"custom:tailnet","label":"Private","models":[{"id":"text","label":"Text","supportsImages":false},{"id":"vision","label":"Vision","supportsImages":true,"hidden":true}]}],"defaults":{}}
+        """.trimIndent())
+        assertFalse(catalog.providers.first().models.first().acceptsImageInput)
+        assertTrue(catalog.providers.first().models.last().acceptsImageInput)
+        assertEquals(listOf("text"), catalog.visibleProviders.first().models.map { it.id })
+    }
 
     @Test
     fun testHiddenAndAllHiddenProviderModelsStayOutOfNewSelections() {

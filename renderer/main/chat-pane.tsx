@@ -22,7 +22,7 @@ import { MessageCircle, ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { TodoPanel } from "../components/todo-panel";
+import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
@@ -47,6 +47,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -54,6 +55,7 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
@@ -290,6 +292,11 @@ export function ChatPane({
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
+  // A durable terminal message can reach the cache before detached ownership is
+  // cleared. During that handoff there is no longer a response to stop or steer.
+  const cachedMessages = chat.data?.messages;
+  const visibleDetachedProjection =
+    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -415,7 +422,7 @@ export function ChatPane({
         ? "This chat is no longer available. Start a new agent."
       : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
         ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining
+        : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
   const botReadinessMessage = chat.data?.botId
@@ -795,8 +802,6 @@ export function ChatPane({
   }, [chatId, Boolean(draft)]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
-  const visibleDetachedProjection =
-    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
   React.useLayoutEffect(() => {
@@ -1966,7 +1971,7 @@ export function ChatPane({
             }
             throw appendError;
           }
-          qc.setQueryData(queryKeys.chat(chatId), updated);
+          await installAppendedChatSnapshot(qc, chatId, updated);
           if (firstDraft) finishChatDraftSend(chatId, true);
           void qc.invalidateQueries({ queryKey: queryKeys.chats });
           if (generationIntentRef.current !== generationIntent ||
@@ -2048,11 +2053,30 @@ export function ChatPane({
   );
 
   const handleStop = React.useCallback(() => {
+    if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = visibleDetachedProjection;
+      setIsStoppingGeneration(true);
+      void stopDetachedGeneration(streamId).then((cancelled) => {
+        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+      }).catch((error: unknown) => {
+        if (chatIdRef.current === chatId) {
+          setIsStoppingGeneration(false);
+          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+        }
+      });
+      return;
+    }
     if (!generationRef.current || !canStopGeneration) return;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration]);
+  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
+
+  React.useEffect(() => {
+    // Detached Stop has no pane-owned terminal callback. The shell clears its
+    // exact stream after authoritative settlement; release the local stop UI.
+    if (!detachedGenerationDraining && !generationRef.current) setIsStoppingGeneration(false);
+  }, [detachedGenerationDraining, detachedProjection]);
 
   const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
     chatId,
@@ -2225,7 +2249,7 @@ export function ChatPane({
       try {
         if (getChatDraft(chatId)) { updateChatDraft(chatId, { computerUseEnabled: enabled }); return; }
         const updated = await chatsApi.setComputerUse(chatId, enabled);
-        qc.setQueryData(queryKeys.chat(chatId), updated);
+        await installAppendedChatSnapshot(qc, chatId, updated);
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -2411,7 +2435,7 @@ export function ChatPane({
         return;
       }
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
-      qc.setQueryData(queryKeys.chat(chatId), updated);
+      await installAppendedChatSnapshot(qc, chatId, updated);
       selectWorkspace(workspaceId);
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
@@ -2738,10 +2762,7 @@ export function ChatPane({
         overlayFooter={presentation === "design"}
         scrollToBottomButtonOffset={
           presentation === "chat" &&
-          (todoSnapshot?.availability === "unavailable" ||
-            todoSnapshot?.tasks.some(
-              (task) => task.status !== "deleted" && task.status !== "completed",
-            ))
+          todoPanelHasVisibleChrome(todoSnapshot)
             ? 44
             : 0
         }
@@ -2995,6 +3016,7 @@ export function ChatPane({
                         : readinessMessage
                 }
                 hasMessages={hasMessages}
+                initialText={draft?.initialText}
                 chatId={chatId}
                 onSend={handleSend}
                 freezeWhileSending={Boolean(draft)}
@@ -3002,17 +3024,17 @@ export function ChatPane({
                 onQueue={draft || presentation === "design" ? undefined : queueMessage}
                 hasQueuedMessages={presentation === "chat" && queuedState.messages.length > 0}
                 queuedMessages={presentation === "chat" ? <QueuedMessages key={chatId} queue={messageQueue}
-                  canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
+                  canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                   returnFocus={() => composerRef.current}
                   onSteer={(id) => {
-                    if (!canStopGeneration || isStoppingGeneration) return;
+                    if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
                     messageQueue.move(id, 0);
                     messageQueue.resume();
                     handleStop();
                   }} /> : undefined}
                 onStop={() => { messageQueue.pause(); handleStop(); }}
-                isGenerating={isGenerating || isStartingGeneration}
-                canStopGeneration={canStopGeneration}
+                isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
+                canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                 configurationBusy={
                   thinkingSaving ||
                   designProjectReconciliation !== undefined ||

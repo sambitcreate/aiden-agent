@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.features.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,6 +45,10 @@ class AidenChatViewModel(
     val initialChat: AidenChat? = null,
     private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null
 ) : ViewModel() {
+    enum class ProgressConnectionState {
+        IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
+    }
+
     private val _chat = MutableStateFlow<AidenChat?>(initialChat ?: chatCache.getChat(chatId))
     val chat: StateFlow<AidenChat?> = _chat.asStateFlow()
 
@@ -94,6 +100,22 @@ class AidenChatViewModel(
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
 
+    private val _taskProgress = MutableStateFlow<AidenChatTaskProgress?>(null)
+    val taskProgress: StateFlow<AidenChatTaskProgress?> = _taskProgress.asStateFlow()
+
+    private val _agentRoster = MutableStateFlow<AidenChatAgentRoster?>(null)
+    val agentRoster: StateFlow<AidenChatAgentRoster?> = _agentRoster.asStateFlow()
+
+    private val _selectedAgentRoster = MutableStateFlow<AidenChatAgentRoster?>(null)
+    val selectedAgentRoster: StateFlow<AidenChatAgentRoster?> = _selectedAgentRoster.asStateFlow()
+
+    private val _agentRosterHistory = MutableStateFlow<List<AidenChatAgentRoster>>(emptyList())
+    /** Current plus a small number of prior turn rosters for the progress sheet. */
+    val agentRosterHistory: StateFlow<List<AidenChatAgentRoster>> = _agentRosterHistory.asStateFlow()
+
+    private val _progressConnectionState = MutableStateFlow(ProgressConnectionState.IDLE)
+    val progressConnectionState: StateFlow<ProgressConnectionState> = _progressConnectionState.asStateFlow()
+
     private val _draft = MutableStateFlow("")
     val draft: StateFlow<String> = _draft.asStateFlow()
 
@@ -102,6 +124,18 @@ class AidenChatViewModel(
     private var streamJob: Job? = null
     private var titleRefreshJob: Job? = null
     private var terminalReconciliationJob: Job? = null
+    private var progressObservationJob: Job? = null
+    private var progressForeground = false
+    private var progressObservationToken = 0L
+    private var taskEpoch: String? = null
+    private var taskRevision = 0L
+    private var agentEpoch: String? = null
+    private var agentRevision = 0L
+    private var currentRosterTurnId: String? = null
+    private var selectedRosterTurnId: String? = null
+    private var agentRosterSelectionTicket = 0L
+    private var taskCapabilityDeniedObservationToken: Long? = null
+    private var agentCapabilityDeniedObservationToken: Long? = null
     private val turnAttempts = AidenTurnAttemptTracker()
     private val attachmentImageLoadMutex = Mutex()
     private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
@@ -117,6 +151,23 @@ class AidenChatViewModel(
 
     val isConnected: Boolean
         get() = activeClient() != null
+
+    val canReadTaskProgress: Boolean
+        get() = coordinator.serverInfo.value?.let { server ->
+            // Progress grants are fail-closed. `capabilities` can be the
+            // legacy aggregate on /server; only the explicit server grant is
+            // authoritative for the new projection.
+            server.supportsChatTasks &&
+                server.serverCapabilities?.contains(AidenRemoteCapability.TASKS_READ) == true &&
+                installationForProgress()?.deviceCapabilities?.contains(AidenRemoteCapability.TASKS_READ) == true
+        } == true
+
+    val canReadAgentRoster: Boolean
+        get() = coordinator.serverInfo.value?.let { server ->
+            server.supportsChatAgents &&
+                server.serverCapabilities?.contains(AidenRemoteCapability.AGENTS_READ) == true &&
+                installationForProgress()?.deviceCapabilities?.contains(AidenRemoteCapability.AGENTS_READ) == true
+        } == true
 
     val canSend: Boolean
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value &&
@@ -150,6 +201,382 @@ class AidenChatViewModel(
         }
     }
 
+    private fun installationForProgress(): AidenInstallation? {
+        val installation = coordinator.installationStore.activeInstallation
+        return installation?.takeIf {
+            it.instanceId == instanceId && it.deviceId == deviceId && activeClient() != null
+        }
+    }
+
+    /** Attach the standalone chat progress stream while the detail screen is foregrounded. */
+    fun startProgressObservation() {
+        progressForeground = true
+        reconcileProgressAccess()
+        if (progressObservationJob?.isActive == true) return
+        progressObservationToken += 1
+        if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster) {
+            _progressConnectionState.value = ProgressConnectionState.UNAVAILABLE
+            return
+        }
+        val observationToken = progressObservationToken
+        progressObservationJob = viewModelScope.launch {
+            observeProgressUntilBackground(observationToken)
+        }
+    }
+
+    /** Stop SSE work in the background but preserve the last authoritative snapshot. */
+    fun stopProgressObservation() {
+        progressForeground = false
+        progressObservationToken += 1
+        progressObservationJob?.cancel()
+        progressObservationJob = null
+        _progressConnectionState.value = when {
+            _taskProgress.value != null || _agentRoster.value != null -> ProgressConnectionState.LAST_KNOWN
+            canReadTaskProgress || canReadAgentRoster -> ProgressConnectionState.IDLE
+            else -> ProgressConnectionState.UNAVAILABLE
+        }
+    }
+
+    private suspend fun observeProgressUntilBackground(observationToken: Long) {
+        var retryAttempt = 0
+        while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
+            val client = activeClient()
+            if (client == null || (!canReadTaskProgress && !canReadAgentRoster)) {
+                _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
+                    ProgressConnectionState.LAST_KNOWN
+                } else {
+                    ProgressConnectionState.UNAVAILABLE
+                }
+                return
+            }
+
+            _progressConnectionState.value = ProgressConnectionState.CONNECTING
+            try {
+                // Hydrate authoritative snapshots before opening the journal.
+                // The server sends a fresh snapshot on subscribe as well, so an
+                // update between these reads and the connection cannot be lost.
+                if (canReadTaskProgress && taskCapabilityDeniedObservationToken != observationToken) {
+                    try {
+                        val snapshot = client.chatTasks(chatId)
+                        if (!isProgressContextCurrent(client, observationToken) || !canReadTaskProgress) return
+                        acceptTaskProgress(snapshot)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        if (isProgressCredentialRevoked(error)) throw error
+                        if (isProgressCapabilityDenied(error)) {
+                            clearTaskProgressState()
+                            taskCapabilityDeniedObservationToken = observationToken
+                        }
+                        // Keep a last-known task snapshot while a transient read fails.
+                    }
+                }
+                if (canReadAgentRoster && agentCapabilityDeniedObservationToken != observationToken) {
+                    try {
+                        val snapshot = client.chatAgents(chatId)
+                        if (!isProgressContextCurrent(client, observationToken) || !canReadAgentRoster) return
+                        acceptAgentRoster(snapshot)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        if (isProgressCredentialRevoked(error)) throw error
+                        if (isProgressCapabilityDenied(error)) {
+                            clearAgentRosterState()
+                            agentCapabilityDeniedObservationToken = observationToken
+                        }
+                        // Keep a last-known roster while a transient read fails.
+                    }
+                }
+
+                // Event sequence numbers are process-local on the Mac. A
+                // reconnect therefore starts a new subscription at zero.
+                val canObserveTasks = canReadTaskProgress && taskCapabilityDeniedObservationToken != observationToken
+                val canObserveAgents = canReadAgentRoster && agentCapabilityDeniedObservationToken != observationToken
+                if (!canObserveTasks && !canObserveAgents) {
+                    _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
+                        ProgressConnectionState.LAST_KNOWN
+                    } else {
+                        ProgressConnectionState.UNAVAILABLE
+                    }
+                    return
+                }
+                client.progressEvents(chatId, after = 0).collect { event ->
+                    if (!isProgressContextCurrent(client, observationToken) || event.streamId != chatId) return@collect
+                    var accepted = false
+                    when (event.type) {
+                        AidenRemoteEventType.TASK_UPDATE -> if (
+                            canReadTaskProgress && taskCapabilityDeniedObservationToken != observationToken
+                        ) {
+                            event.payload?.taskProgress?.let {
+                                acceptTaskProgress(it)
+                                accepted = true
+                            }
+                        }
+                        AidenRemoteEventType.AGENTS_UPDATE -> if (
+                            canReadAgentRoster && agentCapabilityDeniedObservationToken != observationToken
+                        ) {
+                            event.payload?.agentRoster?.let {
+                                acceptAgentRoster(it)
+                                accepted = true
+                            }
+                        }
+                        else -> Unit
+                    }
+                    if (accepted) {
+                        _progressConnectionState.value = ProgressConnectionState.LIVE
+                    }
+                }
+                retryAttempt = 0
+                if (progressForeground && progressObservationToken == observationToken) {
+                    _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
+                        ProgressConnectionState.LAST_KNOWN
+                    } else {
+                        ProgressConnectionState.UNAVAILABLE
+                    }
+                    delay(progressRetryDelay(0))
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) return
+                if (isProgressCredentialRevoked(error)) {
+                    clearProgressState()
+                    if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                        coordinator.removeInstallation(instanceId)
+                    }
+                    return
+                }
+                if (isProgressCapabilityDenied(error)) {
+                    clearProgressState()
+                    return
+                }
+                _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
+                    ProgressConnectionState.LAST_KNOWN
+                } else {
+                    ProgressConnectionState.UNAVAILABLE
+                }
+                delay(progressRetryDelay(retryAttempt))
+                retryAttempt = (retryAttempt + 1).coerceAtMost(5)
+            }
+        }
+    }
+
+    private fun isProgressContextCurrent(client: AidenRemoteClient, observationToken: Long): Boolean =
+        progressForeground && progressObservationToken == observationToken &&
+            activeClient() === client && coordinator.activeInstanceId == instanceId &&
+            coordinator.installationStore.activeInstallation?.deviceId == deviceId
+
+    private fun isProgressCredentialRevoked(error: Throwable): Boolean {
+        val serverError = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server ?: return false
+        return serverError.statusCode == 401 ||
+            serverError.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
+    }
+
+    private fun isProgressCapabilityDenied(error: Throwable): Boolean {
+        val serverError = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server ?: return false
+        return serverError.statusCode == 403 &&
+            serverError.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CAPABILITY_DENIED
+    }
+
+    private fun clearProgressState() {
+        agentRosterSelectionTicket += 1
+        _taskProgress.value = null
+        _agentRoster.value = null
+        _selectedAgentRoster.value = null
+        _agentRosterHistory.value = emptyList()
+        taskEpoch = null
+        taskRevision = 0L
+        agentEpoch = null
+        agentRevision = 0L
+        currentRosterTurnId = null
+        selectedRosterTurnId = null
+        taskCapabilityDeniedObservationToken = null
+        agentCapabilityDeniedObservationToken = null
+        _progressConnectionState.value = ProgressConnectionState.UNAVAILABLE
+    }
+
+    private fun clearTaskProgressState() {
+        _taskProgress.value = null
+        taskEpoch = null
+        taskRevision = 0L
+        if (_agentRoster.value == null) _progressConnectionState.value = ProgressConnectionState.UNAVAILABLE
+    }
+
+    private fun clearAgentRosterState() {
+        agentRosterSelectionTicket += 1
+        _agentRoster.value = null
+        _selectedAgentRoster.value = null
+        _agentRosterHistory.value = emptyList()
+        agentEpoch = null
+        agentRevision = 0L
+        currentRosterTurnId = null
+        selectedRosterTurnId = null
+        if (_taskProgress.value == null) _progressConnectionState.value = ProgressConnectionState.UNAVAILABLE
+    }
+
+    /** Drop cached projections as soon as the negotiated read gate disappears. */
+    fun reconcileProgressAccess() {
+        // A fresh /server response starts a new negotiation view. A prior
+        // capability denial is scoped to the old observation and may be
+        // retried after the server confirms the grant again.
+        taskCapabilityDeniedObservationToken = null
+        agentCapabilityDeniedObservationToken = null
+        val keepTasks = canReadTaskProgress
+        val keepAgents = canReadAgentRoster
+        if (!keepTasks && !keepAgents) {
+            clearProgressState()
+            return
+        }
+        if (!keepTasks) {
+            _taskProgress.value = null
+            taskEpoch = null
+            taskRevision = 0L
+        }
+        if (!keepAgents) {
+            agentRosterSelectionTicket += 1
+            _agentRoster.value = null
+            _selectedAgentRoster.value = null
+            _agentRosterHistory.value = emptyList()
+            agentEpoch = null
+            agentRevision = 0L
+            currentRosterTurnId = null
+            selectedRosterTurnId = null
+        }
+        _progressConnectionState.value = if (keepTasks || keepAgents) {
+            ProgressConnectionState.IDLE
+        } else {
+            ProgressConnectionState.UNAVAILABLE
+        }
+    }
+
+    private fun progressRetryDelay(attempt: Int): Long =
+        (500L * (1L shl attempt.coerceIn(0, 5))).coerceAtMost(8_000L)
+
+    private fun acceptTaskProgress(snapshot: AidenChatTaskProgress) {
+        if (snapshot.chatId != chatId) return
+        if (!AidenProgressFencing.accepts(taskEpoch, taskRevision, snapshot.epoch, snapshot.revision)) return
+        if (taskEpoch != snapshot.epoch) taskRevision = 0L
+        taskEpoch = snapshot.epoch
+        taskRevision = snapshot.revision
+        _taskProgress.value = snapshot
+    }
+
+    private fun acceptAgentRoster(snapshot: AidenChatAgentRoster, historical: Boolean = false): Boolean {
+        if (snapshot.chatId != chatId) return false
+        val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
+        if (!historical) {
+            if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
+            if (agentEpoch != null && agentEpoch != snapshot.epoch) {
+                agentRosterSelectionTicket += 1
+                _agentRosterHistory.value = emptyList()
+                selectedRosterTurnId = null
+                _selectedAgentRoster.value = null
+                agentRevision = 0L
+            }
+            agentEpoch = snapshot.epoch
+            agentRevision = snapshot.revision
+            val previousTurnId = currentRosterTurnId
+            currentRosterTurnId = snapshot.turnId
+            _agentRoster.value = snapshot
+            if (selectedRosterTurnId == null || selectedRosterTurnId == previousTurnId || selectedRosterTurnId == snapshot.turnId) {
+                selectedRosterTurnId = snapshot.turnId
+                _selectedAgentRoster.value = snapshot
+            }
+        } else {
+            if (snapshot.epoch != agentEpoch) return false
+            // A retained-turn fetch can resolve after a fresher snapshot for the
+            // same turn was already applied. Revisions are ordered within an
+            // epoch:turn key, so never let a late response move history or the
+            // user's selected roster backwards.
+            val existing = _agentRosterHistory.value.firstOrNull {
+                AidenProgressFencing.rosterKey(it.epoch, it.turnId) == key
+            }
+            if (existing != null && !AidenProgressFencing.accepts(
+                    existing.epoch, existing.revision, snapshot.epoch, snapshot.revision
+                )
+            ) return false
+        }
+        val updated = buildList {
+            add(snapshot)
+            addAll(_agentRosterHistory.value.filter {
+                AidenProgressFencing.rosterKey(it.epoch, it.turnId) != key
+            })
+        }.take(MAX_AGENT_ROSTER_HISTORY)
+        _agentRosterHistory.value = updated
+        if (historical && selectedRosterTurnId == snapshot.turnId) {
+            _selectedAgentRoster.value = snapshot
+        }
+        return true
+    }
+
+    /** Select a current or retained turn; an absent retained turn is fetched by opaque ID. */
+    fun selectAgentRosterTurn(turnId: String?) {
+        val selectionTicket = ++agentRosterSelectionTicket
+        if (!canReadAgentRoster) {
+            selectedRosterTurnId = null
+            _selectedAgentRoster.value = null
+            return
+        }
+        if (turnId == null) {
+            selectedRosterTurnId = null
+            _selectedAgentRoster.value = _agentRoster.value
+            return
+        }
+        val cached = AidenProgressFencing.retainedRoster(
+            _agentRosterHistory.value,
+            agentEpoch,
+            turnId
+        )
+        // Fence a current-turn refresh immediately, even while the selected
+        // historical roster is being fetched. Otherwise its late response can
+        // briefly replace the user's chosen turn in the sheet.
+        selectedRosterTurnId = turnId
+        _selectedAgentRoster.value = cached
+        val client = activeClient() ?: return
+        viewModelScope.launch {
+            try {
+                val roster = client.chatAgents(chatId, turnId)
+                if (activeClient() !== client || coordinator.activeInstanceId != instanceId ||
+                    coordinator.installationStore.activeInstallation?.deviceId != deviceId ||
+                    agentRosterSelectionTicket != selectionTicket
+                ) return@launch
+                if (acceptAgentRoster(roster, historical = true)) {
+                    selectedRosterTurnId = turnId
+                    _selectedAgentRoster.value = roster
+                } else {
+                    // The fetch resolved to a stale snapshot: keep the newer
+                    // cached roster for this turn instead of regressing it.
+                    selectedRosterTurnId = turnId
+                    _selectedAgentRoster.value = AidenProgressFencing.retainedRoster(
+                        _agentRosterHistory.value,
+                        agentEpoch,
+                        turnId
+                    )
+                }
+            } catch (error: Exception) {
+                if (isProgressCredentialRevoked(error)) {
+                    clearProgressState()
+                    if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                        coordinator.removeInstallation(instanceId)
+                    }
+                } else if (isProgressCapabilityDenied(error)) {
+                    clearAgentRosterState()
+                    agentCapabilityDeniedObservationToken = progressObservationToken
+                } else if (error !is CancellationException && agentRosterSelectionTicket == selectionTicket) {
+                    _presentedError.value = "That agent session is no longer available."
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        progressForeground = false
+        progressObservationToken += 1
+        progressObservationJob?.cancel()
+        streamJob?.cancel()
+        titleRefreshJob?.cancel()
+        terminalReconciliationJob?.cancel()
+        super.onCleared()
+    }
+
     private fun publishLiveNotification(
         state: AidenStreamState?,
         responseText: String,
@@ -173,7 +600,7 @@ class AidenChatViewModel(
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
             responseText.isNotBlank() -> "Writing a response"
             else -> status.title
-        } ?: status.title
+        }
         liveNotificationManager?.showAgentProgressNotification(
             instanceId = instanceId,
             sessionId = chatId,
@@ -357,7 +784,7 @@ class AidenChatViewModel(
                 if (e !is CancellationException) {
                     val fallbackMessages = _chat.value?.messages?.filter { it.id != optimisticId } ?: emptyList()
                     _chat.value = _chat.value?.copy(messages = fallbackMessages, updatedAt = previousUpdatedAt)
-                    _draft.value = AidenDraftSendReconciliation.failedDraft(text, _draft.value)
+                    updateDraft(AidenDraftSendReconciliation.failedDraft(text, _draft.value))
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
                     _presentedError.value = e.localizedMessage
@@ -832,6 +1259,8 @@ class AidenChatViewModel(
     }
 
     companion object {
+        private const val MAX_AGENT_ROSTER_HISTORY = 8
+
         fun factory(
             chatId: String,
             coordinator: AidenRemoteCoordinator,

@@ -56,6 +56,11 @@ export interface DataStoreOptions<T> {
   afterWritePublish?: (previous: T | null, next: T) => void;
 }
 
+/** Fresh per-update receipt; callers must treat an entered filesystem publication as uncertain on rejection. */
+export interface DataStorePublicationReceipt {
+  state: "not-published" | "uncertain" | "published";
+}
+
 export class DataStoreExternalChangeError extends Error {
   constructor() {
     super("Cannot overwrite a JSON file that changed outside the app.");
@@ -338,6 +343,7 @@ export class DataStore<T> {
     staged: string,
     destination: string,
     isCurrent: () => boolean,
+    receipt?: DataStorePublicationReceipt,
   ): Promise<void> {
     if (this.diskSnapshot === undefined) {
       throw new Error("Cannot overwrite a JSON file before loading its current contents.");
@@ -391,7 +397,9 @@ export class DataStore<T> {
       // concurrent editor that creates it wins: hard-link publication is the
       // no-overwrite primitive that rename lacks.
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (receipt) receipt.state = "uncertain";
       await fs.link(staged, destination);
+      if (receipt) receipt.state = "published";
       destinationPublished = true;
       await this.options.afterDestinationPublish?.();
       await this.syncDirectory(path.dirname(destination));
@@ -442,7 +450,7 @@ export class DataStore<T> {
    * dies or the disk fills mid-write, which would destroy a config the user
    * maintains by hand rather than merely losing a regenerable cache.
    */
-  private async writeNow(data: T, isCurrent: () => boolean): Promise<void> {
+  private async writeNow(data: T, isCurrent: () => boolean, receipt?: DataStorePublicationReceipt): Promise<void> {
     if (!isCurrent()) throw new Error("The renderer document is no longer active.");
     if (this.options.isSafe && !this.options.isSafe(data)) {
       throw new DataStoreUnsafeWriteError();
@@ -481,10 +489,12 @@ export class DataStore<T> {
       const previous = this.cache === null ? null : structuredClone(this.cache);
       this.options.beforeWritePublish?.(previous, data);
       if (this.options.rejectExternalChanges) {
-        await this.publishProtected(staged, destination, isCurrent);
+        await this.publishProtected(staged, destination, isCurrent, receipt);
       } else {
         if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        if (receipt) receipt.state = "uncertain";
         await fs.rename(staged, destination);
+        if (receipt) receipt.state = "published";
         await this.options.afterDestinationPublish?.();
         await this.syncDirectory(path.dirname(destination));
       }
@@ -527,7 +537,9 @@ export class DataStore<T> {
   async update<R>(
     mutation: (draft: T) => R | Promise<R>,
     isCurrent: () => boolean = () => true,
+    receipt?: DataStorePublicationReceipt,
   ): Promise<R> {
+    if (receipt) receipt.state = "not-published";
     return this.serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       if (this.options.reloadBeforeWrite) await this.reloadNow();
@@ -539,7 +551,7 @@ export class DataStore<T> {
       }
       const draft = structuredClone(await this.load());
       const result = await mutation(draft);
-      await this.writeNow(draft, isCurrent);
+      await this.writeNow(draft, isCurrent, receipt);
       return result;
     });
   }

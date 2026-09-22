@@ -21,6 +21,7 @@ import {
   type GitDiffInput,
   type GitPushInput,
 } from "../services/git.js";
+import { githubCurrentPullRequest } from "../services/github-pull-request.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {
   listWorkspaceFiles,
@@ -177,6 +178,20 @@ export function registerWorkspaceHandlers(): void {
     ),
   );
 
+  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>
+    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+      if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
+      const info = await gitInfo(resolved.folderPath, signal);
+      if (!info.isRepo) {
+        return { availability: "not-repo" as const, message: "This workspace is not a Git repository." };
+      }
+      if (!info.hasRemote) {
+        return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
+      }
+      return githubCurrentPullRequest(resolved.folderPath, signal);
+    }),
+  );
+
   // ── Environment panel: Files + Review ────────────────────────────────
   ipcMain.handle("workspaces:files", async (event, workspaceId: unknown) =>
     withWorkspaceOperation(event, workspaceId, (resolved, signal) =>
@@ -298,14 +313,40 @@ export function registerWorkspaceHandlers(): void {
     return workspaceWorktreeApplicationService.create(owner, sourceWorkspaceId, branch);
   });
 
-  ipcMain.handle("git:deleteManagedWorktree", async (event, workspaceId: unknown) => {
-    const id = asString(workspaceId, "workspaceId");
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Workspace access requires the active renderer document."),
-    );
-    return workspaceWorktreeApplicationService.remove(owner, id);
-  });
+  ipcMain.handle(
+    "git:deleteManagedWorktree",
+    async (event, workspaceId: unknown, options: unknown) => {
+      const id = asString(workspaceId, "workspaceId");
+      const force =
+        typeof options === "object" &&
+        options !== null &&
+        (options as { force?: unknown }).force === true;
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Workspace access requires the active renderer document."),
+      );
+      return workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
+    },
+  );
+
+  ipcMain.handle(
+    "git:restoreManagedWorktree",
+    async (event, workspaceId: unknown, snapshotId: unknown, name: unknown) => {
+      const id = asString(workspaceId, "workspaceId");
+      const snapshot = asString(snapshotId, "snapshotId");
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(snapshot)
+      ) {
+        throw new Error("The snapshot identifier is invalid.");
+      }
+      const requestedName = name === undefined ? undefined : asString(name, "name");
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Workspace access requires the active renderer document."),
+      );
+      return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
+    },
+  );
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
   ipcMain.handle("workspaces:openFolder", async (event, workspaceId: unknown) =>

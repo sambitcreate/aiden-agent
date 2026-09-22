@@ -339,7 +339,7 @@ Paths below are the authoritative audit evidence. Component code takes precedenc
 
 <a id="s7"></a>**S7 — Telegram:** [settings](../../renderer/components/settings/telegram-settings.tsx), [parity plan](telegram-first-class-agent-parity-plan.md).
 
-<a id="s8"></a>**S8 — Schedules/Assistant:** [task editor](../../renderer/components/scheduled-task-editor.tsx), [tasks view](../../renderer/components/scheduled-tasks-view.tsx), [Assistant capability disclosure](../../renderer/components/settings/assistant-settings.tsx), [Assistant automation approval](../../renderer/components/assistant/assistant-automation-approval.tsx).
+<a id="s8"></a>**S8 — Schedules/Assistant:** [task editor](../../renderer/components/scheduled-task-editor.tsx), [tasks view](../../renderer/components/scheduled-tasks-view.tsx), [Assistant capability disclosure](../../renderer/components/settings/assistant-settings.tsx), [chat approval surface](../../renderer/main/chat-pane.tsx).
 
 <a id="s9"></a>**S9 — Plugins/skills:** [plugin settings](../../renderer/components/settings/mcp-settings.tsx), [preset setup](../../renderer/components/settings/mcp-preset-setup.tsx), [skills](../../renderer/components/settings/skills-settings.tsx).
 

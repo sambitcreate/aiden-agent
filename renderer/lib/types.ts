@@ -1,3 +1,4 @@
+import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine } from "../shared/compaction";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
@@ -53,6 +54,8 @@ export type ProviderDeployment = "local" | "hosted";
 export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
+  overrides?: CustomModelOptions;
+  manuallyAdded?: boolean;
   source: "lmstudio" | "ollama" | "provider";
   name?: string;
   type?: ProviderModelType;
@@ -74,6 +77,8 @@ export interface Provider {
   baseUrl: string;
   models: string[];
   modelMetadata?: Record<string, ProviderModelMetadata>;
+  /** User-authored model intent, portable independently of discovery cache. */
+  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
   defaultModel?: string;
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
@@ -243,6 +248,52 @@ export interface ExternalEditor {
   id: string;
   label: string;
   iconDataUrl: string;
+}
+
+export type GitHubPullRequestCheckStatus =
+  | "pending"
+  | "action-required"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "neutral"
+  | "cancelled";
+
+export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
+
+export type GitHubPullRequestAvailability =
+  | "ready"
+  | "not-repo"
+  | "missing-tool"
+  | "unauthenticated"
+  | "no-pull-request"
+  | "not-github"
+  | "unsupported"
+  | "error";
+
+export interface GitHubPullRequestCheck {
+  name: string;
+  status: GitHubPullRequestCheckStatus;
+  description?: string;
+  url?: string;
+}
+
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  headBranch: string;
+  baseBranch: string;
+  checksState?: GitHubPullRequestChecksState | null;
+  checks: GitHubPullRequestCheck[];
+}
+
+export interface GitHubPullRequestStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequest?: GitHubPullRequestSummary;
 }
 
 export interface GitInfo {
@@ -494,6 +545,9 @@ export type ModelMetadataSource =
   | "fallback";
 
 export interface ModelInfo {
+  detectedCapabilities?: CustomModelOptions;
+  maxImages?: number;
+  video?: boolean;
   id: string;
   name?: string;
   vision?: boolean;

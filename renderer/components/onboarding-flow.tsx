@@ -1,4 +1,5 @@
 import {
+  AudioWaveform,
   Bot,
   Blocks,
   Lightbulb,
@@ -99,7 +100,7 @@ const FEATURE_ILLUSTRATIONS = {
   webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
   skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
   mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
-  assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
   bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
   schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
     .href,
@@ -155,12 +156,12 @@ const providerChoices: Array<{
   {
     id: "custom",
     title: "Other Custom Provider",
-    description: "Connect your own model server or endpoint.",
+    description: "Connect your endpoint, choose models, and customize their capabilities.",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect to a private model on your tailnet.",
+    description: "Connect a private server and choose models and capabilities in More options.",
   },
 ];
 
@@ -217,7 +218,7 @@ const featureBentos: FeatureBento[] = [
     id: "subagents",
     group: "create",
     title: "Native Subagents",
-    description: "Delegate scout, planner, and reviewer jobs, then inspect their live results.",
+    description: "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
     size: "standard",
@@ -282,7 +283,7 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or local endpoints.",
+    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -345,12 +346,13 @@ const featureBentos: FeatureBento[] = [
     size: "wide",
   },
   {
-    id: "assistant",
+    id: "geminiLive",
     group: "control",
-    title: "Aiden Assistant",
-    description: "Ask about the app and prepare confirmed automations from a private dock.",
-    icon: Bot,
-    imageUrl: FEATURE_ILLUSTRATIONS.assistant,
+    title: "Aiden Live",
+    description:
+      "Talk to Aiden, share screen context, and approve each app action one at a time from the new orb.",
+    icon: AudioWaveform,
+    imageUrl: FEATURE_ILLUSTRATIONS.geminiLive,
     size: "hero",
   },
   {

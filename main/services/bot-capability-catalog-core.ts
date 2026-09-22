@@ -30,6 +30,7 @@ export const BOT_ORDINARY_CAPABILITY_KINDS = [
   "computer_use",
   "schedules",
   "subagents",
+  "tasks",
 ] as const;
 
 export type BotOrdinaryCapabilityKind = (typeof BOT_ORDINARY_CAPABILITY_KINDS)[number];

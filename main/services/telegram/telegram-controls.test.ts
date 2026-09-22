@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   TELEGRAM_COMMANDS,
+  telegramModelChoice,
   buildMainMenu,
   buildModelMenu,
   buildQueueItemMenu,
@@ -91,4 +92,17 @@ test("Telegram settings expose native rendering and voice policy controls", () =
   const callbacks = menu.markup.inline_keyboard.flat().map((button) => button.callback_data);
   assert.ok(callbacks.includes("settings:rendering:toggle"));
   assert.ok(callbacks.includes("settings:voice:next"));
+});
+
+
+test("Telegram choices honor explicit custom reasoning overrides", () => {
+  const provider = {
+    id: "custom:server", label: "Server", kind: "openai" as const, baseUrl: "http://localhost/v1", needsKey: false, hasKey: false, models: ["on", "off"],
+    modelMetadata: {
+      on: { source: "provider" as const, reasoning: false, overrides: { reasoning: true } },
+      off: { source: "provider" as const, reasoning: true, overrides: { reasoning: false } },
+    },
+  };
+  assert.equal(telegramModelChoice(provider, "on").reasoning, true);
+  assert.equal(telegramModelChoice(provider, "off").reasoning, false);
 });

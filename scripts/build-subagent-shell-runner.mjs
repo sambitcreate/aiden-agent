@@ -25,6 +25,7 @@ await mkdir(path.dirname(output), { recursive: true });
 await executeFile(
   "/usr/bin/xcrun",
   [
+    "--sdk", "macosx",
     "clang",
     "-std=c17",
     "-Wall",
@@ -48,6 +49,7 @@ if (testing) {
   await executeFile(
     "/usr/bin/xcrun",
     [
+      "--sdk", "macosx",
       "clang",
       "-std=c17",
       "-Wall",

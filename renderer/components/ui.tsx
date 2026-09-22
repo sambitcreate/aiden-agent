@@ -1002,6 +1002,10 @@ type DialogProps = React.PropsWithChildren<{
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
   cancelDisabled?: boolean;
+  cancelLabel?: string;
+  onCancel?: () => void | Promise<void>;
+  allowCancelWhileBusy?: boolean;
+  actionClassName?: string;
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
@@ -1020,6 +1024,10 @@ export function Dialog({
   cancelRef,
   dismissDisabled,
   cancelDisabled,
+  cancelLabel,
+  onCancel,
+  allowCancelWhileBusy,
+  actionClassName,
   busy,
   onConfirm,
   returnFocus,
@@ -1027,7 +1035,9 @@ export function Dialog({
   layer = "default",
   children,
 }: DialogProps) {
-  const dismissBlocked = Boolean(dismissDisabled || cancelDisabled || busy);
+  const dismissBlocked = Boolean(
+    dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
+  );
 
   return (
     <DialogPrimitive.Root
@@ -1070,13 +1080,20 @@ export function Dialog({
           <div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div>
           <div className="mt-5 flex shrink-0 justify-end gap-2">
             <DialogPrimitive.Close asChild>
-              <Button ref={cancelRef} variant="filled" disabled={dismissBlocked}>
-                {confirmHidden ? "Close" : "Cancel"}
+              <Button
+                ref={cancelRef}
+                variant="filled"
+                className={actionClassName}
+                disabled={dismissBlocked}
+                onClick={() => void onCancel?.()}
+              >
+                {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
               </Button>
             </DialogPrimitive.Close>
             {confirmHidden ? null : (
               <Button
                 variant="accent"
+                className={actionClassName}
                 disabled={confirmDisabled || busy}
                 onClick={() => void onConfirm?.()}
               >

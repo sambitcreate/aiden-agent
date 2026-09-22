@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter, getEventListeners } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
@@ -29,7 +30,15 @@ import {
   CuaDriverSession,
 } from "./session.js";
 
+// Keep fixture polling on wall time while a test controls the host deadline clock.
+const realSetTimeout = setTimeout;
 const fixture = fileURLToPath(new URL("./fixtures/fake-cua-driver.mjs", import.meta.url));
+
+test("Computer Use helper layout follows physical packaging, not the runtime profile", async () => {
+  const source = await readFile(new URL("./runtime.ts", import.meta.url), "utf8");
+  assert.match(source, /isPackaged:\s*app\.isPackaged/);
+  assert.doesNotMatch(source, /isPackagedRuntime/);
+});
 const SESSION_LESS_TOOLS = new Set([
   "health_report",
   "check_permissions",
@@ -155,24 +164,24 @@ async function waitForEvent(
   predicate: (event: Record<string, unknown>) => boolean,
   timeoutMs = 4_000,
 ): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     try {
       const match = (await readEvents(logPath)).find(predicate);
       if (match) return match;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => realSetTimeout(resolve, 20));
   }
   throw new Error("Timed out waiting for a fake Computer Use event.");
 }
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 4_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => realSetTimeout(resolve, 20));
   }
   throw new Error("Timed out waiting for a Computer Use lifecycle condition.");
 }
@@ -917,51 +926,96 @@ test("aborting readiness kills the bridge and broker without an orphan", async (
   }
 });
 
-test("one startup deadline aborts bridge verification and cleans up the launch lease", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "acu-verifier-deadline-"));
-  const logPath = path.join(root, "events.jsonl");
-  let bridgePid: number | undefined;
-  let verifierObservedAbort = false;
-  const host = fakeHost(root, logPath, [], {
-    startupTimeoutMs: 120,
-    verifyBridgeProcess: async (pid, _expectedExecutable, signal) => {
-      bridgePid = pid;
-      await new Promise<void>((_resolve, reject) => {
-        if (!signal) {
-          reject(new Error("verification must receive the startup signal"));
-          return;
+for (const phase of ["before fixture initialization", "during bridge verification"] as const) {
+  test(`one startup deadline cleans up ${phase}`, { timeout: 10_000 }, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "acu-verifier-deadline-"));
+    const logPath = path.join(root, "events.jsonl");
+    const gated = phase === "before fixture initialization";
+    const children: Array<{ child: ChildProcess; role: string }> = [];
+    const originalSpawn = childProcess.spawn;
+    const spawnMock = t.mock.method(childProcess, "spawn", ((...args: Parameters<typeof originalSpawn>) => {
+      const child = originalSpawn(...args);
+      children.push({ child, role: args[1]?.includes("--bridge") ? "bridge" : "broker" });
+      return child;
+    }) as typeof originalSpawn);
+    syncBuiltinESMExports();
+    let bridgePid: number | undefined;
+    let verifierSignal: AbortSignal | undefined;
+    let verifierObservedAbort = false;
+    const host = fakeHost(root, logPath, gated ? ["--initialization-gate", path.join(root, "gate")] : [], {
+      startupTimeoutMs: 120,
+      verifyBridgeProcess: async (pid, _expectedExecutable, signal) => {
+        bridgePid = pid;
+        verifierSignal = signal;
+        assert.ok(signal, "verification must receive the startup signal");
+        await new Promise<void>((_resolve, reject) => {
+          const aborted = () => {
+            verifierObservedAbort = true;
+            signal.removeEventListener("abort", aborted);
+            reject(signal.reason);
+          };
+          signal.addEventListener("abort", aborted, { once: true });
+          if (signal.aborted) aborted();
+        });
+      },
+    });
+    let settled = false;
+    let outcome: Promise<void> | undefined;
+    try {
+      // Only the host clock is virtual. Real children and filesystem cleanup stay real.
+      t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+      const creating = host.createSession();
+      outcome = assert.rejects(
+        creating,
+        (error: unknown) => error instanceof CuaDriverError && error.code === "startup_timeout",
+      );
+      void creating.then(() => { settled = true; }, () => { settled = true; });
+      await waitForCondition(() => verifierSignal !== undefined);
+      assert.deepEqual(children.map(({ role }) => role), ["broker", "bridge"]);
+      assert.equal(bridgePid, children[1].child.pid);
+      for (const { child } of children) {
+        assert.ok(child.pid);
+        assertProcessRunning(child.pid);
+      }
+      if (gated) {
+        // The unopened gate makes absence of the child-owned log intentional.
+        await assert.rejects(readFile(logPath), { code: "ENOENT" });
+      } else {
+        for (const { child, role } of children) {
+          await waitForEvent(logPath, (event) =>
+            event.event === "spawn" && event.command === role && event.pid === child.pid);
         }
-        const aborted = () => {
-          verifierObservedAbort = true;
-          signal.removeEventListener("abort", aborted);
-          reject(signal.reason);
-        };
-        signal.addEventListener("abort", aborted, { once: true });
-        if (signal.aborted) aborted();
-      });
-    },
+      }
+      assert.equal((await readdir(root)).filter((name) => name.startsWith("acu-")).length, 1);
+      t.mock.timers.tick(119);
+      assert.equal(verifierSignal?.aborted, false, "startup must retain the whole deadline budget");
+      assert.equal(settled, false);
+      t.mock.timers.tick(1);
+      assert.equal(verifierObservedAbort, true, "the host deadline must abort the active verifier");
+      // Restore real timers before asynchronous process termination/escalation runs.
+      t.mock.timers.reset();
+      await outcome;
+      for (const { child } of children) {
+        assert.ok(child.exitCode !== null || child.signalCode !== null, "the parent must reap each child");
+        assertProcessExited(child.pid!);
+      }
+      if (gated) await assert.rejects(readFile(logPath), { code: "ENOENT" });
+      const leftovers = (await readdir(root)).filter((name) => name !== path.basename(logPath));
+      assert.deepEqual(leftovers, [], "deadline cleanup should remove the launch lease directory");
+    } finally {
+      t.mock.timers.reset();
+      await host.shutdown();
+      // Observe a rejection even when an earlier phase assertion fails.
+      await outcome?.catch(() => {});
+      for (const { child } of children) {
+        if (child.exitCode === null && child.signalCode === null) await killExactProcess(child.pid);
+      }
+      spawnMock.mock.restore();
+      syncBuiltinESMExports();
+      await rm(root, { recursive: true, force: true });
+    }
   });
-  const startedAt = Date.now();
-  try {
-    await assert.rejects(
-      host.createSession(),
-      (error: unknown) => error instanceof CuaDriverError && error.code === "startup_timeout",
-    );
-    assert.equal(verifierObservedAbort, true);
-    assert.equal(Date.now() - startedAt < 1_000, true, "deadline cleanup should be prompt");
-    assert.ok(bridgePid);
-    assertProcessExited(bridgePid);
-    const events = await readEvents(logPath);
-    const broker = events.find((event) => event.event === "spawn" && event.command === "broker");
-    assert.equal(typeof broker?.pid, "number");
-    assertProcessExited(broker?.pid as number);
-    const leftovers = (await readdir(root)).filter((name) => name !== path.basename(logPath));
-    assert.deepEqual(leftovers, [], "deadline cleanup should remove the launch lease directory");
-  } finally {
-    await host.shutdown();
-    await rm(root, { recursive: true, force: true });
-  }
-});
+}
 
 test("shutdown racing session startup cannot return an orphan session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-race-"));

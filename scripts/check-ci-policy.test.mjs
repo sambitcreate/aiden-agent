@@ -8,6 +8,10 @@ const catalogWorkflowUrl = new URL(
   "../.github/workflows/model-catalog-refresh.yml",
   import.meta.url,
 );
+const pullfrogWorkflowUrl = new URL(
+  "../.github/workflows/pullfrog.yml",
+  import.meta.url,
+);
 
 function workflowStep(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -28,6 +32,13 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /^ {4}needs: changes$/mu);
   assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
   assert.match(workflow, /npm run test:model-catalog/u);
+  assert.match(
+    workflow,
+    /^ {2}e2e:\n {4}name: Deterministic Electron E2E\n {4}runs-on: macos-26\n {4}timeout-minutes: 45$/mu,
+  );
+
+  const sdkSetup = workflowStep(workflow, "Set up Android SDK tools");
+  assert.match(sdkSetup, /^ {10}packages: platform-tools$/mu);
 
   const mainPushOnly =
     /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/u;
@@ -63,6 +74,13 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /needs: refresh/u);
   assert.match(workflow, /PUBLISH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.match(workflow, /git push.*HEAD:main/u);
+});
+
+test("Pullfrog allows aggregate release reviews to finish", async () => {
+  const workflow = await readFile(pullfrogWorkflowUrl, "utf8");
+
+  assert.match(workflow, /uses: pullfrog\/pullfrog@v0\.1\.57/u);
+  assert.match(workflow, /^ {10}timeout: 2h$/mu);
 });
 
 test("coverage collection is enabled before positional test paths", async () => {

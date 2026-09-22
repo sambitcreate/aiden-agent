@@ -202,12 +202,14 @@
   --text-mini: calc(var(--ui-font-size) - 3px);
   --text-mini--line-height: calc(var(--ui-font-size) - 1px);
 }
-
 :root {
   color-scheme: light;
   font-family: var(--font-ui-family);
-  --font-ui-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-code-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  --font-ui-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    sans-serif;
+  --font-code-family:
+    ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --ui-font-size: 14px;
   --code-font-size: 12px;
   --text-primary: #3D3F41;
@@ -273,7 +275,8 @@
   --elevation-control-hover: 0 2px 5px -2px rgb(0 0 0 / 0.16), 0 7px 14px -10px rgb(0 0 0 / 0.2);
   --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14);
   --elevation-popover:
-    0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
+    0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12),
+    0 0 20px rgb(0 0 0 / 0.035);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
@@ -346,7 +349,8 @@
   --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
   --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.68);
   --elevation-popover:
-    0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+    0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58),
+    0 0 20px rgb(0 0 0 / 0.16);
   --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
@@ -768,7 +772,8 @@ textarea {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent;
+  scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%)
+    transparent;
 }
 
 /* Keep classic vertical scrollbars from changing any scrolling box's width. */
@@ -792,11 +797,19 @@ textarea {
 }
 
 .scroll-edge-mask[data-scroll-top="false"][data-scroll-bottom="true"] {
-  mask-image: linear-gradient(to bottom, transparent, black var(--scroll-fade-size));
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black var(--scroll-fade-size)
+  );
 }
 
 .scroll-edge-mask[data-scroll-top="true"][data-scroll-bottom="false"] {
-  mask-image: linear-gradient(to bottom, black calc(100% - var(--scroll-fade-size)), transparent);
+  mask-image: linear-gradient(
+    to bottom,
+    black calc(100% - var(--scroll-fade-size)),
+    transparent
+  );
 }
 
 /* Promote the same live artifact iframe into Chromium's top layer. Keeping the
@@ -838,7 +851,11 @@ textarea {
   inset-inline: 0;
   top: 100%;
   height: 16px;
-  background: linear-gradient(to bottom, var(--surface-background), transparent);
+  background: linear-gradient(
+    to bottom,
+    var(--surface-background),
+    transparent
+  );
   content: "";
   pointer-events: none;
 }
@@ -939,7 +956,8 @@ textarea {
       color-mix(in srgb, var(--accent) 20%, transparent),
       transparent 46%
     ),
-    linear-gradient(to top, rgb(0 0 0 / 4%), transparent 64%), var(--surface-well);
+    linear-gradient(to top, rgb(0 0 0 / 4%), transparent 64%),
+    var(--surface-well);
   box-shadow:
     inset 0 0 0 0.5px var(--border-separator),
     inset 0 1px 0 rgb(255 255 255 / 7%);
@@ -959,7 +977,11 @@ textarea {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: radial-gradient(circle at center, transparent 52%, rgb(0 0 0 / 8%));
+  background: radial-gradient(
+    circle at center,
+    transparent 52%,
+    rgb(0 0 0 / 8%)
+  );
   content: "";
   pointer-events: none;
 }
@@ -1385,6 +1407,21 @@ textarea {
   flex-wrap: wrap;
 }
 
+/* Device pickers are a single line, not a wrapping trailing-action cluster.
+   Radix Value intentionally drops className/style, so target its actual span. */
+.settings-page .settings-field-control > .live-audio-device-select {
+  flex-wrap: nowrap;
+}
+
+.live-audio-device-select > span:first-child {
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
 .settings-page .settings-field-control input {
   min-width: 0;
 }
@@ -1808,11 +1845,13 @@ textarea {
   pointer-events: none;
 }
 
-:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="visible"] {
+:root[data-reduce-motion="false"]
+  .composer-slash-palette[data-presence="visible"] {
   animation: aiden-slash-palette-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
 }
 
-:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="exiting"] {
+:root[data-reduce-motion="false"]
+  .composer-slash-palette[data-presence="exiting"] {
   animation: aiden-slash-palette-out 100ms ease-in both;
 }
 
@@ -1865,41 +1904,6 @@ textarea {
   }
 }
 
-/* The Aiden dock is anchored to the bottom of the window, so it rises into
-   place and settles back down — the mirror of the top-anchored summary card. */
-@keyframes aiden-assistant-dock-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes aiden-assistant-dock-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(6px) scale(0.99);
-  }
-}
-
-@keyframes aiden-assistant-bubble-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 .chat-title-reveal-previous {
   display: none;
 }
@@ -1927,7 +1931,8 @@ textarea {
   animation: aiden-chat-title-previous-out 200ms ease-out both;
 }
 :root[data-reduce-motion="false"] .chat-title-reveal-character {
-  animation: aiden-chat-title-character-in 160ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-chat-title-character-in 160ms cubic-bezier(0.19, 1, 0.22, 1)
+    both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="open"] {
   animation: aiden-environment-summary-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
@@ -1936,19 +1941,11 @@ textarea {
   animation: aiden-environment-summary-out 120ms ease-in both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1)
+    both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="closed"] {
   animation: aiden-app-update-banner-out 120ms ease-in both;
-}
-:root[data-reduce-motion="false"] .assistant-dock-panel[data-state="open"] {
-  animation: aiden-assistant-dock-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
-}
-:root[data-reduce-motion="false"] .assistant-dock-panel[data-state="closed"] {
-  animation: aiden-assistant-dock-out 120ms ease-in both;
-}
-:root[data-reduce-motion="false"] .assistant-dock-bubble {
-  animation: aiden-assistant-bubble-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
 }
 :root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
@@ -2003,16 +2000,24 @@ textarea {
 /* Older lines dissolve into the top edge instead of ending at a hard border. */
 .activity-feed-window[data-masked="true"] {
   mask-image: linear-gradient(to bottom, transparent 0%, black 45%, black 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 45%, black 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 45%,
+    black 100%
+  );
 }
 
-:root[data-reduce-motion="false"] .agent-event-presence[data-presence="visible"],
-:root[data-reduce-motion="false"] .activity-feed[data-animate="true"][data-presence="visible"],
+:root[data-reduce-motion="false"]
+  .agent-event-presence[data-presence="visible"],
+:root[data-reduce-motion="false"]
+  .activity-feed[data-animate="true"][data-presence="visible"],
 :root[data-reduce-motion="false"] .agent-event-in {
   animation: aiden-agent-event-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-:root[data-reduce-motion="false"] .agent-event-presence[data-presence="exiting"],
+:root[data-reduce-motion="false"]
+  .agent-event-presence[data-presence="exiting"],
 :root[data-reduce-motion="false"] .activity-feed[data-presence="exiting"],
 :root[data-reduce-motion="false"] .agent-event-out {
   animation: aiden-agent-event-out 180ms ease-in both;
@@ -2076,7 +2081,11 @@ textarea {
   padding: 10px 12px;
   border: 0;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--support-warning) 9%, var(--surface-popover));
+  background: color-mix(
+    in srgb,
+    var(--support-warning) 9%,
+    var(--surface-popover)
+  );
   color: var(--text-primary);
   font-size: var(--text-small);
   line-height: 1.4;
@@ -2214,12 +2223,14 @@ textarea {
   border-left: 3px solid transparent;
 }
 
-.appearance-code-pane-deletion .appearance-code-line:nth-child(n + 2):nth-child(-n + 4) {
+.appearance-code-pane-deletion
+  .appearance-code-line:nth-child(n + 2):nth-child(-n + 4) {
   border-left-color: var(--preview-danger);
   background: color-mix(in srgb, var(--preview-danger) 13%, var(--preview-bg));
 }
 
-.appearance-code-pane-addition .appearance-code-line:nth-child(n + 2):nth-child(-n + 4) {
+.appearance-code-pane-addition
+  .appearance-code-line:nth-child(n + 2):nth-child(-n + 4) {
   border-left-color: var(--preview-success);
   background: color-mix(in srgb, var(--preview-success) 13%, var(--preview-bg));
 }
@@ -2449,7 +2460,8 @@ textarea {
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
 }
 
-.appearance-range-control input[type="range"]:focus-visible::-webkit-slider-thumb {
+.appearance-range-control
+  input[type="range"]:focus-visible::-webkit-slider-thumb {
   background: var(--accent);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
 }
@@ -2789,4 +2801,256 @@ textarea {
 :root[data-reduce-motion="true"] .button-press-feedback { scale: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .button-press-feedback { scale: none !important; }
+}
+
+/* Aiden Live replaces the previous Assistant panel with one persistent,
+   stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
+:root {
+  --aiden-live-trigger-size: 3.5rem;
+  --aiden-live-edge-inset: 1rem;
+}
+.aiden-live-dock {
+  bottom: var(--aiden-live-edge-inset);
+}
+/* Floating tools cannot move the launcher sideways at the minimum window
+   width. Leave its existing hit target and the panel's usual 3-spacing gap
+   below the panel instead. Inline tools already inset the dock horizontally. */
+[data-app-focus-root]:has(> .aiden-live-dock) .environment-panel[data-surface-mode="tools-floating"] {
+  bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
+}
+.aiden-live-trigger {
+  position: relative;
+  display: grid;
+  width: var(--aiden-live-trigger-size);
+  height: var(--aiden-live-trigger-size);
+  place-items: center;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent);
+  background: var(--color-background);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 16%),
+    0 1px 2px rgb(0 0 0 / 10%);
+  outline: none;
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+.aiden-live-trigger-logo-mask {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+}
+.aiden-live-trigger[data-kind="logo"] img {
+  width: 100%;
+  height: 100%;
+  scale: 1.32;
+  object-fit: cover;
+}
+.aiden-live-trigger[data-kind="orb"] {
+  appearance: none;
+  border-color: transparent;
+  border-radius: 9999px;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.aiden-live-trigger:hover {
+  transform: translateY(-1px) scale(1.025);
+}
+.aiden-live-trigger:active {
+  transform: scale(0.96);
+}
+.aiden-live-trigger:focus-visible {
+  box-shadow:
+    0 0 0 3px var(--color-focus-ring),
+    0 10px 30px rgb(0 0 0 / 16%);
+}
+.aiden-live-trigger[data-kind="orb"]:focus-visible {
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+.aiden-live-trigger-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--color-background);
+  border-radius: 9999px;
+  background: var(--color-support-warning);
+}
+.aiden-live-orb {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
+  transition: opacity 300ms ease, transform 420ms cubic-bezier(.22, 1, .36, 1);
+}
+.aiden-live-orb-layer,
+.aiden-live-duplex-listening,
+.aiden-live-duplex-weaving { position: absolute; inset: 0; }
+.aiden-live-orb-layer { opacity: 0; transition: opacity 360ms ease; }
+.aiden-live-orb[data-visual="rest"] [data-layer="rest"],
+.aiden-live-orb[data-visual="connecting"] [data-layer="connecting"],
+.aiden-live-orb[data-visual="duplex"] [data-layer="duplex"] { opacity: 1; }
+.aiden-live-duplex-listening { opacity: .65; }
+.aiden-live-duplex-weaving { opacity: .35; }
+.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-listening { animation: aiden-live-duplex 10s ease-in-out infinite alternate; }
+.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-weaving { animation: aiden-live-duplex 10s ease-in-out infinite alternate-reverse; }
+@keyframes aiden-live-duplex { from { opacity: .75; } to { opacity: .25; } }
+.aiden-live-stop-symbol { position: absolute; width: 16px; height: 16px; border-radius: 4px; background: var(--color-text-primary, currentColor); opacity: 0; transform: scale(.85); transition: opacity 220ms ease, transform 300ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
+.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-orb { opacity: 0; transform: scale(.94); }
+.aiden-live-trigger[data-stop-revealed="true"] .aiden-live-stop-symbol { opacity: 1; transform: scale(1); }
+:root[data-reduce-motion="true"] .aiden-live-orb-layer,
+:root[data-reduce-motion="true"] .aiden-live-stop-symbol { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-duplex-listening,
+:root[data-reduce-motion="true"] .aiden-live-duplex-weaving { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .aiden-live-orb, .aiden-live-orb-layer, .aiden-live-stop-symbol { transition: none !important; }
+  .aiden-live-duplex-listening, .aiden-live-duplex-weaving { animation: none !important; }
+}
+.aiden-live-orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  /* thinking-orbs 0.3.1 is monochrome; normalize its ink, then tint it blue. */
+  filter: brightness(0) saturate(100%) invert(48%) sepia(97%) saturate(3187%)
+    hue-rotate(209deg) brightness(102%) contrast(101%);
+}
+.gemini-live-setup-hero {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0 0.75rem;
+}
+.aiden-live-orb[data-state="ready"] {
+  opacity: 0.82;
+}
+.aiden-live-orb[data-visual="duplex"] {
+  transform: scale(calc(0.98 + var(--aiden-live-level, 0) * 0.08));
+}
+.aiden-live-orb[data-state="approval"] {
+  filter: drop-shadow(0 0 7px rgb(79 125 255 / 32%));
+}
+.aiden-live-orb[data-state="error"],
+.aiden-live-orb[data-state="unavailable"] {
+  opacity: 0.5;
+}
+.gemini-live-readiness-list {
+  overflow: hidden;
+  border: 1px solid var(--color-separator);
+  border-radius: 0.875rem;
+  background: var(--color-well);
+}
+.gemini-live-readiness-row {
+  display: flex;
+  min-height: 4.25rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+.gemini-live-readiness-row + .gemini-live-readiness-row {
+  border-top: 1px solid var(--color-separator);
+}
+.gemini-live-readiness-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.625rem;
+  background: var(--color-background);
+  color: var(--color-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-separator);
+}
+.gemini-live-ready-mark {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-support-green) 16%, transparent);
+  color: var(--color-support-green);
+}
+.gemini-live-setup-error,
+.gemini-live-inline-error,
+.gemini-live-hud-error {
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--color-support-red) 10%, transparent);
+  color: var(--color-support-red);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+.gemini-live-setup-error {
+  margin-bottom: 0.75rem;
+  padding: 0.625rem 0.75rem;
+}
+.gemini-live-inline-error {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+}
+.gemini-live-hud {
+  width: min(22rem, calc(100vw - 2rem));
+  overflow: hidden;
+  pointer-events: auto;
+  border: 1px solid var(--color-separator);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--color-background) 94%, transparent);
+  box-shadow:
+    0 18px 52px rgb(0 0 0 / 20%),
+    0 1px 2px rgb(0 0 0 / 8%);
+  backdrop-filter: blur(20px);
+}
+.gemini-live-hud-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-separator);
+}
+.gemini-live-hud-header > .aiden-live-orb {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.gemini-live-hud-transcript {
+  max-height: 10.5rem;
+  overflow-y: auto;
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--color-primary);
+}
+.gemini-live-hud-transcript p + p {
+  margin-top: 0.625rem;
+}
+.gemini-live-hud-transcript span {
+  font-weight: 600;
+}
+.gemini-live-hud-error {
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.625rem 0.75rem;
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger {
+  transition: none;
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger:hover,
+:root[data-reduce-motion="true"] .aiden-live-trigger:active {
+  transform: none;
+}
+:root[data-reduce-motion="true"] .aiden-live-orb {
+  transform: none;
+  transition: none;
 }
