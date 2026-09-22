@@ -171,6 +171,7 @@ actor AidenChatCache {
         private var value: UInt64 = 0
         private var removed: [String: [String: UInt64]] = [:]
         private var purged: [String: UInt64] = [:]
+        private var metadataRemovalStarts: [String: UInt64] = [:]
         private var pending: [UInt64: (instanceId: String, chatId: String?)] = [:]
 
         func invalidate(instanceId: String, chatId: String? = nil) -> UInt64 {
@@ -178,21 +179,35 @@ actor AidenChatCache {
             defer { lock.unlock() }
             value += 1
             pending[value] = (instanceId, chatId)
+            metadataRemovalStarts[instanceId] = value
             if let chatId { removed[instanceId, default: [:]][chatId] = value }
             else { purged[instanceId] = value; removed.removeValue(forKey: instanceId) }
             return value
         }
 
-        func finish(_ token: UInt64) {
+        @discardableResult
+        func finish(_ token: UInt64) -> UInt64 {
             lock.lock()
             defer { lock.unlock() }
-            pending.removeValue(forKey: token)
+            guard let removal = pending.removeValue(forKey: token) else { return value }
+            // Reservations made while cleanup was suspended cannot gain fresh
+            // authority merely because the pending marker has disappeared.
+            value += 1
+            if let chatId = removal.chatId { removed[removal.instanceId, default: [:]][chatId] = value }
+            else { purged[removal.instanceId] = value }
+            return value
         }
 
         func isPending(instanceId: String, chatId: String) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             return pending.values.contains { $0.instanceId == instanceId && ($0.chatId == nil || $0.chatId == chatId) }
+        }
+
+        func metadataRemovalStart(instanceId: String) -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            return metadataRemovalStarts[instanceId] ?? 0
         }
 
         func hasPendingRemoval(instanceId: String) -> Bool {
@@ -229,6 +244,7 @@ actor AidenChatCache {
     }
 
     private var metadataDeletionTokens: [String: UInt64] = [:]
+    private var metadataCompletionTokens: [String: UInt64] = [:]
     private var workspaceWriteTokens: [String: [String: UInt64]] = [:]
     private var summaryWriteTokens: [String: UInt64] = [:]
     private var summaryWriteGenerations: [String: UInt64] = [:]
@@ -285,16 +301,25 @@ actor AidenChatCache {
         guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
               writeToken >= (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0) else { return }
         workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
+        var retained = chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id) }
+        if metadataWriteIsPartial(writeToken, instanceId: instanceId) {
+            let ids = Set(retained.map(\.id))
+            retained += (loadChats(instanceId: instanceId, workspaceId: workspaceId) ?? []).filter { !ids.contains($0.id) }
+        }
         try save(
-            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id) }),
+            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: retained),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
     }
 
     private func metadataWriteIsRetained(_ token: UInt64, instanceId: String) -> Bool {
-        token > (metadataDeletionTokens[instanceId] ?? 0) &&
-        !chatWriteClock.hasPendingRemoval(instanceId: instanceId) &&
+        token > max(metadataDeletionTokens[instanceId] ?? 0, chatWriteClock.metadataRemovalStart(instanceId: instanceId)) &&
+        !chatWriteClock.isPending(instanceId: instanceId, chatId: "") &&
         isChatWriteRetained(token, instanceId: instanceId, chatId: "")
+    }
+
+    private func metadataWriteIsPartial(_ token: UInt64, instanceId: String) -> Bool {
+        chatWriteClock.hasPendingRemoval(instanceId: instanceId) || token <= (metadataCompletionTokens[instanceId] ?? 0)
     }
 
     private func isChatHidden(instanceId: String, chatId: String) -> Bool {
@@ -359,10 +384,17 @@ actor AidenChatCache {
     ) async throws {
         await beforeMetadataWrite?()
         guard metadataWriteIsRetained(writeToken, instanceId: instanceId) else { return }
-        let retained = snapshot.summaries.filter {
+        var retained = snapshot.summaries.filter {
             !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id)
         }
-        try persistChatSummaries(SummarySnapshot(summaries: retained, nextCursor: snapshot.nextCursor), instanceId: instanceId, generation: generation, writeToken: writeToken)
+        var nextCursor = snapshot.nextCursor
+        let partial = metadataWriteIsPartial(writeToken, instanceId: instanceId)
+        if partial {
+            let cached = loadChatSummaries(instanceId: instanceId)
+            retained = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: retained)
+            nextCursor = cached?.nextCursor
+        }
+        try persistChatSummaries(SummarySnapshot(summaries: retained, nextCursor: nextCursor), instanceId: instanceId, generation: partial ? nil : generation, writeToken: writeToken)
     }
 
     private func persistChatSummaries(_ snapshot: SummarySnapshot, instanceId: String, generation: UInt64? = nil, writeToken: UInt64) throws {
@@ -402,13 +434,13 @@ actor AidenChatCache {
         )
     }
 
-    func removeChatSummary(instanceId: String, chatId: String) throws {
+    func removeChatSummary(instanceId: String, chatId: String, writeToken: UInt64? = nil) throws {
         guard let cached = loadChatSummaries(instanceId: instanceId, includingRemoved: true) else { return }
         let summaries = cached.summaries.filter { $0.id != chatId }
         guard summaries.count != cached.summaries.count else { return }
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
-            instanceId: instanceId, writeToken: reserveChatWrite()
+            instanceId: instanceId, writeToken: writeToken.map { max($0, summaryWriteTokens[instanceId] ?? 0) } ?? reserveChatWrite()
         )
     }
 
@@ -457,7 +489,6 @@ actor AidenChatCache {
         for cleanup in cleanups { await cleanup.task.value }
         lifetimes.completed(cleanups)
         await removeChatFiles(instanceId: instanceId, chatId: chatId, token: token)
-        chatWriteClock.finish(token)
     }
 
     private func removeChatFiles(instanceId: String, chatId: String, token: UInt64) {
@@ -480,10 +511,11 @@ actor AidenChatCache {
             }
         }
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
-        do { try removeChatSummary(instanceId: instanceId, chatId: chatId) }
+        do { try removeChatSummary(instanceId: instanceId, chatId: chatId, writeToken: token) }
         catch { try? fileManager.removeItem(at: fileURL(kind: "summaries", instanceId)) }
         removeActiveStream(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: attachmentChatDirectory(instanceId: instanceId, chatId: chatId))
+        metadataCompletionTokens[instanceId] = chatWriteClock.finish(token)
     }
 
     @MainActor func purge(instanceId: String) async {
@@ -492,7 +524,6 @@ actor AidenChatCache {
         for cleanup in cleanups { await cleanup.task.value }
         lifetimes.completed(cleanups)
         await purgeFilesForInstance(instanceId: instanceId, token: token)
-        chatWriteClock.finish(token)
     }
 
     private func purgeFilesForInstance(instanceId: String, token: UInt64) {
@@ -506,6 +537,7 @@ actor AidenChatCache {
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {
             purgeNamespace(legacyRoot, instanceId: instanceId)
         }
+        metadataCompletionTokens[instanceId] = chatWriteClock.finish(token)
     }
 
     func removeActiveStreams(instanceId: String) {
