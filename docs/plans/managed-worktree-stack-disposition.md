@@ -67,9 +67,11 @@ Evidence names are repository files and named tests so they remain useful as lin
 - Read complete committed trees even when the initiating workspace is nested or
   tracked source files are missing. Inspect checkout attributes using an isolated
   temporary index; never run filters to estimate their output. Reject unbounded
-  filters, ident and working-tree encodings. Account for EOL expansion and per-file overhead.
+  filters, ident and working-tree encodings. All declarations of these attributes
+  are rejected, including disabled/sentinel-looking values: Git's attribute
+  output cannot distinguish `-filter` from the literal driver `filter=unset`. Account for EOL expansion and per-file overhead.
 - Recheck the captured creation commit in Git's mutation queue on destination
-  and Git common-directory filesystems (bounded metadata/index budget, not a second object copy). Source HEAD movement does not select a
+  and Git common-directory filesystems. Device IDs combine checkout/payload plus the 16 MiB metadata budget only on a shared filesystem; separate filesystems receive their own allocation. Source HEAD movement does not select a
   different checkout. Provisioning reserves its enforced 256 MiB bound and checks
   again immediately before copying; no mutable source-size estimate is trusted.
 - Restore admits the base tree, captured tree and validated private payload
@@ -102,5 +104,14 @@ new Remote restore/force capabilities remain out of this corrective patch.
   run by this task; existing native decoders already accept the unchanged
   `git_capability_denied` code. Hosted generic-device compilation is not XCTest
   execution evidence.
-- Hosted checks and PR review remain pending at initial publication. Old stack
-  heads and their 22 unresolved threads remain unchanged.
+- PR #221 initial head `de4a898c` passed hosted verify and deterministic Electron
+  E2E. Pullfrog then identified literal filter-driver sentinel collisions and
+  split-volume metadata overcharging; both are corrected with real configured
+  filter-driver and deterministic filesystem-boundary tests (29 focused tests
+  passed). Both Sol reviewers independently cleared the follow-up diff. Fresh
+  hosted checks remain required for the follow-up commit.
+- Separable baseline-only capacity-test fix `4c00c968` replaces equality across
+  two live free-space observations with the denial's own capacity invariant;
+  isolated test passed. Shared with the Create Images/mobile-recovery owners.
+- Old stack heads and their 22 unresolved threads remain unchanged. Owner
+  disposition is supersession, not a claim that those old heads were repaired.

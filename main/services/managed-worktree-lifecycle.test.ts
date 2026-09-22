@@ -13,6 +13,9 @@ import {
 } from "./git.js";
 import {
   checkCreateCapacity,
+  checkWorktreeAllocation,
+  CREATE_CAPACITY_POLICY,
+  WORKTREE_GIT_METADATA_BYTES,
   checkSnapshotCapacity,
   InsufficientDiskSpaceError,
   WorktreeCapacityUnavailableError,
@@ -896,7 +899,9 @@ test("capacity admission reports a typed insufficient_disk_space error", async (
     (error: unknown) =>
       error instanceof InsufficientDiskSpaceError &&
       error.code === "insufficient_disk_space" &&
+      // The filesystem can change between the earlier observation and admission.
       Number.isSafeInteger(error.availableBytes) && error.availableBytes >= 0 &&
+      error.requiredBytes > error.availableBytes &&
       error.requiredBytes > error.reserveBytes &&
       error.reserveBytes > 0 &&
       error.estimatedBytes === Number.MAX_SAFE_INTEGER,
@@ -1166,9 +1171,11 @@ test("checkout admission rejects filters and encodings without executing transfo
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
   const marker = path.join(root, "filter-ran");
-  await git(repository, ["config", "filter.expanding.smudge", `touch '${marker}'; cat`]);
+  for (const driver of ["expanding", "unset", "unspecified"]) {
+    await git(repository, ["config", `filter.${driver}.smudge`, `touch '${marker}'; cat`]);
+  }
   const service = new GitService({ cacheTtlMs: 0 });
-  for (const attribute of ["filter=expanding", "ident", "working-tree-encoding=UTF-16"]) {
+  for (const attribute of ["filter=expanding", "filter=unset", "filter=unspecified", "ident", "working-tree-encoding=UTF-16"]) {
     await fs.writeFile(path.join(repository, ".gitattributes"), `README.md ${attribute}\n`);
     await git(repository, ["add", ".gitattributes"]);
     await git(repository, ["commit", "-m", "checkout transformation"]);
@@ -1188,4 +1195,31 @@ test("capacity admission rejects unknown numeric estimates and uses the destinat
   const report = await checkCreateCapacity(missing, 0);
   assert.ok(report.availableBytes > 0);
   await assert.rejects(fs.stat(path.dirname(missing)), { code: "ENOENT" });
+});
+
+
+test("worktree admission charges split volumes separately and combines a shared volume", async () => {
+  const checkoutBytes = 1024;
+  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", -1, async () => {
+    throw new Error("invalid estimates must fail before filesystem inspection");
+  }), WorktreeCapacityUnavailableError);
+  const required = (bytes: number) => CREATE_CAPACITY_POLICY.reserveBytes + Math.ceil(bytes * CREATE_CAPACITY_POLICY.overheadFactor);
+  const destinationFree = required(checkoutBytes);
+  const metadataFree = required(WORKTREE_GIT_METADATA_BYTES);
+  const paths: string[] = [];
+  await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async (directory) => {
+    paths.push(directory);
+    return directory === "/destination"
+      ? { device: "destination-volume", availableBytes: destinationFree }
+      : { device: "git-volume", availableBytes: metadataFree };
+  });
+  assert.deepEqual(paths.sort(), ["/destination", "/repository/.git"]);
+  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async () =>
+    ({ device: "shared", availableBytes: destinationFree })),
+    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === checkoutBytes + WORKTREE_GIT_METADATA_BYTES);
+  await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async () =>
+    ({ device: "shared", availableBytes: required(checkoutBytes + WORKTREE_GIT_METADATA_BYTES) }));
+  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes, async (directory) =>
+    ({ device: directory, availableBytes: directory === "/destination" ? destinationFree : metadataFree - 1 })),
+    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === WORKTREE_GIT_METADATA_BYTES);
 });

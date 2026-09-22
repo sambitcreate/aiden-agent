@@ -65,20 +65,27 @@ export const SNAPSHOT_CAPACITY_POLICY: DiskCapacityPolicy = {
   overheadFactor: 1.1,
 };
 
-/** Free bytes on the filesystem containing `dir`, from the user's view. */
-export async function statfsAvailableBytes(dir: string): Promise<number> {
+export interface WorktreeFilesystemCapacity {
+  device: string;
+  availableBytes: number;
+}
+
+async function inspectFilesystemCapacity(dir: string): Promise<WorktreeFilesystemCapacity> {
   // A new worktree root may not exist yet. Inspect its nearest existing parent
   // without creating directories or substituting the source repository volume.
   let candidate = path.resolve(dir);
   while (true) {
     try {
-      const stats = await fs.statfs(candidate);
-      const available = Number(stats.bavail) * Number(stats.bsize);
-      if (!Number.isSafeInteger(available) || available < 0 ||
+      const [stats, identity] = await Promise.all([
+        fs.statfs(candidate),
+        fs.stat(candidate, { bigint: true }),
+      ]);
+      const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+      if (!Number.isSafeInteger(availableBytes) || availableBytes < 0 ||
           !Number.isSafeInteger(Number(stats.bsize)) || Number(stats.bsize) <= 0) {
         throw new WorktreeCapacityUnavailableError();
       }
-      return available;
+      return { device: identity.dev.toString(), availableBytes };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || path.dirname(candidate) === candidate) {
         throw new WorktreeCapacityUnavailableError();
@@ -88,27 +95,55 @@ export async function statfsAvailableBytes(dir: string): Promise<number> {
   }
 }
 
+/** Free bytes on the filesystem containing `dir`, from the user's view. */
+export async function statfsAvailableBytes(dir: string): Promise<number> {
+  return (await inspectFilesystemCapacity(dir)).availableBytes;
+}
+
+function capacityReport(
+  availableBytes: number,
+  estimatedBytes: number,
+  policy: DiskCapacityPolicy,
+): DiskCapacityReport {
+  if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes < 0 ||
+      !Number.isSafeInteger(availableBytes) || availableBytes < 0) {
+    throw new WorktreeCapacityUnavailableError("The worktree allocation size could not be verified.");
+  }
+  const requiredBytes = Math.ceil(estimatedBytes * policy.overheadFactor) + policy.reserveBytes;
+  const report = { availableBytes, requiredBytes, reserveBytes: policy.reserveBytes, estimatedBytes };
+  if (availableBytes < requiredBytes) throw new InsufficientDiskSpaceError(report);
+  return report;
+}
+
 async function checkCapacity(
   dir: string,
   estimatedBytes: number,
   policy: DiskCapacityPolicy,
 ): Promise<DiskCapacityReport> {
-  if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes < 0) {
+  return capacityReport(await statfsAvailableBytes(dir), estimatedBytes, policy);
+}
+
+/** Admit bytes exactly on the volume receiving them; combine shared volumes.
+ * The inspector seam allows deterministic split-volume tests without mounts.
+ */
+export async function checkWorktreeAllocation(
+  destination: string,
+  commonDirectory: string,
+  checkoutAndPayloadBytes: number,
+  inspect: (directory: string) => Promise<WorktreeFilesystemCapacity> = inspectFilesystemCapacity,
+): Promise<void> {
+  if (!Number.isSafeInteger(checkoutAndPayloadBytes) || checkoutAndPayloadBytes < 0) {
     throw new WorktreeCapacityUnavailableError("The worktree allocation size could not be verified.");
   }
-  const availableBytes = await statfsAvailableBytes(dir);
-  const requiredBytes =
-    Math.ceil(estimatedBytes * policy.overheadFactor) + policy.reserveBytes;
-  const report: DiskCapacityReport = {
-    availableBytes,
-    requiredBytes,
-    reserveBytes: policy.reserveBytes,
-    estimatedBytes,
-  };
-  if (availableBytes < requiredBytes) {
-    throw new InsufficientDiskSpaceError(report);
+  const [checkout, metadata] = await Promise.all([inspect(destination), inspect(commonDirectory)]);
+  if (!checkout.device || !metadata.device) throw new WorktreeCapacityUnavailableError();
+  if (checkout.device === metadata.device) {
+    capacityReport(Math.min(checkout.availableBytes, metadata.availableBytes),
+      checkoutAndPayloadBytes + WORKTREE_GIT_METADATA_BYTES, CREATE_CAPACITY_POLICY);
+  } else {
+    capacityReport(checkout.availableBytes, checkoutAndPayloadBytes, CREATE_CAPACITY_POLICY);
+    capacityReport(metadata.availableBytes, WORKTREE_GIT_METADATA_BYTES, CREATE_CAPACITY_POLICY);
   }
-  return report;
 }
 
 /** Admission before `mkdir` + `git worktree add`. */

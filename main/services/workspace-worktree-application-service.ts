@@ -1,4 +1,3 @@
-import { WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -57,6 +56,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   workspacePathExists(worktreePath: string): Promise<boolean>;
   checkoutBytes(folderPath: string, commit?: string): Promise<number>;
   checkCreateCapacity(worktreeRoot: string, estimatedBytes: number): Promise<unknown>;
+  checkWorktreeAllocation(worktreeRoot: string, commonDirectory: string, estimatedBytes: number): Promise<void>;
   checkSnapshotCapacity(snapshotRoot: string, estimatedBytes: number): Promise<unknown>;
   provisionIncludedFiles(options: {
     sourceRoot: string;
@@ -173,7 +173,8 @@ export function createWorkspaceWorktreeApplicationService(
       const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath);
       // Reserve the provisioner's enforced maximum, so changing source files
       // cannot invalidate a smaller, racy pre-copy estimate.
-      await dependencies.checkCreateCapacity(worktreeRoot, estimatedBytes + MAX_PROVISIONED_BYTES + WORKTREE_GIT_METADATA_BYTES);
+      const repository = await dependencies.repositoryPaths(resolved.folderPath);
+      await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + MAX_PROVISIONED_BYTES);
       const worktree = await dependencies.createWorktree(
         resolved.folderPath,
         worktreeRoot,
@@ -552,8 +553,7 @@ export function createWorkspaceWorktreeApplicationService(
                   : Promise.resolve(0),
                 dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.snapshotCommit),
               ]);
-              await dependencies.checkCreateCapacity(root, baseBytes + snapshotBytes + payloadBytes + WORKTREE_GIT_METADATA_BYTES);
-              await dependencies.checkCreateCapacity(target.commonDir, WORKTREE_GIT_METADATA_BYTES);
+              await dependencies.checkWorktreeAllocation(root, target.commonDir, baseBytes + snapshotBytes + payloadBytes);
             },
             restoreCheckout: dependencies.restoreManagedCheckout,
             resumeCheckout: dependencies.resumeManagedCheckout,

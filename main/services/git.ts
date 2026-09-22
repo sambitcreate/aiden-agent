@@ -8,7 +8,7 @@ import { constants as fsConstants, type Stats } from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { checkCreateCapacity, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
+import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -5034,8 +5034,7 @@ export class GitService {
     return this.enqueueMutation(repo.commonDir, async () => {
       const createdFromHead = await this.requireHead(repo);
       const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, createdFromHead);
-      await checkCreateCapacity(root, checkoutBytes + WORKTREE_GIT_METADATA_BYTES);
-      await checkCreateCapacity(repo.commonDir, WORKTREE_GIT_METADATA_BYTES);
+      await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
       const exists = await this.run(
         repo.cwd,
         ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
@@ -5575,8 +5574,10 @@ export class GitService {
           { gitIndexFile });
         const values = attributes.stdout.split("\u0000");
         for (let index = 0; index + 2 < values.length; index += 3) {
-          if ((values[index + 1] === "filter" || values[index + 1] === "working-tree-encoding" || values[index + 1] === "ident") &&
-              values[index + 2] !== "unset" && values[index + 2] !== "unspecified") {
+          // --all cannot distinguish -filter from filter=unset. Refuse every
+          // declaration of an unsupported transformation, including sentinel-
+          // looking literal driver names, rather than risk executing one.
+          if (["filter", "working-tree-encoding", "ident"].includes(values[index + 1])) {
             throw new GitServiceError("unsupported_scope",
               "Managed worktrees cannot safely estimate checkout filters, ident expansion or working-tree encodings. Use a checkout without these transformations.");
           }

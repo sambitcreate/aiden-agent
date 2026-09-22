@@ -23,7 +23,7 @@ import {
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
 } from "./git.js";
-import { checkCreateCapacity, checkSnapshotCapacity } from "./managed-worktree-capacity.js";
+import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
 import { llmClient } from "./llm-client.js";
 import { scheduleService } from "./schedule-service.js";
@@ -79,6 +79,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     managed.ownershipToken!,
   ),
   checkoutBytes: gitManagedWorktreeCheckoutBytes,
+  checkWorktreeAllocation,
   checkCreateCapacity: async (root, estimatedBytes) => {
     await checkCreateCapacity(root, estimatedBytes);
   },
