@@ -47,3 +47,10 @@ in that memory-only pending window may discard an unacknowledged command; accept
 history remains persisted. This matches the slice's non-durable Telegram ingress
 scope and is covered by a stop-before-admission regression. PR #216 hosted verify
 is green; Electron and Pullfrog remain pending. PR #220 hosted checks in progress.
+
+PR #216 Pullfrog follow-up: `/continue` carries its Telegram source message ID
+and treats post-admission acknowledgment failure as handled. Explicit `/queue`
+and `/continue` suppress the generic busy notice so each command produces one
+confirmation. Six regressions cover preparing/running and unknown acknowledgment
+outcomes with redelivery. Telegram suite: 233 passed; scoped lint passes. This
+fix is carried into stacked PR #220 without changing the native input contract.

@@ -831,13 +831,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     turn: Omit<QueuedTelegramTurn, "workspaceId">,
     workspaceId?: string,
     workspaceCaptured = false,
+    options: { acknowledgeBusy?: boolean } = {},
   ): Promise<void> {
     const settings = workspaceCaptured ? undefined : await deps.config.getSettings();
     const duplicate = turn.sourceMessageId === undefined ? undefined : queue.findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
     if (duplicate) return;
     checkPendingCapacity(turn);
     queue.enqueue({ ...turn, workspaceId: workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId });
-    if (!turn.dispatchNext && (activeTurn || dispatchPending)) {
+    if (options.acknowledgeBusy !== false && !turn.dispatchNext && (activeTurn || dispatchPending)) {
       // Admission already succeeded; a failed acknowledgement must not replay it.
       await deps.api.sendMessage({ chatId: turn.chatId, threadId: turn.threadId, text: "⏳ Queued for the next turn. Use /queue to manage pending prompts or /stop to clear them." }).catch(() => undefined);
     }
@@ -1375,7 +1376,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         ownerUserId: message.from?.id ?? chatId,
         fromUsername: message.from?.username,
         binding,
-      }, effectiveWorkspaceId, true);
+      }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
       if (cmd === "/interrupt" && dispatchCancellation === interruptedDispatch) {
         try {
           await abortCurrentTurn(binding, message);
@@ -1416,11 +1417,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         text: commandArgument(command) || "Continue.",
         chatId,
         threadId: message.message_thread_id,
+        sourceMessageId: message.message_id,
         ownerUserId: message.from?.id ?? chatId,
         fromUsername: message.from?.username,
         binding,
-      }, effectiveWorkspaceId, true);
-      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "▶️ Continuation queued." });
+      }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
+      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "▶️ Continuation queued." }).catch(() => undefined);
       return;
     }
 
