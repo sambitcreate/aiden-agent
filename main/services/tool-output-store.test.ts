@@ -124,3 +124,17 @@ test("publication after the final async authority check cannot return retained t
     await assert.rejects(tools[1]!.execute("read", { handle }), /access changed/u);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("Pi credential rotation revokes a prior generation handle after restart without MCP servers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-pi-spill-"));
+  try {
+    await writeFile(join(root, "pi-provider-credentials.json"), "encrypted-account-a");
+    const scope = toolOutputScope({ servers: [], credentials: await toolOutputCredentialFingerprint(root) });
+    const handle = await new ToolOutputStore(() => root).put("chat", scope, "run_command", "old output", () => true);
+    await writeFile(join(root, "pi-provider-credentials.json"), "encrypted-account-b");
+    const nextScope = toolOutputScope({ servers: [], credentials: await toolOutputCredentialFingerprint(root) });
+    assert.notEqual(nextScope, scope);
+    await assert.rejects(new ToolOutputStore(() => root).read("chat", nextScope, new Set(["run_command"]), handle, 0, 100), /unavailable/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

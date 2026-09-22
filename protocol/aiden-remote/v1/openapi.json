@@ -4886,6 +4886,52 @@
             "$ref": "#/components/schemas/ProducedFile"
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "producedFile"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "toolName": {
+                      "const": "write_file"
+                    },
+                    "producedFile": {
+                      "properties": {
+                        "operation": {
+                          "const": "written"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "toolName": {
+                      "const": "edit_file"
+                    },
+                    "producedFile": {
+                      "properties": {
+                        "operation": {
+                          "const": "edited"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "ProducedFile": {
@@ -4900,7 +4946,8 @@
           "relativePath": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 240
+            "maxLength": 240,
+            "pattern": "^(?![/~])(?![A-Za-z]:/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*/$)[^\\\\\\u0000-\\u001F\\u007F]+$"
           },
           "operation": {
             "enum": [

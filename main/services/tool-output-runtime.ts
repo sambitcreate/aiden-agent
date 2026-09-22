@@ -38,7 +38,7 @@ export async function attachWorkspaceToolOutputs(
       }
       const root = workspace.folderPath ? await realpath(workspace.folderPath) : undefined;
       const identity = root ? await stat(root) : undefined;
-      const credentials = servers.length ? await toolOutputCredentialFingerprint(app.getPath("userData")) : [];
+      const credentials = await toolOutputCredentialFingerprint(app.getPath("userData"));
       if (!stillCurrent()) throw new Error("Tool output access changed.");
       return toolOutputScope({ workspaceId, permission: workspace.permission, root,
         device: identity?.dev, inode: identity?.ino,

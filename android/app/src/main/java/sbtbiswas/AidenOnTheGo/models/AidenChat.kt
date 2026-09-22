@@ -191,9 +191,10 @@ enum class AidenAgentStepStatus {
 data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
     fun isValid(toolName: String?): Boolean {
         val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
-        return operation == expected && relativePath.isNotEmpty() && relativePath.length <= 240 &&
+        return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
             !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
-            relativePath.none { it.code < 32 || it.code == 127 || it == ':' || it == '\\' } &&
+            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
             relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
     }
 }

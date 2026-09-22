@@ -44,9 +44,12 @@ class AidenChatTest {
     @Test fun producedFileProvenanceRejectsForeignPathsAndUnrelatedTools() {
         val file = sbtbiswas.AidenOnTheGo.models.AidenProducedFile("out/report.txt", "written", 12)
         assertTrue(file.isValid("write_file"))
+        assertTrue(file.copy(relativePath = "foo:bar.txt").isValid("write_file"))
+        assertTrue(file.copy(relativePath = "😀".repeat(121)).isValid("write_file"))
+        assertFalse(file.copy(relativePath = "😀".repeat(241)).isValid("write_file"))
         assertFalse(file.isValid("mcp_write"))
         assertFalse(file.isValid("edit_file"))
-        for (path in listOf("/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname")) {
+        for (path in listOf("C:/private", "/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname")) {
             assertFalse(file.copy(relativePath = path).isValid("write_file"))
         }
         assertEquals(file, Json.decodeFromString<sbtbiswas.AidenOnTheGo.models.AidenProducedFile>(Json.encodeToString(file)))

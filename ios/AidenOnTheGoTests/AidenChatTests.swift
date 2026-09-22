@@ -10,9 +10,12 @@ final class AidenChatTests: XCTestCase {
     func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
         let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
         XCTAssertTrue(file.isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: "foo:bar.txt", operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: String(repeating: "😀", count: 121), operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertFalse(AidenProducedFile(relativePath: String(repeating: "😀", count: 241), operation: "written", bytes: 12).isValid(toolName: "write_file"))
         XCTAssertFalse(file.isValid(toolName: "mcp_write"))
         XCTAssertFalse(file.isValid(toolName: "edit_file"))
-        for path in ["/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname"] {
+        for path in ["C:/private", "/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname"] {
             XCTAssertFalse(AidenProducedFile(relativePath: path, operation: "written", bytes: 12).isValid(toolName: "write_file"))
         }
         let data = try JSONEncoder().encode(file)

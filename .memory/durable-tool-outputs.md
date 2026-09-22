@@ -15,3 +15,6 @@ Review corrections: use `chat.workspaceId` with persistedChatWorkspaceId; normal
 Windows separators; canonicalize parent directories for macOS /var symlinks; include
 encrypted credential-store fingerprints in authority; prune expired storage on startup.
 Validation: 125 focused tests and 10 inventory-fence tests pass; TypeScript and lint pass; Android chat/contract tests 38/38 pass; unsigned generic iOS app/test build passes; React Doctor 90/100 with no issues. Physical iPhone XCTest is queued but blocked by locked device (deviceprep Code=-3). Two independent Sol medium reviews and follow-up corrections are clear. Hosted PR state remains pending.
+
+
+PR #219 at 58abfb02 passed hosted CI/Android/Electron gates. Pullfrog follow-up fixes include all three encrypted credential stores even in no-MCP workspaces, POSIX colon path parity, 240 Unicode code-point limits across clients, ASCII-only drive prefixes, and AJV-tested normative path/tool/status constraints. Follow-up validation: 128/128 focused tests, TypeScript, lint, Android chat/contract tests, and unsigned generic iOS test build pass; both independent reviewers clear. Follow-up hosted CI remains pending; physical XCTest remains blocked by device lock.

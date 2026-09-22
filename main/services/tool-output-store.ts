@@ -25,7 +25,7 @@ export function toolOutputScope(value: unknown): string {
 
 /** Ciphertext-only authority evidence; conservatively invalidates on any key/token update. */
 export async function toolOutputCredentialFingerprint(root: string): Promise<string[]> {
-  return Promise.all(["provider-keys.json", "mcp-oauth.json"].map(async (filename) => {
+  return Promise.all(["provider-keys.json", "mcp-oauth.json", "pi-provider-credentials.json"].map(async (filename) => {
     try {
       return createHash("sha256").update(await readRegularFile(join(root, filename), 4_000_000)).digest("hex");
     } catch (error) {

@@ -156,9 +156,10 @@ struct AidenProducedFile: Codable, Equatable, Sendable {
     func isValid(toolName: String?) -> Bool {
         let expected = toolName == "write_file" ? "written" : toolName == "edit_file" ? "edited" : nil
         return expected != nil && operation == expected
-            && !relativePath.isEmpty && relativePath.utf16.count <= 240
+            && !relativePath.isEmpty && relativePath.unicodeScalars.count <= 240
             && !relativePath.hasPrefix("/") && !relativePath.hasPrefix("~")
-            && !relativePath.unicodeScalars.contains { $0.value < 32 || $0.value == 127 || $0 == ":" || $0 == "\\" }
+            && relativePath.range(of: "^[A-Za-z]:/", options: .regularExpression) == nil
+            && !relativePath.unicodeScalars.contains { $0.value < 32 || $0.value == 127 || $0 == "\\" }
             && !relativePath.components(separatedBy: "/").contains { $0.isEmpty || $0 == "." || $0 == ".." }
             && (0...1_000_000_000).contains(bytes)
     }

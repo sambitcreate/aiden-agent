@@ -45,3 +45,7 @@ PR checks and actionable review closure. No merge, release or deployment.
 - Android AidenChatTest + AidenBotContractTest: 38/38 passed.
 - Xcode generic iOS `build-for-testing`, unsigned: passed. Physical iPhone XCTest is queued through the coordinator but blocked by device lock (`deviceprep Code=-3`, Unlock Sambit’s iPhone to Continue); no simulator used.
 - Independent GPT-5.6 Sol medium regression and adversarial reviews are clear after fixes, including credential publication races, optional-store availability, cleanup, and Windows/macOS path normalization.
+
+## Hosted review follow-up
+
+Initial commit 58abfb02 passed all hosted CI jobs. Pullfrog identified omitted Pi credential persistence and path/schema parity gaps. The correction fingerprints all three encrypted stores regardless of MCP presence, accepts POSIX colon names, aligns Unicode code-point bounds and ASCII drive prefixes, and tests normative OpenAPI path/status/tool/operation constraints with AJV. Follow-up local validation passes: 128 focused tests, TypeScript, lint, Android chat/contract suites and unsigned generic iOS test build; both independent reviewers clear. Follow-up CI remains pending.

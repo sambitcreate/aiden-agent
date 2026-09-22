@@ -320,7 +320,7 @@ Initial event types:
 - `status`: `queued`, `running`, `waiting_for_approval`, or `reconciling`.
 - `text_delta`, `reasoning_delta`.
 - `tool_started`, `tool_finished`: safe name/status/milestone only.
-- `timeline`: renderer-safe generation milestone. Completed first-party `write_file`/`edit_file` steps may include `producedFile` (`relativePath`, `operation: written|edited`, `bytes`). This is host-confirmed historical provenance; it never grants file-read authority. Relative paths reject absolute paths, traversal, backslashes, control characters and empty segments. Spill handles and private output text are not projected into Activity or added to remote endpoints.
+- `timeline`: renderer-safe generation milestone. Completed first-party `write_file`/`edit_file` steps may include `producedFile` (`relativePath`, `operation: written|edited`, `bytes`). This is host-confirmed historical provenance; it never grants file-read authority. Relative paths are bounded to 240 Unicode code points and reject absolute paths (including ASCII Windows drive prefixes), traversal, backslashes, control characters and empty segments. POSIX colon filenames are accepted. Spill handles and private output text are not projected into Activity or added to remote endpoints.
 - `approval_required`: approval ID, safe summary, deadline; no raw command/path/arguments.
 - `done`: terminal persisted completion.
 - `error`: terminal stable category and safe message.
