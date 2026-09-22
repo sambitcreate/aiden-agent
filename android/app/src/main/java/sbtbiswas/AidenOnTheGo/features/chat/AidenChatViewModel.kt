@@ -1314,10 +1314,11 @@ class AidenChatViewModel(
         val client = activeClient() ?: return false
         return try {
             val remote = client.chat(chatId)
+            if (activeClient() !== client || installationForProgress() == null) return false
             acceptRemoteChat(remote)
             true
         } catch (e: Exception) {
-            if (e !is CancellationException) {
+            if (e !is CancellationException && activeClient() === client && installationForProgress() != null) {
                 _presentedError.value = e.localizedMessage
             }
             false

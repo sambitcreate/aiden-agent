@@ -231,6 +231,9 @@ class AidenChatTest {
     fun runInputRequiresAdvertisedFeature() = exerciseRunControl("input-unsupported")
 
     @Test
+    fun acceptedInputRefreshCannotPublishAfterPairingSwitch() = exerciseRunControl("input-switch")
+
+    @Test
     fun uncertainInputStaysBlockedAfterTerminalSettlement() = exerciseRunControl("input-unknown-terminal")
 
     @Test
@@ -247,6 +250,8 @@ class AidenChatTest {
         val release = CountDownLatch(1)
         val finishRead = CountDownLatch(1)
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
+        val refreshArrived = CountDownLatch(1)
+        val releaseRefresh = CountDownLatch(1)
         val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
@@ -269,6 +274,10 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/chats/chat-control" -> {
                     if (terminal.get()) check(finishRead.await(10, TimeUnit.SECONDS))
                     if (admitted.get() && scenario == "input-accepted-refresh-failed-terminal") return MockResponse().setResponseCode(503)
+                    if (admitted.get() && scenario == "input-switch") {
+                        refreshArrived.countDown()
+                        check(releaseRefresh.await(10, TimeUnit.SECONDS))
+                    }
                     val snapshot = if (admitted.get()) chat.copy(messages = listOf(AidenChatMessage(
                         id = "message-input", role = AidenChatRole.USER, text = "Original instruction", createdAt = Instant.EPOCH
                     ))) else chat
@@ -343,6 +352,8 @@ class AidenChatTest {
                         assertEquals(0, writes.get())
                         return@runBlocking
                     }
+                    model.updateDraft(" \n\t")
+                    assertFalse(model.canSubmitRunInput)
                     model.updateDraft("🦊".repeat(5000))
                     assertFalse(model.canSubmitRunInput)
                     model.updateDraft("Original instruction")
@@ -367,6 +378,18 @@ class AidenChatTest {
                         assertFalse(model.canSend)
                     }
                     release.countDown()
+                    if (scenario == "input-switch") {
+                        withContext(Dispatchers.IO) { assertTrue(refreshArrived.await(5, TimeUnit.SECONDS)) }
+                        installations.addInstallation(AidenPairingExchange(
+                            instanceId = "instance-other", deviceId = "device-other", endpoint = server.url("/api/aiden/v1").toString(),
+                            serverSpkiSha256 = "sha256/other", credential = "synthetic-other", capabilities = grants), null)
+                        coordinator.refreshClient()
+                        releaseRefresh.countDown()
+                        withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
+                        assertTrue(model.chat.value!!.messages.isEmpty())
+                        assertTrue(cache.loadChat("instance-control", chat.id)?.messages.orEmpty().isEmpty())
+                        return@runBlocking
+                    }
                     withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
                     assertEquals(1, writes.get())
                     if (scenario == "input-accepted-refresh-failed-terminal") assertTrue(model.runInputNotice.value!!.contains("chat could not refresh"))
@@ -475,6 +498,7 @@ class AidenChatTest {
         } finally {
             releaseOld.countDown()
             releaseNew.countDown()
+            releaseRefresh.countDown()
             release.countDown()
             finishRead.countDown()
             runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }
