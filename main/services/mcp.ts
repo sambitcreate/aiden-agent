@@ -1,3 +1,5 @@
+import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 // MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
 // / SSE) via the official MCP SDK, caches clients, and exposes their tools as
 // pi agent tools for the generation loop.
@@ -317,12 +319,7 @@ class McpManager {
     server: McpServer,
     isCurrent: () => boolean = () => true,
     expectedGeneration: number = this.statusGeneration(server.id),
-  ): Promise<{
-    connected: boolean;
-    toolCount: number;
-    tools: string[];
-    error?: string;
-  }> {
+  ): Promise<McpStatus> {
     try {
       return await this.statusClients.run(
         server.id,
@@ -338,24 +335,14 @@ class McpManager {
             makeTransport(await resolveAuth(server, active), active) as never,
           );
         },
-        async (client, connectionIsCurrent) => {
-          if (!isCurrent() || !connectionIsCurrent()) {
-            throw new Error("The MCP connection was superseded.");
-          }
-          const { tools } = (await client.listTools()) as {
-            tools: McpToolInfo[];
-          };
-          return {
-            connected: true,
-            toolCount: tools.length,
-            tools: tools.map((t) => t.name),
-          };
-        },
+        (client, connectionIsCurrent) =>
+          inspectInitializedMcpStatus(client, () => isCurrent() && connectionIsCurrent()),
         async (client) => client.close(),
       );
     } catch (error) {
       return {
         connected: false,
+        serverCapabilities: null,
         toolCount: 0,
         tools: [],
         error: error instanceof Error ? error.message : String(error),
