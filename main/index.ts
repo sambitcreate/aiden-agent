@@ -119,6 +119,7 @@ import { loadCreateImagesPackagedAcceptanceSession } from "./services/create-ima
 import { createImagesEnabled } from "./services/create-images/feature-flag.js";
 import {
   installCreateImagesAssetProtocol,
+  observeCreateImagesRequestPolicy,
   registerCreateImagesAssetScheme,
 } from "./services/create-images/asset-protocol.js";
 import { createImagesService } from "./services/create-images/create-images-service.js";
@@ -2064,6 +2065,8 @@ if (!ownsSingleInstanceLock) {
           throw new Error("Packaged Create Images acceptance requires a live main window.");
         }
         await runPackagedCreateImagesAcceptance(packagedCreateImagesAcceptance, {
+          service: createImagesService(),
+          observeRequestPolicy: observeCreateImagesRequestPolicy,
           window: acceptanceWindow,
           runtimeProfile: currentRuntimeProfile(),
           reloadRenderer: async () => {

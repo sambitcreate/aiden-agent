@@ -50,19 +50,22 @@ export async function verifyCreateImagesLazyBoundary(
   ) {
     throw new Error("Packaged Create Images acceptance automation leaked into eager main startup.");
   }
-  const mainProcessEntries = await fs.readdir(path.join(mainProcessDirectory, "chunks"));
-  let runnerChunkName;
-  for (const name of mainProcessEntries.filter((entry) => entry.endsWith(".js.map"))) {
-    const map = JSON.parse(
-      await fs.readFile(path.join(mainProcessDirectory, "chunks", name), "utf8"),
-    );
-    if ((map.sources ?? []).some((source) => source.replaceAll("\\", "/").endsWith(runnerSuffix))) {
-      runnerChunkName = name.replace(/\.map$/u, "");
-      break;
-    }
+  const runnerChunkName = "create-images-packaged-acceptance-runner.js";
+  const mainProcessSource = await fs.readFile(path.join(mainProcessDirectory, "index.js"), "utf8");
+  if (!mainProcessSource.includes(`import("./${runnerChunkName}")`)) {
+    throw new Error("Packaged Create Images acceptance runner is not loaded through its lazy entry.");
   }
-  if (!runnerChunkName) {
-    throw new Error("Packaged Create Images acceptance automation did not emit a lazy main chunk.");
+  const runnerMap = JSON.parse(
+    await fs.readFile(path.join(mainProcessDirectory, `${runnerChunkName}.map`), "utf8"),
+  );
+  const runnerSources = (runnerMap.sources ?? []).map((source) => source.replaceAll("\\", "/"));
+  if (!runnerSources.some((source) => source.endsWith(runnerSuffix))) {
+    throw new Error("Packaged Create Images acceptance automation did not emit its lazy module.");
+  }
+  for (const singleton of ["create-images-service.ts", "asset-protocol.ts", "llm-client.ts", "platform.ts"]) {
+    if (runnerSources.some((source) => source.endsWith(`/${singleton}`))) {
+      throw new Error(`Packaged acceptance runner duplicated main runtime module ${singleton}.`);
+    }
   }
 
   return {

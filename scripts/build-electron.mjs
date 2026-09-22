@@ -21,11 +21,26 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: { index: "main/bootstrap.ts" },
-    outdir: "build/main",
-    entryNames: "[name]",
-    chunkNames: "chunks/[name]-[hash]",
-    splitting: true,
+    entryPoints: ["main/bootstrap.ts"],
+    outfile: "build/main/index.js",
+    // Preserve main's singleton initialization order and sibling worker paths.
+    // Only the packaged acceptance runner needs a separate lazy module.
+    plugins: [{
+      name: "lazy-create-images-acceptance",
+      setup(builder) {
+        builder.onResolve({ filter: /\/packaged-canvas-acceptance-runner\.js$/ }, () => ({
+          path: "./create-images-packaged-acceptance-runner.js",
+          external: true,
+        }));
+      },
+    }],
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
+    entryPoints: ["main/services/create-images/packaged-canvas-acceptance-runner.ts"],
+    outfile: "build/main/create-images-packaged-acceptance-runner.js",
     format: "esm",
     packages: "external",
   }),

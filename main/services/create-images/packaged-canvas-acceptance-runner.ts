@@ -1,4 +1,4 @@
-import { app } from "../../platform.js";
+import { app } from "electron";
 import type { BrowserWindow } from "electron";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -14,8 +14,8 @@ import {
   type CreateImagesPackagedAssetRequestEvidence,
   type CreateImagesPackagedAcceptanceSession,
 } from "./packaged-canvas-acceptance-core.js";
-import { createImagesService } from "./create-images-service.js";
-import { observeCreateImagesRequestPolicy } from "./asset-protocol.js";
+import type { createImagesService } from "./create-images-service.js";
+import type { observeCreateImagesRequestPolicy } from "./asset-protocol.js";
 
 const CREATE_IMAGES_PACKAGED_ACCEPTANCE_ROUTE = "/create-images/stress-100" as const;
 const CREATE_IMAGES_PACKAGED_ACCEPTANCE_WAIT_MS = 30_000;
@@ -464,6 +464,8 @@ const CREATE_IMAGES_ACCEPTANCE_SELECTED_NODE_VISIBLE_SCRIPT = `(() => {
 
 export interface RunPackagedCreateImagesAcceptanceOptions {
   window: BrowserWindow;
+  service: ReturnType<typeof createImagesService>;
+  observeRequestPolicy: typeof observeCreateImagesRequestPolicy;
   reloadRenderer(): Promise<void>;
   navigate(path: string): Promise<void>;
   runtimeProfile: { configDir: string; userDataPath: string };
@@ -714,7 +716,7 @@ export async function runPackagedCreateImagesAcceptance(
   // main-owned configuration path used by the real picker. Keep it outside config/userData
   // so product-persistence evidence does not mistake user-selected workspace mirrors for
   // app-owned records.
-  const service = createImagesService();
+  const service = options.service;
   const acceptanceWorkspace = path.join(
     path.dirname(runtimeProfile.userDataPath),
     "create-images-workspace",
@@ -769,7 +771,7 @@ export async function runPackagedCreateImagesAcceptance(
   window.webContents.on("console-message", onConsoleMessage);
   window.webContents.on("render-process-gone", onRenderProcessGone);
   window.webContents.on("did-fail-load", onDidFailLoad);
-  const stopRequestPolicyObservation = observeCreateImagesRequestPolicy((observation) => {
+  const stopRequestPolicyObservation = options.observeRequestPolicy((observation) => {
     if (observation.kind === "renderer-egress") {
       if (observation.url === CREATE_IMAGES_PACKAGED_ACCEPTANCE_EGRESS_PROBE) {
         rendererEgressProbeRequests += 1;
