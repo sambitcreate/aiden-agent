@@ -713,6 +713,11 @@ class AidenChatViewModel(
 
     fun send() {
         if (!canSend) return
+        val session = draftSession ?: return
+        if (!draftStore.canStartTurn(session)) {
+            _presentedError.value = "An instruction from another chat view is unconfirmed. Reopen this chat to review it before sending again."
+            return
+        }
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
@@ -1148,8 +1153,11 @@ class AidenChatViewModel(
                 }
                 if (!draftStore.setUnconfirmedRunInput(false, session)) return@launch
                 _hasUnconfirmedRunInput.value = false
+                val refreshed = !receipt.accepted || reconcileChat()
+                if (activeClient() !== client || draftSession != session) return@launch
                 _runInputNotice.value = if (receipt.accepted)
-                    "Queued on your Mac. This does not confirm that the model has read it."
+                    if (refreshed) "Queued on your Mac. This does not confirm that the model has read it."
+                    else "Queued on your Mac, but the chat could not refresh. Reopen this chat to see the latest messages. This does not confirm that the model has read it."
                 else "Your Mac did not queue this instruction. The draft is kept; review the run before choosing an action again."
             } catch (e: Exception) {
                 if (e !is CancellationException && activeClient() === client && draftSession == session) {

@@ -101,6 +101,10 @@ class AidenChatDraftStore(
     }
 
     @Synchronized
+    fun canStartTurn(session: Session): Boolean =
+        !runInputMarker(session).exists()
+
+    @Synchronized
     fun hasUnconfirmedRunInput(session: Session): Boolean =
         isCurrent(session) && runInputMarker(session).exists()
 

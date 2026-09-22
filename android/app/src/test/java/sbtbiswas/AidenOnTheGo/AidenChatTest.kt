@@ -66,8 +66,16 @@ class AidenChatTest {
         try {
             val store = AidenChatDraftStore(root = root)
             val session = store.beginSession("mac", "bot")
+            assertTrue(store.canStartTurn(session))
             assertTrue(store.setUnconfirmedRunInput(true, session))
-            assertTrue(store.save("", session))
+            assertFalse(store.canStartTurn(session))
+            val newer = store.beginSession("mac", "bot")
+            assertFalse(store.canStartTurn(session))
+            assertFalse(store.canStartTurn(newer))
+            assertTrue(store.save("", newer))
+            assertTrue(store.setUnconfirmedRunInput(false, newer))
+            assertTrue(store.canStartTurn(session))
+            assertTrue(store.setUnconfirmedRunInput(true, newer))
             val reopened = AidenChatDraftStore(root = root)
             val next = reopened.beginSession("mac", "bot")
             assertTrue(reopened.hasUnconfirmedRunInput(next))
@@ -218,6 +226,15 @@ class AidenChatTest {
     @Test
     fun runInputRequiresAdvertisedFeature() = exerciseRunControl("input-unsupported")
 
+    @Test
+    fun uncertainInputStaysBlockedAfterTerminalSettlement() = exerciseRunControl("input-unknown-terminal")
+
+    @Test
+    fun acceptedInputAfterTerminalWithFailedRefreshShowsStaleNotice() = exerciseRunControl("input-accepted-refresh-failed-terminal")
+
+    @Test
+    fun acceptedInputAfterTerminalSettlementConsumesOnlyCapturedDraft() = exerciseRunControl("input-accepted-terminal")
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
         val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
@@ -226,6 +243,7 @@ class AidenChatTest {
         val release = CountDownLatch(1)
         val finishRead = CountDownLatch(1)
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
+        val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
         val server = MockWebServer()
@@ -242,7 +260,11 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
                 request.path == "/api/aiden/v1/chats/chat-control" -> {
                     if (terminal.get()) check(finishRead.await(10, TimeUnit.SECONDS))
-                    MockResponse().setBody(json.encodeToString(chat))
+                    if (admitted.get() && scenario == "input-accepted-refresh-failed-terminal") return MockResponse().setResponseCode(503)
+                    val snapshot = if (admitted.get()) chat.copy(messages = listOf(AidenChatMessage(
+                        id = "message-input", role = AidenChatRole.USER, text = "Original instruction", createdAt = Instant.EPOCH
+                    ))) else chat
+                    MockResponse().setBody(json.encodeToString(snapshot))
                 }
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
                 request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
@@ -256,7 +278,8 @@ class AidenChatTest {
                         assertEquals("/api/aiden/v1/streams/stream-control/inputs", request.path)
                         assertEquals(input.requestId, request.getHeader("Idempotency-Key"))
                         assertEquals("Original instruction", input.text)
-                        if (scenario == "input-unknown") return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                        if (scenario.startsWith("input-unknown")) return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                        admitted.set(scenario != "input-rejected")
                         return MockResponse().setBody(Json { explicitNulls = false }.encodeToString(AidenRunInputReceipt(
                             input.requestId, "stream-control", input.mode, scenario != "input-rejected",
                             admission = if (scenario == "input-rejected") null else "queued",
@@ -321,26 +344,45 @@ class AidenChatTest {
                         check(draftFile.mkdir())
                         File(draftFile, "undeletable-child").writeText("fixture")
                     }
+                    if (scenario.endsWith("terminal")) {
+                        terminal.set(true)
+                        withTimeout(5_000) { model.streamState.first { it == AidenStreamState.DONE } }
+                        finishRead.countDown()
+                        withTimeout(5_000) { while (model.currentRunControlId != null) kotlinx.coroutines.delay(10) }
+                        assertFalse(model.canSend)
+                    }
                     release.countDown()
                     withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
                     assertEquals(1, writes.get())
+                    if (scenario == "input-accepted-refresh-failed-terminal") assertTrue(model.runInputNotice.value!!.contains("chat could not refresh"))
+                    if (scenario == "input-accepted-terminal") assertEquals("message-input", model.chat.value!!.messages.last().id)
                     assertEquals(when (scenario) {
-                        "input-accepted" -> ""
+                        "input-accepted", "input-accepted-terminal", "input-accepted-refresh-failed-terminal" -> ""
                         "input-newer", "input-early-edit" -> "Newer instruction"
                         else -> "Original instruction"
                     }, model.draft.value)
-                    assertEquals(scenario in listOf("input-unknown", "input-delete-failed"), model.hasUnconfirmedRunInput.value)
+                    assertEquals(scenario in listOf("input-unknown", "input-unknown-terminal", "input-delete-failed"), model.hasUnconfirmedRunInput.value)
                     assertFalse(model.canSend)
                     // A fresh store represents process restart; unknown outcomes remain gated.
                     val reopened = AidenChatDraftStore(directory)
                     val reopenedSession = reopened.beginSession("instance-control", chat.id)
-                    assertEquals(scenario in listOf("input-unknown", "input-delete-failed"), reopened.hasUnconfirmedRunInput(reopenedSession))
+                    assertEquals(scenario in listOf("input-unknown", "input-unknown-terminal", "input-delete-failed"), reopened.hasUnconfirmedRunInput(reopenedSession))
                     if (scenario == "input-early-edit") assertEquals("Newer instruction", reopened.load(reopenedSession))
-                    if (scenario == "input-unknown") {
+                    if (scenario.startsWith("input-unknown")) {
                         model.submitRunInput(AidenRunInputMode.STEER, "stream-control")
                         assertEquals(1, writes.get())
                         model.acknowledgeUnconfirmedRunInput()
                         assertFalse(model.hasUnconfirmedRunInput.value)
+                        if (scenario.endsWith("terminal")) {
+                            assertTrue(model.canSend)
+                            // A second open view owns the newer draft session and admission marker.
+                            val secondSession = drafts.beginSession("instance-control", chat.id)
+                            drafts.setUnconfirmedRunInput(true, secondSession)
+                            model.send()
+                            yield()
+                            assertEquals(1, writes.get())
+                            assertTrue(model.presentedError.value!!.contains("another chat view"))
+                        }
                     }
                     return@runBlocking
                 }

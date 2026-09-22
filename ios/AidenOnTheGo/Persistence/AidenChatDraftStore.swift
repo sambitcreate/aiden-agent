@@ -91,6 +91,11 @@ actor AidenChatDraftStore {
         return true
     }
 
+    func canStartTurn(session: Session) -> Bool {
+        // Reads span view sessions; only mutations require current draft ownership.
+        !fileManager.fileExists(atPath: runInputMarkerURL(session).path)
+    }
+
     func hasUnconfirmedRunInput(session: Session) -> Bool {
         isCurrent(session) && fileManager.fileExists(atPath: runInputMarkerURL(session).path)
     }

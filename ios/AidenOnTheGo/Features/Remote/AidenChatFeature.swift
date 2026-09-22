@@ -1577,7 +1577,14 @@ final class AidenChatViewModel {
     func send() async {
         guard !isReadOnlyPresentation else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend else { return }
+        guard canSend, let session = draftSession else { return }
+        let generation = composerGeneration
+        guard await draftStore.canStartTurn(session: session) else {
+            presentedError = String(localized: "An instruction from another chat view is unconfirmed. Reopen this chat to review it before sending again.")
+            return
+        }
+        guard canSend,
+              draftSession == session, composerGeneration == generation else { return }
         switch aidenImageSendRecovery(
             isBotChat: chat.isBotChat,
             acceptsImages: acceptsImageAttachments,
@@ -1993,8 +2000,11 @@ final class AidenChatViewModel {
             }
             guard try await draftStore.setUnconfirmedRunInput(false, session: session) else { return }
             hasUnconfirmedRunInput = false
+            let refreshed = receipt.accepted ? await reconcileChat(context: context) : true
+            guard coordinator.isCurrent(context), draftSession == session else { return }
             runInputNotice = receipt.accepted
-                ? String(localized: "Queued on your Mac. This does not confirm that the model has read it.")
+                ? (refreshed ? String(localized: "Queued on your Mac. This does not confirm that the model has read it.")
+                    : String(localized: "Queued on your Mac, but the chat could not refresh. Reopen this chat to see the latest messages. This does not confirm that the model has read it."))
                 : String(localized: "Your Mac did not queue this instruction. The draft is kept; review the run before choosing an action again.")
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
