@@ -37,3 +37,13 @@ projection, draft retention, and oversized text eligibility. Compaction suite 33
 and fixed detach rejection, oversized draft uncertainty, stream-eviction replay,
 and uncertain old-receipt duplicate risk. Plan remains active until native work
 and hosted review/check gates complete; no merge, deploy, or release performed.
+
+
+Shared admission published in PR #220 (stacked on #216). Full desktop queue E2E
+12/12 pass; existing Android Remote/progress focused suite passes; iOS generic
+build-for-testing passes (compilation, not device execution). Telegram final
+barrier captures the target and admits only after offset durability. A crash/stop
+in that memory-only pending window may discard an unacknowledged command; accepted
+history remains persisted. This matches the slice's non-durable Telegram ingress
+scope and is covered by a stop-before-admission regression. PR #216 hosted verify
+is green; Electron and Pullfrog remain pending. PR #220 hosted checks in progress.

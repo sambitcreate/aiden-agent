@@ -483,8 +483,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       for (const update of updates) {
         if (offset !== undefined && update.update_id < offset) continue;
         let handled = false;
+        const afterPersist: Array<() => Promise<void>> = [];
         try {
-          await handleUpdate(update);
+          await handleUpdate(update, (action) => afterPersist.push(action));
           handled = true;
         } catch (cause) {
           if (cause instanceof TelegramQueueCapacityError && (update.message || update.edited_message)) {
@@ -519,6 +520,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
               await deps.sleep(ERROR_SLEEP_MS, signal).catch(() => undefined);
             }
           }
+          // Run-scoped side effects capture their original target and execute
+          // only after this update cannot be redelivered following a crash.
+          if (started && !signal.aborted) for (const action of afterPersist) await action();
         }
       }
 
@@ -527,7 +531,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
   }
 
-  async function handleUpdate(update: TelegramUpdate): Promise<void> {
+  async function handleUpdate(update: TelegramUpdate, afterPersist: (action: () => Promise<void>) => void): Promise<void> {
     if (update.message_reaction) {
       await handleReaction(update.message_reaction);
       return;
@@ -618,7 +622,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
     // Control lane: commands are handled immediately (no LLM).
     if (rawText?.startsWith("/")) {
-      await handleCommand(rawText.trim(), message, selectedWorkspaceId, threadWorkspaceId !== undefined, binding);
+      await handleCommand(rawText.trim(), message, afterPersist, selectedWorkspaceId, threadWorkspaceId !== undefined, binding);
       return;
     }
 
@@ -1290,6 +1294,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   async function handleCommand(
     command: string,
     message: TelegramMessage,
+    afterPersist: (action: () => Promise<void>) => void,
     effectiveWorkspaceId?: string,
     managedThread = false,
     binding?: TelegramBotBindingSnapshot,
@@ -1334,13 +1339,17 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       }
       const digest = createHash("sha256").update(JSON.stringify([deps.profile, message.chat.id, message.message_thread_id, message.message_id])).digest("hex");
       const requestId = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
-      try {
-        const receipt = await deps.submitRunInput(activeStream.streamId, activeStream.ownerDocumentId, { requestId, mode: "steer", text });
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: receipt.accepted ? "Steering accepted. It will be read at the next available steering boundary unless the run stops." : `Steering was not accepted (${receipt.reason}). Your instruction was not queued.` }).catch(() => undefined);
-      } catch {
-        // An unknown host outcome must not replay as a new ordinary prompt.
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Steering delivery could not be confirmed. Check the Aiden conversation before sending it again." }).catch(() => undefined);
-      }
+      const target = activeStream;
+      const submit = deps.submitRunInput;
+      afterPersist(async () => {
+        try {
+          const receipt = await submit(target.streamId, target.ownerDocumentId, { requestId, mode: "steer", text });
+          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: receipt.accepted ? "Steering accepted. It will be read at the next available steering boundary unless the run stops." : `Steering was not accepted (${receipt.reason}). Your instruction was not queued.` }).catch(() => undefined);
+        } catch {
+          // An unknown host outcome must not replay as a new ordinary prompt.
+          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Steering delivery could not be confirmed. Check the Aiden conversation before sending it again." }).catch(() => undefined);
+        }
+      });
       return;
     }
 

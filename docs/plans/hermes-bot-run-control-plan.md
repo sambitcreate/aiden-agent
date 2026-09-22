@@ -40,6 +40,11 @@ Steer and Telegram `/steer` use this path; Interrupt retains stop-and-send behav
 Remote receipts retain the chat authorization resource through stream eviction and
 restart and recheck current Bot access before returning an exact retry. Desktop
 unknown outcomes retain their original request identity and cannot auto-resend.
+Telegram `/steer` captures its target and waits for a durable polling offset before
+admission. Like the pending Telegram queue, this waiting action is memory-only:
+a crash or bridge stop between offset persistence and admission can discard an
+unacknowledged command. Only the later host receipt produces “Steering accepted”;
+accepted user history survives cancellation. No durable Telegram ingress is claimed.
 Implementation and acceptance checklist:
 
 1. Negotiate an additive capability (`chat-run-input-v1`, subject to native review).
