@@ -179,6 +179,118 @@ class AidenChatTest {
         }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun heldTurnReceiptPreservesOtherOwnerAndCannotCrossRemoval() {
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        Dispatchers.setMain(main)
+        try {
+            runBlocking(main) {
+                for (mode in listOf("newer", "missing", "newer_post", "purge", "remove", "disk", "stream_disk", "replace_disk", "unpair", "switch", "repair")) {
+                    val root = kotlin.io.path.createTempDirectory("aiden-turn-owner-").toFile()
+                    val server = MockWebServer()
+                    val owners = ViewModelStore()
+                    val arrived = CountDownLatch(1)
+                    val release = CountDownLatch(1)
+                    val postCount = java.util.concurrent.atomic.AtomicInteger()
+                    val initial = sampleChat().copy(messages = emptyList())
+                    val accepted = AidenChatMessage("accepted-user", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH)
+                    val second = accepted.copy(id = "second-user", text = "Second", createdAt = Instant.EPOCH.plusSeconds(2))
+                    val settled = initial.copy(title = "Settled title", revision = "settled-revision", messages = listOf(accepted,
+                        AidenChatMessage("settled-assistant", AidenChatRole.ASSISTANT, "Final", createdAt = Instant.EPOCH.plusSeconds(1))))
+                    val remote = java.util.concurrent.atomic.AtomicReference(initial)
+                    server.dispatcher = object : Dispatcher() {
+                        override fun dispatch(request: RecordedRequest): MockResponse = when {
+                            request.requestUrl!!.encodedPath.endsWith("/turns") -> {
+                                val count = postCount.incrementAndGet()
+                                if (count == 1) { arrived.countDown(); check(release.await(8, TimeUnit.SECONDS)) }
+                                MockResponse().setResponseCode(202).setBody("""{"turnId":"accepted-turn-$count","streamId":"accepted-stream-$count","status":"queued","message":${json.encodeToString(if (count == 1) accepted else second)}}""")
+                            }
+                            request.requestUrl!!.encodedPath.endsWith("/events") -> MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE)
+                            request.requestUrl!!.encodedPath.endsWith("/chats/" + initial.id) -> MockResponse().setBody(json.encodeToString(remote.get()))
+                            else -> MockResponse().setResponseCode(404)
+                        }
+                    }
+                    server.start()
+                    try {
+                        val store = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                        store.addInstallation(AidenPairingExchange(instanceId = "turn-instance", deviceId = "turn-device",
+                            endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                            capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                        var failStreamWrite = false
+                        val cache = AidenChatCache(root = File(root, "cache"), beforeActiveStreamWrite = {
+                            if (failStreamWrite) throw java.io.IOException("held stream persistence failure")
+                        })
+                        val drafts = AidenChatDraftStore(root)
+                        val coordinator = AidenRemoteCoordinator(store, root, cache, drafts, scope = CoroutineScope(main + Job().apply { cancel() }))
+                        coordinator.refreshClient()
+                        val sender = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        owners.put("sender", sender)
+                        yield(); withTimeout(5_000) { sender.isLoading.first { !it } }
+                        sender.updateDraft("Hello")
+                        assertTrue(sender.canSend)
+                        sender.send()
+                        withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+                        remote.set(if (mode == "missing") settled.copy(messages = settled.messages.drop(1)) else settled)
+                        val other = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        owners.put("other", other)
+                        yield(); withTimeout(5_000) { other.isLoading.first { !it } }
+                        assertEquals("settled-assistant", other.chat.value!!.messages.last().id)
+                        if (mode == "newer_post") {
+                            other.updateDraft("Second")
+                            assertTrue(other.canSend)
+                            other.send()
+                            yield(); withTimeout(5_000) { other.isStarting.first { !it } }
+                            assertEquals("accepted-stream-2", cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                        }
+                        when (mode) {
+                            "unpair" -> store.removeInstallation("turn-instance")
+                            "switch" -> { store.setActiveInstallation(null); coordinator.refreshClient() }
+                            "repair" -> store.addInstallation(AidenPairingExchange(instanceId = "turn-instance", deviceId = "turn-device",
+                                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "replacement",
+                                capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                            "replace_disk" -> {
+                                cache.saveActiveStream(AidenChatCache.ActiveStream("turn-device", "old-stream", "old-turn", 0), "turn-instance", initial.id)
+                                assertEquals("old-stream", AidenChatCache(root = File(root, "cache")).loadActiveStream("turn-instance", initial.id)?.streamId)
+                                failStreamWrite = true
+                            }
+                            "purge" -> cache.purge("turn-instance")
+                            "remove" -> { cache.removeChat("turn-instance", initial.id); cache.saveChat(initial.copy(title = "Fresh readmission"), "turn-instance") }
+                            "disk" -> File(cache.root, "chats").apply { deleteRecursively(); writeText("blocked directory") }
+                            "stream_disk" -> File(cache.root, "streams").apply { deleteRecursively(); writeText("blocked directory") }
+                        }
+                        release.countDown()
+                        withTimeout(5_000) { sender.isStarting.first { !it } }
+                        val reopened = AidenChatCache(root = File(root, "cache"))
+                        if (mode in listOf("unpair", "switch", "repair")) {
+                            assertFalse(sender.hasActiveStream.value)
+                            assertEquals(settled.messages, sender.chat.value!!.messages)
+                            assertEquals(if (mode == "switch") "accepted-stream-1" else null, cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertNull(sender.presentedError.value)
+                            assertEquals("", sender.draft.value)
+                        } else if (mode !in listOf("purge", "remove")) {
+                            val expectedMessages = if (mode == "newer_post") settled.messages + second else settled.messages
+                            assertEquals(expectedMessages, sender.chat.value!!.messages)
+                            assertEquals(settled.revision, sender.chat.value!!.revision)
+                            val expectedStream = if (mode == "newer_post") "accepted-stream-2" else "accepted-stream-1"
+                            assertEquals(expectedStream, cache.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertEquals(if (mode in listOf("stream_disk", "replace_disk")) null else expectedStream, reopened.loadActiveStream("turn-instance", initial.id)?.streamId)
+                            assertTrue(sender.hasActiveStream.value)
+                            assertNull(sender.presentedError.value)
+                            assertEquals("", sender.draft.value)
+                            if (mode == "newer") assertEquals(settled.messages, reopened.loadChat("turn-instance", initial.id)?.messages)
+                        } else {
+                            assertNull(reopened.loadActiveStream("turn-instance", initial.id))
+                            assertFalse(sender.hasActiveStream.value)
+                            assertEquals(if (mode == "remove") "Fresh readmission" else null, reopened.loadChat("turn-instance", initial.id)?.title)
+                        }
+                        assertEquals(if (mode == "newer_post") 2 else 1, postCount.get())
+                    } finally { release.countDown(); owners.clear(); server.shutdown(); root.deleteRecursively() }
+                }
+            }
+        } finally { Dispatchers.resetMain(); main.close() }
+    }
+
     @Test
     fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
 
