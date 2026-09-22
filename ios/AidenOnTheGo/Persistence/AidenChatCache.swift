@@ -21,22 +21,34 @@ actor AidenChatCache {
         let chatId: String
         private(set) var isRemoved = false
         var onRemoval: (() -> Void)?
+        var onRemovalCleanup: (@Sendable () async -> Void)?
 
         init(instanceId: String, chatId: String) {
             self.instanceId = instanceId
             self.chatId = chatId
         }
 
-        func remove() {
+        @discardableResult
+        func remove() -> (@Sendable () async -> Void)? {
             isRemoved = true
             onRemoval?()
             onRemoval = nil
+            let cleanup = onRemovalCleanup
+            onRemovalCleanup = nil
+            return cleanup
         }
     }
 
     @MainActor private final class Lifetimes {
         private struct Entry { weak var value: ChatLifetime? }
         private var entries: [Entry] = []
+        struct Cleanup {
+            let id = UUID()
+            let instanceId: String
+            let chatId: String
+            let task: Task<Void, Never>
+        }
+        private var pendingCleanups: [Cleanup] = []
         nonisolated init() {}
 
         func register(_ lifetime: ChatLifetime) {
@@ -44,13 +56,23 @@ actor AidenChatCache {
             entries.append(Entry(value: lifetime))
         }
 
-        func remove(instanceId: String, chatId: String? = nil) {
+        func remove(instanceId: String, chatId: String? = nil) -> [Cleanup] {
             for entry in entries {
                 guard let value = entry.value, value.instanceId == instanceId,
                       chatId == nil || value.chatId == chatId else { continue }
-                value.remove()
+                if let cleanup = value.remove() {
+                    pendingCleanups.append(Cleanup(instanceId: value.instanceId, chatId: value.chatId, task: Task { await cleanup() }))
+                }
             }
             entries.removeAll { $0.value == nil || $0.value?.isRemoved == true }
+            // Overlapping removals must join cleanup already claimed by an
+            // earlier removal, even though that lifetime is now invalidated.
+            return pendingCleanups.filter { $0.instanceId == instanceId && (chatId == nil || $0.chatId == chatId) }
+        }
+
+        func completed(_ cleanups: [Cleanup]) {
+            let ids = Set(cleanups.map(\.id))
+            pendingCleanups.removeAll { ids.contains($0.id) }
         }
     }
 
@@ -423,7 +445,9 @@ actor AidenChatCache {
     // this identity until the deletion completes.
     @MainActor func removeChat(instanceId: String, chatId: String) async {
         let token = chatWriteClock.invalidate(instanceId: instanceId, chatId: chatId)
-        lifetimes.remove(instanceId: instanceId, chatId: chatId)
+        let cleanups = lifetimes.remove(instanceId: instanceId, chatId: chatId)
+        for cleanup in cleanups { await cleanup.task.value }
+        lifetimes.completed(cleanups)
         await removeChatFiles(instanceId: instanceId, chatId: chatId, token: token)
         chatWriteClock.finish(token)
     }
@@ -453,7 +477,9 @@ actor AidenChatCache {
 
     @MainActor func purge(instanceId: String) async {
         let token = chatWriteClock.invalidate(instanceId: instanceId)
-        lifetimes.remove(instanceId: instanceId)
+        let cleanups = lifetimes.remove(instanceId: instanceId)
+        for cleanup in cleanups { await cleanup.task.value }
+        lifetimes.completed(cleanups)
         await purgeFilesForInstance(instanceId: instanceId, token: token)
         chatWriteClock.finish(token)
     }

@@ -920,6 +920,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
+    @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
     private var attachmentPreparationID: UUID?
     var isPreparingAttachments: Bool { attachmentPreparationID != nil }
@@ -1043,6 +1044,11 @@ final class AidenChatViewModel {
         let lifetime = cache.registerLifetime(instanceId: coordinator.activeInstanceId ?? "", chatId: chat.id)
         deletionLifetime = lifetime
         lifetime.onRemoval = { [weak self] in self?.handleRemoval() }
+        let draftInstanceId = coordinator.activeInstanceId ?? ""
+        let draftChatId = chat.id
+        lifetime.onRemovalCleanup = {
+            await draftStore.remove(instanceId: draftInstanceId, chatId: draftChatId)
+        }
     }
 
 #if DEBUG
@@ -1066,9 +1072,18 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
+        uploadTask?.cancel()
     }
 
     private func handleRemoval() {
+        draftPersistenceTask?.cancel()
+        draftPersistenceTask = nil
+        draftSession = nil
+        draftGeneration &+= 1
+        composerGeneration &+= 1
+        cancelAttachmentPreparation()
+        uploadTask?.cancel()
+        pendingAttachments = []
         transcriptGeneration &+= 1
         streamTask?.cancel()
         terminalReconciliationTask?.cancel()
@@ -1125,9 +1140,11 @@ final class AidenChatViewModel {
 
     func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
         guard !isReadOnlyFixture else { throw AidenRemoteClientError.invalidResponse }
+        guard !isRemoved, !Task.isCancelled else { throw CancellationError() }
         let context = try coordinator.requestContext(for: instanceId)
         let client = try coordinator.remoteClient(for: context)
         let status = try await client.speechStatus()
+        guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { throw CancellationError() }
         guard status.engine.ready else {
             throw NSError(
                 domain: "AidenVoiceInput",
@@ -1145,8 +1162,9 @@ final class AidenChatViewModel {
             )
         }
         if status.selectedModelId != model.id { _ = try await client.selectSpeechModel(model.id) }
+        guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { throw CancellationError() }
         let result = try await client.transcribeSpeech(pcm16: pcm16, modelId: model.id)
-        guard coordinator.isCurrent(context) else { throw CancellationError() }
+        guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { throw CancellationError() }
         return result.text
     }
 
@@ -1595,13 +1613,18 @@ final class AidenChatViewModel {
         }
     }
 
+    // Await the already scheduled write without starting a new persistence owner.
+    func waitForDraftPersistence() async {
+        await draftPersistenceTask?.value
+    }
+
     private func scheduleDraftPersistence() {
-        guard !isReadOnlyPresentation, let session = draftSession else { return }
+        guard !isReadOnlyPresentation, !isRemoved, let session = draftSession else { return }
         let text = draft
         draftPersistenceTask?.cancel()
         draftPersistenceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled, let self,
+            guard !Task.isCancelled, let self, !self.isRemoved,
                   self.draftSession == session,
                   self.draft == text else { return }
             _ = try? await self.draftStore.save(text, session: session)
@@ -1834,7 +1857,7 @@ final class AidenChatViewModel {
         _ selection: Result<[Selection], Error>,
         prepare: @escaping @MainActor (Selection) async throws -> AidenAttachmentUpload
     ) -> Task<Void, Never>? {
-        guard !isReadOnlyPresentation else { return nil }
+        guard !isReadOnlyPresentation, !isRemoved else { return nil }
         let selections: [Selection]
         do {
             selections = try selection.get()
@@ -1864,7 +1887,7 @@ final class AidenChatViewModel {
             var uploads: [AidenAttachmentUpload] = []
             var failures = max(0, selections.count - capacity)
             for selection in selections.prefix(capacity) {
-                guard !Task.isCancelled, coordinator.isCurrent(context) else { return }
+                guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context) else { return }
                 do {
                     uploads.append(try await prepare(selection))
                 } catch let error where aidenIsCancellation(error) {
@@ -1873,10 +1896,10 @@ final class AidenChatViewModel {
                     failures += 1
                 }
             }
-            guard !Task.isCancelled, coordinator.isCurrent(context),
+            guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context),
                   attachmentPreparationID == preparationID else { return }
             failures += await upload(uploads)
-            guard !Task.isCancelled, coordinator.isCurrent(context),
+            guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context),
                   attachmentPreparationID == preparationID else { return }
             if failures > 0 {
                 presentedError = failures == 1
@@ -1896,6 +1919,18 @@ final class AidenChatViewModel {
 
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
+        guard uploadTask == nil, !isRemoved else { return uploads.count }
+        let task = Task { await performUpload(uploads) }
+        uploadTask = task
+        defer { uploadTask = nil }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func performUpload(_ uploads: [AidenAttachmentUpload]) async -> Int {
         guard !uploads.isEmpty else { return 0 }
         guard !isReadOnlyPresentation, !isRemoved else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
@@ -1910,8 +1945,7 @@ final class AidenChatViewModel {
         var failedCount = 0
         var acceptedReferences: [AidenAttachmentReference] = []
         for upload in uploads.prefix(10 - pendingAttachments.count) {
-            guard !isRemoved else { return uploads.count }
-            if Task.isCancelled {
+            if isRemoved || Task.isCancelled {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
                 return uploads.count
             }
@@ -1921,6 +1955,11 @@ final class AidenChatViewModel {
                     upload: upload
                 )
                 guard !isRemoved, coordinator.isCurrent(context) else {
+                    acceptedReferences.append(reference)
+                    await cleanupCancelledUpload(acceptedReferences, context: context)
+                    return uploads.count
+                }
+                if Task.isCancelled {
                     acceptedReferences.append(reference)
                     await cleanupCancelledUpload(acceptedReferences, context: context)
                     return uploads.count
@@ -1938,6 +1977,10 @@ final class AidenChatViewModel {
                         kind: .image,
                         size: reference.size
                     )
+                    if isRemoved || Task.isCancelled {
+                        await cleanupCancelledUpload(acceptedReferences, context: context)
+                        return uploads.count
+                    }
                     _ = try? await cache.saveAttachmentImage(
                         data,
                         instanceId: instanceId,
@@ -1946,6 +1989,10 @@ final class AidenChatViewModel {
                         attachment: attachment,
                         writeToken: imageWriteToken
                     )
+                    if isRemoved || Task.isCancelled {
+                        await cleanupCancelledUpload(acceptedReferences, context: context)
+                        return uploads.count
+                    }
                 }
             } catch let error where aidenIsCancellation(error) {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
