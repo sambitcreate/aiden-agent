@@ -862,3 +862,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
   stopAndSettle() and user Stop cancel dispatch preparation. Keep tests distinct.
 - Pi harness queueSteer is not a public foreground input API: host transcript
   projection and exact-run admission must be implemented before native controls.
+
+
+## 2026-09-22 — shared run-input admission
+
+- Persisted steering needs a Pi visible-user marker in the same journal append; without it, the next ordinary turn can sync the same user input a second time.
+- Pi may finish its final queue check while host persistence is pending. Reserve before awaiting, drain reservations at agent_end, and explicitly continue late accepted messages.
+- Remote stream event eviction is earlier than operation-ledger expiry. Keep the authorization chat ID with the private durable receipt and recheck current access before replay.
+- Never turn an uncertain delivery into a fresh queued send merely because its old stream/receipt is gone. Retain request identity and require the user to inspect history.

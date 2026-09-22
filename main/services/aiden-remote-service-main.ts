@@ -431,6 +431,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             now: Date.now,
             cancel: (streamId, ownerDocumentId) =>
               llmClient.cancel(streamId, "user_stop", ownerDocumentId),
+            submitInput: (streamId, ownerDocumentId, input) => llmClient.submitRunInput(streamId, ownerDocumentId, input),
             approve: (approvalId, decision, ownerDocumentId) =>
               llmClient.approve(approvalId, decision, ownerDocumentId),
             notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),

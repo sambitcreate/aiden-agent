@@ -1,3 +1,4 @@
+import { parseChatRunInput, type ChatRunInputRequest, type ChatRunInputReceipt } from "../../renderer/shared/chat-run-input.js";
 import type { ServerResponse } from "node:http";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
@@ -412,6 +413,7 @@ export class AidenRemoteStreamService {
     private readonly options: {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
+      submitInput?(streamId: string, ownerDocumentId: string, input: ChatRunInputRequest): Promise<ChatRunInputReceipt>;
       approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
       notifyChatChanged?: (chatId: string) => void;
       notifyApprovalChanged?: (chatId: string) => void;
@@ -1123,6 +1125,38 @@ export class AidenRemoteStreamService {
       return false;
     }
     return this.resolveApproval(approvalId, decision);
+  }
+
+  get supportsRunInput(): boolean { return this.options.submitInput !== undefined; }
+
+  async submitInput(
+    deviceId: string, streamId: string, key: string, raw: unknown,
+    authorize: (chatId: string, action: () => Promise<ChatRunInputReceipt>) => Promise<ChatRunInputReceipt> = (_chatId, action) => action(),
+  ): Promise<ChatRunInputReceipt> {
+    let input: ChatRunInputRequest;
+    try { input = parseChatRunInput(raw); }
+    catch { throw new AidenRemoteServiceError("invalid_request", "Invalid run input.", 400); }
+    if (key.toLowerCase() !== input.requestId) throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key must match requestId.", 400);
+    if (!this.options.submitInput) throw new AidenRemoteServiceError("not_found", "Run input is unavailable.", 404);
+    try {
+      // Retain only the authorization resource with the durable receipt. Stream
+      // event eviction must not erase the ability to authorize an exact retry.
+      const result = await this.executeIdempotent(
+        { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key: input.requestId },
+        input,
+        async () => {
+          const stream = this.requireStream(deviceId, streamId);
+          const receipt = await authorize(stream.chatId, async (): Promise<ChatRunInputReceipt> => {
+            if (terminal(stream.state) || stream.cancelRequested) {
+              return { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: stream.cancelRequested ? "cancelled" : "not-active" };
+            }
+            return this.options.submitInput!(streamId, stream.owner.owner.documentId, input);
+          });
+          return { chatId: stream.chatId, receipt };
+        },
+      );
+      return await authorize(result.chatId, async () => result.receipt);
+    } catch (error) { return this.mapIdempotencyError(error); }
   }
 
   async cancel(deviceId: string, streamId: string, key: string): Promise<AidenRemoteStreamStatus> {

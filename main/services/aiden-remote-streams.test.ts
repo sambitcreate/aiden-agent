@@ -1,3 +1,5 @@
+import { AidenIdempotencyLedger } from "./aiden-remote-operation-contract.js";
+import type { ChatRunInputRequest, ChatRunInputReceipt } from "../../renderer/shared/chat-run-input.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
@@ -1007,4 +1009,57 @@ test("stream capacity does not reclaim genuinely active generations", () => {
   );
   assert.equal(app.service.snapshot().streams.length, 256);
   assert.deepEqual(app.cancelled, []);
+});
+
+test("run input replay is exact, device-scoped, and rejected after terminal", async () => {
+  const accepted: string[] = [];
+  const service = new AidenRemoteStreamService({ now: () => 1000, cancel: () => true, approve: () => true,
+    submitInput: async (streamId, owner, input) => {
+      accepted.push(`${streamId}:${owner}`);
+      return { requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "message-1" };
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { requestId: "019a0000-0000-4000-8000-000000000001", mode: "steer", text: "Change direction" };
+  const receipt = await service.submitInput("device-1", "stream-1", input.requestId, input);
+  owner.owner.send("chat:done", { content: "done" });
+  assert.deepEqual(await service.submitInput("device-1", "stream-1", input.requestId, input), receipt);
+  assert.equal(accepted.length, 1);
+  await assert.rejects(service.submitInput("device-1", "stream-1", input.requestId, { ...input, text: "changed" }), (error: unknown) => (error as { code: string }).code === "idempotency_conflict");
+  await assert.rejects(service.submitInput("device-2", "stream-1", input.requestId, input), (error: unknown) => (error as { code: string }).code === "not_found");
+  const next = { ...input, requestId: "019a0000-0000-4000-8000-000000000002" };
+  assert.equal((await service.submitInput("device-1", "stream-1", next.requestId, next)).accepted, false);
+});
+
+
+test("run input receipt survives stream eviction and restart but rechecks current chat authority", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const options = { now: () => 1000, cancel: () => true, approve: () => true,
+    submitInput: async (streamId: string, _owner: string, input: ChatRunInputRequest): Promise<ChatRunInputReceipt> => ({
+      requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "input-1",
+    }),
+  };
+  const service = new AidenRemoteStreamService({ ...options, idempotency: ledger });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { requestId: "019a0000-0000-4000-8000-000000000003", mode: "steer", text: "Change direction" };
+  const receipt = await service.submitInput("device-1", "stream-1", input.requestId, input);
+  owner.owner.send("chat:done", { content: "done" });
+  for (let i = 0; i < 3; i++) {
+    const producer = service.create("device-1", `pressure-${i}`, `chat-${i}`, `turn-${i}`);
+    for (let j = 0; j < 30; j++) producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
+  }
+  assert.throws(() => service.streamChatId("device-1", "stream-1"));
+  assert.deepEqual(await service.submitInput("device-1", "stream-1", input.requestId, input), receipt);
+  const restored = new AidenRemoteStreamService({ ...options, idempotency: new AidenIdempotencyLedger(ledger.snapshot()),
+    submitInput: async () => { throw new Error("A retry must never run inference"); },
+  });
+  let authorized = 0;
+  assert.deepEqual(await restored.submitInput("device-1", "stream-1", input.requestId, input, async (chatId, action) => {
+    assert.equal(chatId, "chat-1"); authorized++; return action();
+  }), receipt);
+  assert.equal(authorized, 1);
+  await assert.rejects(restored.submitInput("device-1", "stream-1", input.requestId, input, async () => {
+    throw new AidenRemoteServiceError("capability_denied", "Revoked", 403);
+  }), (error: unknown) => (error as { status: number }).status === 403);
+  await assert.rejects(restored.submitInput("device-2", "stream-1", input.requestId, input));
 });

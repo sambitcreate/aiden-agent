@@ -28,8 +28,8 @@ test("Telegram model choices omit hidden models without invalidating explicit ex
 
 test("command catalog exposes the first-class operator controls", () => {
   assert.deepEqual(
-    TELEGRAM_COMMANDS.slice(0, 8).map((command) => command.command),
-    ["start", "interrupt", "new", "compact", "next", "continue", "abort", "stop"],
+    TELEGRAM_COMMANDS.slice(0, 9).map((command) => command.command),
+    ["start", "interrupt", "steer", "new", "compact", "next", "continue", "abort", "stop"],
   );
   assert.equal(commandName("/MODEL@aiden_bot 2"), "/model");
   assert.equal(commandArgument("/workspace Aiden  Agent"), "Aiden  Agent");

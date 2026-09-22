@@ -32,6 +32,7 @@ async function fixture(options: {
   chatClassification?: "present" | "missing" | "error";
   chatPayloadError?: "reconciling";
   oversizedChatResponse?: boolean;
+  runInputSupported?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
 } = {}) {
@@ -546,6 +547,14 @@ async function fixture(options: {
       },
     },
     streams: {
+      supportsRunInput: options.runInputSupported ?? false,
+      submitInput: async (deviceId, streamId, _key, raw, authorize) => {
+        const input = raw as { requestId: string; mode: "steer" | "queue" };
+        return authorize!("chat-1", async () => {
+          calls.push(`run-input:${deviceId}:${streamId}`);
+          return { requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "input-1" };
+        });
+      },
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
         streamId,
@@ -2999,4 +3008,23 @@ test("every matcher path pattern in the router source is declared as a route tem
     [],
     "every router matcher path must have a declared route template for routePath evidence",
   );
+});
+
+test("run input endpoint negotiates support and preserves conjunctive Bot mutation grants", async () => {
+  const requestId = "019a0000-0000-4000-8000-000000000001";
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json", "idempotency-key": requestId };
+  for (const scenario of [
+    { options: { runInputSupported: false, capabilities: ["chat:write"] as AidenRemoteCapability[] }, status: 404 },
+    { options: { runInputSupported: true, capabilities: ["chat:read"] as AidenRemoteCapability[] }, status: 403 },
+    { options: { runInputSupported: true, capabilities: ["chat:write"] as AidenRemoteCapability[] }, status: 200 },
+    { options: { runInputSupported: true, botChat: true, capabilities: ["chat:write"] as AidenRemoteCapability[] }, status: 404 },
+    { options: { runInputSupported: true, botChat: true, acceptsBotCapabilities: true, botChatAuthorization: async () => true, capabilities: ["chat:write", "bot:read", "bot:write"] as AidenRemoteCapability[] }, status: 200 },
+  ]) {
+    const app = await fixture(scenario.options);
+    try {
+      const response = await fetch(`${app.base}/streams/stream-1/inputs`, { method: "POST", headers, body: JSON.stringify({ requestId, mode: "steer", text: "new direction" }) });
+      assert.equal(response.status, scenario.status);
+      assert.equal(app.calls.some((call) => call.startsWith("run-input:")), scenario.status === 200);
+    } finally { await app.close(); }
+  }
 });

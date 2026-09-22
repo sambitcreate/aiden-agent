@@ -529,6 +529,7 @@ interface HarnessOptions {
   ) => Promise<void>;
   compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
+  submitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["submitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
@@ -596,6 +597,7 @@ function harness(o: HarnessOptions = {}) {
     applyModelSelection: o.applyModelSelection,
     compactChat: o.compactChat,
     abortChat: o.abortChat,
+    submitRunInput: o.submitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
@@ -2093,4 +2095,24 @@ test("a cancelled dispatch rejection does not send a late error reply", async ()
   assert.equal(h.api.sentMessages.some(({ text }) => text.includes("late preparation failure")), false);
   assert.equal(h.turnMock.startCalls(), 0);
   h.service.stop();
+});
+
+
+test("Telegram Steer preserves the active run and confirms only host admission", async () => {
+  const submissions: Array<{ streamId: string; text: string }> = [];
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), "/steer new direction"))]],
+    submitRunInput: async (streamId, owner, input) => {
+      assert.equal(owner, `telegram:${streamId}`);
+      submissions.push({ streamId, text: input.text });
+      return { requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "input-1" };
+    },
+    abortChat: async () => assert.fail("Steer must not cancel the active response"),
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Steering accepted")));
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0]?.text, "new direction");
+  assert.equal(h.turnMock.startCalls(), 1);
+  h.turnMock.completePendingTurn(); h.service.stop();
 });

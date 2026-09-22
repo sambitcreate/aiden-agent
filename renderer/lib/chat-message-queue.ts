@@ -8,6 +8,7 @@ export interface QueuedChatMessage {
   attachments: Attachment[];
   skillInvocation?: SkillInvocationV1;
   options?: { visualize?: boolean };
+  runInput?: { streamId: string; requestId: string };
 }
 
 interface QueueSnapshot {
@@ -15,6 +16,7 @@ interface QueueSnapshot {
   paused: boolean;
   sendingId?: string;
   editingId?: string;
+  uncertainIds?: readonly string[];
 }
 
 /** Unsent, document-local drafts. Never write attachment contents to browser storage. */
@@ -55,7 +57,7 @@ export class ChatMessageQueue {
     });
   }
   edit(id: string): boolean {
-    if (this.snapshot.sendingId || !this.snapshot.messages.some((item) => item.id === id))
+    if (this.snapshot.sendingId || this.snapshot.uncertainIds?.includes(id) || !this.snapshot.messages.some((item) => item.id === id))
       return false;
     this.publish({ ...this.snapshot, editingId: id });
     return true;
@@ -100,14 +102,23 @@ export class ChatMessageQueue {
   discard() {
     this.publish({ messages: [], paused: true });
   }
+  claimForRun(id: string, identity?: { streamId: string; requestId: string }): QueuedChatMessage | undefined {
+    if (this.snapshot.sendingId || this.snapshot.editingId) return;
+    const original = this.snapshot.messages.find((item) => item.id === id);
+    if (!original) return;
+    const message = identity && !original.runInput ? { ...original, runInput: identity } : original;
+    this.publish({ ...this.snapshot, sendingId: id, messages: this.snapshot.messages.map((item) => item.id === id ? message : item) });
+    return message;
+  }
   claim(): QueuedChatMessage | undefined {
+    if (this.snapshot.uncertainIds?.some((id) => this.snapshot.messages.some((item) => item.id === id))) return;
     if (this.snapshot.paused || this.snapshot.sendingId || this.snapshot.editingId) return;
     const message = this.snapshot.messages[0];
     if (!message) return;
     this.publish({ ...this.snapshot, sendingId: message.id });
     return message;
   }
-  settle(id: string, outcome: "sent" | "failed" | "deferred") {
+  settle(id: string, outcome: "sent" | "failed" | "deferred" | "uncertain") {
     if (this.snapshot.sendingId !== id) return;
     this.publish({
       ...this.snapshot,
@@ -115,8 +126,9 @@ export class ChatMessageQueue {
       messages:
         outcome === "sent"
           ? this.snapshot.messages.filter((item) => item.id !== id)
-          : this.snapshot.messages,
-      paused: outcome === "failed" || this.snapshot.paused,
+          : outcome === "failed" ? this.snapshot.messages.map((item) => item.id === id ? { ...item, runInput: undefined } : item) : this.snapshot.messages,
+      paused: outcome === "failed" || outcome === "uncertain" || this.snapshot.paused,
+      uncertainIds: outcome === "uncertain" ? [...(this.snapshot.uncertainIds ?? []).filter((item) => item !== id), id] : (this.snapshot.uncertainIds ?? []).filter((item) => item !== id),
     });
   }
 }
