@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
-[Skill and MCP session context](skill-mcp-session-context-plan.md) — Partial: skill invocation policy implemented and under PR validation; MCP metadata/resources/instructions and boundary refresh deferred.
+[Skill and MCP session context](skill-mcp-session-context-plan.md) — Partial: skill invocation policy implemented in PR #214; implementation CI/review passed, physical iOS launch blocked by device lock. MCP metadata/resources/instructions and boundary refresh deferred.
 
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

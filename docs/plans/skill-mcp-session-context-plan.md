@@ -1,6 +1,6 @@
 # Skill and MCP session context
 
-Status: Partial — invocation-policy slice implemented; PR validation in progress.
+Status: Partial — invocation-policy slice implemented in PR #214, with hosted CI and review passed on implementation head 5ab368c1. Physical iOS execution remains blocked by a locked device; broader MCP scope remains deferred.
 
 ## Bounded implementation
 
