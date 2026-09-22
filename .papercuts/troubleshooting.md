@@ -852,3 +852,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## AGENTS refresh — 2026-09-22
+The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.

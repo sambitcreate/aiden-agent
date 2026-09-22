@@ -1,7 +1,7 @@
 import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
@@ -77,6 +77,7 @@ async function managedTestHarness(
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
+    initialSystemPrompt?: string;
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
@@ -136,7 +137,7 @@ async function managedTestHarness(
       ? {
           transformContext: createGenerationContextTransform({
             contextWindow: model.contextWindow,
-            systemPrompt: "Managed prompt",
+            systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
             tools: options.tools ?? [],
             supportsImages: model.input.includes("image"),
             providerId: model.provider,
@@ -145,7 +146,7 @@ async function managedTestHarness(
         }
       : {}),
     initialState: {
-      systemPrompt: "Managed prompt",
+      systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
       thinkingLevel: "off",
       tools: options.tools ?? [],
       messages: [],
@@ -2765,4 +2766,48 @@ test("provider diagnostics classify before outcome redaction without exporting t
   assert.equal(failures[0].fields.providerCategory, "model_unavailable");
   assert.equal(failures[0].fields.failurePhase, "provider-request");
   assert.doesNotMatch(bytes, /PRIVATE_MODEL_CANARY|PRIVATE_PROMPT_CANARY|errorMessage/u);
+});
+
+test("AGENTS edits enter only the next logical model request and preserve the tool snapshot", async (t) => {
+  const { createAgentsInstructionRefresher } = await import("./agents-instructions.js");
+  const root = await mkdtemp(join(tmpdir(), "aiden-agents-harness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "AGENTS.md");
+  await writeFile(file, "INITIAL_GUIDANCE");
+  const instructions = await createAgentsInstructionRefresher({
+    globalRoot: root,
+    revalidate: async () => {},
+    read: async () => readFile(file, "utf8"),
+  });
+  const initial = await instructions.apply({ systemPrompt: "HOST" });
+  const tool = declarePiRuntimeReplay({
+    name: "update_guidance", label: "Update guidance", description: "Fixture edit", parameters: Type.Object({}),
+    execute: async () => {
+      await writeFile(file, "NEXT_GUIDANCE");
+      return { content: [{ type: "text" as const, text: "edited" }], details: null };
+    },
+  }, "safe");
+  const prompts: string[] = [];
+  const toolSets: string[][] = [];
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const { core, harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    initialSystemPrompt: initial.systemPrompt,
+    tools: [tool],
+    streamFn: (model, context, options) => {
+      prompts.push(context.systemPrompt ?? "");
+      toolSets.push((context.tools ?? []).map(({ name }) => name));
+      return providerCore.streamSimple(model, context, options);
+    },
+    prepareNextTurnWithContext: async ({ context }, signal) => ({ context: await instructions.apply(context, signal) }),
+  });
+  providerCore = core;
+  const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run the edit", timestamp: 1 } });
+  assert.equal(result.kind, "completed");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
+  assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
+  assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
 });

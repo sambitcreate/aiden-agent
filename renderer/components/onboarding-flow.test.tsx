@@ -429,3 +429,7 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
 });
+
+test("workspace tour discloses AGENTS instruction loading and refresh", () => {
+  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
+});
