@@ -2,7 +2,16 @@
 // deliberately stricter than snapshot/removal so a nearly-full disk can never
 // trap Aiden in "cannot snapshot → cannot delete → cannot free disk".
 
+import * as path from "node:path";
 import * as fs from "node:fs/promises";
+
+export class WorktreeCapacityUnavailableError extends Error {
+  readonly code = "capacity_unavailable";
+  constructor(message = "Disk capacity could not be verified. Check that the worktree and repository volumes are available.") {
+    super(message);
+    this.name = "WorktreeCapacityUnavailableError";
+  }
+}
 
 export class InsufficientDiskSpaceError extends Error {
   readonly code = "insufficient_disk_space";
@@ -38,6 +47,12 @@ export interface DiskCapacityPolicy {
   overheadFactor: number;
 }
 
+/** The estimator accepts at most 1 MiB of ls-tree records (<20k entries).
+ * Reserve room for registration, refs and multiple index writes, not a second
+ * copy of repository objects, which worktrees share with the original repo.
+ */
+export const WORKTREE_GIT_METADATA_BYTES = 16 * 1024 * 1024;
+
 /** Creating a worktree needs a real reserve: checkout + hooks-free add. */
 export const CREATE_CAPACITY_POLICY: DiskCapacityPolicy = {
   reserveBytes: 512 * 1024 * 1024,
@@ -52,8 +67,25 @@ export const SNAPSHOT_CAPACITY_POLICY: DiskCapacityPolicy = {
 
 /** Free bytes on the filesystem containing `dir`, from the user's view. */
 export async function statfsAvailableBytes(dir: string): Promise<number> {
-  const stats = await fs.statfs(dir);
-  return Number(stats.bavail) * Number(stats.bsize);
+  // A new worktree root may not exist yet. Inspect its nearest existing parent
+  // without creating directories or substituting the source repository volume.
+  let candidate = path.resolve(dir);
+  while (true) {
+    try {
+      const stats = await fs.statfs(candidate);
+      const available = Number(stats.bavail) * Number(stats.bsize);
+      if (!Number.isSafeInteger(available) || available < 0 ||
+          !Number.isSafeInteger(Number(stats.bsize)) || Number(stats.bsize) <= 0) {
+        throw new WorktreeCapacityUnavailableError();
+      }
+      return available;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || path.dirname(candidate) === candidate) {
+        throw new WorktreeCapacityUnavailableError();
+      }
+      candidate = path.dirname(candidate);
+    }
+  }
 }
 
 async function checkCapacity(
@@ -61,6 +93,9 @@ async function checkCapacity(
   estimatedBytes: number,
   policy: DiskCapacityPolicy,
 ): Promise<DiskCapacityReport> {
+  if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes < 0) {
+    throw new WorktreeCapacityUnavailableError("The worktree allocation size could not be verified.");
+  }
   const availableBytes = await statfsAvailableBytes(dir);
   const requiredBytes =
     Math.ceil(estimatedBytes * policy.overheadFactor) + policy.reserveBytes;

@@ -31,6 +31,7 @@ async function pathExists(target: string): Promise<boolean> {
 export interface ManagedWorktreeRestoreDependencies {
   ensureWorktreeRoot(): Promise<string>;
   snapshotRoot(): Promise<string>;
+  checkCapacity(root: string, phase: ManagedWorktreeRestoreJournal["phase"]): Promise<void>;
   repositoryPaths(repositoryPath: string): Promise<{ topLevel: string; commonDir: string }>;
   snapshotCommit(repositoryPath: string, snapshotId: string): Promise<string | undefined>;
   restoreCheckout(
@@ -167,6 +168,12 @@ export async function restoreManagedWorktreeSnapshot(
 
   let journal = await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId);
   const signal = dependencies.signal;
+  if (journal?.phase !== "complete") {
+    await dependencies.checkCapacity(
+      journal ? path.dirname(journal.worktreePath) : await dependencies.ensureWorktreeRoot(),
+      journal?.phase ?? "checkout_planned",
+    );
+  }
   await updateManagedWorktreeSnapshotState(snapshotRoot, snapshot, "restoring");
 
   if (journal === undefined) {

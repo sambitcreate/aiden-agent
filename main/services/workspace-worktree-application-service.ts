@@ -1,3 +1,5 @@
+import { WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
+import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -53,7 +55,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   managedWorktreeUsable(managed: ManagedWorktree): Promise<boolean>;
   finalizeManagedWorktreeDeletion(managed: ManagedWorktree): Promise<void>;
   workspacePathExists(worktreePath: string): Promise<boolean>;
-  checkoutBytes(folderPath: string): Promise<number>;
+  checkoutBytes(folderPath: string, commit?: string): Promise<number>;
   checkCreateCapacity(worktreeRoot: string, estimatedBytes: number): Promise<unknown>;
   checkSnapshotCapacity(snapshotRoot: string, estimatedBytes: number): Promise<unknown>;
   provisionIncludedFiles(options: {
@@ -166,10 +168,12 @@ export function createWorkspaceWorktreeApplicationService(
     sourceWorkspaceId,
     async (resolved, signal) => {
       const worktreeRoot = await dependencies.ensureWorktreeRoot();
-      // Free-space admission before mkdir + `git worktree add` can mutate the
-      // filesystem or the repository.
+      // Admit checkout allocation before creating its directory or Git branch.
+      // ensureWorktreeRoot may already have created the empty managed root.
       const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath);
-      await dependencies.checkCreateCapacity(worktreeRoot, estimatedBytes);
+      // Reserve the provisioner's enforced maximum, so changing source files
+      // cannot invalidate a smaller, racy pre-copy estimate.
+      await dependencies.checkCreateCapacity(worktreeRoot, estimatedBytes + MAX_PROVISIONED_BYTES + WORKTREE_GIT_METADATA_BYTES);
       const worktree = await dependencies.createWorktree(
         resolved.folderPath,
         worktreeRoot,
@@ -178,6 +182,7 @@ export function createWorkspaceWorktreeApplicationService(
       );
       const provisionedFiles: string[] = [];
       try {
+        await dependencies.checkCreateCapacity(worktree.path, MAX_PROVISIONED_BYTES);
         const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
         await dependencies.provisionIncludedFiles({
           sourceRoot,
@@ -533,6 +538,23 @@ export function createWorkspaceWorktreeApplicationService(
             snapshotRoot: dependencies.ensureSnapshotRoot,
             repositoryPaths: dependencies.repositoryPaths,
             snapshotCommit: dependencies.snapshotRefCommit,
+            checkCapacity: async (root, state) => {
+              const payloadBytes = snapshot.provisionedFiles.reduce((sum, file) => sum + file.size, 0);
+              // After snapshot application, only private files remain. Do not
+              // reread checkout policy or require space on the Git volume.
+              if (state === "snapshot_applied") {
+                await dependencies.checkCreateCapacity(root, payloadBytes);
+                return;
+              }
+              const [baseBytes, snapshotBytes] = await Promise.all([
+                state === "checkout_planned"
+                  ? dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.originalHead)
+                  : Promise.resolve(0),
+                dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.snapshotCommit),
+              ]);
+              await dependencies.checkCreateCapacity(root, baseBytes + snapshotBytes + payloadBytes + WORKTREE_GIT_METADATA_BYTES);
+              await dependencies.checkCreateCapacity(target.commonDir, WORKTREE_GIT_METADATA_BYTES);
+            },
             restoreCheckout: dependencies.restoreManagedCheckout,
             resumeCheckout: dependencies.resumeManagedCheckout,
             applySnapshot: dependencies.applyWorktreeSnapshot,

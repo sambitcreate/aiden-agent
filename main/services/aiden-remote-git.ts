@@ -1,3 +1,4 @@
+import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -164,6 +165,13 @@ function requireConfirmation(record: Record<string, unknown>): void {
 
 function mapGitError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
+  if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
+    throw new AidenRemoteServiceError("git_capability_denied",
+      error instanceof InsufficientDiskSpaceError
+        ? "There is not enough free disk space on the Mac for this managed worktree. Free space and try again."
+        : "The Mac could not verify disk capacity for this managed worktree. Check its storage and try again.",
+      409);
+  }
   if (!(error instanceof GitServiceError)) {
     throw new AidenRemoteServiceError("internal_error", "Aiden could not complete this Git operation.", 500);
   }

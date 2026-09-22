@@ -852,3 +852,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — managed worktree stack audit
+
+- Fresh main already merged #185 while #189–193 remain open with incompatible duplicate contracts. A trial main→#189 merge conflicted in Git journals, provisioning metadata and package scripts; aborted it without discarding any PR work. Audit current architecture before transplanting dated research/stack fixes.
+- This task retained workspace-write despite global full-access configuration. Ordinary Git metadata writes, clang temporary output and tsx local IPC were blocked; required tool escalation was used without changing permission settings.

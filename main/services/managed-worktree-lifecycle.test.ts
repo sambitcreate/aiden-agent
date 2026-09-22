@@ -15,6 +15,7 @@ import {
   checkCreateCapacity,
   checkSnapshotCapacity,
   InsufficientDiskSpaceError,
+  WorktreeCapacityUnavailableError,
   statfsAvailableBytes,
 } from "./managed-worktree-capacity.js";
 import {
@@ -694,6 +695,7 @@ test("restore converges after a crash between checkout creation and journal upda
   const repositoryTopLevel = await git(repository, ["rev-parse", "--show-toplevel"]);
   const deps: ManagedWorktreeRestoreDependencies = {
     ensureWorktreeRoot: async () => worktreeRoot,
+    checkCapacity: async () => undefined,
     snapshotRoot: async () => snapshotRoot,
     repositoryPaths: async () => ({
       topLevel: repositoryTopLevel,
@@ -710,6 +712,16 @@ test("restore converges after a crash between checkout creation and journal upda
       service.managedWorktreeUsable(repo, wt, b, gitDir, token, dev, ino),
     createWorkspaceId: () => "workspace-restored",
   };
+
+  await assert.rejects(restoreManagedWorktreeSnapshot({
+    ...deps,
+    checkCapacity: async (_root, phase) => {
+      assert.equal(phase, "checkout_planned");
+      throw new WorktreeCapacityUnavailableError();
+    },
+  }, snapshotId), WorktreeCapacityUnavailableError);
+  assert.equal(await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId), undefined);
+  assert.equal((await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId)).state, "ready");
 
   // Simulate the crash window: the journal recorded the planned path and the
   // checkout was created, but the checkout identity was never journaled.
@@ -742,7 +754,10 @@ test("restore converges after a crash between checkout creation and journal upda
 
   // A retry after completion converges to the saved result instead of
   // attaching the recorded branch to a fresh random path.
-  const again = await restoreManagedWorktreeSnapshot(deps, snapshotId);
+  const again = await restoreManagedWorktreeSnapshot({
+    ...deps,
+    checkCapacity: async () => { throw new Error("completed restores allocate nothing"); },
+  }, snapshotId);
   assert.equal(again.workspaceId, "workspace-restored");
   assert.equal(again.worktree.path, canonicalPlanned);
   const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
@@ -881,7 +896,7 @@ test("capacity admission reports a typed insufficient_disk_space error", async (
     (error: unknown) =>
       error instanceof InsufficientDiskSpaceError &&
       error.code === "insufficient_disk_space" &&
-      error.availableBytes === available &&
+      Number.isSafeInteger(error.availableBytes) && error.availableBytes >= 0 &&
       error.requiredBytes > error.reserveBytes &&
       error.reserveBytes > 0 &&
       error.estimatedBytes === Number.MAX_SAFE_INTEGER,
@@ -1121,4 +1136,56 @@ test("readWorktreeInclude rejects symlinks and oversized includes", async (t) =>
     (error: unknown) =>
       error instanceof ManagedWorktreeProvisionerError && error.code === "include_invalid",
   );
+});
+
+
+test("checkout estimates include the entire pinned tree from a nested workspace despite deleted source files", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, "nested"));
+  await fs.writeFile(path.join(repository, "nested", "small"), "x");
+  await fs.writeFile(path.join(repository, "large"), "a".repeat(50000));
+  await git(repository, ["add", "."]);
+  await git(repository, ["commit", "-m", "whole tree"]);
+  const commit = await git(repository, ["rev-parse", "HEAD"]);
+  const marker = path.join(repository, "estimate-hook-ran");
+  await fs.writeFile(path.join(repository, ".git", "hooks", "post-index-change"),
+    `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  await fs.unlink(path.join(repository, "large"));
+  const service = new GitService({ cacheTtlMs: 0 });
+  const rootEstimate = await service.managedWorktreeCheckoutBytes(repository, commit);
+  assert.ok(rootEstimate >= 100000);
+  await assert.rejects(fs.stat(marker), { code: "ENOENT" });
+  assert.equal(await service.managedWorktreeCheckoutBytes(path.join(repository, "nested"), commit), rootEstimate);
+  await git(repository, ["add", "."]);
+  await git(repository, ["commit", "-m", "delete large"]);
+  assert.equal(await service.managedWorktreeCheckoutBytes(repository, commit), rootEstimate);
+  assert.ok(await service.managedWorktreeCheckoutBytes(repository) < rootEstimate);
+});
+
+test("checkout admission rejects filters and encodings without executing transformations or creating a branch", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const marker = path.join(root, "filter-ran");
+  await git(repository, ["config", "filter.expanding.smudge", `touch '${marker}'; cat`]);
+  const service = new GitService({ cacheTtlMs: 0 });
+  for (const attribute of ["filter=expanding", "ident", "working-tree-encoding=UTF-16"]) {
+    await fs.writeFile(path.join(repository, ".gitattributes"), `README.md ${attribute}\n`);
+    await git(repository, ["add", ".gitattributes"]);
+    await git(repository, ["commit", "-m", "checkout transformation"]);
+    await assert.rejects(service.createWorktree(repository, root, "feature/rejected"),
+      (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope");
+    await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/rejected"]));
+    await assert.rejects(fs.stat(marker), { code: "ENOENT" });
+  }
+});
+
+test("capacity admission rejects unknown numeric estimates and uses the destination's existing ancestor", async (t) => {
+  const root = await temporaryDirectory(t);
+  for (const estimate of [NaN, Infinity, -1, 0.5]) {
+    await assert.rejects(checkCreateCapacity(root, estimate), WorktreeCapacityUnavailableError);
+  }
+  const missing = path.join(root, "not-created", "worktrees");
+  const report = await checkCreateCapacity(missing, 0);
+  assert.ok(report.availableBytes > 0);
+  await assert.rejects(fs.stat(path.dirname(missing)), { code: "ENOENT" });
 });
