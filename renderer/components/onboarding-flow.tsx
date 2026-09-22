@@ -386,7 +386,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Aiden in Telegram",
     description:
-      "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
+      "Use models, skills, files, and voice from your paired account. Queue follow-ups, interrupt a turn, or stop pending work.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",
