@@ -227,6 +227,9 @@ function projection(record: PendingAttachmentRecord): AidenRemoteAttachmentProje
 
 export class AidenRemoteAttachmentStore {
   private readonly records = new Map<string, PendingAttachmentRecord>();
+  private readonly uploads = new Set<{ deviceId: string; chatId: string; active: boolean }>();
+  private readonly deletingChats = new Set<string>();
+  private readonly revokedDevices = new Set<string>();
   private retainedRepresentationBytes = 0;
 
   constructor(private readonly options: {
@@ -236,7 +239,58 @@ export class AidenRemoteAttachmentStore {
     maxRepresentationBytes?: number;
   } = {}) {}
 
+  /** Fence the awaited chat lookup without retaining permanent chat tombstones. */
+  beginUpload(deviceId: string, chatId: string): { assertCurrent(): void; release(): void } {
+    this.assertDeviceActive(deviceId);
+    if (this.deletingChats.has(chatId)) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
+    }
+    if (this.uploads.size >= MAX_PENDING_ATTACHMENTS) {
+      throw new AidenRemoteServiceError("handle_capacity", "Too many attachment uploads are in progress.", 429, true);
+    }
+    const lease = { deviceId, chatId, active: true };
+    this.uploads.add(lease);
+    return {
+      assertCurrent: () => {
+        if (!lease.active) {
+          throw new AidenRemoteServiceError("handle_invalid", "The attachment upload is no longer current.", 409);
+        }
+      },
+      release: () => {
+        lease.active = false;
+        this.uploads.delete(lease);
+      },
+    };
+  }
+
+  beginChatDeletion(chatId: string): () => void {
+    if (this.deletingChats.has(chatId)) throw new Error("This chat is already being deleted.");
+    this.deletingChats.add(chatId);
+    for (const lease of this.uploads) {
+      if (lease.chatId === chatId) lease.active = false;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.deletingChats.delete(chatId);
+    };
+  }
+
+  revokeChat(chatId: string): void {
+    for (const lease of this.uploads) {
+      if (lease.chatId === chatId) lease.active = false;
+    }
+    for (const record of this.records.values()) {
+      if (record.chatId === chatId) this.removeRecord(record);
+    }
+  }
+
   upload(deviceId: string, chatId: string, input: unknown): AidenRemoteAttachmentProjection {
+    this.assertDeviceActive(deviceId);
+    if (this.deletingChats.has(chatId)) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
+    }
     const now = this.now();
     this.prune(now);
     const id = this.nextId();
@@ -357,6 +411,12 @@ export class AidenRemoteAttachmentStore {
   }
 
   revokeDevice(deviceId: string): void {
+    // Device identities are never reused. This also fences requests that were
+    // authenticated before revocation but have not reached beginUpload yet.
+    this.revokedDevices.add(deviceId);
+    for (const lease of this.uploads) {
+      if (lease.deviceId === deviceId) lease.active = false;
+    }
     for (const record of [...this.records.values()]) {
       if (record.deviceId === deviceId) this.removeRecord(record);
     }
@@ -364,6 +424,12 @@ export class AidenRemoteAttachmentStore {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private assertDeviceActive(deviceId: string): void {
+    if (this.revokedDevices.has(deviceId)) {
+      throw new AidenRemoteServiceError("handle_wrong_device", "This device has been revoked.", 403);
+    }
   }
 
   private nextId(): string {

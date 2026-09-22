@@ -990,8 +990,15 @@ export class AidenRemoteChatService {
     chatId: string,
     input: unknown,
   ): Promise<AidenRemoteAttachmentProjection> {
-    await this.chat(chatId);
-    return this.attachments.upload(deviceId, safeId(chatId, "chat"), input);
+    const id = safeId(chatId, "chat");
+    const lease = this.attachments.beginUpload(deviceId, id);
+    try {
+      await this.chat(id);
+      lease.assertCurrent();
+      return this.attachments.upload(deviceId, id, input);
+    } finally {
+      lease.release();
+    }
   }
 
   async removeAttachment(deviceId: string, chatId: string, attachmentId: string): Promise<void> {
