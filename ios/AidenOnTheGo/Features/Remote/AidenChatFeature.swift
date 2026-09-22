@@ -897,6 +897,7 @@ final class AidenChatViewModel {
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
     private var approvalSnapshotGeneration: UInt64 = 0
+    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
@@ -2089,7 +2090,7 @@ final class AidenChatViewModel {
             guard response.approvalId == approval.id, response.decision == decision else {
                 presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
                 if pendingApproval == nil {
-                    await restorePendingApproval(streamID: streamID, context: context)
+                    await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
                 }
                 return
             }
@@ -2101,7 +2102,7 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
             // Never resurrect the captured card or retry a possibly accepted decision.
             if pendingApproval == nil {
-                await restorePendingApproval(streamID: streamID, context: context)
+                await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
             }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -2410,12 +2411,20 @@ final class AidenChatViewModel {
     func restorePendingApproval(
         streamID: String,
         context: AidenRemoteRequestContext,
-        announce: Bool = false
+        announce: Bool = false,
+        isFallback: Bool = false
     ) async {
         guard coordinator.isCurrent(context), activeStreamID == streamID,
               streamState?.isTerminal != true else { return }
+        if isFallback, let read = approvalSnapshotInFlight,
+           read.streamID == streamID, coordinator.isCurrent(read.context),
+           read.approval == pendingApproval, read.state == streamState { return }
         approvalSnapshotGeneration &+= 1
         let snapshotGeneration = approvalSnapshotGeneration
+        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
+        defer {
+            if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+        }
         let expectedApproval = pendingApproval
         let expectedState = streamState
         do {

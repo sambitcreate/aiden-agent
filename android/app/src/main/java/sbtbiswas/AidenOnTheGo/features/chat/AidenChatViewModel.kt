@@ -1080,11 +1080,19 @@ class AidenChatViewModel(
     }
 
     private var approvalSnapshotGeneration = 0L
+    private data class ApprovalSnapshotRead(
+        val streamId: String, val client: AidenRemoteClient,
+        val approval: AidenPendingApproval?, val state: AidenStreamState?
+    )
+    private var approvalSnapshotInFlight: ApprovalSnapshotRead? = null
 
-    internal suspend fun restorePendingApproval(streamId: String) {
+    internal suspend fun restorePendingApproval(streamId: String, isFallback: Boolean = false) {
         val client = activeClient() ?: return
         if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        if (isFallback && approvalSnapshotInFlight?.let { it.streamId == streamId && it.client === client &&
+                it.approval == _pendingApproval.value && it.state == _streamState.value } == true) return
         val snapshotGeneration = ++approvalSnapshotGeneration
+        approvalSnapshotInFlight = ApprovalSnapshotRead(streamId, client, _pendingApproval.value, _streamState.value)
         val expectedApproval = _pendingApproval.value
         val expectedState = _streamState.value
         try {
@@ -1111,6 +1119,8 @@ class AidenChatViewModel(
                 _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             _pendingApproval.value = null
             _streamState.value = AidenStreamState.RECONCILING
+        } finally {
+            if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
         }
     }
 
@@ -1268,14 +1278,14 @@ class AidenChatViewModel(
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.approvalId != approval.id || response.decision != decision) {
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
-                    if (_pendingApproval.value == null) restorePendingApproval(streamId)
+                    if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
                     _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
                     // An ambiguous write may have succeeded; only the Mac can restore a card.
-                    if (_pendingApproval.value == null) restorePendingApproval(streamId)
+                    if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } finally {
                 _isRespondingToApproval.value = false
