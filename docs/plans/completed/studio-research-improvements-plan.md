@@ -1,6 +1,6 @@
 # Studio research improvements
 
-Status: Implemented; final PR checks pending. Scope is a bounded follow-on to the
+Status: Complete; implementation and hosted acceptance passed on 2026-09-22. Scope is a bounded follow-on to the
 completed Studio roadmap in PR #85, with no new engine or permission model.
 
 ## Verified research and scope
@@ -78,3 +78,18 @@ existing Design tile/art and setup flow remain appropriate; no new tile is added
   component/ref/dependency warnings. The new source-request ref is synchronized
   in a layout effect; selection-dependent reads use a stable explicit request key.
   No global rule suppression or unrelated rewrite was added.
+
+## Hosted acceptance
+
+Head `241ef9272416dffb433145d345d9b1e1ed53c5e8` passed CI verify and
+Deterministic Electron E2E in [run 35738331314](https://github.com/sambitcreate/aiden-agent/actions/runs/35738331314),
+and Release consumer contract in [run 35738331308](https://github.com/sambitcreate/aiden-agent/actions/runs/35738331308).
+Android CI was path-skipped; local Android validation above passed. No PR
+comments or unresolved review threads were present at 14:41 UTC.
+
+The prior Vite Apply/Undo reload race was fixed with an exact same-page
+navigation-error classifier; assertion strength and retry bounds are unchanged.
+Both Sol medium reviewers approved the fix. Nine focused cases across three
+repetitions and all 12 browser-suite tests passed with retries disabled.
+Full local npm tests previously passed, including 1,721 final-suite tests.
+No merge, release, deployment, or physical-device runtime acceptance is claimed.

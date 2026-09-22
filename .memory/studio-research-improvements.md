@@ -2,7 +2,7 @@
 
 Preserved `feature/stitch-design-studio` (original head 37c7d37fa) in isolated
 `feature/studio-research-upgrade`. Main integration is separate commit 1edd2781.
-See docs/plans/studio-research-improvements-plan.md for verified sources, changes,
+See docs/plans/completed/studio-research-improvements-plan.md for verified sources, changes,
 explicit deferrals, review findings and acceptance scope. Existing PR must be
 updated, never duplicated; no merge/release/deploy authorized.
 
@@ -51,3 +51,5 @@ including Apply/Undo and ambiguous-component rejection. Both prior Sol reviews
 cover this unchanged test-only fix. Coordinator notification now succeeded.
 The full Generative UI browser suite also passed all 12 tests with retries
 disabled. Hosted acceptance still requires the new pushed head's checks.
+
+14:41 UTC: all applicable hosted checks passed on 241ef9272416dffb433145d345d9b1e1ed53c5e8 (CI35738331314 and release contract35738331308). Android path-skipped; no comments/review threads. Plan archived as complete. Documentation-only completion commit will receive its own exact-head check before monitoring closes.
