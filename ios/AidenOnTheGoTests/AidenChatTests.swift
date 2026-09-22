@@ -374,6 +374,11 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
+    }
+
+    @MainActor
     private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let cache = AidenChatCache(root: root)
@@ -417,6 +422,11 @@ final class AidenChatTests: XCTestCase {
             await coordinator.removeInstallation(installation.id)
         }
         AidenChatProgressLifecycleURLProtocol.setApprovalID(nextApproval)
+        if mode == .mismatchedApproval {
+            await model.load(observeProgress: false)
+            XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        }
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await task.value
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
@@ -3127,6 +3137,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case controls
         case legacyControls
         case mismatchedStop
+        case mismatchedApproval
         case revokedControls
         case unsupportedControls
         case inputAccepted, inputNewer, inputUnknown, inputRejected, inputUnsupported, inputDeleteFailure
@@ -3141,6 +3152,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _controlWriteCount = 0
     nonisolated(unsafe) private static var approvalID = "approval-current"
+    nonisolated(unsafe) private static var approvalReadFails = false
+    static func failApprovalReads() { lock.withLock { approvalReadFails = true } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
     static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
     nonisolated(unsafe) private static var mode: Mode = .denied
@@ -3186,6 +3199,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         self.mode = mode
         _controlWriteCount = 0
         approvalID = "approval-current"
+        approvalReadFails = false
         _progressRequestCount = 0
         _agentRequestCount = 0
         _turnRequestCount = 0
@@ -3235,6 +3249,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             shouldFinish = false
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
         case "/api/aiden/v1/streams/stream-control/approval":
+            if Self.lock.withLock({ Self.approvalReadFails }) {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
             let id = Self.lock.withLock { Self.approvalID }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
@@ -3264,7 +3282,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             }
         case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
             Self.lock.withLock { Self._controlWriteCount += 1 }
-            if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
+            if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            } else if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
                 result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-other","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"reconciling","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
             } else {
             result = Self.response(for: request, status: 503, contentType: "application/json", data: Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8))
