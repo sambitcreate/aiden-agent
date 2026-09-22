@@ -24,7 +24,7 @@ final class ModelIntegrationTests: XCTestCase {
     private func goldenRows() throws -> [GoldenRow] {
         // Golden rows: upstream demo.jsonl subset (dataset revision
         // 8273f34778b99ac2e12d9f6e7d57dad99ae20845).
-        let url = Bundle.module.url(forResource: "demo-golden", withExtension: "jsonl")!
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "demo-golden", withExtension: "jsonl", subdirectory: "Fixtures"))
         var rows: [GoldenRow] = []
         for line in try String(contentsOf: url).split(separator: "\n") {
             rows.append(try JSONDecoder().decode(GoldenRow.self, from: Data(line.utf8)))

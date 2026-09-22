@@ -54,6 +54,8 @@ export interface FormFillBatchPlan {
   window: FormFillBatchWindow;
   /** Controller revision at plan time — external mutations invalidate. */
   controllerEpoch: number;
+  /** Snapshot structure, excluding mutable values and capture-scoped tokens. */
+  structureHash?: string;
   actions: FormFillBatchAction[];
   /** Orders the user deselected on the review card; set only at approval. */
   excludedOrders?: number[];
@@ -80,7 +82,9 @@ function canonicalize(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function formFillPlanDigest(plan: FormFillBatchPlan): FormFillBatchDigest {
+export function formFillPlanDigest(
+  plan: FormFillBatchPlan,
+): FormFillBatchDigest {
   return createHash("sha256").update(canonicalize(plan), "utf8").digest("hex");
 }
 
@@ -167,7 +171,11 @@ export class FormFillBatchLedger {
     excludedOrders: readonly number[] = [],
   ): { token: string; plan: FormFillBatchPlan } {
     const entry = this.entries.get(planId);
-    if (!entry) throw new FormFillBatchError("plan_unknown", "The form-fill plan is unknown.");
+    if (!entry)
+      throw new FormFillBatchError(
+        "plan_unknown",
+        "The form-fill plan is unknown.",
+      );
     if (entry.digest !== expectedDigest) {
       throw new FormFillBatchError(
         "plan_mismatch",
@@ -176,13 +184,22 @@ export class FormFillBatchLedger {
     }
     if (entry.status === "expired" || entry.plan.expiresAt <= this.now()) {
       entry.status = "expired";
-      throw new FormFillBatchError("plan_expired", "The form-fill plan expired.");
+      throw new FormFillBatchError(
+        "plan_expired",
+        "The form-fill plan expired.",
+      );
     }
     if (entry.status === "revoked") {
-      throw new FormFillBatchError("plan_revoked", "The form-fill plan was revoked.");
+      throw new FormFillBatchError(
+        "plan_revoked",
+        "The form-fill plan was revoked.",
+      );
     }
     if (entry.status !== "pending") {
-      throw new FormFillBatchError("plan_consumed", "The form-fill plan was already used.");
+      throw new FormFillBatchError(
+        "plan_consumed",
+        "The form-fill plan was already used.",
+      );
     }
     let plan = entry.plan;
     const excluded = [...new Set(excludedOrders)].sort((a, b) => a - b);
@@ -213,14 +230,23 @@ export class FormFillBatchLedger {
   consume(token: string, plan: FormFillBatchPlan): FormFillBatchPlan {
     const planId = this.tokenIndex.get(token);
     if (!planId) {
-      throw new FormFillBatchError("not_authorized", "The form-fill batch was not authorized.");
+      throw new FormFillBatchError(
+        "not_authorized",
+        "The form-fill batch was not authorized.",
+      );
     }
     const entry = this.entries.get(planId);
     if (!entry || entry.plan.planId !== plan.planId) {
-      throw new FormFillBatchError("plan_unknown", "The form-fill plan is unknown.");
+      throw new FormFillBatchError(
+        "plan_unknown",
+        "The form-fill plan is unknown.",
+      );
     }
     if (formFillPlanDigest(plan) !== entry.digest) {
-      throw new FormFillBatchError("plan_mismatch", "The form-fill plan changed after approval.");
+      throw new FormFillBatchError(
+        "plan_mismatch",
+        "The form-fill plan changed after approval.",
+      );
     }
     if (entry.status !== "authorized") {
       const code =
@@ -231,7 +257,10 @@ export class FormFillBatchLedger {
             : entry.status === "expired"
               ? "plan_expired"
               : "not_authorized";
-      throw new FormFillBatchError(code, `The form-fill plan is ${entry.status}.`);
+      throw new FormFillBatchError(
+        code,
+        `The form-fill plan is ${entry.status}.`,
+      );
     }
     entry.status = "consumed";
     entry.consumedAt = this.now();
@@ -247,7 +276,10 @@ export class FormFillBatchLedger {
   /** Revoke every pending/authorized plan for a generation. */
   revokeGeneration(generationId: string): void {
     for (const entry of this.entries.values()) {
-      if (entry.plan.generationId === generationId && entry.status !== "consumed") {
+      if (
+        entry.plan.generationId === generationId &&
+        entry.status !== "consumed"
+      ) {
         entry.status = "revoked";
       }
     }
@@ -266,27 +298,43 @@ export class FormFillBatchLedger {
  * token, fall back to index, then verify conservative semantics (normalized
  * role + normalized label both match). Returns undefined on drift.
  */
+export function formFillStructureHash(elements: readonly FormFillElement[]): string {
+  return createHash("sha256").update(canonicalize(elements.map((element) => ({
+    index: element.index, role: element.role, label: element.label,
+    frame: element.frame, depth: element.depth, parentIndex: element.parentIndex,
+  })))).digest("hex");
+}
+
 export function reacquirePlannedElement(
   action: Pick<FormFillBatchAction, "elementIndex" | "elementToken" | "role" | "label">,
   elements: readonly FormFillElement[],
+  structureHash?: string,
 ): FormFillElement | undefined {
-  // Token match first; when the driver no longer reports that token, fall
-  // back to the plan-time index — both paths still require semantics.
-  const tokenMatches = action.elementToken
-    ? elements.filter((e) => e.token === action.elementToken)
-    : [];
-  const candidates =
-    tokenMatches.length > 0
-      ? tokenMatches
-      : elements.filter((e) => e.index === action.elementIndex);
-  const expectedRole = normalizeRole(action.role);
-  const expectedLabel = normalizedControlLabel(action.label);
-  for (const candidate of candidates) {
-    if (normalizeRole(candidate.role ?? "") !== expectedRole) continue;
-    if (normalizedControlLabel(candidate.label ?? "") !== expectedLabel) continue;
-    return candidate;
+  const matches = (element: FormFillElement) =>
+    normalizeRole(element.role ?? "") === normalizeRole(action.role) &&
+    element.label === action.label;
+  if (!normalizedControlLabel(action.label)) return undefined;
+  const tokens = action.elementToken ? elements.filter((element) => element.token === action.elementToken) : [];
+  const snapshotToken = /^s[0-9a-f]{4}:\d+$/u.test(action.elementToken ?? "");
+  if (!snapshotToken) {
+    if (tokens.length === 1 && matches(tokens[0]!)) return tokens[0];
+    return undefined;
   }
-  return undefined;
+
+  // Pinned cua-driver 0.8.3 tokens identify snapshots, not stable AX objects.
+  // Permit their expected rollover only against the complete reviewed tree,
+  // unique exact semantics, and an unchanged positioned target. Never replace
+  // an arbitrary vanished token with a bare snapshot index.
+  const oldToken = /^s[0-9a-f]{4}:(\d+)$/u.exec(action.elementToken ?? "");
+  if (!oldToken || Number(oldToken[1]) !== action.elementIndex || !structureHash ||
+      formFillStructureHash(elements) !== structureHash) return undefined;
+  const semantic = elements.filter(matches);
+  if (semantic.length !== 1) return undefined;
+  const candidate = semantic[0]!;
+  const newToken = /^s[0-9a-f]{4}:(\d+)$/u.exec(candidate.token ?? "");
+  if (!newToken || Number(newToken[1]) !== action.elementIndex || candidate.index !== action.elementIndex ||
+      !candidate.frame || !Number.isSafeInteger(candidate.depth) || !Number.isSafeInteger(candidate.parentIndex)) return undefined;
+  return candidate;
 }
 
 export type FormFillRowResultStatus =

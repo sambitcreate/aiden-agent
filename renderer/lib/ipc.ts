@@ -767,8 +767,10 @@ export const gitApi = {
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
@@ -1087,6 +1089,11 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };

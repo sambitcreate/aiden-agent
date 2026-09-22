@@ -34,7 +34,10 @@ export interface FormFillArtifactStatus {
   error?: string;
 }
 
-const TOTAL_BYTES = FORM_FILL_ARTIFACT_FILES.reduce((sum, file) => sum + file.bytes, 0);
+const TOTAL_BYTES = FORM_FILL_ARTIFACT_FILES.reduce(
+  (sum, file) => sum + file.bytes,
+  0,
+);
 
 export function isFormFillSupported(
   options: {
@@ -46,18 +49,26 @@ export function isFormFillSupported(
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   if (platform !== "darwin" || arch !== "arm64") {
-    return { supported: false, reason: "Form fill needs a Mac with Apple silicon." };
+    return {
+      supported: false,
+      reason: "Form fill needs a Mac with Apple silicon.",
+    };
   }
-  // macOS 14.4 is Darwin 23.4.0.
+  // Electron returns the macOS product version, not the Darwin kernel version.
   const release = options.osRelease ?? process.getSystemVersion?.() ?? "";
   const match = release.match(/^(\d+)\.(\d+)/u);
   if (match) {
     const major = Number(match[1]);
     const minor = Number(match[2]);
-    if (major < 23 || (major === 23 && minor < 4)) {
-      return { supported: false, reason: "Form fill needs macOS 14.4 or later." };
+    if (major < 14 || (major === 14 && minor < 4)) {
+      return {
+        supported: false,
+        reason: "Form fill needs macOS 14.4 or later.",
+      };
     }
   }
+  if (!match)
+    return { supported: false, reason: "Could not verify the macOS version." };
   return { supported: true };
 }
 
@@ -79,9 +90,13 @@ export async function verifyFormFillPackage(
   const relativePaths: string[] = [];
   let entryCount = 0;
   try {
+    if (fs.lstatSync(rootResolved).isSymbolicLink())
+      return "The model package must not contain links.";
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         entryCount += 1;
+        if (entryCount > FORM_FILL_MAX_FILE_COUNT)
+          throw new Error("Too many entries");
         const full = path.join(dir, entry.name);
         if (entry.isSymbolicLink()) {
           relativePaths.push(`symlink:${path.relative(rootResolved, full)}`);
@@ -120,11 +135,14 @@ export async function verifyFormFillPackage(
     } catch {
       return `The model file ${file.path} is missing.`;
     }
-    if (!stat.isFile()) return `The model file ${file.path} is not a regular file.`;
+    if (!stat.isFile())
+      return `The model file ${file.path} is not a regular file.`;
     if (stat.size !== file.bytes) {
       return `The model file ${file.path} has an unexpected size.`;
     }
-    const hash = createHash("sha256").update(fs.readFileSync(full)).digest("hex");
+    const hash = createHash("sha256")
+      .update(fs.readFileSync(full))
+      .digest("hex");
     if (hash !== file.sha256) {
       return `The model file ${file.path} failed its checksum.`;
     }
@@ -142,8 +160,9 @@ async function downloadToFile(
   maxBytes: number,
   sink: DownloadProgressSink,
   signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-  const response = await fetch(url, {
+  const response = await fetchImpl(url, {
     signal,
     redirect: "follow",
     headers: { "User-Agent": "aiden-form-fill/1" },
@@ -152,29 +171,28 @@ async function downloadToFile(
     throw new Error(`Download failed (HTTP ${response.status}).`);
   }
   await fsp.mkdir(path.dirname(destination), { recursive: true });
-  const writer = fs.createWriteStream(destination, { flags: "wx" });
+  const writer = await fsp.open(destination, "wx", 0o600);
+  const reader = response.body.getReader();
   let received = 0;
   try {
-    const reader = response.body.getReader();
     while (true) {
+      signal.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
       received += value.byteLength;
-      if (received > maxBytes) {
+      if (received > maxBytes)
         throw new Error("The download exceeded its size limit.");
-      }
-      if (!writer.write(value)) {
-        await new Promise<void>((resolve, reject) => {
-          writer.once("drain", resolve);
-          writer.once("error", reject);
-        });
-      }
+      // writeFile on a FileHandle awaits every byte, including partial writes.
+      await writer.writeFile(value);
       sink.onProgress?.(received, TOTAL_BYTES);
     }
+    signal.throwIfAborted();
+    await writer.sync();
   } finally {
-    writer.destroy();
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+    await writer.close();
   }
-  await fsp.stat(destination);
 }
 
 export class FormFillArtifactStore {
@@ -186,6 +204,8 @@ export class FormFillArtifactStore {
   };
   private abort: AbortController | null = null;
   private inFlight: Promise<void> | null = null;
+  private removing: Promise<void> | null = null;
+  private lifecycleVersion = 0;
 
   constructor(
     private readonly deps: {
@@ -193,7 +213,10 @@ export class FormFillArtifactStore {
       rootDir: string;
       onStatusChanged?: (status: FormFillArtifactStatus) => void;
       fetchImpl?: typeof fetch;
+      files?: readonly FormFillArtifactFile[];
+      supported?: () => { supported: boolean; reason?: string };
       now?: () => number;
+      rename?: typeof fsp.rename;
     },
   ) {}
 
@@ -201,18 +224,24 @@ export class FormFillArtifactStore {
     return this.deps.rootDir;
   }
 
+  get compiledDir(): string {
+    return `${this.rootDir}.compiled`;
+  }
+
   status(): FormFillArtifactStatus {
     return { ...this.statusValue };
   }
 
   private setStatus(status: FormFillArtifactStatus): void {
-    this.statusValue = status;
-    this.deps.onStatusChanged?.({ ...status });
+    this.statusValue = this.removing
+      ? { state: "not-downloaded", progress: 0, downloadedBytes: 0, totalBytes: TOTAL_BYTES }
+      : status;
+    this.deps.onStatusChanged?.({ ...this.statusValue });
   }
 
   /** Refresh status without touching the network. */
   async refresh(): Promise<FormFillArtifactStatus> {
-    const support = isFormFillSupported();
+    const support = (this.deps.supported ?? isFormFillSupported)();
     if (!support.supported) {
       this.setStatus({
         state: "unsupported",
@@ -223,9 +252,11 @@ export class FormFillArtifactStore {
       });
       return this.status();
     }
-    if (this.inFlight) return this.status();
+    if (this.inFlight || this.removing) return this.status();
     const root = this.rootDir;
-    const failure = await verifyFormFillPackage(root);
+    const version = this.lifecycleVersion;
+    const failure = await verifyFormFillPackage(root, this.deps.files);
+    if (version !== this.lifecycleVersion) return this.status();
     this.setStatus({
       state: failure ? "not-downloaded" : "ready",
       progress: failure ? 0 : 1,
@@ -242,12 +273,18 @@ export class FormFillArtifactStore {
    * install when any part fails.
    */
   async download(): Promise<void> {
+    if (this.removing) throw new Error("Model removal is in progress.");
     if (this.inFlight) return this.inFlight;
-    const support = isFormFillSupported();
+    const support = (this.deps.supported ?? isFormFillSupported)();
     if (!support.supported) {
-      this.setStatus({ ...this.statusValue, state: "unsupported", error: support.reason });
+      this.setStatus({
+        ...this.statusValue,
+        state: "unsupported",
+        error: support.reason,
+      });
       throw new Error(support.reason);
     }
+    this.lifecycleVersion++;
     this.abort = new AbortController();
     const now = this.deps.now ?? Date.now;
     const staging = `${this.rootDir}.staging-${now()}`;
@@ -284,15 +321,17 @@ export class FormFillArtifactStore {
 
   private async doDownload(staging: string, now: () => number): Promise<void> {
     if (TOTAL_BYTES > FORM_FILL_MAX_TOTAL_BYTES) {
-      throw new Error("The pinned model manifest exceeds the download byte limit.");
+      throw new Error(
+        "The pinned model manifest exceeds the download byte limit.",
+      );
     }
     let downloaded = 0;
-    for (const file of FORM_FILL_ARTIFACT_FILES) {
+    for (const file of this.deps.files ?? FORM_FILL_ARTIFACT_FILES) {
       const destination = path.join(staging, file.path);
       await downloadToFile(
         formFillArtifactUrl(file.path),
         destination,
-        Math.min(file.bytes, FORM_FILL_MAX_FILE_BYTES) + 1,
+        Math.min(file.bytes, FORM_FILL_MAX_FILE_BYTES),
         {
           onProgress: (fileBytes) => {
             this.setStatus({
@@ -303,7 +342,8 @@ export class FormFillArtifactStore {
             });
           },
         },
-        this.abort!.signal,
+        AbortSignal.any([this.abort!.signal, AbortSignal.timeout(120_000)]),
+        this.deps.fetchImpl,
       );
       downloaded += file.bytes;
       if (downloaded > FORM_FILL_MAX_TOTAL_BYTES) {
@@ -311,21 +351,23 @@ export class FormFillArtifactStore {
       }
     }
     this.setStatus({ ...this.statusValue, state: "preparing", progress: 1 });
-    const failure = await verifyFormFillPackage(staging);
+    const failure = await verifyFormFillPackage(staging, this.deps.files);
     if (failure) {
       throw new Error(`Downloaded model is invalid: ${failure}`);
     }
+    this.abort!.signal.throwIfAborted();
     // Atomic publish: remove the old tree only after staging verifies.
     const backup = `${this.rootDir}.previous-${now()}`;
     let movedOld = false;
     if (fs.existsSync(this.rootDir)) {
-      await fsp.rename(this.rootDir, backup);
+      await (this.deps.rename ?? fsp.rename)(this.rootDir, backup);
       movedOld = true;
     }
     try {
-      await fsp.rename(staging, this.rootDir);
+      this.abort!.signal.throwIfAborted();
+      await (this.deps.rename ?? fsp.rename)(staging, this.rootDir);
     } catch (error) {
-      if (movedOld) await fsp.rename(backup, this.rootDir).catch(() => {});
+      if (movedOld) await (this.deps.rename ?? fsp.rename)(backup, this.rootDir).catch(() => {});
       throw error;
     }
     if (movedOld) await fsp.rm(backup, { recursive: true, force: true });
@@ -343,9 +385,22 @@ export class FormFillArtifactStore {
     return true;
   }
 
-  async remove(): Promise<void> {
+  async remove(beforeDelete?: () => Promise<void>): Promise<void> {
+    if (this.removing) return this.removing;
+    this.lifecycleVersion++;
     this.cancel();
+    this.setStatus({ state: "not-downloaded", progress: 0, downloadedBytes: 0, totalBytes: TOTAL_BYTES });
+    this.removing = this.finishRemoval(beforeDelete).finally(() => {
+      this.removing = null;
+    });
+    return this.removing;
+  }
+
+  private async finishRemoval(beforeDelete?: () => Promise<void>): Promise<void> {
+    await this.inFlight?.catch(() => {});
+    await beforeDelete?.();
     await fsp.rm(this.rootDir, { recursive: true, force: true });
+    await fsp.rm(this.compiledDir, { recursive: true, force: true });
     this.setStatus({
       state: "not-downloaded",
       progress: 0,

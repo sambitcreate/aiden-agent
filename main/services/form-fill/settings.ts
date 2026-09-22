@@ -10,7 +10,9 @@ export async function formFillSpecialistEnabled(): Promise<boolean> {
  * generations so pending review plans and batch authority are revoked through
  * the normal generation-cancellation path.
  */
-export async function setFormFillSpecialistEnabled(enabled: boolean): Promise<void> {
+export async function setFormFillSpecialistEnabled(
+  enabled: boolean,
+): Promise<void> {
   await configStore.setSettings({ formFillSpecialistEnabled: enabled });
   if (!enabled) llmClient.cancelComputerUseGenerations();
 }

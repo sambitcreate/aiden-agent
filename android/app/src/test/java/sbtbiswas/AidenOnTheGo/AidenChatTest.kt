@@ -451,6 +451,12 @@ class AidenChatTest {
     }
 
     @Test
+    fun formFillActivityDecodesCountOnlyOutcome() {
+        val step = json.decodeFromString<AidenAgentStep>("""{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"form_fill","label":"Form fill","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"detail":"1 filled · 1 not attempted · stopped early"}""")
+        assertEquals("Form fill 1 filled · 1 not attempted · stopped early", AidenAgentActivityPresentation.line(step))
+    }
+
+    @Test
     fun testAgentActivityPresentation() {
         val readStep = AidenAgentStep(
             id = "tool-1",

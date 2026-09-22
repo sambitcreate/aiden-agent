@@ -101,7 +101,10 @@ export function extractFormFillEntities(input: {
       `${name} is not a plain-text document.`,
     );
   }
-  if (text.endsWith(FORM_FILL_TRUNCATION_SUFFIX.trimEnd()) || text.endsWith(FORM_FILL_TRUNCATION_SUFFIX)) {
+  if (
+    text.endsWith(FORM_FILL_TRUNCATION_SUFFIX.trimEnd()) ||
+    text.endsWith(FORM_FILL_TRUNCATION_SUFFIX)
+  ) {
     throw new FormFillExtractionError(
       "truncated",
       `${name} is too large — its content was truncated when attached.`,
@@ -119,14 +122,20 @@ export function extractFormFillEntities(input: {
       continue;
     }
     const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) continue;
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//"))
+      continue;
     const match = LABEL_VALUE.exec(trimmed);
     if (!match) continue;
     const label = match[1].trim();
     const value = match[2].trim();
     if (!label.length || !value.length) continue;
-    if (label.length > FORM_FILL_MAX_LABEL_CHARS || value.length > FORM_FILL_MAX_VALUE_CHARS) {
-      issues.push(`Line ${index + 1} has an oversized label or value and was skipped.`);
+    if (
+      label.length > FORM_FILL_MAX_LABEL_CHARS ||
+      value.length > FORM_FILL_MAX_VALUE_CHARS
+    ) {
+      issues.push(
+        `Line ${index + 1} has an oversized label or value and was skipped.`,
+      );
       continue;
     }
     const normalized = normalizeLabel(label);

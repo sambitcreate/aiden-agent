@@ -4,8 +4,10 @@
 // moving ref.
 
 export const FORM_FILL_MODEL_REPO = "FluidInference/cua-s1-forms-coreml";
-export const FORM_FILL_MODEL_REVISION = "ca2113d260559ee5d2d6463900e39916936aca65";
-export const FORM_FILL_MODEL_PACKAGE_DIR = "cua_s1_forms_fp16_options32";
+export const FORM_FILL_MODEL_REVISION =
+  "ca2113d260559ee5d2d6463900e39916936aca65";
+export const FORM_FILL_MODEL_PACKAGE_DIR =
+  "cua_s1_forms_fp16_options32.mlpackage";
 
 export interface FormFillArtifactFile {
   /** Repository-relative path; also the package-relative install path. */
@@ -65,7 +67,11 @@ export function isAllowedArtifactPath(
   filePath: string,
   files: readonly FormFillArtifactFile[] = FORM_FILL_ARTIFACT_FILES,
 ): boolean {
-  if (!SAFE_PATH.test(filePath) || filePath.includes("..") || filePath.includes("//")) {
+  if (
+    !SAFE_PATH.test(filePath) ||
+    filePath.includes("..") ||
+    filePath.includes("//")
+  ) {
     return false;
   }
   return files.some((file) => file.path === filePath);

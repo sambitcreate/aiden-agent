@@ -35,7 +35,10 @@ function makeHelperBundle(): { root: string; executable: string } {
 }
 
 /** A scripted child: captures requests, lets the test drive responses. */
-function makeChild(): { child: FakeChild; requests: Record<string, unknown>[] } {
+function makeChild(): {
+  child: FakeChild;
+  requests: Record<string, unknown>[];
+} {
   const requests: Record<string, unknown>[] = [];
   const child = new EventEmitter() as FakeChild;
   child.stdin = new PassThrough();
@@ -60,7 +63,11 @@ function makeChild(): { child: FakeChild; requests: Record<string, unknown>[] } 
   return { child, requests };
 }
 
-function respond(child: FakeChild, id: string, result: Record<string, unknown>): void {
+function respond(
+  child: FakeChild,
+  id: string,
+  result: Record<string, unknown>,
+): void {
   child.stdout.write(
     `${JSON.stringify({ version: 1, id, ok: true, result })}\n`,
   );
@@ -78,7 +85,10 @@ function makeClient() {
     return child as unknown as ChildProcess;
   }) as typeof spawn;
   const client = new FormFillHelperClient({
-    paths: { appBundle: path.dirname(path.dirname(path.dirname(executable))), executable },
+    paths: {
+      appBundle: path.dirname(path.dirname(path.dirname(executable))),
+      executable,
+    },
     spawnImpl,
   });
   return { client, spawned, requestsByChild, root };
@@ -126,7 +136,10 @@ test("score rejects option counts below 2 and above 32 without spawning", async 
   try {
     await assert.rejects(client.score("c", ["only"]), /32/u);
     await assert.rejects(
-      client.score("c", Array.from({ length: 33 }, (_, i) => `o${i}`)),
+      client.score(
+        "c",
+        Array.from({ length: 33 }, (_, i) => `o${i}`),
+      ),
       /32/u,
     );
     await assert.rejects(client.score("c", []), /32/u);
@@ -218,10 +231,54 @@ test("score rejects malformed score payloads", async () => {
   const { client, spawned, requestsByChild, root } = makeClient();
   try {
     for (const bad of [
-      { selectedIndex: 5, probabilities: [0.5, 0.5], rawProbabilities: [0.5, 0.5], logits: [0, 0], contextWasTruncated: false, truncatedOptionIndices: [] },
-      { selectedIndex: 0, probabilities: [0.5, Number.NaN], rawProbabilities: [0.5, 0.5], logits: [0, 0], contextWasTruncated: false, truncatedOptionIndices: [] },
-      { selectedIndex: 0, probabilities: [1.5, 0.5], rawProbabilities: [0.5, 0.5], logits: [0, 0], contextWasTruncated: false, truncatedOptionIndices: [] },
-      { selectedIndex: 0, probabilities: [0.5], rawProbabilities: [0.5, 0.5], logits: [0, 0], contextWasTruncated: false, truncatedOptionIndices: [] },
+      {
+        selectedIndex: 0,
+        probabilities: [0.01, 0.99],
+        rawProbabilities: [0.01, 0.99],
+        logits: [0, 1],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
+      {
+        selectedIndex: 0,
+        probabilities: [1],
+        rawProbabilities: [1],
+        logits: [1],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
+      {
+        selectedIndex: 5,
+        probabilities: [0.5, 0.5],
+        rawProbabilities: [0.5, 0.5],
+        logits: [0, 0],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
+      {
+        selectedIndex: 0,
+        probabilities: [0.5, Number.NaN],
+        rawProbabilities: [0.5, 0.5],
+        logits: [0, 0],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
+      {
+        selectedIndex: 0,
+        probabilities: [1.5, 0.5],
+        rawProbabilities: [0.5, 0.5],
+        logits: [0, 0],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
+      {
+        selectedIndex: 0,
+        probabilities: [0.5],
+        rawProbabilities: [0.5, 0.5],
+        logits: [0, 0],
+        contextWasTruncated: false,
+        truncatedOptionIndices: [],
+      },
     ]) {
       const promise = client.score("c", ["a", "b"]);
       const requests = requestsByChild[0];

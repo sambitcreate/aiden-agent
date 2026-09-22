@@ -1,6 +1,6 @@
 # Form Fill Specialist (CUA-S1-FORMS + Core ML)
 
-Status: Implemented — pending macOS verification. Slices A–E are landed; the Swift helper compile/tests and packaged acceptance require a macOS run.
+Status: Implemented — PR #195 remediation and automated macOS model verification complete; CI review, physical iOS parity, and signed live-window acceptance remain pending.
 
 ## Goal
 
@@ -78,7 +78,7 @@ main ── form-fill/
 main ── computer-use/ComputerUseController (unchanged public surface)
     │ authenticated broker/bridge, audit-token auth, per-generation sessions
 native/cua-s1-forms ── thin Swift helper (Foundation + CoreML only)
-        ├─ AidenCuaS1FormsCore    ported MIT-licensed input/output/validation code
+        ├─ AidenCuaS1FormsCore    ported Apache-2.0 input/output/validation code
         └─ AidenCuaS1FormsHelper  bounded protocol executable
 ```
 
@@ -86,7 +86,7 @@ native/cua-s1-forms ── thin Swift helper (Foundation + CoreML only)
 
 A thin `native/cua-s1-forms` Swift package rather than a FluidAudio dependency.
 Rationale: FluidAudio's package compiles broad audio targets and vendored
-dependencies we do not need; the useful surface is ~200 lines of MIT-licensed
+dependencies we do not need; the useful surface is Apache-2.0-licensed
 input preparation, tensor validation, and stable softmax. We port that code
 (with attribution in `THIRD_PARTY_NOTICES.md`) into `AidenCuaS1FormsCore` and
 wrap it in a versioned file-based protocol identical in shape to
@@ -128,8 +128,8 @@ weakness: the manifest is a complete SHA-256 map, not filename presence.
   by a partial/invalid download.
 - First use compiles the `.mlpackage` once (via the helper's `prepare`
   request); the compiled artifact is cached under
-  `userData/form-fill-models/<packageId>/compiled/` and reused while the
-  pinned manifest matches.
+  a separate revision-scoped sibling cache, rebuilt from verified source once
+  per runtime and shared through one cancellable preparation promise.
 - Status states surfaced to the renderer: `not_downloaded`, `downloading`
   (bounded progress), `preparing`, `ready`, `update_required`, `error`
   (with retry), `unsupported`. Cancel and Remove are user actions through
@@ -300,3 +300,13 @@ in encoding/formatting is caught on Linux.
 
 Recorded per slice; the final report lists files, revisions, hashes, tests,
 and remaining manual acceptance on macOS.
+
+
+## 2026-09-22 remediation evidence
+
+- Read the Notion CUA-S1-FORMS research and verified the pinned publisher model card, checksums, license, Swift source and driver revision. MIT applies to model artifacts; FluidAudio's ported Swift reference is Apache-2.0 (not the earlier claimed MIT). Publisher benchmark numbers are not Aiden acceptance results.
+- Fixed product-version gating, `.mlpackage` source URLs, fully awaited bounded downloads, cancellation/removal publication ordering, renderer-owner invalidation and a separate compiled cache. Concurrent preparation shares one lifecycle-bound promise; one cancelled caller cannot cancel another generation's initialization.
+- Exact latest-user-turn source references are exposed in the tool description; stale prior attachments cannot seed a plan. Rehash before execution; reject unsupported source types, zero-action plans and forms above 64 actionable controls before scoring.
+- Approval digest includes full capture structure. Pinned driver snapshot-token rollover requires unchanged structural hash, exact unique role/label, index, frame, depth and parent; arbitrary lost tokens, window/app/title changes and user edits stop input. Mutations use fresh driver tokens, never submit, and report interrupted batches as incomplete. Layout changes after a fill intentionally stop the remaining batch.
+- Bot admission uses the existing Computer Use grant, unchanged tool exclusions and live revocation wrapper. Mobile approvals remain host-only; both native clients decode count-only results through existing generic tool activity.
+- Automated evidence: 375 scoped JavaScript checks and 41 native broker checks; 17 Swift/Core ML tests with the downloaded SHA-verified FP16 model (zero skips); focused Android count-only activity test passed. Type-check/lint and integration suites are tracked in the PR closeout. Physical iOS is queued behind the coordinator's device lock/ownership gate; signed live-window and packaged TCC acceptance remain unverified.

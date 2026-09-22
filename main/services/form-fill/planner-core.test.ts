@@ -50,14 +50,17 @@ test("renderContext matches the upstream byte format", () => {
   );
   assert.equal(
     ctx,
-    'TASK fill the form from the document, then submit\n' +
-      'FORM Northwind Clinic - New Patient Registration\n' +
+    "TASK fill the form from the document, then submit\n" +
+      "FORM Northwind Clinic - New Patient Registration\n" +
       'ELEMENT Edit "First name" value=""',
   );
 });
 
 test("renderContext renders checkbox state and truncates like upstream", () => {
-  const ctx = renderContext("F", element({ role: "CheckBox", label: "Consent", checked: false }));
+  const ctx = renderContext(
+    "F",
+    element({ role: "CheckBox", label: "Consent", checked: false }),
+  );
   assert.equal(
     ctx,
     'TASK fill the form from the document, then submit\nFORM F\nELEMENT CheckBox "Consent" unchecked',
@@ -104,7 +107,9 @@ test("truncateUtf8 stops at the last complete code point and flags truncation", 
 
 test("a matching empty text field produces a verbatim fill", () => {
   const entities = [entity("First name", "Ada")];
-  const elements = [element({ index: 3, role: "AXTextField", label: "First name", value: "" })];
+  const elements = [
+    element({ index: 3, role: "AXTextField", label: "First name", value: "" }),
+  ];
   const plan = planFormFill({
     entities,
     elements,
@@ -126,17 +131,24 @@ test("skip-wins, low probability, and small margin all become needs_review", () 
   const base = { entities, elements: [el], formTitle: "F" };
 
   // skip wins
-  let plan = planFormFill({ ...base, scores: [score(1, optionCount, entities.length + 2)] });
+  let plan = planFormFill({
+    ...base,
+    scores: [score(1, optionCount, entities.length + 2)],
+  });
   assert.equal(plan.rows[0].outcome, "needs_review");
 
   // low top probability
-  const low = score(1, optionCount, 0, { probabilities: [0.3, 0.2, 0.2, 0.2, 0.1] });
+  const low = score(1, optionCount, 0, {
+    probabilities: [0.3, 0.25, 0.25, 0.2],
+  });
   plan = planFormFill({ ...base, scores: [low] });
   assert.equal(plan.rows[0].outcome, "needs_review");
   assert.match(plan.rows[0].reason ?? "", /confident/u);
 
   // small margin
-  const tight = score(1, optionCount, 0, { probabilities: [0.5, 0.4, 0.03, 0.03, 0.04] });
+  const tight = score(1, optionCount, 0, {
+    probabilities: [0.5, 0.4, 0.05, 0.05],
+  });
   plan = planFormFill({ ...base, scores: [tight] });
   assert.equal(plan.rows[0].outcome, "needs_review");
 });
@@ -144,7 +156,9 @@ test("skip-wins, low probability, and small margin all become needs_review", () 
 test("material truncation routes to needs_review", () => {
   const entities = [entity("Name", "Ada")];
   const el = element({ index: 1, role: "Edit", label: "Name", value: "" });
-  const truncated = score(1, entities.length + 3, 0, { contextWasTruncated: true });
+  const truncated = score(1, entities.length + 3, 0, {
+    contextWasTruncated: true,
+  });
   const plan = planFormFill({
     entities,
     elements: [el],
@@ -158,7 +172,12 @@ test("material truncation routes to needs_review", () => {
 test("already-populated fields: identical skips, different needs review", () => {
   const entities = [entity("Name", "Ada")];
   const same = element({ index: 1, role: "Edit", label: "Name", value: "Ada" });
-  const different = element({ index: 2, role: "Edit", label: "Name", value: "Grace" });
+  const different = element({
+    index: 2,
+    role: "Edit",
+    label: "Name",
+    value: "Grace",
+  });
   const scores = [score(1, 4, 0), score(2, 4, 0)];
   const plan = planFormFill({
     entities,
@@ -189,11 +208,22 @@ test("checkboxes: unknown state never toggles, consequential labels review", () 
   const entities = [entity("Name", "Ada")];
   const optionCount = 4;
   const cases: [Partial<FormFillElement>, string][] = [
-    [{ role: "AXCheckBox", label: "Reminders", checked: undefined }, "needs_review"],
-    [{ role: "AXCheckBox", label: "I agree to the terms", checked: false }, "needs_review"],
+    [
+      { role: "AXCheckBox", label: "Reminders", checked: undefined },
+      "needs_review",
+    ],
+    [
+      { role: "AXCheckBox", label: "I agree to the terms", checked: false },
+      "needs_review",
+    ],
     [{ role: "AXCheckBox", label: "Reminders", checked: true }, "skip"],
     [
-      { role: "AXCheckBox", label: "Reminders", checked: false, actions: ["AXPress"] },
+      {
+        role: "AXCheckBox",
+        label: "Reminders",
+        checked: false,
+        actions: ["AXPress"],
+      },
       "needs_review",
     ],
     [{ role: "Edit", label: "Name" }, "needs_review"], // check on non-checkbox
@@ -218,7 +248,12 @@ test("fills never come from outside the source set", () => {
     entities,
     elements: [el],
     formTitle: "F",
-    scores: [score(1, 4, 0, { selectedIndex: 4, probabilities: [0.2, 0.1, 0.1, 0.1, 0.5] })],
+    scores: [
+      score(1, 4, 0, {
+        selectedIndex: 4,
+        probabilities: [0.2, 0.1, 0.1, 0.1, 0.5],
+      }),
+    ],
   });
   assert.equal(plan.rows[0].outcome, "needs_review");
   assert.equal(plan.fills.length, 0);

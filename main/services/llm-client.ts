@@ -89,6 +89,7 @@ import {
   filterExactBotSubagentMcpInventory,
   filterBotSkillSnapshot,
   protectAdmittedBotTool,
+  isComputerUseCapabilityTool,
 } from "./bot-tool-authority.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
@@ -140,6 +141,7 @@ import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
   FORM_FILL_TOOL_NAME,
+  currentFormFillAttachments,
   FormFillService,
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
@@ -802,16 +804,14 @@ async function prepareGeneration(
   // CU itself is live for this generation, the user enabled the specialist,
   // and the verified model package is already on disk (status is offline).
   let formFill: FormFillService | undefined;
-  if (computerUse && settings.formFillSpecialistEnabled === true) {
+  const sourceAttachments = currentFormFillAttachments(chat.messages);
+  if (computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
     const artifact = await formFillArtifacts.refresh();
     if (artifact.state === "ready") {
-      const sourceMessage = [...chat.messages]
-        .reverse()
-        .find((message) => message.role === "user" && (message.attachments?.length ?? 0) > 0);
       formFill = new FormFillService({
         controller: computerUse,
         scorer: formFillRuntime,
-        attachmentResolver: () => sourceMessage?.attachments ?? [],
+        attachmentResolver: () => sourceAttachments,
         owner: { chatId: chat.id, generationId: streamId, documentId: ownerDocumentId },
       });
     }
@@ -1266,7 +1266,7 @@ async function prepareGeneration(
             ? true
             : tool.name === "web_search"
               ? webAllowed
-              : tool.name === COMPUTER_USE_TOOL_NAME
+              : isComputerUseCapabilityTool(tool.name)
                 ? computerAllowed
                 : tool.name === "subagent"
                   ? subagentsAllowed

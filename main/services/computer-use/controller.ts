@@ -1405,6 +1405,17 @@ export class ComputerUseController {
       signal,
       CAPTURE_TIMEOUT_MS,
     );
+    if ((safeInteger(result.structured?.element_count, 0) ?? 0) > maximumElements) {
+      this.clearTarget();
+      throw new ComputerUseSafetyError("form_fill_drift", "The form capture was truncated.");
+    }
+    const capturePid = safeInteger(result.structured?.pid, 1);
+    const captureWindow = safeInteger(result.structured?.window_id, 1);
+    if ((capturePid !== undefined && capturePid !== window.pid) ||
+        (captureWindow !== undefined && captureWindow !== window.windowId)) {
+      this.clearTarget();
+      throw new ComputerUseSafetyError("form_fill_drift", "The capture belongs to a different window.");
+    }
     const elements = normalizeElements(result, maximumElements);
     return this.setTarget(window, elements);
   }
@@ -1541,6 +1552,9 @@ export class ComputerUseController {
           { pid: plan.window.pid, window_id: plan.window.windowId },
           signal,
         );
+        if (window.appName !== plan.window.appName || window.title !== plan.window.title) {
+          throw new ComputerUseSafetyError("form_fill_drift", "The reviewed window changed.");
+        }
         target = await this.observeFormFillWindow(window, 500, signal);
       } catch (error) {
         record(
@@ -1555,7 +1569,7 @@ export class ComputerUseController {
         break;
       }
 
-      const element = reacquirePlannedElement(action, [...target.elements.values()]);
+      const element = reacquirePlannedElement(action, [...target.elements.values()], plan.structureHash);
       if (!element) {
         record(
           action.order,
@@ -1575,8 +1589,18 @@ export class ComputerUseController {
         continue;
       }
 
+      if (existing !== "") {
+        record(action.order, action.elementIndex, action.label, "failed", "The field changed after review.");
+        stoppedEarly = true;
+        stopReason = "element_drift";
+        break;
+      }
+
       let verdict: DriverVerdict;
       try {
+        this.assertUsable();
+        signal.throwIfAborted();
+        this.clearTarget();
         const result = await this.callDriver(
           "set_value",
           {
@@ -1591,13 +1615,13 @@ export class ComputerUseController {
           signal,
         );
         verdict = parseDriverVerdict(result.structured);
-      } catch (error) {
+      } catch {
         record(
           action.order,
           action.elementIndex,
           action.label,
           "failed",
-          error instanceof Error ? error.message.slice(0, 200) : "The driver rejected the fill.",
+          "The driver rejected the fill.",
         );
         stoppedEarly = true;
         stopReason = "mutation_failed";
@@ -1623,8 +1647,11 @@ export class ComputerUseController {
           { pid: plan.window.pid, window_id: plan.window.windowId },
           signal,
         );
+        if (window.appName !== plan.window.appName || window.title !== plan.window.title) {
+          throw new ComputerUseSafetyError("form_fill_drift", "The reviewed window changed.");
+        }
         const post = await this.observeFormFillWindow(window, 500, signal);
-        const after = reacquirePlannedElement(action, [...post.elements.values()]);
+        const after = reacquirePlannedElement(action, [...post.elements.values()], plan.structureHash);
         if (!after || (after.value ?? "").trim() !== action.value.trim()) {
           record(
             action.order,

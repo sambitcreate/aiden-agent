@@ -85,15 +85,14 @@ export function registerChatGenerationHandlers(): void {
       }
       return;
     }
-    if (
-      llmClient.cancel(streamId, "user_stop", owner.documentId) &&
-      isExplicitUserStop(parsedOrigin)
-    ) {
+    const cancelled = llmClient.cancel(streamId, "user_stop", owner.documentId);
+    if (cancelled && isExplicitUserStop(parsedOrigin)) {
       // This structured lifecycle event is intentionally content-free. Besides
       // normal diagnostics, packaged acceptance accepts it only when the
       // renderer identifies the visible Stop control as the cancellation origin.
       logger.info("chat", JSON.stringify({ event: "renderer_user_stop", streamId }));
     }
+    return cancelled;
   });
 
   // Resolve a pending tool-approval request ("ask" mode).

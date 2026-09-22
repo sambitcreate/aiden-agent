@@ -45,8 +45,15 @@ function score(
 }
 
 /** Scripted argmax on the fixed `skip` action (last option index). */
-function skipScore(elementIndex: number, entityCount: number): FormFillElementScore {
-  return score(elementIndex, entityCount + FORM_FILL_FIXED_ACTIONS.indexOf("skip"), entityCount);
+function skipScore(
+  elementIndex: number,
+  entityCount: number,
+): FormFillElementScore {
+  return score(
+    elementIndex,
+    entityCount + FORM_FILL_FIXED_ACTIONS.indexOf("skip"),
+    entityCount,
+  );
 }
 
 const REGISTRATION_DOC = [
@@ -114,7 +121,11 @@ test("fixture 1 — registration form: fields fill, synonyms match, submit is ex
 });
 
 test("fixture 2 — distractor entities are never written; already-filled fields are skipped", () => {
-  const doc = ["Phone: +1 555 0100", "Blood type: O-", "Middle name: Grace"].join("\n");
+  const doc = [
+    "Phone: +1 555 0100",
+    "Blood type: O-",
+    "Middle name: Grace",
+  ].join("\n");
   const extraction = extractFormFillEntities({
     attachmentId: "att-2",
     text: doc,
@@ -164,16 +175,25 @@ test("fixture 3 — ambiguous labels and weak scores become needs_review", () =>
   const n = extraction.entities.length;
   const weakAmbiguous = (index: number): FormFillElementScore => ({
     ...score(index, 0, n, 0.55, 0.45),
-    probabilities: Array.from({ length: n + 3 }, (_, i) => (i === 0 ? 0.55 : i === 1 ? 0.45 : 0)),
+    probabilities: Array.from({ length: n + 3 }, (_, i) =>
+      i === 0 ? 0.55 : i === 1 ? 0.45 : 0,
+    ),
   });
   const plan = planFormFill({
     entities: extraction.entities,
     elements,
     formTitle: "Address",
-    scores: [weakAmbiguous(0), weakAmbiguous(1), { ...score(2, 0, n, 0.4, 0.35) }],
+    scores: [
+      weakAmbiguous(0),
+      weakAmbiguous(1),
+      { ...score(2, 0, n, 0.4, 0.35) },
+    ],
   });
   assert.equal(plan.fills.length, 0);
-  assert.equal(plan.rows.filter((row) => row.outcome === "needs_review").length, 3);
+  assert.equal(
+    plan.rows.filter((row) => row.outcome === "needs_review").length,
+    3,
+  );
   assert.equal(plan.hasReview, true);
 });
 
@@ -208,8 +228,19 @@ test("fixture 4 — checkboxes are never toggled from unknown state; consent nee
       actions: ["press"],
     },
     // Known checkbox role but the normalized state is absent.
-    { index: 2, role: "checkbox", label: "Emergency contact", actions: ["press"] },
-    { index: 3, role: "checkbox", label: "Already a member", checked: true, actions: ["press"] },
+    {
+      index: 2,
+      role: "checkbox",
+      label: "Emergency contact",
+      actions: ["press"],
+    },
+    {
+      index: 3,
+      role: "checkbox",
+      label: "Already a member",
+      checked: true,
+      actions: ["press"],
+    },
   ];
   const plan = planFormFill({
     entities: extraction.entities,
@@ -240,7 +271,10 @@ test("fixture 4 — checkboxes are never toggled from unknown state; consent nee
 });
 
 test("fixture 5 — documents with more than 29 entities fail closed before any mutation", () => {
-  const lines = Array.from({ length: 30 }, (_, i) => `Field ${i + 1}: value ${i + 1}`);
+  const lines = Array.from(
+    { length: 30 },
+    (_, i) => `Field ${i + 1}: value ${i + 1}`,
+  );
   const doc = lines.join("\n");
   assert.throws(
     () =>
@@ -250,7 +284,9 @@ test("fixture 5 — documents with more than 29 entities fail closed before any 
         size: doc.length,
         name: "overflow.txt",
       }),
-    (error) => error instanceof FormFillExtractionError && error.failure === "too_many_entities",
+    (error) =>
+      error instanceof FormFillExtractionError &&
+      error.failure === "too_many_entities",
   );
 });
 
@@ -306,10 +342,12 @@ test("eval metrics — extraction, match, abstention, and unsafe-mutation accoun
     for (const row of plan.rows) {
       if (row.outcome === "fill") {
         filled += 1;
-        if (!extraction.entities.some((entity) => entity.value === row.value)) unsafe += 1;
+        if (!extraction.entities.some((entity) => entity.value === row.value))
+          unsafe += 1;
       } else if (row.outcome === "needs_review") needsReview += 1;
       else skipped += 1;
-      if (/never part of the fill batch/u.test(row.reason ?? "")) submitExcluded += 1;
+      if (/never part of the fill batch/u.test(row.reason ?? ""))
+        submitExcluded += 1;
     }
   }
   assert.equal(extracted, 2);

@@ -1,4 +1,4 @@
-import type { Attachment } from "../types.js";
+import type { Attachment, ChatMessage } from "../types.js";
 import type { FormFillBatchApprovalDetails } from "../../../renderer/shared/assistant.js";
 import {
   extractFormFillEntities,
@@ -19,6 +19,7 @@ import {
   FORM_FILL_BATCH_TTL_MS,
   FORM_FILL_BATCH_VERSION,
   newFormFillPlanId,
+  formFillStructureHash,
   type FormFillBatchAction,
   type FormFillBatchPlan,
   type FormFillBatchResult,
@@ -35,6 +36,15 @@ import {
  */
 
 export const FORM_FILL_TOOL_NAME = "form_fill";
+
+export function currentFormFillAttachments(
+  messages: readonly Pick<ChatMessage, "role" | "attachments">[],
+): readonly Attachment[] {
+  return (
+    [...messages].reverse().find((message) => message.role === "user")
+      ?.attachments ?? []
+  );
+}
 
 export interface FormFillToolArgs {
   attachment_id: string;
@@ -58,10 +68,16 @@ export function normalizeFormFillArgs(raw: unknown): FormFillToolArgs {
     );
   }
   if (!Number.isSafeInteger(pid) || (pid as number) < 1) {
-    throw new FormFillServiceError("invalid_args", "form_fill requires an exact pid.");
+    throw new FormFillServiceError(
+      "invalid_args",
+      "form_fill requires an exact pid.",
+    );
   }
   if (!Number.isSafeInteger(window_id) || (window_id as number) < 1) {
-    throw new FormFillServiceError("invalid_args", "form_fill requires an exact window_id.");
+    throw new FormFillServiceError(
+      "invalid_args",
+      "form_fill requires an exact window_id.",
+    );
   }
   return { attachment_id, pid: pid as number, window_id: window_id as number };
 }
@@ -97,7 +113,11 @@ export interface FormFillControllerLike {
     plan: FormFillBatchPlan,
     options?: {
       signal?: AbortSignal;
-      onRow?: (row: { order: number }, completed: number, total: number) => void;
+      onRow?: (
+        row: { order: number },
+        completed: number,
+        total: number,
+      ) => void;
     },
   ): Promise<FormFillBatchResult>;
 }
@@ -145,6 +165,7 @@ export class FormFillService {
   private readonly ledger: FormFillBatchLedger;
   private readonly now: () => number;
   /** toolCallId → one-use authority (set only after explicit approval). */
+  private revoked = false;
   private readonly authorized = new Map<string, AuthorizedBatch>();
 
   constructor(private readonly deps: FormFillServiceDeps) {
@@ -157,7 +178,12 @@ export class FormFillService {
    * → plan → mint. The card IS the approval surface, so the model call happens
    * here, before the user is asked.
    */
-  async approvalFor(rawArgs: unknown, signal?: AbortSignal): Promise<FormFillApprovalDescriptor> {
+  async approvalFor(
+    rawArgs: unknown,
+    signal?: AbortSignal,
+  ): Promise<FormFillApprovalDescriptor> {
+    this.assertActive();
+    signal?.throwIfAborted();
     const args = normalizeFormFillArgs(rawArgs);
     const attachment = this.deps
       .attachmentResolver()
@@ -177,6 +203,12 @@ export class FormFillService {
     const elements = capture.elements;
     const actionable = filterActionable(elements);
 
+    if (actionable.length > 64) {
+      throw new FormFillServiceError(
+        "no_fillable_fields",
+        "This form has too many controls for one review. Use standard Computer Use.",
+      );
+    }
     const options = renderOptions(extraction.entities);
     const scores: FormFillElementScore[] = [];
     for (const element of actionable) {
@@ -215,6 +247,14 @@ export class FormFillService {
       },
     }));
 
+    this.assertActive();
+    signal?.throwIfAborted();
+    if (actions.length === 0) {
+      throw new FormFillServiceError(
+        "no_fillable_fields",
+        "No fields can be safely filled. Continue with standard Computer Use for fields needing review.",
+      );
+    }
     const plan: FormFillBatchPlan = {
       version: FORM_FILL_BATCH_VERSION,
       planId: newFormFillPlanId(),
@@ -226,6 +266,7 @@ export class FormFillService {
       attachmentName: attachment.name,
       window: capture.window,
       controllerEpoch: capture.revision,
+      structureHash: formFillStructureHash(elements),
       actions,
       maxActions: actions.length,
       submit: false,
@@ -238,7 +279,10 @@ export class FormFillService {
       .map((row) => ({
         label: row.label.trim() || `Element ${row.elementIndex}`,
         reason:
-          row.reason ?? (row.outcome === "needs_review" ? "Needs review." : "Left unchanged."),
+          row.reason ??
+          (row.outcome === "needs_review"
+            ? "Needs review."
+            : "Left unchanged."),
       }));
 
     const details: FormFillBatchApprovalDetails = {
@@ -279,7 +323,12 @@ export class FormFillService {
     expectedDigest: string,
     excludedOrders: readonly number[] = [],
   ): void {
-    const { token, plan } = this.ledger.authorize(planId, expectedDigest, excludedOrders);
+    this.assertActive();
+    const { token, plan } = this.ledger.authorize(
+      planId,
+      expectedDigest,
+      excludedOrders,
+    );
     this.authorized.set(toolCallId, { token, plan });
   }
 
@@ -289,11 +338,16 @@ export class FormFillService {
     rawArgs: unknown,
     signal?: AbortSignal,
   ): Promise<FormFillBatchResult & { sourceDocument: string }> {
+    this.assertActive();
+    signal?.throwIfAborted();
     const args = normalizeFormFillArgs(rawArgs);
     const authorized = this.authorized.get(toolCallId);
     this.authorized.delete(toolCallId);
     if (!authorized) {
-      throw new FormFillBatchError("not_authorized", "The form-fill batch was not approved.");
+      throw new FormFillBatchError(
+        "not_authorized",
+        "The form-fill batch was not approved.",
+      );
     }
     const { token, plan } = authorized;
     // Args identity is bound to the approved plan, not trusted from the tool call.
@@ -307,13 +361,32 @@ export class FormFillService {
         "The form-fill request does not match the approved plan.",
       );
     }
+    const attachment = this.deps
+      .attachmentResolver()
+      .find((item) => item.id === plan.attachmentId);
+    if (
+      !attachment ||
+      this.extract(attachment).contentHash !== plan.attachmentHash
+    ) {
+      throw new FormFillBatchError(
+        "plan_mismatch",
+        "The source document changed after review.",
+      );
+    }
     const authoritativePlan = this.ledger.consume(token, plan);
     try {
-      const result = await this.deps.controller.executeFormFillBatch(authoritativePlan, {
-        signal,
-        onRow: (_row, completed, total) =>
-          (this.progressSink ?? this.deps.onProgress)?.(toolCallId, completed, total),
-      });
+      const result = await this.deps.controller.executeFormFillBatch(
+        authoritativePlan,
+        {
+          signal,
+          onRow: (_row, completed, total) =>
+            (this.progressSink ?? this.deps.onProgress)?.(
+              toolCallId,
+              completed,
+              total,
+            ),
+        },
+      );
       return { ...result, sourceDocument: plan.attachmentName };
     } catch (error) {
       if (error instanceof FormFillBatchError) throw error;
@@ -323,12 +396,30 @@ export class FormFillService {
 
   /** Revoke all pending plans for this generation (stop/gate/target change). */
   revoke(): void {
+    this.revoked = true;
     this.ledger.revokeGeneration(this.deps.owner.generationId);
     this.authorized.clear();
   }
 
+  sourceReferences(): string {
+    return JSON.stringify(
+      this.deps
+        .attachmentResolver()
+        .map(({ id, name }) => ({ attachment_id: id, name })),
+    );
+  }
+
+  private assertActive(): void {
+    if (this.revoked)
+      throw new FormFillBatchError("plan_revoked", "Form fill was cancelled.");
+  }
+
   private extract(attachment: Attachment): FormFillExtraction {
-    if (attachment.kind !== "text" || typeof attachment.text !== "string") {
+    if (
+      attachment.kind !== "text" ||
+      typeof attachment.text !== "string" ||
+      !/\.(txt|md)$/iu.test(attachment.name)
+    ) {
       throw new FormFillServiceError(
         "attachment_unsupported",
         "Form fill reads explicit Label: value pairs from a UTF-8 .txt or .md attachment.",

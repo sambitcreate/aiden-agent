@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -73,7 +79,10 @@ test("verifyFormFillPackage rejects missing files", async () => {
   try {
     writeTestTree(root);
     rmSync(path.join(root, "LICENSE"));
-    assert.match((await verifyFormFillPackage(root, TEST_FILES)) ?? "", /missing/u);
+    assert.match(
+      (await verifyFormFillPackage(root, TEST_FILES)) ?? "",
+      /missing/u,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -118,7 +127,10 @@ test("verifyFormFillPackage rejects hash mismatches and wrong sizes", async () =
     );
     // Same size, different bytes → checksum failure specifically.
     writeFileSync(path.join(root, "LICENSE"), "licenze");
-    assert.match((await verifyFormFillPackage(root, TEST_FILES)) ?? "", /checksum/u);
+    assert.match(
+      (await verifyFormFillPackage(root, TEST_FILES)) ?? "",
+      /checksum/u,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -140,12 +152,16 @@ test("manifest requires the complete pinned file set with stable paths", () => {
     assert.ok(file.bytes > 0);
   }
   assert.ok(
-    FORM_FILL_ARTIFACT_FILES.some((f) => f.path === `${FORM_FILL_MODEL_PACKAGE_DIR}/Manifest.json`),
+    FORM_FILL_ARTIFACT_FILES.some(
+      (f) => f.path === `${FORM_FILL_MODEL_PACKAGE_DIR}/Manifest.json`,
+    ),
   );
   assert.ok(!isAllowedArtifactPath("../escape"));
   assert.ok(!isAllowedArtifactPath("foo/../../bar"));
   assert.ok(!isAllowedArtifactPath(""));
-  assert.ok(!isAllowedArtifactPath("cua_s1_forms_fp16_options32.mlpackage/evil.sh"));
+  assert.ok(
+    !isAllowedArtifactPath("cua_s1_forms_fp16_options32.mlpackage/evil.sh"),
+  );
   assert.equal(
     formFillArtifactUrl("LICENSE"),
     "https://huggingface.co/FluidInference/cua-s1-forms-coreml/resolve/ca2113d260559ee5d2d6463900e39916936aca65/LICENSE",
@@ -154,27 +170,45 @@ test("manifest requires the complete pinned file set with stable paths", () => {
 
 test("isFormFillSupported gates on Apple silicon macOS 14.4+", () => {
   assert.equal(
-    isFormFillSupported({ platform: "darwin", arch: "arm64", osRelease: "23.4.0" }).supported,
+    isFormFillSupported({
+      platform: "darwin",
+      arch: "arm64",
+      osRelease: "14.4.0",
+    }).supported,
     true,
   );
   assert.equal(
-    isFormFillSupported({ platform: "darwin", arch: "arm64", osRelease: "24.0.0" }).supported,
+    isFormFillSupported({
+      platform: "darwin",
+      arch: "arm64",
+      osRelease: "15.0.0",
+    }).supported,
     true,
   );
   assert.equal(
-    isFormFillSupported({ platform: "darwin", arch: "x64", osRelease: "24.0.0" }).supported,
+    isFormFillSupported({
+      platform: "darwin",
+      arch: "x64",
+      osRelease: "15.0.0",
+    }).supported,
     false,
   );
   assert.equal(
-    isFormFillSupported({ platform: "darwin", arch: "arm64", osRelease: "23.3.0" }).supported,
+    isFormFillSupported({
+      platform: "darwin",
+      arch: "arm64",
+      osRelease: "14.3.0",
+    }).supported,
     false,
   );
   assert.equal(
-    isFormFillSupported({ platform: "linux", arch: "x64", osRelease: "6.8.0" }).supported,
+    isFormFillSupported({ platform: "linux", arch: "x64", osRelease: "6.8.0" })
+      .supported,
     false,
   );
   assert.equal(
-    isFormFillSupported({ platform: "win32", arch: "x64", osRelease: "10.0.0" }).supported,
+    isFormFillSupported({ platform: "win32", arch: "x64", osRelease: "10.0.0" })
+      .supported,
     false,
   );
 });
@@ -191,4 +225,175 @@ test("status is not-downloaded when the root has no verified package, no network
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("downloads flush every byte and removal waits for cancellation without republishing", async () => {
+  const root = makeTemp();
+  const modelRoot = path.join(root, "model");
+  let removeAtPreparing = false;
+  let removal: Promise<void> | undefined;
+  const store = new FormFillArtifactStore({
+    rootDir: modelRoot,
+    supported: () => ({ supported: true }),
+    files: TEST_FILES,
+    fetchImpl: async (url) => {
+      const name = String(url);
+      const content = name.endsWith("model.mlmodel")
+        ? "model-bytes"
+        : name.endsWith("weight.bin")
+          ? "weights"
+          : "license";
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const byte of new TextEncoder().encode(content))
+              controller.enqueue(Uint8Array.of(byte));
+            controller.close();
+          },
+        }),
+      );
+    },
+    onStatusChanged: (status) => {
+      if (removeAtPreparing && status.state === "preparing")
+        removal = store.remove();
+    },
+  });
+  try {
+    await store.download();
+    assert.equal(store.status().state, "ready");
+    assert.equal(await verifyFormFillPackage(modelRoot, TEST_FILES), null);
+    mkdirSync(store.compiledDir, { recursive: true });
+    writeFileSync(path.join(store.compiledDir, "generated.bin"), "compiled");
+    assert.equal(await verifyFormFillPackage(modelRoot, TEST_FILES), null);
+    removeAtPreparing = true;
+    await store.download();
+    await removal;
+    assert.equal(store.status().state, "not-downloaded");
+    assert.equal(
+      await verifyFormFillPackage(modelRoot, TEST_FILES),
+      "The model directory is unreadable.",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("unparseable macOS version fails closed and the native package keeps its extension", () => {
+  assert.equal(
+    isFormFillSupported({
+      platform: "darwin",
+      arch: "arm64",
+      osRelease: "unknown",
+    }).supported,
+    false,
+  );
+  assert.equal(path.extname(FORM_FILL_MODEL_PACKAGE_DIR), ".mlpackage");
+});
+
+test("concurrent runtime preparation compiles once and shutdown fences late compilation", async () => {
+  const { FormFillRuntime } = await import("./runtime.js");
+  const root = makeTemp();
+  let release!: () => void;
+  let started!: () => void;
+  let compiling = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let compiles = 0;
+  let loads = 0;
+  const client = {
+    isPoisoned: false,
+    dispose() {},
+    async compileModel() {
+      compiles++;
+      started();
+      await gate;
+      return path.join(root, "compiled.mlmodelc");
+    },
+    async loadModel() {
+      loads++;
+    },
+    async shutdown() {},
+  } as unknown as import("./helper-client.js").FormFillHelperClient;
+  const runtime = new FormFillRuntime(
+    new FormFillArtifactStore({ rootDir: path.join(root, "source") }),
+    {
+      clientFactory: () => client,
+      supported: () => ({ supported: true }),
+      verifyPackage: async () => null,
+    },
+  );
+  try {
+    const caller = new AbortController();
+    const first = runtime.ensureReady(caller.signal);
+    const firstRejected = assert.rejects(first);
+    const second = runtime.ensureReady();
+    await compiling;
+    caller.abort();
+    await firstRejected;
+    release();
+    await second;
+    assert.equal(compiles, 1);
+    assert.equal(loads, 1);
+    await runtime.shutdown();
+    compiling = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const late = runtime.ensureReady();
+    const rejected = assert.rejects(late);
+    await compiling;
+    const stopped = runtime.shutdown();
+    release();
+    await Promise.all([stopped, rejected]);
+    assert.equal(loads, 1, "late compilation must not load after shutdown");
+  } finally {
+    await runtime.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("removal immediately hides readiness and a prior refresh cannot resurrect it", async () => {
+  const root = makeTemp();
+  writeTestTree(root);
+  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
+  await store.refresh();
+  assert.equal(store.status().state, "ready");
+  const refresh = store.refresh();
+  const removal = store.remove();
+  assert.equal(store.status().state, "not-downloaded");
+  await Promise.all([refresh, removal]);
+  assert.equal(store.status().state, "not-downloaded");
+});
+
+test("a completed publish cannot advertise readiness after removal starts", async () => {
+  const { rename } = await import("node:fs/promises");
+  const parent = makeTemp();
+  let published!: () => void;
+  let release!: () => void;
+  const atPublish = new Promise<void>((resolve) => { published = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let removing = false;
+  const states: string[] = [];
+  const store = new FormFillArtifactStore({
+    rootDir: path.join(parent, "model"), files: TEST_FILES, supported: () => ({ supported: true }),
+    fetchImpl: async (url) => new Response(String(url).endsWith("model.mlmodel") ? "model-bytes" : String(url).endsWith("weight.bin") ? "weights" : "license"),
+    rename: async (from, to) => { await rename(from, to); if (String(from).includes(".staging-")) { published(); await gate; } },
+    onStatusChanged: (status) => { if (removing) states.push(status.state); },
+  });
+  try {
+    const download = store.download();
+    await atPublish;
+    removing = true;
+    const removal = store.remove();
+    assert.equal(store.status().state, "not-downloaded");
+    release();
+    await Promise.all([download, removal]);
+    assert.ok(!states.includes("ready"));
+    assert.equal(store.status().state, "not-downloaded");
+  } finally { release(); rmSync(parent, { recursive: true, force: true }); }
 });

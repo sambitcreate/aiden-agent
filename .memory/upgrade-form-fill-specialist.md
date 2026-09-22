@@ -24,5 +24,12 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 ## Status
 
 - All TS suites green (test:form-fill = 76+eval tests; test:computer-use incl. ipc-contract; type-check; eslint).
-- **Not yet verified on macOS**: Swift helper compile/tests (`npm run test:form-fill:native`), helper signing/notarization in a real package, end-to-end acceptance against a live form window. Requires a macOS run.
-- Notion spec: no MCP/Notion access existed in-session; plan doc is the contract source.
+- **Verified on macOS**: Swift helper compilation and 17 native tests with real SHA-verified FP16 model (zero skips). Still unverified: helper signing/notarization in a real package and end-to-end acceptance against a live form window.
+- Notion research reviewed in remediation; pinned source code, model card and licenses independently verified.
+
+
+## 2026-09-22 review remediation
+
+PR #195 updated against main c8c09e0d2 in isolated worktree 6510. All 12 original inline findings addressed with regression coverage. Further Sol reviews found/fixed value drift, malformed scorer output, Unicode identity, 64-control approval bounds, concurrent compilation/cancellation and native fixture loading. Pinned driver tokens roll per snapshot: structural digest plus exact unique semantics/geometry/hierarchy fences their refresh; full layout changes stop the batch. Source Swift is Apache-2.0; model files are MIT. Both license texts are in packaged THIRD_PARTY_NOTICES.md.
+
+Native local model verification: 17/17 tests, no skips, six downloaded files verified against pinned hashes. Computer Use: 375 JS + 41 Rust passing before final closeout; focused Android parity passed. iOS physical test is queued with the coordinator (last known device locked); signed app/TCC/live form acceptance still not performed. Do not call this released or merged. Existing Improve compute RUSE task owns general capture improvements; its uncommitted work was not copied.

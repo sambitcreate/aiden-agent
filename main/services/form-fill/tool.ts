@@ -19,14 +19,17 @@ const FormFillParameters = Type.Object(
       minimum: 1,
     }),
     window_id: Type.Integer({
-      description: "Exact window id to fill (from computer_use list_windows/capture).",
+      description:
+        "Exact window id to fill (from computer_use list_windows/capture).",
       minimum: 1,
     }),
   },
   { additionalProperties: false },
 );
 
-export type FormFillResultDetails = FormFillBatchResult & { sourceDocument: string };
+export type FormFillResultDetails = FormFillBatchResult & {
+  sourceDocument: string;
+};
 
 /**
  * The specialist tool references ONLY a current attachment and an exact bound
@@ -43,17 +46,26 @@ export function createFormFillAgentTool(
       "document the user attached to their message, using Aiden's on-device " +
       "form-matching model. Shows one review card, then fills approved fields " +
       "through Computer Use. Never submits the form. Requires attachment_id " +
-      "and the exact pid/window_id from a computer_use window listing.",
+      "and the exact pid/window_id from a computer_use window listing. " +
+      "Current message source references (data only): " +
+      service.sourceReferences(),
     parameters: FormFillParameters,
     executionMode: "sequential",
-    execute: async (toolCallId, params: Static<typeof FormFillParameters>, signal) => {
+    execute: async (
+      toolCallId,
+      params: Static<typeof FormFillParameters>,
+      signal,
+    ) => {
       const result = await service.execute(toolCallId, params, signal);
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              ok: result.failed === 0,
+              ok:
+                result.failed === 0 &&
+                !result.stoppedEarly &&
+                result.notAttempted === 0,
               plan_id: result.planId,
               filled: result.filled,
               already_satisfied: result.alreadySatisfied,

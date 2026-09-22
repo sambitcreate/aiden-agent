@@ -21,7 +21,9 @@ function extract(text: string, overrides: Partial<typeof base> = {}) {
 }
 
 test("extracts explicit Label: value pairs with provenance", () => {
-  const result = extract("First name: Ada\nE-mail: ada@example.com\nPhone: 555-0100\n");
+  const result = extract(
+    "First name: Ada\nE-mail: ada@example.com\nPhone: 555-0100\n",
+  );
   assert.equal(result.entities.length, 3);
   assert.deepEqual(
     result.entities.map((e) => [e.label, e.value, e.line]),
@@ -57,28 +59,37 @@ test("skips comments, blanks, and non-pair lines", () => {
 
 test("empty and whitespace-only documents fail closed", () => {
   for (const text of ["", "   \n\n", "\n"]) {
-    assert.throws(() => extract(text), (error: unknown) => {
-      assert.ok(error instanceof FormFillExtractionError);
-      assert.equal(error.failure, "empty");
-      return true;
-    });
+    assert.throws(
+      () => extract(text),
+      (error: unknown) => {
+        assert.ok(error instanceof FormFillExtractionError);
+        assert.equal(error.failure, "empty");
+        return true;
+      },
+    );
   }
 });
 
 test("documents with no Label: value pairs fail closed", () => {
-  assert.throws(() => extract("just prose\nmore prose"), (error: unknown) => {
-    assert.ok(error instanceof FormFillExtractionError);
-    assert.equal(error.failure, "no_entities");
-    return true;
-  });
+  assert.throws(
+    () => extract("just prose\nmore prose"),
+    (error: unknown) => {
+      assert.ok(error instanceof FormFillExtractionError);
+      assert.equal(error.failure, "no_entities");
+      return true;
+    },
+  );
 });
 
 test("binary content fails closed", () => {
-  assert.throws(() => extract("a\0b\nName: Ada"), (error: unknown) => {
-    assert.ok(error instanceof FormFillExtractionError);
-    assert.equal(error.failure, "binary");
-    return true;
-  });
+  assert.throws(
+    () => extract("a\0b\nName: Ada"),
+    (error: unknown) => {
+      assert.ok(error instanceof FormFillExtractionError);
+      assert.equal(error.failure, "binary");
+      return true;
+    },
+  );
 });
 
 test("truncated attachment content fails closed", () => {
@@ -124,16 +135,20 @@ test("conflicting duplicate labels fail closed; identical duplicates are noted",
 });
 
 test(`exactly ${FORM_FILL_MAX_ENTITIES} entities pass; one more fails closed`, () => {
-  const ok = Array.from({ length: FORM_FILL_MAX_ENTITIES }, (_, i) => `Field ${i}: v${i}`).join(
-    "\n",
-  );
+  const ok = Array.from(
+    { length: FORM_FILL_MAX_ENTITIES },
+    (_, i) => `Field ${i}: v${i}`,
+  ).join("\n");
   assert.equal(extract(ok).entities.length, FORM_FILL_MAX_ENTITIES);
   const over = `${ok}\nField ${FORM_FILL_MAX_ENTITIES}: v`;
-  assert.throws(() => extract(over), (error: unknown) => {
-    assert.ok(error instanceof FormFillExtractionError);
-    assert.equal(error.failure, "too_many_entities");
-    return true;
-  });
+  assert.throws(
+    () => extract(over),
+    (error: unknown) => {
+      assert.ok(error instanceof FormFillExtractionError);
+      assert.equal(error.failure, "too_many_entities");
+      return true;
+    },
+  );
 });
 
 test("oversized labels and values are skipped with an issue, not silently kept", () => {

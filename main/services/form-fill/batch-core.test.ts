@@ -6,10 +6,13 @@ import {
   FORM_FILL_BATCH_VERSION,
   formFillPlanDigest,
   reacquirePlannedElement,
+  formFillStructureHash,
   type FormFillBatchPlan,
 } from "./batch-core.js";
 
-function makePlan(overrides: Partial<FormFillBatchPlan> = {}): FormFillBatchPlan {
+function makePlan(
+  overrides: Partial<FormFillBatchPlan> = {},
+): FormFillBatchPlan {
   return {
     version: FORM_FILL_BATCH_VERSION,
     planId: "ffp-test-1",
@@ -61,7 +64,17 @@ test("digest is stable and covers every bound field", () => {
     ["document", { documentId: "doc-2" }],
     ["attachment", { attachmentId: "att-2" }],
     ["attachment hash", { attachmentHash: "b".repeat(64) }],
-    ["window", { window: { pid: 42, windowId: 8, appName: "Safari", title: "Registration" } }],
+    [
+      "window",
+      {
+        window: {
+          pid: 42,
+          windowId: 8,
+          appName: "Safari",
+          title: "Registration",
+        },
+      },
+    ],
     ["epoch", { controllerEpoch: 4 }],
     ["expiry", { expiresAt: 2_000_000 }],
     [
@@ -100,11 +113,13 @@ test("consume rejects a second use and an unapproved call", () => {
   ledger.consume(token, plan);
   assert.throws(
     () => ledger.consume(token, plan),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_consumed",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_consumed",
   );
   assert.throws(
     () => ledger.consume("ffb-forged", plan),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "not_authorized",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "not_authorized",
   );
 });
 
@@ -114,7 +129,8 @@ test("authorize rejects a plan whose contents changed after review", () => {
   ledger.mint(plan);
   assert.throws(
     () => ledger.authorize(plan.planId, "0".repeat(64)),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -129,7 +145,8 @@ test("consume rejects a tampered plan passed at execution", () => {
   };
   assert.throws(
     () => ledger.consume(token, tampered),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -141,7 +158,8 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   now = 2_000_000;
   assert.throws(
     () => ledger.authorize(expired.planId, ledger.digestOf(expired.planId)!),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_expired",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_expired",
   );
   assert.equal(ledger.statusOf(expired.planId), "expired");
 
@@ -151,7 +169,8 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   ledger.revoke(revoked.planId);
   assert.throws(
     () => ledger.authorize(revoked.planId, revokedDigest),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 
   const generationPlan = makePlan({ planId: "ffp-gen", generationId: "gen-9" });
@@ -159,16 +178,21 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   ledger.revokeGeneration("gen-9");
   assert.throws(
     () => ledger.authorize(generationPlan.planId, generationDigest),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 
-  const otherGeneration = makePlan({ planId: "ffp-gen2", generationId: "gen-8" });
+  const otherGeneration = makePlan({
+    planId: "ffp-gen2",
+    generationId: "gen-8",
+  });
   const otherDigest = ledger.mint(otherGeneration);
   assert.equal(ledger.statusOf(otherGeneration.planId), "pending");
   ledger.revokeAll();
   assert.throws(
     () => ledger.authorize(otherGeneration.planId, otherDigest),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 });
 
@@ -181,7 +205,8 @@ test("row deselection authorizes a strict subset with its own digest", () => {
   assert.notEqual(formFillPlanDigest(derived), digest);
   assert.throws(
     () => ledger.authorize(makePlan({ planId: "ffp-x" }).planId, digest, [9]),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_unknown",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_unknown",
   );
   ledger.consume(token, derived);
   // Token is bound to the derived digest — replaying the unfiltered plan fails.
@@ -191,11 +216,17 @@ test("row deselection authorizes a strict subset with its own digest", () => {
   const { token: token2 } = ledger2.authorize(plan2.planId, digest2, [0]);
   assert.throws(
     () => ledger2.consume(token2, plan2),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
   assert.throws(
-    () => new FormFillBatchLedger({ now: () => 500_000 }).authorize(plan.planId, digest),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_unknown",
+    () =>
+      new FormFillBatchLedger({ now: () => 500_000 }).authorize(
+        plan.planId,
+        digest,
+      ),
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_unknown",
   );
 });
 
@@ -205,7 +236,8 @@ test("deselection of a row outside the plan is rejected", () => {
   const digest = ledger.mint(plan);
   assert.throws(
     () => ledger.authorize(plan.planId, digest, [7]),
-    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -222,9 +254,10 @@ test("reacquirePlannedElement prefers token and verifies role+label", () => {
   ];
   assert.equal(reacquirePlannedElement(action, elements)?.index, 2);
   assert.equal(
-    reacquirePlannedElement(action, [{ index: 5, role: "AXTextField", label: "First name" }])
-      ?.index,
-    5,
+    reacquirePlannedElement(action, [
+      { index: 5, role: "AXTextField", label: "First name" },
+    ])?.index,
+    undefined,
   );
   // Drift: same token but a different label must not match.
   assert.equal(
@@ -235,7 +268,56 @@ test("reacquirePlannedElement prefers token and verifies role+label", () => {
   );
   // Drift: same index but a different role must not match.
   assert.equal(
-    reacquirePlannedElement(action, [{ index: 5, role: "AXButton", label: "First name" }]),
+    reacquirePlannedElement(action, [
+      { index: 5, role: "AXButton", label: "First name" },
+    ]),
     undefined,
   );
+});
+
+test("reacquisition preserves Unicode identity and rejects duplicate/empty labels", () => {
+  const action = { elementIndex: 0, elementToken: "stable", role: "AXTextField", label: "名前" };
+  assert.equal(
+    reacquirePlannedElement(action, [
+      { index: 0, role: "AXTextField", label: "住所" },
+    ]),
+    undefined,
+  );
+  assert.ok(
+    reacquirePlannedElement(action, [
+      { index: 0, token: "stable", role: "AXTextField", label: "名前" },
+    ]),
+  );
+  assert.equal(
+    reacquirePlannedElement(action, [
+      { index: 0, token: "stable", role: "AXTextField", label: "名前" },
+      { index: 1, token: "stable", role: "AXTextField", label: "名前" },
+    ]),
+    undefined,
+  );
+  assert.equal(
+    reacquirePlannedElement({ ...action, label: "" }, [
+      { index: 0, role: "AXTextField", label: "" },
+    ]),
+    undefined,
+  );
+});
+
+test("pinned snapshot token rollover needs unchanged complete structure and unique semantics", () => {
+  const base = { index: 0, token: "s0001:0", role: "AXTextField", label: "Name", depth: 2, parentIndex: 1, frame: { x: 10, y: 20, width: 200, height: 30 } };
+  const action = { elementIndex: 0, elementToken: base.token, role: base.role, label: base.label };
+  const hash = formFillStructureHash([base]);
+  const fresh = { ...base, token: "s0002:0" };
+  assert.equal(reacquirePlannedElement(action, [fresh], hash)?.token, "s0002:0");
+  for (const changed of [
+    { ...fresh, token: "replacement" },
+    { ...fresh, token: "s0002:1" },
+    { ...fresh, depth: 3 },
+    { ...fresh, parentIndex: 2 },
+    { ...fresh, frame: { ...base.frame, x: 11 } },
+  ]) assert.equal(reacquirePlannedElement(action, [changed], hash), undefined);
+  assert.equal(reacquirePlannedElement(action, [fresh]), undefined);
+  assert.equal(reacquirePlannedElement(action, [{ ...base, depth: 3 }], hash), undefined);
+  assert.equal(reacquirePlannedElement(action, [{ ...fresh, parentIndex: undefined }], hash), undefined);
+  assert.equal(reacquirePlannedElement(action, [fresh, { ...fresh, index: 1, token: "s0002:1" }], hash), undefined);
 });

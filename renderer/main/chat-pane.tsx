@@ -50,6 +50,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  stopDetachedGeneration,
   gitApi,
   workspacesApi,
   type ApprovalPrompt,
@@ -57,6 +58,7 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  installAppendedChatSnapshot,
   logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
@@ -214,6 +216,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
+  // A durable terminal message can reach the cache before detached ownership is
+  // cleared. During that handoff there is no longer a response to stop or steer.
+  const cachedMessages = chat.data?.messages;
+  const visibleDetachedProjection =
+    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -288,11 +295,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? "This chat could not be loaded. Try again."
       : !chat.data
         ? "This chat is no longer available. Start a new agent."
-        : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
-          ? "Message save status is unknown. Reload Aiden before sending another message."
-          : detachedGenerationDraining
-            ? "Response continues in the background…"
-            : undefined;
+      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
+        ? "Message save status is unknown. Reload Aiden before sending another message."
+        : detachedGenerationDraining && !visibleDetachedProjection
+          ? "Response continues in the background…"
+          : undefined;
   const botReadinessMessage = chat.data?.botId
     ? bot.isLoading
       ? "Loading bot…"
@@ -610,8 +617,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId, Boolean(draft)]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
-  const visibleDetachedProjection =
-    messages[messages.length - 1]?.role === "assistant" ? null : detachedProjection;
   const visibleDetachedStreamId = visibleDetachedProjection?.streamId;
   const detachedLastTextDeltaAt = visibleDetachedProjection?.lastTextDeltaAt ?? null;
   React.useEffect(() => {
@@ -1285,7 +1290,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           throw appendError;
         }
-        qc.setQueryData(queryKeys.chat(chatId), updated);
+        await installAppendedChatSnapshot(qc, chatId, updated);
         if (firstDraft) finishChatDraftSend(chatId, true);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (
@@ -1331,11 +1336,30 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
+    if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
+      const { streamId } = visibleDetachedProjection;
+      setIsStoppingGeneration(true);
+      void stopDetachedGeneration(streamId).then((cancelled) => {
+        if (!cancelled && chatIdRef.current === chatId) setIsStoppingGeneration(false);
+      }).catch((error: unknown) => {
+        if (chatIdRef.current === chatId) {
+          setIsStoppingGeneration(false);
+          toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
+        }
+      });
+      return;
+    }
     if (!generationRef.current || !canStopGeneration) return;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, [canStopGeneration]);
+  }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
+
+  React.useEffect(() => {
+    // Detached Stop has no pane-owned terminal callback. The shell clears its
+    // exact stream after authoritative settlement; release the local stop UI.
+    if (!detachedGenerationDraining && !generationRef.current) setIsStoppingGeneration(false);
+  }, [detachedGenerationDraining, detachedProjection]);
 
   const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
     chatId,
@@ -2207,10 +2231,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
-                    canSteer={ready && isGenerating && canStopGeneration && !isStoppingGeneration}
+                    canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                     returnFocus={() => composerRef.current}
                     onSteer={(id) => {
-                      if (!canStopGeneration || isStoppingGeneration) return;
+                      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
                       messageQueue.move(id, 0);
                       messageQueue.resume();
                       handleStop();
@@ -2221,8 +2245,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   messageQueue.pause();
                   handleStop();
                 }}
-                isGenerating={isGenerating || isStartingGeneration}
-                canStopGeneration={canStopGeneration}
+                isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}
+                canStopGeneration={(canStopGeneration || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
                 workspace={effectiveWorkspace}

@@ -50,6 +50,9 @@ const CONSEQUENTIAL_CHECKBOX_PATTERN =
 export interface FormFillElement {
   index: number;
   token?: string;
+  frame?: { x: number; y: number; width: number; height: number };
+  parentIndex?: number;
+  depth?: number;
   role?: string;
   label?: string;
   value?: string;
@@ -111,12 +114,18 @@ export function utf8Truncated(text: string, maxBytes: number): boolean {
  * complete code point. The scorer itself truncates raw bytes exactly like
  * upstream; this only reports whether truncation occurred.
  */
-export function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
+export function truncateUtf8(
+  text: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
   const bytes = utf8Bytes(text);
   if (bytes.length <= maxBytes) return { text, truncated: false };
   let end = maxBytes;
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
-  return { text: new TextDecoder("utf-8").decode(bytes.subarray(0, end)), truncated: true };
+  return {
+    text: new TextDecoder("utf-8").decode(bytes.subarray(0, end)),
+    truncated: true,
+  };
 }
 
 export function normalizeRole(role: string): string {
@@ -124,7 +133,7 @@ export function normalizeRole(role: string): string {
 }
 
 export function normalizedControlLabel(label: string): string {
-  return (label.toLowerCase().match(/[a-z0-9]+/gu) ?? []).join(" ");
+  return (label.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
 }
 
 export function isSubmitControl(element: FormFillElement): boolean {
@@ -170,16 +179,26 @@ export function decodeOption(
   entityCount: number,
 ): { action: FormFillAction; entityIndex?: number } {
   const optionCount = entityCount + FORM_FILL_FIXED_ACTIONS.length;
-  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= optionCount) {
-    throw new Error(`Option index ${optionIndex} is outside 0..${optionCount - 1}`);
+  if (
+    !Number.isInteger(optionIndex) ||
+    optionIndex < 0 ||
+    optionIndex >= optionCount
+  ) {
+    throw new Error(
+      `Option index ${optionIndex} is outside 0..${optionCount - 1}`,
+    );
   }
-  if (optionIndex < entityCount) return { action: "fill", entityIndex: optionIndex };
+  if (optionIndex < entityCount)
+    return { action: "fill", entityIndex: optionIndex };
   return { action: FORM_FILL_FIXED_ACTIONS[optionIndex - entityCount] };
 }
 
-export function filterActionable(elements: readonly FormFillElement[]): FormFillElement[] {
+export function filterActionable(
+  elements: readonly FormFillElement[],
+): FormFillElement[] {
   return elements.filter(
-    (element) => element.role && ACTIONABLE_ROLES.has(normalizeRole(element.role)),
+    (element) =>
+      element.role && ACTIONABLE_ROLES.has(normalizeRole(element.role)),
   );
 }
 
@@ -213,7 +232,10 @@ export interface FormFillPlan {
   hasReview: boolean;
 }
 
-function topTwo(probabilities: readonly number[]): { top: number; margin: number } {
+function topTwo(probabilities: readonly number[]): {
+  top: number;
+  margin: number;
+} {
   let first = -Infinity;
   let second = -Infinity;
   for (const p of probabilities) {
@@ -251,7 +273,10 @@ function decideElement(
     role: element.role ?? "",
     label: element.label ?? "",
   };
-  const review = (reason: string, action: FormFillAction = "skip"): FormFillPlanRow => ({
+  const review = (
+    reason: string,
+    action: FormFillAction = "skip",
+  ): FormFillPlanRow => ({
     ...base,
     action,
     outcome: "needs_review",
@@ -279,27 +304,50 @@ function decideElement(
     return review("The model selected an invalid option.");
   }
 
+  if (
+    score.probabilities.length !== entities.length + 3 ||
+    score.probabilities.some((p) => !Number.isFinite(p) || p < 0 || p > 1) ||
+    score.probabilities[score.selectedIndex] !==
+      Math.max(...score.probabilities)
+  ) {
+    return review("The model returned an invalid score.");
+  }
   const { top, margin } = topTwo(score.probabilities);
 
   if (decoded.action === "skip") {
     return review("The model chose to skip this field.", "skip");
   }
   if (top < thresholds.minTopProbability) {
-    return review("The model was not confident enough to fill this field.", decoded.action);
+    return review(
+      "The model was not confident enough to fill this field.",
+      decoded.action,
+    );
   }
   if (margin < thresholds.minMargin) {
-    return review("The model could not clearly choose one field value.", decoded.action);
+    return review(
+      "The model could not clearly choose one field value.",
+      decoded.action,
+    );
   }
   if (thresholds.materialTruncation === "any" && score.contextWasTruncated) {
-    return review("The field context was truncated before scoring.", decoded.action);
+    return review(
+      "The field context was truncated before scoring.",
+      decoded.action,
+    );
   }
   if (optionTruncated(score, score.selectedIndex)) {
-    return review("The selected option was truncated before scoring.", decoded.action);
+    return review(
+      "The selected option was truncated before scoring.",
+      decoded.action,
+    );
   }
 
   if (decoded.action === "check") {
     if (!CHECKBOX_ROLES.has(role)) {
-      return review("The model tried to check a non-checkbox control.", "check");
+      return review(
+        "The model tried to check a non-checkbox control.",
+        "check",
+      );
     }
     if (element.checked === undefined || element.checked === null) {
       return review("Checkbox state is unknown; it was not toggled.", "check");
@@ -309,13 +357,19 @@ function decideElement(
     }
     const label = `${element.label ?? ""}`;
     if (CONSEQUENTIAL_CHECKBOX_PATTERN.test(label)) {
-      return review("This control needs your review (consent, terms, or similar).", "check");
+      return review(
+        "This control needs your review (consent, terms, or similar).",
+        "check",
+      );
     }
     if (!element.actions?.some((a) => /press|click|toggle|check/iu.test(a))) {
       return review("The control does not advertise a toggle action.", "check");
     }
     // v1: `check` is scored but not auto-executed; keep it reviewable.
-    return review("Checkbox fills require your confirmation per field.", "check");
+    return review(
+      "Checkbox fills require your confirmation per field.",
+      "check",
+    );
   }
   if (decoded.action === "click") {
     // Submit is filtered above; any other click is unsupported in v1.
@@ -337,7 +391,10 @@ function decideElement(
     role === "axcombobox" ||
     role === "axsecuretextfield";
   if (!fillable) {
-    return review(`A ${element.role ?? "control"} cannot be filled with text.`, "fill");
+    return review(
+      `A ${element.role ?? "control"} cannot be filled with text.`,
+      "fill",
+    );
   }
   const existing = (element.value ?? "").trim();
   if (existing.length > 0) {
@@ -387,6 +444,14 @@ export function planFormFill(
   // Upstream ordering semantics on executable rows; deterministic ties by index.
   const fills = rows
     .filter((row) => row.outcome === "fill" && row.action === "fill")
-    .sort((a, b) => ACTION_ORDER[a.action] - ACTION_ORDER[b.action] || a.elementIndex - b.elementIndex);
-  return { rows, fills, hasReview: rows.some((row) => row.outcome === "needs_review") };
+    .sort(
+      (a, b) =>
+        ACTION_ORDER[a.action] - ACTION_ORDER[b.action] ||
+        a.elementIndex - b.elementIndex,
+    );
+  return {
+    rows,
+    fills,
+    hasReview: rows.some((row) => row.outcome === "needs_review"),
+  };
 }

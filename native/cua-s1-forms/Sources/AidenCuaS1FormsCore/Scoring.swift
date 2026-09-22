@@ -1,6 +1,9 @@
 import Foundation
 
-// Output decoding ported from FluidAudio's MIT-licensed
+// Modified for Aiden: local-only loading, bounded protocol and validation.
+// See THIRD_PARTY_NOTICES.md for the upstream Apache-2.0 license.
+
+// Output decoding ported from FluidAudio's Apache-2.0-licensed
 // `Sources/FluidAudio/Decision/CuaS1Forms/CuaS1FormsOutput.swift`
 // (pinned revision 87a39dfe4068fef0f1c69bfe704b2b3ef4fbc5bc).
 /// Decode the emitted logits with a stable softmax, retaining the model's raw probabilities.
