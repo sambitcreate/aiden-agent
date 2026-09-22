@@ -38,6 +38,7 @@ export function activityPresentationDelay(
 interface AgentActivityVisibility {
   reasoningVisible: boolean;
   visualizingVisible: boolean;
+  toolVisible?: boolean;
 }
 
 interface AgentActivityInput {
@@ -110,10 +111,11 @@ export function resolveAgentActivity({
 /** Let transcript-owned phase cards replace the generic orb row exactly once. */
 export function resolveVisibleAgentActivity(
   activity: AgentActivity | null,
-  { reasoningVisible, visualizingVisible }: AgentActivityVisibility,
+  { reasoningVisible, visualizingVisible, toolVisible = false }: AgentActivityVisibility,
 ): AgentActivity | null {
   if (!activity) return null;
   if (reasoningVisible && activity.phase === "thinking") return null;
   if (visualizingVisible && activity.phase === "visualizing") return null;
+  if (toolVisible && (activity.phase === "searching" || activity.phase === "working")) return null;
   return activity;
 }

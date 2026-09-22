@@ -5,6 +5,7 @@ import {
   safeToolDescriptor,
   safeToolIssueDetails,
 } from "./generation-timeline.js";
+import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -363,6 +364,27 @@ test("readable reasoning spans remain ordered across tools and reconcile to term
     snapshot.steps[2].reasoningEndOffset === 14));
 });
 
+test("redacted Pi thinking between readable blocks keeps one chronological span", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 13);
+  projector.thinkingEnded();
+  projector.thinkingStarted();
+  projector.reasoningDelta(15, 29);
+  projector.thinkingEnded();
+  const segments = terminalAssistantThinkingSegments({ role: "assistant", content: [
+    { type: "thinking", thinking: "visible first" },
+    { type: "thinking", thinking: "private", redacted: true },
+    { type: "thinking", thinking: "visible second" },
+  ] });
+  assert.ok(segments);
+  projector.reconcileReasoningSegments(firstStep, segments, 29);
+  const thought = projector.finish("completed").steps[0];
+  assert.equal(thought?.kind === "thinking" && thought.reasoningStartOffset, 0);
+  assert.equal(thought?.kind === "thinking" && thought.reasoningEndOffset, 29);
+});
+
 test("ambiguous terminal thinking and retry remove stale public spans", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.thinkingStarted();
@@ -579,6 +601,10 @@ test("version 2 reasoning timelines replay without presentation offsets", () => 
   const parsed = parseGenerationTimeline(legacy);
   assert.equal(parsed?.version, 2);
   assert.equal(parsed?.steps[0]?.contentOffset, undefined);
+  assert.equal(parseGenerationTimeline({
+    ...legacy,
+    steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
+  }), undefined);
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {

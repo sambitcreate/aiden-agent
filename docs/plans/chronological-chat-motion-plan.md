@@ -1,6 +1,6 @@
 # Chronological Chat Motion
 
-Status: Implemented locally; PR and visual acceptance pending.
+Status: Implemented in [PR #224](https://github.com/sambitcreate/aiden-agent/pull/224); review and visual acceptance pending.
 
 ## Objective
 

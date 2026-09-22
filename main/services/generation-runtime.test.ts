@@ -49,6 +49,13 @@ test("canonical thinking spans keep separators and skip non-assistant boundaries
     { type: "toolCall", name: "read_file" },
     { type: "thinking", thinking: "visible" },
   ] }), [{ start: 0, end: 0 }, { start: 2, end: 9 }]);
+  const redacted = { role: "assistant", content: [
+    { type: "thinking", thinking: "visible first" },
+    { type: "thinking", thinking: "private", redacted: true },
+    { type: "thinking", thinking: "visible second" },
+  ] };
+  assert.equal(terminalAssistantReasoning(redacted), "visible first\n\nvisible second");
+  assert.deepEqual(terminalAssistantThinkingSegments(redacted), [{ start: 0, end: 29 }]);
 });
 
 test("canonical Pi content anchors activity between rewritten text blocks", () => {

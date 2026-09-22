@@ -397,30 +397,29 @@ export function terminalAssistantThinkingSegments(message: {
   content?: unknown;
 }): { start: number; end: number }[] | null {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return null;
-  const visible = message.content.flatMap((part, index) =>
-    typeof part === "object" && part !== null &&
-    (part as { type?: unknown }).type === "thinking" &&
-    typeof (part as { thinking?: unknown }).thinking === "string" &&
-    (part as { redacted?: unknown }).redacted !== true
-      ? [{ index, text: (part as { thinking: string }).thinking }]
-      : [],
-  );
   let offset = 0;
-  let previousIndex = -2;
+  let visibleCount = 0;
+  let previousThinking = false;
   const segments: { start: number; end: number }[] = [];
-  for (const [visibleIndex, part] of visible.entries()) {
-    if (visibleIndex > 0) offset += 2; // terminalAssistantReasoning joins all visible blocks with two newlines.
-    const index = part.index;
-    if (index !== previousIndex + 1 || segments.length === 0) {
+  for (const part of message.content) {
+    const block = typeof part === "object" && part !== null
+      ? part as { type?: unknown; thinking?: unknown; redacted?: unknown }
+      : null;
+    const thinking = block?.type === "thinking";
+    if (thinking && !previousThinking) {
       segments.push({ start: offset, end: offset });
     }
-    if (part.text.length > 0) {
-      const segment = segments[segments.length - 1]!;
-      if (segment.start === segment.end) segment.start = offset;
-      segment.end = offset + part.text.length;
+    if (thinking && block?.redacted !== true && typeof block?.thinking === "string") {
+      if (visibleCount > 0) offset += 2; // terminalAssistantReasoning joins visible blocks with two newlines.
+      if (block.thinking.length > 0) {
+        const segment = segments[segments.length - 1]!;
+        if (segment.start === segment.end) segment.start = offset;
+        segment.end = offset + block.thinking.length;
+      }
+      offset += block.thinking.length;
+      visibleCount += 1;
     }
-    offset += part.text.length;
-    previousIndex = index;
+    previousThinking = thinking;
   }
   return segments;
 }

@@ -324,6 +324,9 @@ export function parseGenerationTimeline(
         (end === undefined && start !== undefined && step.finishedAt !== undefined)
       ) return undefined;
       if (end !== undefined) previousReasoningEndOffset = end as number;
+    } else if (candidate.version !== GENERATION_TIMELINE_VERSION &&
+      (step.reasoningStartOffset !== undefined || step.reasoningEndOffset !== undefined)) {
+      return undefined;
     }
     // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =

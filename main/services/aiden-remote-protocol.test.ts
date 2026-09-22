@@ -1487,6 +1487,25 @@ test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and reje
   }
 });
 
+test("chat parser limits reasoning to regular assistants and 100,000 UTF-16 units", () => {
+  const projection = {
+    id: "chat-1", workspaceId: "workspace-1", title: "Chat",
+    messages: [{ id: "message-1", role: "assistant", text: "Done", reasoning: "visible",
+      createdAt: "2026-08-23T00:00:00.000Z" }],
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z", revision: "revision-1",
+  };
+  assert.equal(parseAidenRemoteChatProjection(projection).messages[0]?.reasoning, "visible");
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection, botId: "bot-1" }),
+    /regular-assistant-only/u);
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(60_000) }],
+  }), /UTF-16/u);
+  assert.equal(parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(50_000) }],
+  }).messages[0]?.reasoning?.length, 100_000);
+});
+
 test("SSE framing resumes by id, ignores duplicates and unknown nonterminal events, and reconciles gaps", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const [first, second] = fixture.events;

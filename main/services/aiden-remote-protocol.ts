@@ -1976,8 +1976,14 @@ export function parseAidenRemoteChatProjection(
         200_000,
         true,
       );
-      if (hasOwn(entry, "reasoning") && entry.role !== "assistant") {
-        throw new Error(`${label} message ${index} reasoning is assistant-only.`);
+      if (hasOwn(entry, "reasoning") && (entry.role !== "assistant" || hasOwn(value, "botId"))) {
+        throw new Error(`${label} message ${index} reasoning is regular-assistant-only.`);
+      }
+      const reasoning = hasOwn(entry, "reasoning")
+        ? boundedText(entry.reasoning, `${label} message ${index} reasoning`, 100_000)
+        : undefined;
+      if (reasoning !== undefined && reasoning.length > 100_000) {
+        throw new Error(`${label} message ${index} reasoning exceeds the UTF-16 limit.`);
       }
       const message: AidenRemoteChatProjection["messages"][number] = {
         id: boundedText(entry.id, `${label} message ${index} id`, 128),
@@ -1987,9 +1993,7 @@ export function parseAidenRemoteChatProjection(
           `${label} message ${index} role`,
         ),
         text,
-        ...(hasOwn(entry, "reasoning") && entry.role === "assistant"
-          ? { reasoning: boundedText(entry.reasoning, `${label} message ${index} reasoning`, 100_000) }
-          : {}),
+        ...(reasoning === undefined ? {} : { reasoning }),
         createdAt: dateTimeValue(entry.createdAt, `${label} message ${index} createdAt`),
         ...(hasOwn(entry, "attachments")
           ? {

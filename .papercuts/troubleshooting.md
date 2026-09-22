@@ -865,3 +865,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - The full `npm run test` pretest initially stopped at an iOS source-contract regex that assumed the old activity-first branch. Update this contract when the chronological branch changes, while preserving whole-reply Copy actions.
 - Local Electron Playwright smoke tests closed before the first window on this host, before any chat assertion ran; use hosted CI for that gate.
 - Re-running the focused iOS simulator suite on the already booted iPad became unreliable after a parallel clone launch; Xcode reported `Application failed preflight checks: Busy`. The first focused run passed before the final test refinement; use a clean simulator or hosted iOS CI for the final gate.
+- PR #224 Android CI passed its unit gate but one unrelated scheduled-task Compose test saw no hierarchy on its emulator. Rerun the exact commit before changing scoped code.
+- PR #224 verify retained a source-contract assertion for the removed 700 ms Visualizing hold; update it to assert the chronological activity owner and rerun.

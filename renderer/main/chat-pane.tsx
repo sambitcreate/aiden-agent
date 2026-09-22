@@ -1877,6 +1877,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     visualizingVisible:
       visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
         row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+    toolVisible:
+      chronologicalLiveRows?.some((row) => row.kind === "activity" &&
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.status === "pending" || step.status === "running"))) === true,
   });
 
   React.useEffect(() => {

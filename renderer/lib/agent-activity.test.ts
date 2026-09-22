@@ -162,6 +162,17 @@ test("transcript-owned reasoning and visualization replace the generic activity 
     }),
     visualizing,
   );
+  const reading = resolveAgentActivity({
+    ...idle,
+    toolActivity: { state: "running", label: "Read file", toolName: "read_file" },
+  });
+  assert.equal(reading?.phase, "searching");
+  assert.equal(resolveVisibleAgentActivity(reading, {
+    reasoningVisible: false, visualizingVisible: false, toolVisible: true,
+  }), null);
+  assert.equal(resolveVisibleAgentActivity(reading, {
+    reasoningVisible: false, visualizingVisible: false, toolVisible: false,
+  }), reading);
 });
 
 test("stopping and approval take precedence over other live signals", () => {
