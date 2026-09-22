@@ -862,3 +862,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local full validation hits the existing CLT MacOSX27 SDK / linker architecture mismatch in the bot inbox writer build. TypeScript/lint and CI-policy tests pass; use pinned Xcode 26.6 hosted native/Electron validation without changing global developer-tool selection.
 - Adversarial review: added full-validation fallback for empty diffs, restricted documentation skips to prose extensions, and checked non-file execution modes/build prerequisites so registry coverage cannot silently lose Rust, browser, coverage, Ruby or native work.
 - Greptile caught iOS-only selection omitting shipping/TestFlight policies held by a desktop lane. Added conditional Node/install/policy steps to the selected iOS job and an invariant test; full runs keep the existing single preserved policy execution.
+
+## 2026-09-21 — 0.42.2 release gates
+
+- Hosted CI run 35643207134 marked `chat-message-queue` flaky because its first attempt read `settings.json` before that file existed (ENOENT); the retry passed. Poll for the file's first durable write, retrying only ENOENT.
+- The `setsid` fixture wrote its PID from the detached grandchild after scheduling; publish it from the intermediate process, allow a bounded 20s wait under CI load, and arrange cleanup even when the test assertion fails.
+- Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
+- Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
+- Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
