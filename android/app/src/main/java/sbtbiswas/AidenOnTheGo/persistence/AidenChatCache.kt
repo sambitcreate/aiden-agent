@@ -91,10 +91,20 @@ class AidenChatCache(
     private val writeClock = AtomicLong()
     private val chatWriteTokens = mutableMapOf<String, MutableMap<String, Long>>()
     private val admittedChats = mutableMapOf<String, MutableMap<String, AidenChat>>()
+    private val summaryWriteTokens = mutableMapOf<String, Long>()
     private val purgeWriteTokens = mutableMapOf<String, Long>()
 
     // Reserve before scheduling a deferred writer, not when its IO task runs.
     fun reserveChatWrite(): Long = writeClock.incrementAndGet()
+
+    @Synchronized
+    fun reserveSummaryMutation(instanceId: String): Long = reserveChatWrite().also {
+        summaryWriteTokens[instanceId] = it
+    }
+
+    @Synchronized
+    fun isSummaryWriteRetained(instanceId: String, writeToken: Long): Boolean =
+        writeToken > (purgeWriteTokens[instanceId] ?: 0L)
 
     private val _chats = MutableStateFlow<Map<String, AidenChat>>(emptyMap())
     val chats: StateFlow<Map<String, AidenChat>> = _chats.asStateFlow()
@@ -183,14 +193,18 @@ class AidenChatCache(
     fun saveSummaries(
         summaries: List<AidenChatSummary>,
         instanceId: String,
-        unchangedPrefixCount: Int = 0
-    ) {
+        unchangedPrefixCount: Int = 0,
+        writeToken: Long = reserveChatWrite()
+    ): Boolean {
+        if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
+            writeToken < (summaryWriteTokens[instanceId] ?: 0L)) return false
         if (summaries.size > maxSummaryCount || summaries.map { it.id }.toSet().size != summaries.size) {
             throw IllegalArgumentException("Chat summary cache must contain at most 10,000 unique IDs")
         }
         if (unchangedPrefixCount !in 0..summaries.size) {
             throw IllegalArgumentException("Unchanged summary prefix is invalid")
         }
+        summaryWriteTokens[instanceId] = writeToken
         val manifestFile = fileURL("summary-manifests", instanceId)
         val existing = loadEnvelope<ChatSummaryManifestEnvelope>(manifestFile)
         val cachedPrefixMatches = unchangedPrefixCount == 0 ||
@@ -281,6 +295,7 @@ class AidenChatCache(
             )
         }
         publishSummaries(instanceId, summaries)
+        return true
     }
 
     private fun cleanupSummaryChunks(directory: File, retainedChunkIds: Set<String>) {
@@ -307,6 +322,7 @@ class AidenChatCache(
 
     @Synchronized
     fun removeSummary(instanceId: String, chatId: String) {
+        reserveSummaryMutation(instanceId)
         val current = summariesForInstance(instanceId)
         if (current.none { it.id == chatId }) return
         saveSummaries(current.filterNot { it.id == chatId }, instanceId)
@@ -346,21 +362,21 @@ class AidenChatCache(
         if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
             writeToken <= (chatWriteTokens[instanceId]?.get(chat.id) ?: 0L)) return false
         chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chat.id] = writeToken
+        val ownsSummary = writeToken >= (summaryWriteTokens[instanceId] ?: 0L)
         admittedChats.getOrPut(instanceId) { mutableMapOf() }[chat.id] = chat
+        val visibleSummaries = summariesForInstance(instanceId).associateBy { it.id }.toMutableMap()
+        if (ownsSummary) {
+            summaryWriteTokens[instanceId] = writeToken
+            if (chat.isBotChat) visibleSummaries.remove(chat.id)
+            else visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, visibleSummaries[chat.id]?.activity ?: AidenChatSummaryActivity.IDLE)
+            publishSummaries(instanceId, visibleSummaries.values.toList())
+        }
         val envelope = ChatEnvelope(instanceId = instanceId, chat = chat)
         saveEnvelope(envelope, fileURL("chats", instanceId, chat.id))
         val map = _chats.value.toMutableMap()
         map[chat.id] = chat
         _chats.value = map
-        if (chat.isBotChat) {
-            removeSummary(instanceId, chat.id)
-        } else {
-            val activity = summariesForInstance(instanceId)
-                .firstOrNull { it.id == chat.id }
-                ?.activity
-                ?: AidenChatSummaryActivity.IDLE
-            upsertSummary(AidenChatSummary.fromChat(chat, activity), instanceId)
-        }
+        if (ownsSummary) saveSummaries(visibleSummaries.values.toList(), instanceId, writeToken = writeToken)
         return true
     }
 
@@ -396,7 +412,7 @@ class AidenChatCache(
 
     @Synchronized
     fun removeChat(instanceId: String, chatId: String) {
-        chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chatId] = reserveChatWrite()
+        chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chatId] = reserveSummaryMutation(instanceId)
         admittedChats[instanceId]?.remove(chatId)
         val chatFile = fileURL("chats", instanceId, chatId)
         if (chatFile.exists()) chatFile.delete()
