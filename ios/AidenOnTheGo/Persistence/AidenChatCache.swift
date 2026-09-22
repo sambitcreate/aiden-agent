@@ -232,6 +232,7 @@ actor AidenChatCache {
 
     private nonisolated let chatWriteClock = ChatWriteClock()
     private var chatWriteGenerations: [String: [String: UInt64]] = [:]
+    private var admittedChats: [String: [String: AidenChat]] = [:]
     private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
 
@@ -337,6 +338,16 @@ actor AidenChatCache {
         return envelope.chat
     }
 
+    func admittedChat(instanceId: String, chatId: String) -> AidenChat? {
+        guard !chatWriteClock.isPending(instanceId: instanceId, chatId: chatId) else { return nil }
+        if let token = chatWriteGenerations[instanceId]?[chatId] {
+            guard isChatWriteRetained(token, instanceId: instanceId, chatId: chatId) else { return nil }
+            return admittedChats[instanceId]?[chatId]
+        }
+        guard chatPurgeGenerations[instanceId] == nil else { return nil }
+        return loadChat(instanceId: instanceId, chatId: chatId)
+    }
+
     @discardableResult
     func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
         await beforeChatWrite?()
@@ -347,6 +358,7 @@ actor AidenChatCache {
         // Advance even if persistence fails: an older queued snapshot must not
         // become authoritative merely because the newest disk write failed.
         chatWriteGenerations[instanceId, default: [:]][chat.id] = writeToken
+        admittedChats[instanceId, default: [:]][chat.id] = chat
         try save(
             ChatEnvelope(instanceId: instanceId, chat: chat),
             to: fileURL(kind: "chats", instanceId, chat.id)
@@ -497,6 +509,7 @@ actor AidenChatCache {
         metadataDeletionTokens[instanceId] = max(token, metadataDeletionTokens[instanceId] ?? 0)
         chatWriteGenerations[instanceId, default: [:]][chatId] = max(token, chatWriteGenerations[instanceId]?[chatId] ?? 0)
         removedChatIDs[instanceId, default: []].insert(chatId)
+        admittedChats[instanceId]?.removeValue(forKey: chatId)
         let directory = root.appending(path: "lists", directoryHint: .isDirectory)
         for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
             guard let envelope = load(ChatListEnvelope.self, from: url), envelope.instanceId == instanceId,
@@ -532,6 +545,7 @@ actor AidenChatCache {
         workspaceWriteTokens.removeValue(forKey: instanceId)
         summaryWriteTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
+        admittedChats.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {

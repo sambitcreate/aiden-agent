@@ -777,6 +777,150 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testBotRequestOriginRejectsHeldGETAfterNewerOwnerIncludingDiskFailure() async throws {
+        for mode in ["newer", "disk", "remove", "purge"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-bot-get-owner-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var coordinator: AidenRemoteCoordinator!
+            let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+            var old = detail.chat
+            old.botId = "bot-test"
+            old.title = "Held old GET"
+            var newer = old
+            newer.title = "Newer settled owner"
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let oldData = try encoder.encode(old)
+            let newData = try encoder.encode(newer)
+            let context = try coordinator.requestContext()
+            let client = try coordinator.remoteClient(for: context)
+            let owner = AidenBotPresentationOwner()
+            let first = owner.begin(instanceID: context.instanceId, deviceID: context.deviceId, chatID: old.id, cache: cache)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in request.url?.path.hasSuffix("/chats/" + first.chatID) == true ? (200, "application/json", oldData) : nil }
+            let arrived = expectation(description: "old Bot GET held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + old.id) { arrived.fulfill() }
+            let oldID = old.id
+            let loading = Task {
+                let response = try await client.chat(id: oldID)
+                return await aidenPersistBotChatForPresentation(response, context: context, coordinator: coordinator, cache: cache, writeToken: first.writeToken)
+            }
+            await fulfillment(of: [arrived], timeout: 2)
+            let second = owner.begin(instanceID: context.instanceId, deviceID: context.deviceId, chatID: old.id, cache: cache)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in request.url?.path.hasSuffix("/chats/" + oldID) == true ? (200, "application/json", newData) : nil }
+            let settled = try await client.chat(id: old.id)
+            if mode == "disk" {
+                let chats = root.appending(path: "chats")
+                try? FileManager.default.removeItem(at: chats)
+                try Data("blocked directory".utf8).write(to: chats)
+            }
+            let accepted = await aidenPersistBotChatForPresentation(settled, context: context, coordinator: coordinator, cache: cache, writeToken: second.writeToken)
+            XCTAssertEqual(accepted?.title, newer.title)
+            if mode == "remove" { await cache.removeChat(instanceId: context.instanceId, chatId: old.id) }
+            if mode == "purge" { await cache.purge(instanceId: context.instanceId) }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            let result = try await loading.value
+            XCTAssertFalse(owner.owns(first))
+            XCTAssertTrue(owner.owns(second))
+            XCTAssertEqual(result?.title, ["remove", "purge"].contains(mode) ? nil : newer.title)
+            let memory = await cache.admittedChat(instanceId: context.instanceId, chatId: old.id)
+            XCTAssertEqual(memory?.title, result?.title)
+            if mode == "newer" {
+                let disk = await AidenChatCache(root: root).loadChat(instanceId: context.instanceId, chatId: old.id)
+                XCTAssertEqual(disk?.title, newer.title)
+            }
+        }
+    }
+
+    @MainActor
+    func testBotPresentationAttemptCannotReturnAfterNavigationAwayAndBack() async {
+        let owner = AidenBotPresentationOwner()
+        let suite = "aiden-bot-owner-navigation-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let navigation = AidenProductNavigationStore(defaults: defaults)
+        owner.setPath(["chat"], store: navigation, instanceID: "one", deviceID: "device")
+        let first = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat")
+        let permissionGate = AidenChatWriteTestGate()
+        await permissionGate.arm()
+        let permission = Task {
+            await permissionGate.waitIfArmed()
+            return owner.owns(first)
+        }
+        await waitForChatWrite(permissionGate)
+        owner.setPath([], store: navigation, instanceID: "one", deviceID: "device")
+        owner.setPath(["chat"], store: navigation, instanceID: "one", deviceID: "device")
+        XCTAssertEqual(navigation.compactBotPath(for: "one"), ["chat"])
+        let second = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat")
+        await permissionGate.release()
+        let oldAllowed = await permission.value
+        XCTAssertFalse(oldAllowed)
+        XCTAssertTrue(owner.owns(second))
+        owner.retain(instanceID: "two", deviceID: "device", chatID: "chat")
+        XCTAssertFalse(owner.owns(second))
+        let third = owner.begin(instanceID: "two", deviceID: "new-device", chatID: "chat")
+        owner.retain(instanceID: "two", deviceID: "new-device", chatID: "chat")
+        XCTAssertTrue(owner.owns(third))
+        owner.invalidate()
+        XCTAssertFalse(owner.owns(third))
+    }
+
+    @MainActor
+    func testHeldBotPermissionCannotOutliveWriteOrNoticePolicy() async {
+        for downgradeNotice in [false, true] {
+            let owner = AidenBotPresentationOwner()
+            let attempt = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: true)
+            var canWrite = true
+            var fullAccess = true
+            let gate = AidenChatWriteTestGate()
+            await gate.arm()
+            let resolving = Task {
+                await gate.waitIfArmed()
+                return owner.ownsPermission(attempt, canWrite: canWrite, fullAccessAllowed: fullAccess)
+            }
+            await waitForChatWrite(gate)
+            if downgradeNotice { fullAccess = false }
+            else { canWrite = false }
+            await gate.release()
+            let allowed = await resolving.value
+            XCTAssertFalse(allowed)
+            let refreshed = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: fullAccess)
+            XCTAssertEqual(owner.ownsPermission(refreshed, canWrite: canWrite, fullAccessAllowed: fullAccess), canWrite)
+        }
+    }
+
+    @MainActor
+    func testHeldBotCreateReceiptAwaitsFreshPermission() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-bot-create-permission-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+        var chat = detail.chat
+        chat.botId = "bot-test"
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in request.httpMethod == "POST" ? (201, "application/json", data) : nil }
+        let context = try coordinator.requestContext()
+        let client = try coordinator.remoteClient(for: context)
+        let arrived = expectation(description: "Bot create POST held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/bots/bot-test/chats") { arrived.fulfill() }
+        let creating = Task {
+            let response = try await client.createBotChat(botId: "bot-test", request: AidenBotChatCreateRequest(), idempotencyKey: UUID())
+            let admitted = await aidenPersistBotChatForPresentation(response, context: context, coordinator: coordinator, cache: cache)
+            return admitted.map { AidenBotPresentationOwner.Presentation.awaitingPermission($0) }
+        }
+        await fulfillment(of: [arrived], timeout: 2)
+        // Even an accepted receipt cannot inherit the pre-request grant. Both
+        // grant and notice downgrades are exercised by the permission-owner test.
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        let presentation = try await creating.value
+        XCTAssertEqual(presentation?.chat.id, chat.id)
+        XCTAssertEqual(presentation?.allowsMutations, false)
+    }
+
+    @MainActor
     private func waitForChatWrite(_ gate: AidenChatWriteTestGate) async {
         for _ in 0..<200 {
             if await gate.isHolding { return }
