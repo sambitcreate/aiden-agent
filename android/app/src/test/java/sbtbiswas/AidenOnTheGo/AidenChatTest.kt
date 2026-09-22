@@ -162,6 +162,12 @@ class AidenChatTest {
     fun lateApprovalFailureCannotUndoTerminalEvent() = exerciseRunControl("approval-terminal")
 
     @Test
+    fun fallbackDoesNotCoalesceWithPreResponseSnapshot() = exerciseRunControl("approval-fallback-before")
+
+    @Test
+    fun ambiguousResponseCannotSupersedeHeldAuthoritativeApproval() = exerciseRunControl("approval-fallback-overlap")
+
+    @Test
     fun latestAdmittedApprovalReadWinsWhenOlderCompletesFirst() = exerciseRunControl("approval-overlap")
 
     @Test
@@ -176,6 +182,7 @@ class AidenChatTest {
         val finishRead = CountDownLatch(1)
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
+        val failApprovalReads = java.util.concurrent.atomic.AtomicBoolean(false)
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
         val oldRead = CountDownLatch(1)
         val newRead = CountDownLatch(1)
@@ -199,8 +206,10 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
                 request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
                 request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
+                    if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
                     val id = snapshotId.get()
-                    if (scenario == "approval-overlap" && id != "approval-current") {
+                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                        (scenario == "approval-fallback-before" && id == "approval-old")) {
                         (if (id == "approval-old") oldRead else newRead).countDown()
                         check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
                     }
@@ -241,6 +250,35 @@ class AidenChatTest {
                 val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
                 viewModels.put("control", model)
                 withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
+                if (scenario == "approval-fallback-before") {
+                    snapshotId.set("approval-old")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    release.countDown()
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    releaseOld.countDown()
+                    read.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    return@runBlocking
+                }
+                if (scenario == "approval-fallback-overlap") {
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
+                    failApprovalReads.set(true)
+                    release.countDown()
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    releaseNew.countDown()
+                    read.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                    return@runBlocking
+                }
                 if (scenario == "approval-overlap") {
                     snapshotId.set("approval-old")
                     val old = async { model.restorePendingApproval("stream-control") }

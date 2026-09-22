@@ -257,6 +257,59 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let arrived = expectation(description: "pre-response approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { arrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [arrived], timeout: 5)
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        await model.respondToApproval(.allow, approvalID: "approval-current")
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
+    func testAmbiguousResponseDoesNotSupersedeHeldAuthoritativeApproval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let responseArrived = expectation(description: "A response held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/respond") { responseArrived.fulfill() }
+        let response = Task { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        await fulfillment(of: [responseArrived], timeout: 5)
+        let releaseResponse = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let readArrived = expectation(description: "authoritative B read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { readArrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // Any redundant fallback would fail, but must not supersede this admitted read.
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        releaseResponse?()
+        await response.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
     func testLatestAdmittedApprovalSnapshotWinsOverOlderCompletion() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
