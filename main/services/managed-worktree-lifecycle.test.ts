@@ -620,7 +620,11 @@ test("restore recreates dirty state without putting the synthetic commit on the 
   );
   assert.equal(restored.head, capture.head);
   assert.ok(restored.ownershipToken !== created.ownershipToken);
+  const hookMarker = path.join(restoreRoot, "restore-index-hook-ran");
+  await fs.writeFile(path.join(repository, ".git", "hooks", "post-index-change"),
+    `#!/bin/sh\ntouch '${hookMarker}'\n`, { mode: 0o755 });
   await service.applyManagedWorktreeSnapshot(repository, restored.path, capture.commit);
+  await assert.rejects(fs.stat(hookMarker), { code: "ENOENT" });
   await restoreProvisionedFiles(snapshotDir, manifest.provisionedFiles, restored.path);
 
   const status = await git(restored.path, ["status", "--porcelain=v2", "-z"]);
@@ -748,7 +752,33 @@ test("restore converges after a crash between checkout creation and journal upda
     "",
   );
 
-  const first = await restoreManagedWorktreeSnapshot(deps, snapshotId);
+  await assert.rejects(restoreManagedWorktreeSnapshot({
+    ...deps,
+    resumeCheckout: async () => { throw new Error("ownership changed"); },
+    checkCapacity: async () => { throw new Error("must verify before reducing the budget"); },
+  }, snapshotId), /ownership changed/);
+  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
+  await assert.rejects(restoreManagedWorktreeSnapshot({
+    ...deps,
+    checkCapacity: async (_root, phase) => { assert.equal(phase, "checkout_created"); },
+    managedWorktreeUsable: async () => false,
+  }, snapshotId), /partially restored managed worktree could not be verified/);
+  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
+  await assert.rejects(restoreManagedWorktreeSnapshot({
+    ...deps,
+    checkCapacity: async (_root, phase) => {
+      assert.equal(phase, "checkout_created");
+      await git(plannedPath, ["commit", "--allow-empty", "-m", "External branch advance"]);
+    },
+  }, snapshotId), /partially restored managed worktree could not be verified/);
+  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
+  await git(plannedPath, ["reset", "--hard", capture.head]);
+  const first = await restoreManagedWorktreeSnapshot({
+    ...deps,
+    checkCapacity: async (_root, phase) => {
+      assert.equal(phase, "checkout_created", "an existing verified checkout must not be budgeted again");
+    },
+  }, snapshotId);
   const canonicalPlanned = await fs.realpath(plannedPath);
   assert.equal(first.workspaceId, "workspace-restored");
   assert.equal(first.worktree.path, canonicalPlanned);

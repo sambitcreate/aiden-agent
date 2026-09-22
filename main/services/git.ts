@@ -6049,12 +6049,12 @@ export class GitService {
     await this.run(
       worktreePath,
       ["read-tree", "--reset", "-u", snapshotCommit],
-      { mutation: true, signal },
+      { mutation: true, signal, hooksDisabled: true },
     );
     const head = (
       await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
     ).stdout.trim();
-    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal });
+    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal, hooksDisabled: true });
   }
 }
 

@@ -110,6 +110,13 @@ new Remote restore/force capabilities remain out of this corrective patch.
   filter-driver and deterministic filesystem-boundary tests (29 focused tests
   passed). Both Sol reviewers independently cleared the follow-up diff. Fresh
   hosted checks remain required for the follow-up commit.
+- The initial Pullfrog log contained a third inline finding dropped by its
+  invalid line anchor: a planned restore checkout can already exist after a
+  crash. Recovery now verifies that checkout before reducing the admission
+  phase, revalidates after admission, and only then persists its adopted identity.
+  Ownership or base-commit drift during admission leaves the planned journal intact; a missing checkout still
+  requires the full base allocation. Both snapshot-application index writes also
+  disable hooks, covered by a post-index-change marker regression.
 - Separable baseline-only capacity-test fix `4c00c968` replaces equality across
   two live free-space observations with the denial's own capacity invariant;
   isolated test passed. Shared with the Create Images/mobile-recovery owners.

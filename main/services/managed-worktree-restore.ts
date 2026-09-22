@@ -168,11 +168,36 @@ export async function restoreManagedWorktreeSnapshot(
 
   let journal = await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId);
   const signal = dependencies.signal;
+  let adoptedPlannedCheckout = false;
+  if (journal?.phase === "checkout_planned" && await pathExists(journal.worktreePath)) {
+    // The checkout may have been allocated before the crash but not journaled.
+    // Verify ownership before treating those bytes as already materialized.
+    const worktree = await dependencies.resumeCheckout(
+      snapshot.repositoryPath, journal.worktreePath, snapshot.branch,
+      snapshot.originalHead, snapshot.workspaceSubpath, signal,
+    );
+    journal = {
+      ...journal, phase: "checkout_created", worktreePath: worktree.path,
+      worktreeGitDir: worktree.worktreeGitDir, ownershipToken: worktree.ownershipToken,
+      worktreeDevice: worktree.worktreeDevice, worktreeInode: worktree.worktreeInode,
+    };
+    adoptedPlannedCheckout = true;
+  }
   if (journal?.phase !== "complete") {
     await dependencies.checkCapacity(
       journal ? path.dirname(journal.worktreePath) : await dependencies.ensureWorktreeRoot(),
       journal?.phase ?? "checkout_planned",
     );
+  }
+  if (adoptedPlannedCheckout && journal) {
+    // Admission can await external I/O; do not adopt a replacement at the path
+    // or allocate a new checkout using the reduced, remaining-work allowance.
+    await dependencies.resumeCheckout(
+      snapshot.repositoryPath, journal.worktreePath, snapshot.branch,
+      snapshot.originalHead, snapshot.workspaceSubpath, signal,
+    );
+    await verifiedJournaledCheckout(dependencies, journal, snapshot);
+    await writeManagedWorktreeRestoreJournal(snapshotRoot, journal);
   }
   await updateManagedWorktreeSnapshotState(snapshotRoot, snapshot, "restoring");
 
