@@ -2005,7 +2005,9 @@ final class AidenChatViewModel {
                   streamState?.isTerminal != true else { return }
             guard response.approvalId == approval.id, response.decision == decision else {
                 presentedError = String(localized: "The approval response was not confirmed. Refreshing the current request from your Mac.")
-                await restorePendingApproval(streamID: streamID, context: context)
+                if pendingApproval == nil {
+                    await restorePendingApproval(streamID: streamID, context: context)
+                }
                 return
             }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
