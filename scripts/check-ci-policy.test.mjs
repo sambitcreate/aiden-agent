@@ -154,3 +154,17 @@ test("CI keeps full main commits independent and portable static checks on Linux
   assert.equal(workflow.jobs.timings["continue-on-error"], true);
   assert.equal(workflow.jobs.timings.permissions.actions, "read");
 });
+
+test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lanes skip", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const selection = "${{ needs.changes.outputs.desktop == 'false' }}";
+  const steps = jobs.ios.steps;
+  const install = steps.findIndex((step) => step.name === "Install iOS policy dependencies");
+  const policies = steps.findIndex((step) => step.run === "npm run test:ios-release");
+  const setup = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
+  assert.ok(setup >= 0 && setup < install && install < policies);
+  for (const index of [setup, install, policies]) assert.equal(steps[index].if, selection);
+  assert.equal(steps[install].run, "npm ci");
+  const registry = readRegistry();
+  assert.ok(registry.lanes.some((lane) => lane.preserved.includes("ios-release-policy")));
+});

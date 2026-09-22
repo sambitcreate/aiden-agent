@@ -22,7 +22,9 @@ is superseded. Runner capacity can still cause queueing.
 
 - TypeScript and lint run on Ubuntu. Build, diagnostics, branding and catalog
   policy remain on macOS. Apple Foundation Models tests and generic-device iOS
-  compilation run in independent jobs.
+  compilation run in independent jobs. iOS-only changes also run shipping and
+  TestFlight policies in the iOS job; full desktop runs execute those policies
+  through the preserved regression lane.
 - Three desktop lanes use `scripts/ci-test-registry.json`. Every ordinary file in
   the existing `pretest`/`test` graph belongs to exactly one lane. New files require
   explicit assignment; unknown shell commands, environment changes and test flags

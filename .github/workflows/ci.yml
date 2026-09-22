@@ -201,6 +201,18 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22 for iOS-only policy checks
+        if: ${{ needs.changes.outputs.desktop == 'false' }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install iOS policy dependencies
+        if: ${{ needs.changes.outputs.desktop == 'false' }}
+        run: npm ci
+      - name: Verify iOS shipping and TestFlight policies
+        if: ${{ needs.changes.outputs.desktop == 'false' }}
+        run: npm run test:ios-release
       # Physical-device XCTest acceptance stays separate from hosted compilation.
       - name: Compile Aiden On The Go tests for generic iOS hardware
         env:
