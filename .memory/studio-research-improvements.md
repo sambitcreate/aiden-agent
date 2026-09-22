@@ -19,3 +19,10 @@ Fixes preserve exact authorization and visible failure recovery. Native Design
 exclusion remains unchanged; Android parity checks and iOS generic hardware test compilation passed, as did
 production build, type/lint and remote checks (462 pass, one skip). Hosted
 exact-head checks remain pending.
+
+Follow-up at 2026-09-22 11:38 UTC: head 133b96c55 has successful Ubuntu
+checks, while CI run 35719548500 still has verify and Deterministic Electron
+E2E queued with unassigned macos-26 runners. PR comments and review threads are
+empty. This is an external runner blocker, not passing CI. Removed previously
+tracked papercut scratch from Git while retaining the ignored local file, per
+the updated project instructions; no implementation changed.
