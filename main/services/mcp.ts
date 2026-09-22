@@ -17,6 +17,7 @@ import {
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
 import {
   mcpCredentialConnectionSnapshot,
@@ -370,7 +371,7 @@ class McpManager {
   ): Promise<AgentTool[]> {
     const client = await this.ensureConnected(server, generation);
     const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-    return tools.map((t): AgentTool => ({
+    return tools.map((t): AgentTool => markToolOutputSource({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,

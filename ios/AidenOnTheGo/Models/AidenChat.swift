@@ -148,6 +148,22 @@ struct AidenGenerationClaimCheck: Codable, Equatable, Sendable {
     let stepIds: [String]
 }
 
+struct AidenProducedFile: Codable, Equatable, Sendable {
+    let relativePath: String
+    let operation: String
+    let bytes: Int
+
+    func isValid(toolName: String?) -> Bool {
+        let expected = toolName == "write_file" ? "written" : toolName == "edit_file" ? "edited" : nil
+        return expected != nil && operation == expected
+            && !relativePath.isEmpty && relativePath.utf16.count <= 240
+            && !relativePath.hasPrefix("/") && !relativePath.hasPrefix("~")
+            && !relativePath.unicodeScalars.contains { $0.value < 32 || $0.value == 127 || $0 == ":" || $0 == "\\" }
+            && !relativePath.components(separatedBy: "/").contains { $0.isEmpty || $0 == "." || $0 == ".." }
+            && (0...1_000_000_000).contains(bytes)
+    }
+}
+
 struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let additions: Int
     let deletions: Int
@@ -174,6 +190,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let target: String?
     let detail: String?
     let lineChanges: AidenAgentLineChanges?
+    let producedFile: AidenProducedFile?
 
     init(
         id: String,
@@ -190,7 +207,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         durationMs: Double?,
         target: String?,
         detail: String?,
-        lineChanges: AidenAgentLineChanges?
+        lineChanges: AidenAgentLineChanges?,
+        producedFile: AidenProducedFile? = nil
     ) {
         self.id = id
         self.order = order
@@ -207,6 +225,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.target = target
         self.detail = detail
         self.lineChanges = lineChanges
+        self.producedFile = producedFile
     }
 
     init(from decoder: Decoder) throws {
@@ -233,6 +252,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         durationMs = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .durationMs)
         target = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .target)
         detail = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .detail)
+        producedFile = try aidenDecodeOptionalNonNull(AidenProducedFile.self, from: values, forKey: .producedFile)
         lineChanges = try aidenDecodeOptionalNonNull(
             AidenAgentLineChanges.self,
             from: values,
@@ -242,7 +262,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
-        case finishedAt, contentOffset, durationMs, target, detail, lineChanges
+        case finishedAt, contentOffset, durationMs, target, detail, lineChanges, producedFile
     }
 
     var isActive: Bool {
@@ -354,6 +374,9 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                       return !value.isEmpty && value.unicodeScalars.count <= 240
                           && !normalized.hasPrefix("/") && !normalized.hasPrefix("~")
                           && !hasDrivePrefix && !normalized.split(separator: "/").contains("..")
+                  }) ?? true,
+                  step.producedFile.map({ file in
+                      step.kind == .tool && step.status == .completed && file.isValid(toolName: step.toolName)
                   }) ?? true,
                   step.lineChanges.map({ changes in
                       version == 3

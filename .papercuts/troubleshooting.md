@@ -852,3 +852,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+
+## 2026-09-22 — durable tool outputs
+
+- Fresh isolated worktree lacked node_modules; installed locked dependencies with npm ci --ignore-scripts before meaningful TypeScript checks. tsx requires its local pipe outside this task’s workspace sandbox.
+- Gradle requires the existing user cache and ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk; default Xcode selection points to CLT, so use DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer.
+- Physical iPhone tests are queued through the coordinator: device is locked; do not retry or use prohibited simulators. Unsigned generic iOS build succeeds but is not device execution evidence.
+- Canonical /private/var vs lexical /var paths caused valid new-file provenance to be discarded. Resolve the parent directory before forming the relative path; normalize Windows separators.

@@ -1,3 +1,4 @@
+import { parseProducedFile } from "./produced-file.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -13,6 +14,7 @@ export type AgentStepStatus =
   | "cancelled";
 
 export interface AgentToolStep {
+  producedFile?: import("./produced-file.js").ProducedFile;
   id: string;
   order: number;
   kind: "tool";
@@ -158,6 +160,7 @@ function parseToolStep(
   contentOffset?: number,
   allowLineChanges = false,
 ): AgentToolStep | undefined {
+  const producedFile = parseProducedFile(step.producedFile, String(step.toolName));
   const rawLineChanges = step.lineChanges;
   const lineChanges =
     rawLineChanges && typeof rawLineChanges === "object"
@@ -176,6 +179,7 @@ function parseToolStep(
     step.label.length > 120 ||
     typeof step.status !== "string" ||
     !STEP_STATUSES.has(step.status as AgentStepStatus) ||
+    (step.producedFile !== undefined && (!producedFile || step.status !== "completed")) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
     (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
     (rawLineChanges !== undefined &&
@@ -205,6 +209,7 @@ function parseToolStep(
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
     ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
+    ...(producedFile ? { producedFile } : {}),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
     ...(lineChanges === undefined
       ? {}

@@ -223,7 +223,7 @@ const featureBentos: FeatureBento[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat.",
+    description: "Browse, search, edit, and safely save workspace text files beside the chat. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
     size: "standard",

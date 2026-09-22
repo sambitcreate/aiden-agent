@@ -678,3 +678,22 @@ test("automatic compaction publishes bounded engine metrics without summary cont
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
   assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });
+
+
+test("produced files require completed host mutation provenance and survive timeline replay", () => {
+  const file = { relativePath: "out/report.txt", operation: "written" as const, bytes: 12 };
+  const details = { kind: "file_line_changes", version: 1, additions: 1, deletions: 0, producedFile: file };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status] of [["good", "write_file", "completed"], ["mcp", "mcp_write", "completed"], ["failed", "write_file", "failed"]] as const) {
+    projector.toolStarted(id, tool, { path: "out/report.txt" });
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.snapshot();
+  assert.deepEqual(toolSteps(snapshot).map((step) => step.producedFile), [file, undefined, undefined]);
+  assert.deepEqual(toolSteps(parseGenerationTimeline(snapshot)!)[0]?.producedFile, file);
+  for (const relativePath of ["/Users/private.txt", "../secret", "out/../secret", "a\\b", "bad\nname", "a//b"]) {
+    const invalid = structuredClone(snapshot);
+    (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
+    assert.equal(parseGenerationTimeline(invalid), undefined);
+  }
+});

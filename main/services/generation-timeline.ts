@@ -16,6 +16,8 @@ import {
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
 
+import { parseProducedFile } from "../../renderer/shared/produced-file.js";
+
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
 const MAX_DETAIL_LENGTH = 120;
@@ -535,6 +537,8 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
+        const producedFile = lineChanges && parseProducedFile(record(resultDetails).producedFile, step.toolName);
+        if (producedFile) step.producedFile = producedFile;
       } else {
         const issue = safeToolIssue(resultDetails);
         if (issue) step.detail = issue;

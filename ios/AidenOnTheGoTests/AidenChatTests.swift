@@ -7,6 +7,18 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
+        let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
+        XCTAssertTrue(file.isValid(toolName: "write_file"))
+        XCTAssertFalse(file.isValid(toolName: "mcp_write"))
+        XCTAssertFalse(file.isValid(toolName: "edit_file"))
+        for path in ["/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname"] {
+            XCTAssertFalse(AidenProducedFile(relativePath: path, operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        }
+        let data = try JSONEncoder().encode(file)
+        XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,

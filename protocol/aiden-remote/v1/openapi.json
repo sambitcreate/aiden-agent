@@ -4881,6 +4881,37 @@
           },
           "lineChanges": {
             "$ref": "#/components/schemas/GenerationLineChanges"
+          },
+          "producedFile": {
+            "$ref": "#/components/schemas/ProducedFile"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProducedFile": {
+        "type": "object",
+        "description": "Host-confirmed successful write_file/edit_file provenance. Only on completed tool steps. Never an authorization to open a Mac path.",
+        "required": [
+          "relativePath",
+          "operation",
+          "bytes"
+        ],
+        "properties": {
+          "relativePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "operation": {
+            "enum": [
+              "written",
+              "edited"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000
           }
         },
         "additionalProperties": false

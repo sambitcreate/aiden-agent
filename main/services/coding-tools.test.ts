@@ -1371,6 +1371,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 0,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 11 },
     });
 
     const overwritten = await writeFile.execute("overwrite", {
@@ -1382,6 +1383,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 18 },
     });
 
     const edited = await editFile.execute("edit", {
@@ -1394,6 +1396,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "edited", bytes: 27 },
     });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
