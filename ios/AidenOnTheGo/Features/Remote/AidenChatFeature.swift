@@ -733,7 +733,7 @@ final class AidenWorkspaceChatsModel {
                 presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return nil
             }
-            guard let admitted = await persist(chat: chat, instanceId: instanceId), coordinator.isCurrent(context) else { return nil }
+            guard let admitted = await persist(chat: chat, instanceId: instanceId, context: context), coordinator.isCurrent(context) else { return nil }
             onChatUpdated(admitted)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-create:\(chat.id):\(chat.revision)")
             return admitted
@@ -763,7 +763,7 @@ final class AidenWorkspaceChatsModel {
                 title: cleaned
             )
             guard coordinator.isCurrent(context) else { return }
-            guard let admitted = await persist(chat: updated, instanceId: instanceId), coordinator.isCurrent(context) else { return }
+            guard let admitted = await persist(chat: updated, instanceId: instanceId, context: context), coordinator.isCurrent(context) else { return }
             onChatUpdated(admitted)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
@@ -814,16 +814,17 @@ final class AidenWorkspaceChatsModel {
         chats = Self.sorted(chats)
     }
 
-    private func persist(chat: AidenChat, instanceId: String) async -> AidenChat? {
+    private func persist(chat: AidenChat, instanceId: String, context: AidenRemoteRequestContext) async -> AidenChat? {
         let generation = presentationGenerations[chat.id] ?? 0
         let writeToken = cache.reserveChatWrite()
         do {
             guard try await cache.saveChat(chat, instanceId: instanceId, writeToken: writeToken) else {
                 guard let current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
                       current.workspaceId == workspaceId, !current.isBotChat else {
-                    if generation == (presentationGenerations[chat.id] ?? 0) {
+                    if coordinator.isCurrent(context), generation == (presentationGenerations[chat.id] ?? 0) {
                         presentationGenerations[chat.id, default: 0] &+= 1
                         chats.removeAll { $0.id == chat.id }
+                        onChatRemoved(chat.id)
                     }
                     return nil
                 }
@@ -1704,6 +1705,8 @@ final class AidenChatViewModel {
             // resume. Forgetting, revoking, or re-pairing the captured device
             // invalidates the context before any private cache/activity write.
             let writeToken = cache.reserveChatWrite()
+            var acceptedWriteToken = writeToken
+            var startedActivity = false
             var accepted = false
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 accepted = (try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)) ?? true
@@ -1718,14 +1721,20 @@ final class AidenChatViewModel {
                         current.messages.append(response.message)
                     }
                     accepted = (try? await cache.saveChat(current, instanceId: instanceId, writeToken: retryToken)) ?? true
-                    if accepted { acceptedChat = current }
+                    if accepted { acceptedChat = current; acceptedWriteToken = retryToken }
                 }
-                try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
+                accepted = (try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id, chatWriteToken: acceptedWriteToken)) ?? true
+                guard accepted else { return }
                 if let draftSession,
                    draftGeneration == clearedDraftGeneration,
                    draft.isEmpty {
                     _ = try? await draftStore.save("", session: draftSession)
                 }
+                guard cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id) else {
+                    accepted = false
+                    return
+                }
+                startedActivity = true
                 await liveActivities.start(
                     instanceID: instanceId,
                     chatID: chat.id,
@@ -1733,7 +1742,11 @@ final class AidenChatViewModel {
                     streamID: response.streamId
                 )
             }
+            accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
             guard retained, accepted else {
+                if startedActivity {
+                    await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: .cancelled)
+                }
                 if coordinator.isCurrent(context) {
                     chat.messages.removeAll { $0.id == optimisticID }
                     streamState = nil

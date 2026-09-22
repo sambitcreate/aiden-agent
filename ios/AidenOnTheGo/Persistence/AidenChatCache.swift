@@ -84,6 +84,7 @@ actor AidenChatCache {
     }
 
     // Tests can hold an admitted caller while another actor operation wins.
+    private let beforeActiveStreamWrite: (@Sendable () async -> Void)?
     private let beforeChatWrite: (@Sendable () async -> Void)?
     private let root: URL
     private let legacyRoots: [URL]
@@ -97,6 +98,23 @@ actor AidenChatCache {
     private final class ChatWriteClock: @unchecked Sendable {
         private let lock = NSLock()
         private var value: UInt64 = 0
+        private var removed: [String: [String: UInt64]] = [:]
+        private var purged: [String: UInt64] = [:]
+
+        func invalidate(instanceId: String, chatId: String? = nil) -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            if let chatId { removed[instanceId, default: [:]][chatId] = value }
+            else { purged[instanceId] = value; removed.removeValue(forKey: instanceId) }
+            return value
+        }
+
+        func retains(_ token: UInt64, instanceId: String, chatId: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return token > (purged[instanceId] ?? 0) && token > (removed[instanceId]?[chatId] ?? 0)
+        }
 
         func next() -> UInt64 {
             lock.lock()
@@ -114,15 +132,21 @@ actor AidenChatCache {
         chatWriteClock.next()
     }
 
+    nonisolated func isChatWriteRetained(_ token: UInt64, instanceId: String, chatId: String) -> Bool {
+        chatWriteClock.retains(token, instanceId: instanceId, chatId: chatId)
+    }
+
     private var summaryWriteGenerations: [String: UInt64] = [:]
 
     init(
         root: URL? = nil,
         beforeChatWrite: (@Sendable () async -> Void)? = nil,
+        beforeActiveStreamWrite: (@Sendable () async -> Void)? = nil,
         fileManager: FileManager = .default,
         legacyRoots: [URL]? = nil,
         maxSummaryCacheFileBytes: Int = 80 * 1_024 * 1_024
     ) {
+        self.beforeActiveStreamWrite = beforeActiveStreamWrite
         self.beforeChatWrite = beforeChatWrite
         self.fileManager = fileManager
         self.maxSummaryCacheFileBytes = maxSummaryCacheFileBytes
@@ -266,11 +290,15 @@ actor AidenChatCache {
         return envelope.stream
     }
 
-    func saveActiveStream(_ stream: ActiveStream, instanceId: String, chatId: String) throws {
+    @discardableResult
+    func saveActiveStream(_ stream: ActiveStream, instanceId: String, chatId: String, chatWriteToken: UInt64? = nil) async throws -> Bool {
+        await beforeActiveStreamWrite?()
+        if let chatWriteToken, !isChatWriteRetained(chatWriteToken, instanceId: instanceId, chatId: chatId) { return false }
         try save(
             StreamEnvelope(instanceId: instanceId, chatId: chatId, stream: stream),
             to: fileURL(kind: "streams", instanceId, chatId)
         )
+        return true
     }
 
     func removeActiveStream(instanceId: String, chatId: String) {
@@ -287,7 +315,7 @@ actor AidenChatCache {
     }
 
     func removeChat(instanceId: String, chatId: String) {
-        chatWriteGenerations[instanceId, default: [:]][chatId] = reserveChatWrite()
+        chatWriteGenerations[instanceId, default: [:]][chatId] = chatWriteClock.invalidate(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
         try? removeChatSummary(instanceId: instanceId, chatId: chatId)
         removeActiveStream(instanceId: instanceId, chatId: chatId)
@@ -295,7 +323,7 @@ actor AidenChatCache {
     }
 
     func purge(instanceId: String) {
-        chatPurgeGenerations[instanceId] = reserveChatWrite()
+        chatPurgeGenerations[instanceId] = chatWriteClock.invalidate(instanceId: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
