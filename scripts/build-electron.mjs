@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import * as fs from "node:fs/promises";
 
 const common = {
   bundle: true,
@@ -7,6 +8,8 @@ const common = {
   target: "node22",
   logLevel: "info",
 };
+
+await fs.rm("build/main", { recursive: true, force: true });
 
 await Promise.all([
   build({
@@ -20,6 +23,24 @@ await Promise.all([
     ...common,
     entryPoints: ["main/bootstrap.ts"],
     outfile: "build/main/index.js",
+    // Preserve main's singleton initialization order and sibling worker paths.
+    // Only the packaged acceptance runner needs a separate lazy module.
+    plugins: [{
+      name: "lazy-create-images-acceptance",
+      setup(builder) {
+        builder.onResolve({ filter: /\/packaged-canvas-acceptance-runner\.js$/ }, () => ({
+          path: "./create-images-packaged-acceptance-runner.js",
+          external: true,
+        }));
+      },
+    }],
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
+    entryPoints: ["main/services/create-images/packaged-canvas-acceptance-runner.ts"],
+    outfile: "build/main/create-images-packaged-acceptance-runner.js",
     format: "esm",
     packages: "external",
   }),
@@ -56,6 +77,13 @@ await Promise.all([
     ...common,
     entryPoints: ["renderer/preload-pill.ts"],
     outfile: "build/preload/preload-pill.cjs",
+    format: "cjs",
+    external: ["electron"],
+  }),
+  build({
+    ...common,
+    entryPoints: ["renderer/preload-create-images-image-decoder.ts"],
+    outfile: "build/preload/create-images-image-decoder.cjs",
     format: "cjs",
     external: ["electron"],
   }),

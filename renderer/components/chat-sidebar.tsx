@@ -49,6 +49,7 @@ import {
   Folder,
   FolderPlus,
   FolderGit2,
+  ImagePlus,
   GitPullRequest,
   ListTree,
   Loader2,
@@ -59,7 +60,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { BotSidebarIcon } from "./bot-avatar";
-import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import { appUpdatesApi, chatsApi, createImagesApi, gitApi, workspacesApi } from "../lib/ipc";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import {
   CHAT_TITLE_FADE_OUT_MS,
@@ -72,7 +73,7 @@ import {
   createSidebarChatShortcutAssignments,
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
-import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
+import { queryKeys, useCreateImagesWorkflows, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
@@ -82,6 +83,8 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { requestCreateImagesNavigation } from "../create-images/navigation-guard";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import {
@@ -713,9 +716,10 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const createImagesMode = pathname.startsWith("/create-images");
+  const selectedWorkflowId = createImagesMode ? pathname.split("/")[2] : undefined;
+  const appCapabilities = useAppCapabilities();
   const qc = useQueryClient();
   const { workspaces, activeId, select, isReady: workspaceRegistryReady } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
@@ -723,6 +727,12 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useAllRegularChats(workspaces.length > 0);
   const foundationModels = useFoundationModelsConnection();
+  const durableImageWorkflows = useCreateImagesWorkflows(
+    appCapabilities.createImages &&
+      createImagesMode &&
+      selectedWorkflowId !== "stress-100" &&
+      selectedWorkflowId !== "stress-250",
+  );
   const [search, setSearch] = React.useState("");
   const initialPreferences = React.useMemo(
     () => parseSidebarPreferences(localStorage.getItem(SIDEBAR_PREFERENCES_KEY)),
@@ -749,6 +759,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [chatShortcutsVisible, setChatShortcutsVisible] = React.useState(false);
   const shortcutRevealTimerRef = React.useRef<number | null>(null);
   const heldCommandKeysRef = React.useRef(new Set<string>());
+  const imageWorkflows = React.useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const workflows =
+      durableImageWorkflows.data?.status === "ready" ? durableImageWorkflows.data.workflows : [];
+    return workflows.filter((workflow) => !query || workflow.title.toLowerCase().includes(query));
+  }, [durableImageWorkflows.data, search]);
+
+  React.useEffect(() => setSearch(""), [createImagesMode]);
 
   const projection = React.useMemo(
     () => projectSidebarWorkspaces(workspaces, chats.data ?? [], search),
@@ -838,13 +856,68 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       settingsBlockedReason,
     ],
   );
-  const openRemoteSettings = React.useCallback(() => {
+  const openCreateImages = React.useCallback(
+    async (workflowId?: string) => {
+      if (settingsBlockedReason) {
+        toast.info(settingsBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      if (workflowId) {
+        await navigate({ to: "/create-images/$workflowId", params: { workflowId } });
+      } else {
+        await navigate({ to: "/create-images" });
+      }
+    },
+    [navigate, settingsBlockedReason],
+  );
+
+  const newImageWorkflow = React.useCallback(async () => {
+    const decision = await requestCreateImagesNavigation();
+    if (!decision.allowed) {
+      toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+      return;
+    }
+    try {
+      const result = await createImagesApi.create({ template: "blank" });
+      if (result.status !== "saved") {
+        toast.error(
+          result.status === "unavailable" ? result.message : "Aiden could not create the workflow.",
+        );
+        return;
+      }
+      await qc.invalidateQueries({ queryKey: queryKeys.createImagesWorkflows });
+      await navigate({
+        to: "/create-images/$workflowId",
+        params: { workflowId: result.workflow.id },
+      });
+    } catch {
+      toast.error("Aiden could not create the workflow.");
+    }
+  }, [navigate, qc]);
+
+  const navigateOutsideCreateImages = React.useCallback(
+    async (navigateAway: () => void | Promise<void>) => {
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      await navigateAway();
+    },
+    [],
+  );
+  const openRemoteSettings = React.useCallback(async () => {
     if (settingsBlockedReason) {
       toast.info(settingsBlockedReason);
       return;
     }
-    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
-  }, [navigate, settingsBlockedReason]);
+    await navigateOutsideCreateImages(() => navigate({ to: "/settings", search: { section: "remoteAccess" } }));
+  }, [navigate, settingsBlockedReason, navigateOutsideCreateImages]);
 
   React.useEffect(() => {
     if (!activeId || initializedExpansionRef.current) return;
@@ -878,6 +951,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   }, [expandedWorkspaceIds, organization, workspaceRegistryReady, workspaces]);
 
   React.useEffect(() => {
+    if (createImagesMode) {
+      heldCommandKeysRef.current.clear();
+      if (shortcutRevealTimerRef.current !== null) {
+        window.clearTimeout(shortcutRevealTimerRef.current);
+        shortcutRevealTimerRef.current = null;
+      }
+      setChatShortcutsVisible(false);
+      return;
+    }
     const clearRevealTimer = () => {
       if (shortcutRevealTimerRef.current === null) return;
       window.clearTimeout(shortcutRevealTimerRef.current);
@@ -945,9 +1027,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       heldCommandKeysRef.current.clear();
       clearRevealTimer();
     };
-  }, [revealModifierSignature]);
+  }, [createImagesMode, revealModifierSignature]);
 
   React.useEffect(() => {
+    if (createImagesMode) return;
     const unregister = shortcutAssignments.map(({ chat, number }) =>
       registerCommand(`chat.jump.${number}` as CommandId, () => {
         void openChat(chat);
@@ -968,7 +1051,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       );
     }
     return () => unregister.forEach((dispose) => dispose());
-  }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
+  }, [chatNavigationTargets, createImagesMode, openChat, registerCommand, shortcutAssignments]);
 
   // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
@@ -984,6 +1067,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       if (environmentPanel.editorState.dirty && !allowDirtyDiscard) {
         toast.info("Save or discard the open file's edits before switching workspaces.");
         return false;
+      }
+      if (createImagesMode) {
+        const decision = await requestCreateImagesNavigation();
+        if (!decision.allowed) {
+          toast.error(
+            decision.message ?? "Resolve the workflow save issue before switching workspaces.",
+          );
+          return false;
+        }
       }
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const list = await chatsApi.list(id);
@@ -1006,6 +1098,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     [
       activeId,
       appendReconciliationRequired,
+      createImagesMode,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
       environmentPanel.editorState.dirty,
@@ -1158,6 +1251,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     async (workspaceId: string) => {
       if (appendReconciliationRequired || settingsBlockedReason) {
         if (settingsBlockedReason) toast.info(settingsBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
         return;
       }
       try {
@@ -1371,7 +1469,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     <>
       <Sidebar
         searchable
-        searchPlaceholder="Search chats…"
+        searchPlaceholder={createImagesMode ? "Search workflows…" : "Search chats…"}
         searchValue={search}
         onSearchChange={setSearch}
         actions={<SplitView.SidebarToggle />}
@@ -1384,7 +1482,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 title="Profile"
                 selected={pathname === "/profile"}
                 disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/profile" })}
+                onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/profile" }))}
               />
               <div className="flex min-w-0 items-center gap-0.5">
                 <SidebarListItem
@@ -1393,7 +1491,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   selected={pathname === "/settings"}
                   disabled={Boolean(settingsBlockedReason)}
                   className="min-w-0 flex-1"
-                  onClick={() => navigate({ to: "/settings" })}
+                  onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/settings" }))}
                 />
                 <RemoteConnectionPopover
                   settingsBlockedReason={settingsBlockedReason}
@@ -1411,20 +1509,63 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             disabled={!activeId || appendReconciliationRequired}
             onClick={() => void newAgent()}
           />
+          {appCapabilities.createImages ? (
+            <SidebarListItem
+              icon={<ImagePlus />}
+              title="Create Images"
+              selected={createImagesMode}
+              disabled={Boolean(settingsBlockedReason)}
+              onClick={() => openCreateImages()}
+            />
+          ) : null}
           <SidebarListItem
             icon={<Clock3 />}
             title="Scheduled"
             selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
+            onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/scheduled" }))}
           />
           <SidebarListItem
             icon={<BotSidebarIcon />}
             title="Bots"
             selected={pathname.startsWith("/bots")}
-            onClick={() => navigate({ to: "/bots" })}
+            onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/bots" }))}
           />
         </div>
 
+        {createImagesMode ? (
+          <SidebarList>
+            <SidebarListGroup title="Image workflows">
+              <SidebarListItem
+                icon={<SquarePen />}
+                title="New workflow"
+                disabled={Boolean(settingsBlockedReason)}
+                onClick={() => void newImageWorkflow()}
+              />
+              {imageWorkflows.map((workflow) => (
+                <SidebarListItem
+                  key={workflow.id}
+                  icon={<ImagePlus />}
+                  title={workflow.title}
+                  trailing={
+                    <span className="text-mini tabular-nums text-tertiary">
+                      {workflow.nodeCount}
+                    </span>
+                  }
+                  selected={selectedWorkflowId === workflow.id}
+                  disabled={Boolean(settingsBlockedReason)}
+                  onClick={() => openCreateImages(workflow.id)}
+                />
+              ))}
+              {imageWorkflows.length === 0 ? (
+                <EmptyState
+                  placement="inline"
+                  title="No workflows found"
+                  description="Try a different search."
+                />
+              ) : null}
+            </SidebarListGroup>
+          </SidebarList>
+        ) : (
         <SidebarList>
           {organization === "workspace" ? (
             <SidebarListGroup
@@ -1672,6 +1813,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             ))
           )}
         </SidebarList>
+        )}
       </Sidebar>
 
       <Dialog

@@ -56,6 +56,10 @@ test("workspace-only commands are unavailable when their surfaces are unmounted"
     environment: true,
     terminal: false,
   });
+  assert.deepEqual(workspaceCommandVisibility("/create-images/workflow-1"), {
+    environment: false,
+    terminal: false,
+  });
   assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), {
     environment: true,
     terminal: true,

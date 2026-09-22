@@ -24,6 +24,7 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const createImagesMode = pathname.startsWith("/create-images");
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -73,18 +74,17 @@ export function ChatLayout() {
       sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench>
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Outlet />
+      {createImagesMode ? (
+        <div className="h-full min-h-0 overflow-hidden bg-background"><Outlet /></div>
+      ) : (
+        <EnvironmentWorkbench>
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-hidden"><Outlet /></div>
+            {pathname === "/profile" || pathname === "/scheduled" ||
+              (pathname.startsWith("/bots") && !params.chatId) ? null : <TerminalDrawer />}
           </div>
-          {pathname === "/profile" ||
-          pathname === "/scheduled" ||
-          (pathname.startsWith("/bots") && !params.chatId) ? null : (
-            <TerminalDrawer />
-          )}
-        </div>
-      </EnvironmentWorkbench>
+        </EnvironmentWorkbench>
+      )}
     </SplitView>
   );
 }

@@ -283,6 +283,17 @@ export class BrowserService {
     workspace.owner = owner;
     workspace.removeOwner = owner.onInvalidated(() => this.closeForWebContents(owner.id));
   }
+  /** Allow only an already-owned live tab's exact favicon URL in the app chrome. */
+  ownsFaviconRequest(url: string, ownerId: number, documentId: string): boolean {
+    for (const tab of this.tabs.values()) {
+      const owner = this.workspaces.get(tab.state.workspaceId)?.owner;
+      if (owner?.id === ownerId && owner.documentId === documentId &&
+          !owner.isDestroyed() && !tab.closing && !tab.view.webContents.isDestroyed() &&
+          tab.state.favicon === url) return true;
+    }
+    return false;
+  }
+
   getState(workspaceId: string): BrowserState {
     const workspace = this.workspace(workspaceId);
     workspace.state.profiles = this.profiles;
@@ -540,6 +551,7 @@ export class BrowserService {
         // Loading alone cannot distinguish a replacement from a current crash.
         navigationSupersededCrash = wc.isCrashed();
         tab.pendingNavigationUrl = url;
+        tab.state.favicon = undefined;
         tab.pendingNavigationRequest = undefined;
         this.cancelCrashRecovery(tab);
         try { this.beginPreviewNavigation(tab, url); } catch (error) {
@@ -593,6 +605,7 @@ export class BrowserService {
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.contextId = undefined;
+      tab.state.favicon = undefined;
       tab.state.crashed = true;
       tab.state.loading = false;
       tab.crashTimes = tab.crashTimes.filter((time) => Date.now() - time < 30_000);

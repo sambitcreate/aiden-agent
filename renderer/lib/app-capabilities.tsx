@@ -2,19 +2,25 @@ import * as React from "react";
 
 export interface AppCapabilities {
   subagents: boolean;
+  createImages: boolean;
   geminiLive: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   subagents: false,
+  createImages: false,
   geminiLive: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
-  if (typeof value !== "object" || value === null) return DISABLED_APP_CAPABILITIES;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return DISABLED_APP_CAPABILITIES;
+  }
+  const record = value as Record<string, unknown>;
   return {
-    subagents: "subagents" in value && value.subagents === true,
-    geminiLive: "geminiLive" in value && value.geminiLive === true,
+    subagents: record.subagents === true,
+    createImages: record.createImages === true,
+    geminiLive: record.geminiLive === true,
   };
 }
 

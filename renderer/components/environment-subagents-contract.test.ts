@@ -37,19 +37,19 @@ function between(value: string, start: string, end: string): string {
 }
 
 test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, geminiLive: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, geminiLive: false });
+  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, createImages: false, geminiLive: false });
+  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, createImages: false, geminiLive: false });
   assert.deepEqual(parseAppCapabilities({ subagents: false }), {
     subagents: false,
-    geminiLive: false,
+    createImages: false, geminiLive: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
     subagents: false,
-    geminiLive: false,
+    createImages: false, geminiLive: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
-    geminiLive: false,
+    createImages: false, geminiLive: false,
   });
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [

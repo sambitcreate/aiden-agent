@@ -33,6 +33,8 @@ import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { requestCreateImagesNavigation } from "../create-images/navigation-guard";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 import {
   ASSISTANT_AUTOMATION_DRAFT,
@@ -61,6 +63,7 @@ function RootContent() {
   const terminal = useWorkspaceTerminal();
   const { activeId } = useActiveWorkspace();
   const appendReconciliationRequired = useAppendReconciliationRequired();
+  const appCapabilities = useAppCapabilities();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
@@ -153,13 +156,34 @@ function RootContent() {
     },
     workspaceCommands.environment,
   );
-  useCommandHandler("settings.open", () => {
+  useCommandHandler("settings.open", async () => {
     if (navigationBlockedReason) {
       toast.info(navigationBlockedReason);
       return;
     }
-    void navigate({ to: "/settings" });
+    const decision = await requestCreateImagesNavigation();
+    if (!decision.allowed) {
+      toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+      return;
+    }
+    await navigate({ to: "/settings" });
   });
+  useCommandHandler(
+    "images.open",
+    async () => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      await navigate({ to: "/create-images" });
+    },
+    appCapabilities.createImages,
+  );
   const openNewChat = React.useCallback(
     async (initialText?: string) => {
       if (!activeId) {
@@ -172,6 +196,11 @@ function RootContent() {
       }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
         return;
       }
       const chat = createChatDraft(activeId, undefined, initialText).chat;

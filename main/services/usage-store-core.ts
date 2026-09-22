@@ -8,6 +8,7 @@ import type {
 export type UsageRequestSource =
   | "chat"
   | "chat-title"
+  | "workflow-proposal"
   | "bot-avatar"
   | "vision"
   | "voice-transcription"

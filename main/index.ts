@@ -9,7 +9,7 @@ import {
   screen,
   shell,
 } from "./platform.js";
-import { Menu, nativeImage, nativeTheme } from "electron";
+import { Menu, nativeImage, nativeTheme, type MessageBoxSyncOptions } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
@@ -65,10 +65,7 @@ import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.
 import { scheduleService } from "./services/schedule-service.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
-import {
-  effectiveBindings,
-  migrateLegacyKeybindings,
-} from "../renderer/shared/keybindings.js";
+import { effectiveBindings, migrateLegacyKeybindings } from "../renderer/shared/keybindings.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -118,6 +115,17 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import { loadCreateImagesPackagedAcceptanceSession } from "./services/create-images/packaged-canvas-acceptance-core.js";
+import { createImagesEnabled } from "./services/create-images/feature-flag.js";
+import {
+  installCreateImagesAssetProtocol,
+  observeCreateImagesRequestPolicy,
+  registerCreateImagesAssetScheme,
+} from "./services/create-images/asset-protocol.js";
+import { createImagesService } from "./services/create-images/create-images-service.js";
+import type { CreateImagesRunView } from "../renderer/shared/create-images/ipc.js";
+
+if (createImagesEnabled()) registerCreateImagesAssetScheme();
 import {
   geminiLiveService,
   initializeAidenLiveService,
@@ -155,22 +163,26 @@ let closeGuard = {
   path: undefined as string | undefined,
   saving: false,
 };
-let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
-  null;
+let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
-const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
-  (snapshot) => {
-    ipcMain.broadcast("app:update-state", snapshot);
-  },
-);
+const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) => {
+  ipcMain.broadcast("app:update-state", snapshot);
+});
 
 const SUBAGENT_PACKAGED_SOAK_WAIT_MS = 30_000;
 const SUBAGENT_PACKAGED_SOAK_POLL_MS = 25;
+const CREATE_IMAGES_QUIT_SAFETY_TIMEOUT_MS = 6_000;
+
+const MAIN_WINDOW_SECURITY_PREFERENCES = Object.freeze({
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+});
 
 // These scripts are fixed at build time. The strict one-shot control record
 // selects only among their named actions; it never supplies a selector, route,
@@ -224,10 +236,7 @@ function hasCloseGuard(): boolean {
   return closeGuard.dirty || closeGuard.gitBusy || closeGuard.saving;
 }
 
-function confirmProtectedAction(
-  window: BrowserWindow,
-  action: "close" | "reload",
-): boolean {
+function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload"): boolean {
   if (closeGuard.gitBusy) {
     dialog.showMessageBoxSync(window, {
       type: "info",
@@ -265,15 +274,105 @@ function confirmProtectedAction(
         : "Reloading Aiden will permanently discard those edits.",
     buttons: [
       "Keep Editing",
-      action === "close"
-        ? "Discard Edits and Close"
-        : "Discard Edits and Reload",
+      action === "close" ? "Discard Edits and Close" : "Discard Edits and Reload",
     ],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
   });
   return response === 1;
+}
+
+function showQuitMessageBox(
+  window: BrowserWindow | undefined,
+  options: MessageBoxSyncOptions,
+): number {
+  return window && !window.isDestroyed()
+    ? dialog.showMessageBoxSync(window, options)
+    : dialog.showMessageBoxSync(options);
+}
+
+function showImageRunsCouldNotStop(window?: BrowserWindow): void {
+  showQuitMessageBox(window, {
+    type: "error",
+    title: "Image workflows could not stop safely",
+    message: "Aiden could not durably save cancellation for every active image workflow.",
+    detail:
+      "Aiden will stay open. Review Create Images, then try stopping the runs or quitting again.",
+    buttons: ["Keep Aiden Open"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+}
+
+async function activeImageRunsWithinQuitDeadline(): Promise<CreateImagesRunView[]> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      createImagesService().runs.activeRuns(),
+      new Promise<CreateImagesRunView[]>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Create Images quit inspection timed out.")),
+          CREATE_IMAGES_QUIT_SAFETY_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function confirmActiveImageRunsBeforeQuit(window?: BrowserWindow): Promise<boolean> {
+  if (!createImagesEnabled()) return true;
+  let activeRuns: CreateImagesRunView[];
+  try {
+    activeRuns = await activeImageRunsWithinQuitDeadline();
+  } catch (error) {
+    logger.error("main", "Could not inspect active Create Images runs before quit.", error);
+    if (!window || !window.isDestroyed()) {
+      showQuitMessageBox(window, {
+        type: "info",
+        title: "Image run status is unavailable",
+        message: "Aiden could not safely confirm whether a local image workflow is still running.",
+        detail: "Keep Aiden open, review Create Images, then try quitting again.",
+        buttons: ["Keep Aiden Open"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+    }
+    return false;
+  }
+  if (activeRuns.length === 0) return true;
+  const plural = activeRuns.length === 1 ? "workflow is" : "workflows are";
+  const stopLabel = activeRuns.length === 1 ? "Stop Run and Quit" : "Stop Runs and Quit";
+  const response = showQuitMessageBox(window, {
+    type: "warning",
+    title:
+      activeRuns.length === 1 ? "Image workflow still running" : "Image workflows still running",
+    message: `${activeRuns.length} local mock image ${plural} still running.`,
+    detail:
+      "Keep Aiden open to wait for completion, or stop the runs durably before quitting. Completed outputs stay on this device. These Phase 3 mock runs make no network requests and cost $0.",
+    buttons: ["Keep Aiden Open", stopLabel],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response !== 1) return false;
+  try {
+    const stopped = await createImagesService().runs.stopAll("app-quit");
+    if (stopped.status === "safe-to-quit") return true;
+    logger.error(
+      "main",
+      `Create Images cancellation was not durable for ${stopped.failedRunIds.length} run(s); quit was cancelled.`,
+    );
+  } catch (error) {
+    logger.error("main", "Could not durably stop active Create Images runs before quit.", error);
+  }
+  createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+  showImageRunsCouldNotStop(window);
+  return false;
 }
 
 function cleanupApplication(): void {
@@ -296,6 +395,11 @@ function cleanupApplication(): void {
   void mcpManager.closeAll();
 }
 
+function resumeCreateImagesAfterCancelledShutdown(): void {
+  if (!createImagesEnabled()) return;
+  createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+}
+
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -305,11 +409,37 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     } catch (error) {
       shutdownStarted = false;
       computerUseSettings.resumeAfterCancelledShutdown();
+      resumeCreateImagesAfterCancelledShutdown();
+      logger.error("main", "Computer Use state was not durable; Aiden will stay open.", error);
+      return;
+    }
+  }
+  if (createImagesEnabled()) {
+    try {
+      const stopped = await createImagesService().runs.stopAll("app-quit");
+      if (stopped.status === "blocked") {
+        shutdownStarted = false;
+        protectedAction = null;
+        computerUseSettings.resumeAfterCancelledShutdown();
+        createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+        logger.error(
+          "main",
+          `Create Images cancellation was not durable for ${stopped.failedRunIds.length} run(s); Aiden will stay open.`,
+        );
+        showImageRunsCouldNotStop(mainWindow ?? undefined);
+        return;
+      }
+    } catch (error) {
+      shutdownStarted = false;
+      protectedAction = null;
+      computerUseSettings.resumeAfterCancelledShutdown();
+      createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
       logger.error(
         "main",
-        "Computer Use state was not durable; Aiden will stay open.",
+        "Create Images shutdown did not reach a durable cancellation boundary; Aiden will stay open.",
         error,
       );
+      showImageRunsCouldNotStop(mainWindow ?? undefined);
       return;
     }
   }
@@ -328,11 +458,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       );
     }
   } catch (error) {
-    logger.error(
-      "main",
-      "Parent generation shutdown did not complete cleanly.",
-      error,
-    );
+    logger.error("main", "Parent generation shutdown did not complete cleanly.", error);
   }
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
@@ -343,17 +469,16 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   }
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
-  const quitReceiptFinalization =
-    await tryFinalizeSubagentPackagedSoakQuitReceipt(
-      session,
-      parentSettled,
-      subagentsSettled,
-      {
-        flushMetrics: () => subagentHealthMetrics.flush(),
-        snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
-        writeReceipt: writeSubagentPackagedSoakReceipt,
-      },
-    );
+  const quitReceiptFinalization = await tryFinalizeSubagentPackagedSoakQuitReceipt(
+    session,
+    parentSettled,
+    subagentsSettled,
+    {
+      flushMetrics: () => subagentHealthMetrics.flush(),
+      snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
+      writeReceipt: writeSubagentPackagedSoakReceipt,
+    },
+  );
   if (quitReceiptFinalization.status === "lifecycle_unsettled") {
     logger.warn(
       "main",
@@ -371,9 +496,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       quitReceiptFinalization.error,
     );
   }
-  if (
-    requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)
-  ) {
+  if (requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)) {
     logger.error(
       "main",
       "Packaged subagent soak finalization did not create a valid receipt; exiting with failure.",
@@ -404,11 +527,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       browserService.shutdown(),
     ]);
   } catch (error) {
-    logger.error(
-      "main",
-      "Application service shutdown did not complete cleanly.",
-      error,
-    );
+    logger.error("main", "Application service shutdown did not complete cleanly.", error);
   }
   await flushSubagentRuntimeDiagnostics(1_000);
   await flushDiagnosticJournal(1_000);
@@ -425,10 +544,15 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   app.quit();
 }
 
-async function refreshCloseGuardFromRenderer(
-  window: BrowserWindow,
-): Promise<number | null> {
+async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<number | null> {
   try {
+    const createImagesFlushAllowed = await window.webContents.executeJavaScript(
+      "window.__aidenFlushCreateImagesForLifecycle?.() ?? true",
+      true,
+    );
+    if (createImagesFlushAllowed !== true) {
+      throw new Error("Create Images autosave did not authorize the protected action.");
+    }
     const latest = (await window.webContents.executeJavaScript(
       `({
         dirty: document.documentElement.dataset.aidenDirty === "1",
@@ -449,8 +573,7 @@ async function refreshCloseGuardFromRenderer(
       path: closeGuard.path,
       saving: latest?.saving === true,
     };
-    return Number.isSafeInteger(latest?.revision) &&
-      Number(latest.revision) >= 0
+    return Number.isSafeInteger(latest?.revision) && Number(latest.revision) >= 0
       ? Number(latest.revision)
       : 0;
   } catch (error) {
@@ -471,10 +594,7 @@ async function refreshCloseGuardFromRenderer(
   }
 }
 
-async function armRendererUnload(
-  window: BrowserWindow,
-  revision: number,
-): Promise<boolean> {
+async function armRendererUnload(window: BrowserWindow, revision: number): Promise<boolean> {
   try {
     return (
       (await window.webContents.executeJavaScript(
@@ -500,8 +620,7 @@ async function authorizeProtectedAction(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const revision = await refreshCloseGuardFromRenderer(window);
     if (revision === null) return false;
-    if (hasCloseGuard() && !confirmProtectedAction(window, action))
-      return false;
+    if (hasCloseGuard() && !confirmProtectedAction(window, action)) return false;
     if (await armRendererUnload(window, revision)) return true;
   }
   if (!window.isDestroyed()) {
@@ -569,24 +688,19 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
+    if (!(await confirmActiveImageRunsBeforeQuit(window))) return false;
     await persistMainWindowState(window);
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
-      logger.error(
-        "main",
-        "Computer Use state was not durable; quit was cancelled.",
-        error,
-      );
+      logger.error("main", "Computer Use state was not durable; quit was cancelled.", error);
       if (!window.isDestroyed()) {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Aiden will stay open because Computer Use could not be safely turned off.",
-          detail:
-            "Check that the app can write its settings, then try quitting again.",
+          message: "Aiden will stay open because Computer Use could not be safely turned off.",
+          detail: "Check that the app can write its settings, then try quitting again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -604,6 +718,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     return shutdownStarted;
   } finally {
     lifecycleCheckInFlight = false;
+    if (!shutdownStarted) resumeCreateImagesAfterCancelledShutdown();
     if (!shutdownStarted && installUpdateOnQuit) {
       installUpdateOnQuit = false;
       appUpdateService.announceSnapshot();
@@ -611,9 +726,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   }
 }
 
-async function clearRendererOnboardingCompletion(
-  window: BrowserWindow,
-): Promise<boolean> {
+async function clearRendererOnboardingCompletion(window: BrowserWindow): Promise<boolean> {
   try {
     return (
       (await window.webContents.executeJavaScript(
@@ -627,14 +740,8 @@ async function clearRendererOnboardingCompletion(
       )) === true
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not clear the onboarding completion marker.",
-      error,
-    );
-    throw new Error(
-      "Aiden couldn’t prepare onboarding for restart. Try again.",
-    );
+    logger.error("main", "Could not clear the onboarding completion marker.", error);
+    throw new Error("Aiden couldn’t prepare onboarding for restart. Try again.");
   }
 }
 
@@ -649,21 +756,12 @@ async function restoreRendererOnboardingCompletion(
       true,
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not restore the onboarding completion marker.",
-      error,
-    );
+    logger.error("main", "Could not restore the onboarding completion marker.", error);
   }
 }
 
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
-  if (
-    lifecycleCheckInFlight ||
-    shutdownStarted ||
-    installUpdateOnQuit ||
-    window.isDestroyed()
-  ) {
+  if (lifecycleCheckInFlight || shutdownStarted || installUpdateOnQuit || window.isDestroyed()) {
     return false;
   }
   lifecycleCheckInFlight = true;
@@ -684,8 +782,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Onboarding was not reset because Computer Use could not be safely turned off.",
+          message: "Onboarding was not reset because Computer Use could not be safely turned off.",
           detail: "Check that the app can write its settings, then try again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
@@ -712,11 +809,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       computerUseSettings.resumeAfterCancelledShutdown();
       settingsPrepared = false;
       protectedAction = null;
-      logger.error(
-        "main",
-        "Onboarding reset was incomplete after the renderer closed.",
-        error,
-      );
+      logger.error("main", "Onboarding reset was incomplete after the renderer closed.", error);
       try {
         await createMainWindow();
       } catch (recoveryError) {
@@ -730,10 +823,8 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(mainWindow, {
           type: "error",
           title: "Aiden couldn't finish the reset",
-          message:
-            "Some setup data could not be cleared. Retry Reset onboarding.",
-          detail:
-            "Aiden reopened without deleting your chats, projects, schedules, or skills.",
+          message: "Some setup data could not be cleared. Retry Reset onboarding.",
+          detail: "Aiden reopened without deleting your chats, projects, schedules, or skills.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -759,22 +850,16 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
 }
 
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  const input = (
-    typeof value === "object" && value !== null ? value : {}
-  ) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   closeGuard = {
     dirty: input.dirty === true,
     gitBusy: input.gitBusy === true,
-    path:
-      typeof input.path === "string" && input.path.length <= 4_096
-        ? input.path
-        : undefined,
+    path: typeof input.path === "string" && input.path.length <= 4_096 ? input.path : undefined,
     saving: input.saving === true,
   };
   return true;
@@ -782,12 +867,7 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 
 ipcMain.handle("app:resetOnboarding", async (event) => {
   const window = mainWindow;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id
-  )
-    return false;
+  if (!window || window.isDestroyed() || event.sender.id !== window.webContents.id) return false;
   return requestOnboardingReset(window);
 });
 
@@ -865,11 +945,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:getUpdateState", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       status: "idle",
       version: null,
@@ -881,11 +957,7 @@ ipcMain.handle("app:getUpdateState", (event) => {
 ipcMain.handle(
   "app:checkForUpdates",
   async (event): Promise<AppUpdateCheckResult> => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       return { outcome: "unavailable" };
     }
     return appUpdateService.checkNow(false);
@@ -893,11 +965,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       accepted: false,
       reason: "unavailable",
@@ -925,19 +993,13 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
   rendererReadiness.markReady();
   return true;
 });
 
-async function applyDockIconPreference(
-  preference: DockIconPreference,
-): Promise<boolean> {
+async function applyDockIconPreference(preference: DockIconPreference): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
   const iconPath =
     preference === "monochrome"
@@ -948,16 +1010,13 @@ async function applyDockIconPreference(
         ? path.join(process.resourcesPath, "app-icon.png")
         : path.join(app.getAppPath(), "resources", "app-icon.png");
   const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty())
-    throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
+  if (icon.isEmpty()) throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
   app.dock.setIcon(icon);
   await app.dock.show();
   return true;
 }
 
-async function restoreDockIconPreference(
-  preference: DockIconPreference,
-): Promise<void> {
+async function restoreDockIconPreference(preference: DockIconPreference): Promise<void> {
   try {
     await applyDockIconPreference(preference);
   } catch (error) {
@@ -966,35 +1025,22 @@ async function restoreDockIconPreference(
     try {
       await applyDockIconPreference("aiden");
     } catch (fallbackError) {
-      logger.warn(
-        "main",
-        "Could not restore the default Dock icon",
-        fallbackError,
-      );
+      logger.warn("main", "Could not restore the default Dock icon", fallbackError);
     }
   }
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  if (value !== "aiden" && value !== "monochrome")
-    throw new Error("Invalid Dock icon preference.");
+  if (value !== "aiden" && value !== "monochrome") throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
 });
 
 function openExternalUrl(value: string): void {
   try {
     const url = new URL(value);
-    if (
-      url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-    ) {
+    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") {
       void shell.openExternal(url.toString());
     }
   } catch {
@@ -1049,9 +1095,7 @@ async function createMainWindow(): Promise<void> {
     show: false,
     webPreferences: {
       preload: getPreloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
+      ...MAIN_WINDOW_SECURITY_PREFERENCES,
     },
   });
   resetRendererReadiness();
@@ -1352,15 +1396,9 @@ function deliverMainWindowNotificationSafely(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
 ): void {
-  void deliverMainWindowNotification(channel, payload).catch(
-    (error: unknown) => {
-      logger.warn(
-        "main",
-        `Could not deliver renderer command "${channel}".`,
-        error,
-      );
-    },
-  );
+  void deliverMainWindowNotification(channel, payload).catch((error: unknown) => {
+    logger.warn("main", `Could not deliver renderer command "${channel}".`, error);
+  });
 }
 
 function showMainWindow(): void {
@@ -1370,9 +1408,7 @@ function showMainWindow(): void {
 }
 
 function pauseForPackagedSubagentSoak(): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS),
-  );
+  return new Promise((resolve) => setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS));
 }
 
 async function waitForPackagedSubagentSoak(
@@ -1387,9 +1423,7 @@ async function waitForPackagedSubagentSoak(
   throw new Error(`Packaged subagent soak did not reach ${step}.`);
 }
 
-async function runPackagedSubagentSoakRendererScript(
-  script: string,
-): Promise<boolean> {
+async function runPackagedSubagentSoakRendererScript(script: string): Promise<boolean> {
   const window = mainWindow;
   if (!window || window.isDestroyed()) {
     throw new Error("Packaged subagent soak lost its main window.");
@@ -1409,18 +1443,13 @@ async function packagedSubagentSoakGenerationError(): Promise<string | null> {
   return typeof result === "string" && result ? result : null;
 }
 
-async function settlePackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   if (!(await llmClient.waitForChatIdle(SUBAGENT_PACKAGED_SOAK_CHAT_ID))) {
-    throw new Error(
-      "Packaged subagent soak did not settle its parent generation.",
-    );
+    throw new Error("Packaged subagent soak did not settle its parent generation.");
   }
   await waitForPackagedSubagentSoak(
     "child settlement",
-    () =>
-      !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
+    () => !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await subagentHealthMetrics.flush();
   await writeSubagentPackagedSoakReceipt(
@@ -1435,9 +1464,7 @@ async function settlePackagedSubagentSoak(
  * main-only and fixed-function: normal users have no new IPC, renderer API, or
  * automation endpoint.
  */
-async function runPackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   await deliverMainWindowNotification("app:navigate", {
     path: SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
   });
@@ -1447,35 +1474,26 @@ async function runPackagedSubagentSoak(
   await waitForPackagedSubagentSoak("child start", async () => {
     const generationError = await packagedSubagentSoakGenerationError();
     if (generationError) {
-      throw new Error(
-        `Packaged subagent soak parent generation failed: ${generationError}`,
-      );
+      throw new Error(`Packaged subagent soak parent generation failed: ${generationError}`);
     }
-    return subagentRuntimeRegistry.hasChatChildren(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    );
+    return subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID);
   });
   // Ownership alone is intentionally insufficient: a child is registered
   // before it acquires a slot and dispatches provider work. Wait for Pi's
   // response callback so the loopback child request is actually in flight.
   await waitForPackagedSubagentSoak("child provider response", () =>
-    subagentRuntimeRegistry.hasChatProviderResponse(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    ),
+    subagentRuntimeRegistry.hasChatProviderResponse(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await waitForPackagedSubagentSoak(
     "aggregate child start",
-    async () =>
-      (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
+    async () => (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
   );
 
   const action = subagentPackagedSoakAction(session.control.mode);
   switch (action.kind) {
     case "renderer_stop":
       await waitForPackagedSubagentSoak("user stop", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -1484,9 +1502,7 @@ async function runPackagedSubagentSoak(
         path: action.path,
       });
       await waitForPackagedSubagentSoak("Settings navigation", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -1501,19 +1517,13 @@ registerAppPathOpener(async (path) => {
   await deliverMainWindowNotification("app:navigate", { path });
 });
 
-function setupApplicationMenu(
-  settings: AppSettings,
-  acceleratorsEnabled = true,
-): void {
+function setupApplicationMenu(settings: AppSettings, acceleratorsEnabled = true): void {
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
   }
-  const bindings = effectiveBindings(
-    migrateLegacyKeybindings(settings.keybindings, settings),
-  );
-  const command = (commandId: keyof typeof bindings) =>
-    bindings[commandId] ?? undefined;
+  const bindings = effectiveBindings(migrateLegacyKeybindings(settings.keybindings, settings));
+  const command = (commandId: keyof typeof bindings) => bindings[commandId] ?? undefined;
   const menu = Menu.buildFromTemplate([
     {
       label: app.getName(),
@@ -1581,8 +1591,7 @@ function setupApplicationMenu(
           label: "Reload",
           accelerator: "Command+R",
           click: () => {
-            if (mainWindow && !mainWindow.isDestroyed())
-              void requestWindowReload(mainWindow);
+            if (mainWindow && !mainWindow.isDestroyed()) void requestWindowReload(mainWindow);
           },
         },
         {
@@ -1659,7 +1668,16 @@ if (!ownsSingleInstanceLock) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       void requestApplicationQuit(mainWindow);
     } else {
-      void shutdownAndQuit();
+      lifecycleCheckInFlight = true;
+      void (async () => {
+        try {
+          if (await confirmActiveImageRunsBeforeQuit()) {
+            await shutdownAndQuit();
+          }
+        } finally {
+          if (!shutdownStarted) lifecycleCheckInFlight = false;
+        }
+      })();
     }
   });
 
@@ -1686,21 +1704,14 @@ if (!ownsSingleInstanceLock) {
     reloadPortableConfig,
     async (previous, next) => {
       await Promise.all([
-        reconcileExternalProviderCredentialChanges(
-          previous.providers,
-          next.providers,
-        ),
-        reconcileExternalMcpCredentialChanges(
-          previous.mcpServers,
-          next.mcpServers,
-          (serverId) => mcpManager.disconnect(serverId),
+        reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
+        reconcileExternalMcpCredentialChanges(previous.mcpServers, next.mcpServers, (serverId) =>
+          mcpManager.disconnect(serverId),
         ),
       ]);
     },
   );
-  setPortableCredentialSnapshotListener(() =>
-    reloadAndReconcilePortableConfig.syncCurrent(),
-  );
+  setPortableCredentialSnapshotListener(() => reloadAndReconcilePortableConfig.syncCurrent());
   const portableConfigWatcher = createPortableConfigWatcher(
     reloadAndReconcilePortableConfig,
     () => {
@@ -1708,17 +1719,21 @@ if (!ownsSingleInstanceLock) {
       ipcMain.broadcast("app:config-externally-changed", {});
     },
     (error: unknown) =>
-      logger.warn(
-        "portable-config",
-        "Failed to re-read the portable config",
-        error,
-      ),
+      logger.warn("portable-config", "Failed to re-read the portable config", error),
   );
 
   app
     .whenReady()
     .then(async () => {
       const runtimeProfile = currentRuntimeProfile();
+      if (createImagesEnabled()) {
+        const images = createImagesService();
+        await installCreateImagesAssetProtocol(images.grants, {
+          response: (assetId, rendition) => images.assetResponse(assetId, rendition),
+          authorizeBrowserFavicon: (url, ownerId, documentId) =>
+            browserService.ownsFaviconRequest(url, ownerId, documentId),
+        });
+      }
       writeDiagnosticEvent({
         level: "info",
         area: "app",
@@ -1739,10 +1754,14 @@ if (!ownsSingleInstanceLock) {
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
+      const packagedCreateImagesAcceptance = await loadCreateImagesPackagedAcceptanceSession({
+        isPackaged: isPackagedRuntime(),
+      });
+      if (packagedSubagentSoak && packagedCreateImagesAcceptance) {
+        throw new Error("Only one packaged acceptance session may run at a time.");
+      }
       if (packagedSubagentSoak && !subagentsEnabled()) {
-        throw new Error(
-          "Packaged subagent soak requires the internal subagent opt-in.",
-        );
+        throw new Error("Packaged subagent soak requires the internal subagent opt-in.");
       }
       if (!isPackagedRuntime()) {
         logger.info(
@@ -1760,9 +1779,7 @@ if (!ownsSingleInstanceLock) {
         });
       }
       try {
-        terminalService.installHistoryStore(
-          await TerminalHistoryStore.create(),
-        );
+        terminalService.installHistoryStore(await TerminalHistoryStore.create());
       } catch (error) {
         logger.warn(
           "terminal",
@@ -1920,16 +1937,14 @@ if (!ownsSingleInstanceLock) {
         listWorkspaces: () => configStore.listWorkspaces(),
         deletionPending: (workspace) => {
           const managed = workspace.managedWorktree;
-          if (!managed?.worktreeGitDir || !managed.ownershipToken)
-            return Promise.resolve(false);
+          if (!managed?.worktreeGitDir || !managed.ownershipToken) return Promise.resolve(false);
           return gitManagedWorktreeDeletionPending(
             managed.worktreePath,
             managed.worktreeGitDir,
             managed.ownershipToken,
           );
         },
-        blockWorkspace: (workspaceId) =>
-          scheduleService.cancelWorkspace(workspaceId),
+        blockWorkspace: (workspaceId) => scheduleService.cancelWorkspace(workspaceId),
         deleteWorktree: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitDeleteManagedWorktree(
@@ -1944,8 +1959,7 @@ if (!ownsSingleInstanceLock) {
             managed.worktreeInode,
           );
         },
-        removeWorkspaceRecord: (workspaceId) =>
-          configStore.removeWorkspace(workspaceId),
+        removeWorkspaceRecord: (workspaceId) => configStore.removeWorkspace(workspaceId),
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitFinalizeManagedWorktreeDeletion(
@@ -1988,11 +2002,7 @@ if (!ownsSingleInstanceLock) {
       try {
         await reconcilePendingMcpCredentialCleanup();
       } catch (error) {
-        logger.error(
-          "mcp",
-          "Could not reconcile an interrupted MCP credential cleanup.",
-          error,
-        );
+        logger.error("mcp", "Could not reconcile an interrupted MCP credential cleanup.", error);
       }
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
@@ -2004,11 +2014,7 @@ if (!ownsSingleInstanceLock) {
         void deliverMainWindowNotification("app:command", {
           commandId: "composer.focus",
         }).catch((error: unknown) => {
-          logger.warn(
-            "shortcut",
-            "Could not focus the composer from the global shortcut",
-            error,
-          );
+          logger.warn("shortcut", "Could not focus the composer from the global shortcut", error);
         });
       });
       initDictationShortcut(() => {
@@ -2018,11 +2024,7 @@ if (!ownsSingleInstanceLock) {
         void deliverMainWindowNotification("app:command", {
           commandId: "assistant.open",
         }).catch((error: unknown) => {
-          logger.warn(
-            "assistant",
-            "Could not open Aiden from the global shortcut",
-            error,
-          );
+          logger.warn("assistant", "Could not open Aiden from the global shortcut", error);
         });
       });
       try {
@@ -2041,10 +2043,7 @@ if (!ownsSingleInstanceLock) {
       // The active profile's portable config is user-editable, so pick
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
-      app.on(
-        "browser-window-focus",
-        () => void portableConfigWatcher.refresh(),
-      );
+      app.on("browser-window-focus", () => void portableConfigWatcher.refresh());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {
@@ -2058,6 +2057,30 @@ if (!ownsSingleInstanceLock) {
       }
 
       await createMainWindow();
+      if (packagedCreateImagesAcceptance) {
+        const { runPackagedCreateImagesAcceptance } =
+          await import("./services/create-images/packaged-canvas-acceptance-runner.js");
+        const acceptanceWindow = mainWindow;
+        if (!acceptanceWindow || acceptanceWindow.isDestroyed()) {
+          throw new Error("Packaged Create Images acceptance requires a live main window.");
+        }
+        await runPackagedCreateImagesAcceptance(packagedCreateImagesAcceptance, {
+          service: createImagesService(),
+          observeRequestPolicy: observeCreateImagesRequestPolicy,
+          window: acceptanceWindow,
+          runtimeProfile: currentRuntimeProfile(),
+          reloadRenderer: async () => {
+            resetRendererReadiness();
+            acceptanceWindow.webContents.reload();
+            await rendererReadiness.wait();
+          },
+          navigate: (path) => deliverMainWindowNotification("app:navigate", { path }),
+        });
+        forceAppQuit = true;
+        protectedAction = "quit";
+        app.quit();
+        return;
+      }
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;

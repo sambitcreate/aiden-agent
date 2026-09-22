@@ -1,3 +1,4 @@
+import { useAppCapabilities } from "../lib/app-capabilities";
 // In-app full-screen settings: left nav + section content, with "Back to app".
 
 import * as React from "react";
@@ -18,6 +19,7 @@ import {
   ChartScatter,
   Info,
   Clock3,
+  Images,
   Send,
   Smartphone,
   AudioWaveform,
@@ -34,6 +36,7 @@ import { ComputerUseSettings } from "../components/settings/computer-use-setting
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
+import { CreateImagesSettings } from "../components/settings/create-images-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
 import { MemoryCardIcon } from "../components/memory-card-icon";
@@ -62,6 +65,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   geminiLive: <AudioWaveform className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
+  createImages: <Images className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
@@ -86,6 +90,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  createImages: CreateImagesSettings,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
   geminiLive: AidenLiveSettings,
@@ -96,6 +101,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 };
 
 const DESCRIPTIONS: Record<SettingsSection, string> = {
+  createImages: "Choose how image workflows save and how the canvas behaves.",
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this Mac.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
@@ -116,13 +122,16 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
   const navigate = useNavigate();
-  const section = initialSection ?? "providers";
+  const capabilities = useAppCapabilities();
+  const section = initialSection === "createImages" && !capabilities.createImages
+    ? "providers" : initialSection ?? "providers";
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
+  const availableNav = NAV.filter((item) => item.id !== "createImages" || capabilities.createImages);
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
-    : NAV;
+    ? availableNav.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
+    : availableNav;
   const ActiveSection = CONTENT[section];
 
   return (

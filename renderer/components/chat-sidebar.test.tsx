@@ -18,12 +18,16 @@ test("sidebar places primary actions above the unified workspace outline", () =>
   const sidebar = source("./chat-sidebar.tsx");
   const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
+  const createImagesIndex = sidebarBody.indexOf('title="Create Images"');
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
   const workspaceIndex = sidebarBody.indexOf("Workspaces");
 
   assert.notEqual(newAgentIndex, -1);
+  assert.notEqual(createImagesIndex, -1);
   assert.notEqual(scheduledIndex, -1);
-  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
+  assert.ok(newAgentIndex < createImagesIndex, "New Agent should appear before Create Images");
+  assert.ok(createImagesIndex < scheduledIndex, "Create Images should appear before Scheduled");
+  assert.match(sidebarBody, /appCapabilities\.createImages/u);
   assert.ok(
     scheduledIndex < workspaceIndex,
     "Scheduled should stay above the unified workspace and chat list",
@@ -468,4 +472,12 @@ test("working chats receive an accessible animated sidebar indicator", () => {
     styles,
     /:root\[data-reduce-motion="true"\] \*[\s\S]*animation-duration: 0\.001ms !important;[\s\S]*animation-iteration-count: 1 !important;/u,
   );
+});
+
+test("new chat guards image workflow navigation before draft and workspace side effects", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const action = between(sidebar, "const newAgentInWorkspace =", "const newAgent =");
+  assert.ok(action.indexOf("await requestCreateImagesNavigation()") < action.indexOf("createChatDraft("));
+  assert.ok(action.indexOf("if (!decision.allowed)") < action.indexOf("select(workspaceId)"));
+  assert.match(between(sidebar, "const openRemoteSettings =", "React.useEffect"), /await navigateOutsideCreateImages/u);
 });

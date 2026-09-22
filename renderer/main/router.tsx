@@ -3,7 +3,9 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  useNavigate,
 } from "@tanstack/react-router";
+import * as React from "react";
 import { RootView } from "./root-view";
 import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
@@ -15,6 +17,48 @@ import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { parseSettingsSearch } from "../lib/settings-section";
+import { useAppCapabilities } from "../lib/app-capabilities";
+
+const LazyCreateImagesIndexView = React.lazy(() =>
+  import("../create-images/create-images-view").then(({ CreateImagesIndexView }) => ({
+    default: CreateImagesIndexView,
+  })),
+);
+
+const LazyCreateImagesWorkflowView = React.lazy(() =>
+  import("../create-images/create-images-view").then(({ CreateImagesWorkflowView }) => ({
+    default: CreateImagesWorkflowView,
+  })),
+);
+
+function CreateImagesCapabilityGate({ children }: React.PropsWithChildren) {
+  const { createImages } = useAppCapabilities();
+  const navigate = useNavigate();
+
+  React.useEffect(() => {
+    if (!createImages) void navigate({ to: "/", replace: true });
+  }, [createImages, navigate]);
+
+  if (!createImages) {
+    return (
+      <div className="flex h-full items-center justify-center p-6" role="status">
+        <p className="text-small text-secondary">Create Images is unavailable in this build.</p>
+      </div>
+    );
+  }
+
+  return (
+    <React.Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center p-6" role="status">
+          <p className="text-small text-secondary">Opening Create Images…</p>
+        </div>
+      }
+    >
+      {children}
+    </React.Suspense>
+  );
+}
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -72,6 +116,33 @@ const scheduledRoute = createRoute({
   staticData: { title: "Scheduled tasks" },
 });
 
+const createImagesIndexRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/create-images",
+  component: function CreateImagesIndexRoute() {
+    return (
+      <CreateImagesCapabilityGate>
+        <LazyCreateImagesIndexView />
+      </CreateImagesCapabilityGate>
+    );
+  },
+  staticData: { title: "Create Images" },
+});
+
+const createImagesWorkflowRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/create-images/$workflowId",
+  component: function CreateImagesWorkflowRoute() {
+    const { workflowId } = createImagesWorkflowRoute.useParams();
+    return (
+      <CreateImagesCapabilityGate>
+        <LazyCreateImagesWorkflowView workflowId={workflowId} />
+      </CreateImagesCapabilityGate>
+    );
+  },
+  staticData: { title: "Image workflow" },
+});
+
 const botsRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/bots",
@@ -114,6 +185,8 @@ const routeTree = rootRoute.addChildren([
     chatRoute,
     profileRoute,
     scheduledRoute,
+    createImagesIndexRoute,
+    createImagesWorkflowRoute,
     botsRoute,
     botRoute,
     botChatRoute,

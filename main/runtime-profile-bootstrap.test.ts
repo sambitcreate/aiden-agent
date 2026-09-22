@@ -19,6 +19,10 @@ test("the Electron build enters through the profile bootstrap", () => {
     "utf8",
   );
   assert.match(buildScript, /entryPoints: \["main\/bootstrap\.ts"\]/u);
+  assert.match(buildScript, /outfile: "build\/main\/index\.js"/u);
+  assert.doesNotMatch(buildScript, /splitting: true/u);
+  assert.match(buildScript, /path: "\.\/create-images-packaged-acceptance-runner\.js",\s*external: true/u);
+  assert.match(buildScript, /outfile: "build\/main\/create-images-packaged-acceptance-runner\.js"/u);
 });
 
 test("crash capture is off at bootstrap and only the explicit diagnostics handler can enable it", () => {

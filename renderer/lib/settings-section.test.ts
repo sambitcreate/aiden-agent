@@ -9,6 +9,7 @@ import {
 test("accepts known settings deep links and rejects arbitrary search values", () => {
   assert.equal(parseSettingsSection("modelData"), "modelData");
   assert.equal(parseSettingsSection("computerUse"), "computerUse");
+  assert.equal(parseSettingsSection("createImages"), "createImages");
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("geminiLive"), "geminiLive");
   assert.equal(parseSettingsSection("assistant"), undefined);
@@ -17,9 +18,12 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("about"), "about");
   assert.equal(parseSettingsSection("unknown"), undefined);
   assert.equal(parseSettingsSection(["modelData"]), undefined);
-  assert.deepEqual(parseSettingsSearch({ section: "modelData", ignored: "value" }), {
-    section: "modelData",
-  });
+  assert.deepEqual(
+    parseSettingsSearch({ section: "modelData", ignored: "value" }),
+    {
+      section: "modelData",
+    },
+  );
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
 });
 
@@ -29,6 +33,11 @@ test("parses the Remote Access settings deep link", () => {
   });
 });
 
+test("parses the Create Images settings deep link", () => {
+  assert.deepEqual(parseSettingsSearch({ section: "createImages" }), {
+    section: "createImages",
+  });
+});
 test("parses the Gemini Live settings deep link", () => {
   assert.deepEqual(parseSettingsSearch({ section: "geminiLive" }), {
     section: "geminiLive",

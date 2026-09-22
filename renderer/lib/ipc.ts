@@ -161,6 +161,78 @@ import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../share
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 
+import type {
+  CreateImagesAssetGrantResult,
+  CreateImagesApplyAssetCleanupRequest,
+  CreateImagesAssetCleanupPlanResult,
+  CreateImagesAssetCleanupResult,
+  CreateImagesAssetPickResult,
+  CreateImagesPasteImageRequest,
+  CreateImagesPasteImageResult,
+  CreateImagesCreateWorkflowRequest,
+  CreateImagesDeleteWorkflowRequest,
+  CreateImagesDegradedRunDiscardPlanResult,
+  CreateImagesDegradedRunDiscardResult,
+  CreateImagesDiscardDegradedRunRequest,
+  CreateImagesDiscardAutosaveRequest,
+  CreateImagesDownloadWorkflowAssetRequest,
+  CreateImagesDownloadRunAssetRequest,
+  CreateImagesDownloadRunAssetsZipRequest,
+  CreateImagesDownloadRunAssetResult,
+  CreateImagesDuplicateWorkflowRequest,
+  CreateImagesExportArchiveRequest,
+  CreateImagesExportArchiveResult,
+  CreateImagesGrantAssetRequest,
+  CreateImagesGrantRunAssetRequest,
+  CreateImagesGetRunRequest,
+  CreateImagesGetWorkflowRequest,
+  CreateImagesListRunsRequest,
+  CreateImagesImportArchiveResult,
+  CreateImagesImportNodeBananaResult,
+  CreateImagesListRecentOutputsRequest,
+  CreateImagesRecentOutputListResult,
+  CreateImagesGetPresentationRequest,
+  CreateImagesSetAssetHiddenRequest,
+  CreateImagesPresentationResult,
+  CreateImagesPlanRunHistoryPruneRequest,
+  CreateImagesPrepareRunRequest,
+  CreateImagesPrepareRunResult,
+  CreateImagesProposeWorkflowRequest,
+  CreateImagesProposeWorkflowResult,
+  CreateImagesPlanDegradedRunDiscardRequest,
+  CreateImagesPruneRunHistoryRequest,
+  CreateImagesRenameWorkflowRequest,
+  CreateImagesRecoverWorkflowRequest,
+  CreateImagesRecoverRunRequest,
+  CreateImagesRepairWorkflowRequest,
+  CreateImagesResolveRunAmbiguityRequest,
+  CreateImagesRevokeAssetGrantRequest,
+  CreateImagesRunChangedNotification,
+  CreateImagesRunAmbiguityResolutionResult,
+  CreateImagesRunDetailResult,
+  CreateImagesRunListResult,
+  CreateImagesRunMutationResult,
+  CreateImagesRunHistoryPrunePlanResult,
+  CreateImagesRunHistoryPruneResult,
+  CreateImagesRunRecoveryMutationResult,
+  CreateImagesRunSubscriptionResult,
+  CreateImagesSaveWorkflowRequest,
+  CreateImagesStartRunRequest,
+  CreateImagesStopRunRequest,
+  CreateImagesResumeRunRequest,
+  CreateImagesStorageHealthView,
+  CreateImagesSubscribeRunsRequest,
+  CreateImagesUnsubscribeRunsRequest,
+  CreateImagesWorkflowListResult,
+  CreateImagesWorkflowLoadResult,
+  CreateImagesWorkflowMutationResult,
+  CreateImagesWorkspaceStatus,
+  CreateImagesChooseWorkspaceResult,
+  CreateImagesOpenWorkspaceResult,
+  CreateImagesSyncWorkspaceResult,
+} from "../shared/create-images/ipc";
+import type { CreateImagesProviderStatus } from "../shared/create-images/providers";
+
 function bridge() {
   return window.aidenAPI.ipc;
 }
@@ -215,6 +287,101 @@ export const appUpdatesApi = {
     onNotification<unknown>("app:update-state", (payload) =>
       handler(parseAppUpdateSnapshot(payload)),
     ),
+};
+
+export const createImagesApi = {
+  providerStatus: () => invoke<CreateImagesProviderStatus>("imageWorkflows:providerStatus"),
+  workspaceStatus: () => invoke<CreateImagesWorkspaceStatus>("imageWorkflows:workspaceStatus", {}),
+  chooseWorkspace: () =>
+    invoke<CreateImagesChooseWorkspaceResult>("imageWorkflows:chooseWorkspace", {}),
+  openWorkspace: () => invoke<CreateImagesOpenWorkspaceResult>("imageWorkflows:openWorkspace", {}),
+  syncWorkspace: () => invoke<CreateImagesSyncWorkspaceResult>("imageWorkflows:syncWorkspace", {}),
+  list: () => invoke<CreateImagesWorkflowListResult>("imageWorkflows:list"),
+  get: (request: CreateImagesGetWorkflowRequest) =>
+    invoke<CreateImagesWorkflowLoadResult>("imageWorkflows:get", request),
+  create: (request: CreateImagesCreateWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:create", request),
+  save: (request: CreateImagesSaveWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:save", request),
+  rename: (request: CreateImagesRenameWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:rename", request),
+  duplicate: (request: CreateImagesDuplicateWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:duplicate", request),
+  importArchive: () => invoke<CreateImagesImportArchiveResult>("imageWorkflows:importArchive", {}),
+  importNodeBanana: () =>
+    invoke<CreateImagesImportNodeBananaResult>("imageWorkflows:importNodeBanana", {}),
+  exportArchive: (request: CreateImagesExportArchiveRequest) =>
+    invoke<CreateImagesExportArchiveResult>("imageWorkflows:exportArchive", request),
+  delete: (request: CreateImagesDeleteWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:delete", request),
+  recover: (request: CreateImagesRecoverWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:recover", request),
+  repairRecoveryMetadata: (request: CreateImagesRepairWorkflowRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:repairRecoveryMetadata", request),
+  discardAutosave: (request: CreateImagesDiscardAutosaveRequest) =>
+    invoke<CreateImagesWorkflowMutationResult>("imageWorkflows:discardAutosave", request),
+  pickAsset: (request: CreateImagesGetWorkflowRequest) =>
+    invoke<CreateImagesAssetPickResult>("imageWorkflows:pickAsset", request),
+  pasteImage: (request: CreateImagesPasteImageRequest) =>
+    invoke<CreateImagesPasteImageResult>("imageWorkflows:pasteImage", request),
+  grantAsset: (request: CreateImagesGrantAssetRequest) =>
+    invoke<CreateImagesAssetGrantResult>("imageWorkflows:grantAsset", request),
+  revokeAssetGrant: (request: CreateImagesRevokeAssetGrantRequest) =>
+    invoke<boolean>("imageWorkflows:revokeAssetGrant", request),
+  storageHealth: () => invoke<CreateImagesStorageHealthView>("imageWorkflows:storageHealth"),
+  planAssetCleanup: () =>
+    invoke<CreateImagesAssetCleanupPlanResult>("imageWorkflows:planAssetCleanup", {}),
+  applyAssetCleanup: (request: CreateImagesApplyAssetCleanupRequest) =>
+    invoke<CreateImagesAssetCleanupResult>("imageWorkflows:applyAssetCleanup", request),
+  prepareRun: (request: CreateImagesPrepareRunRequest) =>
+    invoke<CreateImagesPrepareRunResult>("imageWorkflows:prepareRun", request),
+  startRun: (request: CreateImagesStartRunRequest) =>
+    invoke<CreateImagesRunMutationResult>("imageWorkflows:startRun", request),
+  stopRun: (request: CreateImagesStopRunRequest) =>
+    invoke<CreateImagesRunMutationResult>("imageWorkflows:stopRun", request),
+  resumeRun: (request: CreateImagesResumeRunRequest) =>
+    invoke<CreateImagesRunMutationResult>("imageWorkflows:resumeRun", request),
+  proposeWorkflow: (request: CreateImagesProposeWorkflowRequest) =>
+    invoke<CreateImagesProposeWorkflowResult>("imageWorkflows:proposeWorkflow", request),
+  listRuns: (request: CreateImagesListRunsRequest) =>
+    invoke<CreateImagesRunListResult>("imageWorkflows:listRuns", request),
+  planRunHistoryPrune: (request: CreateImagesPlanRunHistoryPruneRequest) =>
+    invoke<CreateImagesRunHistoryPrunePlanResult>("imageWorkflows:planRunHistoryPrune", request),
+  pruneRunHistory: (request: CreateImagesPruneRunHistoryRequest) =>
+    invoke<CreateImagesRunHistoryPruneResult>("imageWorkflows:pruneRunHistory", request),
+  planDegradedRunDiscard: (request: CreateImagesPlanDegradedRunDiscardRequest) =>
+    invoke<CreateImagesDegradedRunDiscardPlanResult>(
+      "imageWorkflows:planDegradedRunDiscard",
+      request,
+    ),
+  discardDegradedRun: (request: CreateImagesDiscardDegradedRunRequest) =>
+    invoke<CreateImagesDegradedRunDiscardResult>("imageWorkflows:discardDegradedRun", request),
+  getRun: (request: CreateImagesGetRunRequest) =>
+    invoke<CreateImagesRunDetailResult>("imageWorkflows:getRun", request),
+  recoverRun: (request: CreateImagesRecoverRunRequest) =>
+    invoke<CreateImagesRunRecoveryMutationResult>("imageWorkflows:recoverRun", request),
+  resolveRunAmbiguity: (request: CreateImagesResolveRunAmbiguityRequest) =>
+    invoke<CreateImagesRunAmbiguityResolutionResult>("imageWorkflows:resolveRunAmbiguity", request),
+  subscribeRuns: (request: CreateImagesSubscribeRunsRequest) =>
+    invoke<CreateImagesRunSubscriptionResult>("imageWorkflows:subscribeRuns", request),
+  unsubscribeRuns: (request: CreateImagesUnsubscribeRunsRequest) =>
+    invoke<boolean>("imageWorkflows:unsubscribeRuns", request),
+  grantRunAsset: (request: CreateImagesGrantRunAssetRequest) =>
+    invoke<CreateImagesAssetGrantResult>("imageWorkflows:grantRunAsset", request),
+  listRecentOutputs: (request: CreateImagesListRecentOutputsRequest) =>
+    invoke<CreateImagesRecentOutputListResult>("imageWorkflows:listRecentOutputs", request),
+  getPresentation: (request: CreateImagesGetPresentationRequest) =>
+    invoke<CreateImagesPresentationResult>("imageWorkflows:getPresentation", request),
+  setAssetHidden: (request: CreateImagesSetAssetHiddenRequest) =>
+    invoke<CreateImagesPresentationResult>("imageWorkflows:setAssetHidden", request),
+  downloadWorkflowAsset: (request: CreateImagesDownloadWorkflowAssetRequest) =>
+    invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadWorkflowAsset", request),
+  downloadRunAsset: (request: CreateImagesDownloadRunAssetRequest) =>
+    invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadRunAsset", request),
+  downloadRunAssetsZip: (request: CreateImagesDownloadRunAssetsZipRequest) =>
+    invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadRunAssetsZip", request),
+  onRunsChanged: (handler: (notification: CreateImagesRunChangedNotification) => void) =>
+    onNotification<CreateImagesRunChangedNotification>("imageWorkflows:run-changed", handler),
 };
 
 // ── Providers & settings ──────────────────────────────────────────────

@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   "telegram",
   "remoteAccess",
   "computerUse",
+  "createImages",
   "memory",
   "scheduledTasks",
   "geminiLive",
@@ -110,6 +111,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Memory",
     group: "Agent",
     keywords: ["remember", "facts", "recall", "workspace", "privacy"],
+  },
+  {
+    id: "createImages",
+    title: "Create Images",
+    group: "Agent",
+    keywords: ["image", "workflow", "canvas", "autosave", "manual save", "power features"],
   },
   {
     id: "voice",

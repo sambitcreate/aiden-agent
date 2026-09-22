@@ -852,3 +852,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — Create Images PR #37 integration
+
+- Research and PR were at b697820a0 while main moved to c8c09e0d2; merge required26 conflict resolutions. Preserve both current-main feature registrations and Create Images imports/scripts; do not take either file wholesale.
+- The research's GenerationBoundConnectionCache reference belongs to MCP, not image generation. Verify actual ownership before modifying shared connection lifetimes.
+- Sandbox blocked shared Git metadata, GitHub access and tsx's IPC pipe despite routine task authorization. Required tool escalation succeeded; no permission settings changed.
+- Original PR CSP/egress policy denied current main browser favicons. Preserve denial with exact main-owned favicon URL/document authorization rather than globally allowing renderer network traffic.
+- Journal performance250-node105s gate failed during simultaneous build/review workload; keep timing evidence and rerun without local overlapping heavy jobs. Do not widen thresholds to conceal contention.
+- Hosted Electron E2E exposed an integration failure missed by source-level suites: main-process code splitting reordered circular service initialization, capturing an undefined `llmClient` in the chat application service. It also relocated `import.meta.url` away from sibling worker/resource paths. Restore the unsplit main bundle; emit only packaged image acceptance as a separate lazy module with live service/observer dependencies injected. Verify the runner sourcemap excludes runtime singletons and exercise queue/relaunch/migration through built Electron.

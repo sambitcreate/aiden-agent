@@ -18,6 +18,7 @@ const featureAssetPaths = [
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
+  "features/create-images.png",
   "features/browser.png",
   "features/files-editor.png",
   "features/git-workflows.png",
@@ -341,6 +342,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   }
   for (const title of [
     "Workspace Agent",
+    "Create Images",
     "Computer Use",
     "Native Subagents",
     "Files & Text Editor",
@@ -387,12 +389,12 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /Browser & Annotations/u);
   assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
   assert.match(featurePresentation, /Incognito is temporary/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 26);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 27);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 26);
+  assert.equal(featureAssetPaths.length, 27);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.ok(featureAssetPaths.includes("features/bots.png"));

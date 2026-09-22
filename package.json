@@ -27,7 +27,7 @@
   "type": "module",
   "main": "build/main/index.js",
   "scripts": {
-    "build": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && vite build && node scripts/verify-gemini-live-worklet.mjs && node scripts/verify-ghostty-terminal-assets.mjs && npm run build:electron",
+    "build": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && vite build && node scripts/verify-gemini-live-worklet.mjs && node scripts/verify-ghostty-terminal-assets.mjs && npm run build:electron && node scripts/verify-create-images-lazy-boundary.mjs",
     "computer-use:vendor": "node scripts/vendor-cua-driver.mjs",
     "build:native": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --required",
     "build:native:optional": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:bot-inbox-writer && npm run build:subagent-run-store && npm run build:subagent-file-mutator && npm run build:subagent-shell-runner && node scripts/build-foundation-models-helper.mjs --optional",
@@ -47,8 +47,8 @@
     "generative-ui:vendor": "node scripts/vendor-generative-ui-libs.mjs",
     "pretest:generative-ui": "npm run build:subagent-file-mutator",
     "test:aiden-remote-speech": "tsx --test main/services/aiden-remote-speech.test.ts",
-    "pretest": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run test:mcp && npm run test:browser && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:memory-policy && npm run test:ios-release && npm run test:terminal:coverage && npm run test:ghostty-terminal && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:display-image && npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice && npm run test:sidebar",
-    "pretest:coverage": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:subagent-run-store && npm run test:preflight && npm run test:ghostty-terminal && npm run test:scheduled && npm run test:memory-policy && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && npm run test:bots:coverage",
+    "pretest": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run test:mcp && npm run test:browser && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:memory-policy && npm run test:ios-release && npm run test:terminal:coverage && npm run test:ghostty-terminal && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:display-image && npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice && npm run test:sidebar && npm run test:create-images",
+    "pretest:coverage": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:subagent-run-store && npm run test:preflight && npm run test:ghostty-terminal && npm run test:scheduled && npm run test:memory-policy && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && npm run test:bots:coverage && npm run test:create-images",
     "test:preflight": "npm run test:mcp && npm run test:artificial-analysis && npm run test:model-pad && tsx --test main/services/appearance-preview-core.test.ts main/services/generation-timeline.test.ts main/services/local-runtime-status.test.ts main/services/mcp-tool-result.test.ts main/services/pi-thinking-disclosure.integration.test.ts renderer/components/activity-feed.test.tsx renderer/components/chat-sidebar.test.tsx renderer/components/composer.test.tsx renderer/components/settings/providers-settings.test.tsx renderer/main/chat-transition.test.tsx renderer/components/reasoning-block.test.tsx renderer/components/reasoning-visibility-control.test.tsx renderer/components/thinking-control.test.tsx renderer/lib/agent-steps.test.ts renderer/lib/button-appearance-contract.test.ts renderer/lib/dialog-motion-contract.test.ts renderer/lib/inline-metadata-hierarchy.test.ts renderer/lib/scrollbar-gutter-contract.test.ts renderer/lib/text-entry-focus-contract.test.ts renderer/lib/pill-appearance.test.ts renderer/lib/reasoning-disclosure.test.ts renderer/lib/streaming-motion-contract.test.ts renderer/lib/streaming-reveal.test.ts renderer/lib/voice-recorder-core.test.ts renderer/lib/media-recorder-stop.test.ts renderer/lib/dictation-vad.test.ts renderer/lib/dictation-sounds.test.ts renderer/pill-preload-channels.test.ts renderer/shared/anthropic-thinking.test.ts renderer/shared/app-update.test.ts renderer/shared/claim-check.test.ts renderer/shared/codex-thinking.test.ts renderer/shared/google-thinking.test.ts renderer/shared/provider-deployment.test.ts",
     "test:sidebar": "tsx --test renderer/components/chat-sidebar.test.tsx renderer/lib/sidebar-workspace-groups.test.ts renderer/lib/sidebar-chat-shortcuts.test.ts",
     "test:peer-hosts": "tsx --test main/services/peer-host-registry.test.ts main/services/peer-transport.test.ts",
@@ -130,7 +130,7 @@
     "type-check": "tsc --noEmit",
     "type-check:e2e": "tsc --noEmit --project tests/e2e/tsconfig.json",
     "format": "oxfmt .",
-    "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run generative-ui:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
+    "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run generative-ui:vendor && npm run package:fingerprint && npm run build:native && npm run build && npm run package:fingerprint:verify && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
     "release:preflight": "node scripts/check-macos-release.mjs",
     "release:check-consumers": "node scripts/check-release-consumers.mjs",
@@ -148,7 +148,14 @@
     "vcc:evaluate": "node --import tsx scripts/pi-vcc-evaluation.mjs",
     "test:settings-design": "tsx --test renderer/lib/workspace-path-display.test.ts renderer/components/settings/settings-design.test.tsx renderer/shared/appearance.test.ts renderer/components/chat-sidebar.test.tsx renderer/components/settings/memory-settings.test.tsx",
     "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx",
-    "test:custom-model-options": "tsx --test main/services/custom-model-options.test.ts"
+    "test:custom-model-options": "tsx --test main/services/custom-model-options.test.ts",
+    "pretest:create-images": "tsx --test main/services/create-images/image-decoder-boundary.test.ts main/services/create-images/renderer-egress-core.test.ts main/services/create-images/mutation-rate-limit-core.test.ts renderer/create-images/autosave-preferences-core.test.ts",
+    "test:create-images": "tsx --test renderer/shared/create-images/schema.test.ts renderer/shared/create-images/templates.test.ts renderer/shared/create-images/node-banana-import.test.ts renderer/shared/create-images/execution.test.ts renderer/shared/create-images/ipc.test.ts renderer/shared/create-images/archive.test.ts renderer/shared/create-images/run-contract.test.ts renderer/shared/create-images/providers.test.ts renderer/shared/create-images/prompt-variables.test.ts renderer/shared/create-images/prompt-list.test.ts renderer/shared/create-images/workflow-proposal.test.ts renderer/create-images/editor-core.test.ts renderer/create-images/graph-fragment-core.test.ts renderer/create-images/recent-output-core.test.ts renderer/create-images/recent-output-presentation-core.test.ts renderer/create-images/power-features-core.test.ts renderer/create-images/canvas-navigation-preferences-core.test.ts renderer/create-images/node-dimensions-core.test.ts renderer/create-images/fixtures.test.ts renderer/create-images/feature-surface.test.ts renderer/create-images/provider-connection.test.tsx renderer/create-images/image-lightbox-core.test.ts renderer/create-images/asset-preview-lifecycle-core.test.ts renderer/create-images/workflow-autosave-core.test.ts renderer/create-images/navigation-guard.test.ts renderer/create-images/run-ui-core.test.ts renderer/create-images/run-ui.test.tsx renderer/lib/lifecycle-guard.test.ts main/services/create-images/workflow-manifest-store.test.ts main/services/create-images/run-journal-store.test.ts main/services/create-images/run-service.test.ts main/services/create-images/scheduler-core.test.ts main/services/create-images/mock-image-provider-core.test.ts main/services/create-images/gemini-provider-status-core.test.ts main/services/create-images/image-provider-execution-core.test.ts main/services/create-images/providers/gemini-image-provider-core.test.ts main/services/create-images/asset-store-core.test.ts main/services/create-images/workspace-store.test.ts main/services/create-images/asset-import-normalization-core.test.ts main/services/create-images/electron-asset-import.test.ts main/services/create-images/asset-protocol-core.test.ts main/services/create-images/native-archive-service.test.ts main/services/create-images/native-output-zip.test.ts main/services/create-images/presentation-store.test.ts main/services/create-images/workflow-proposal-service.test.ts main/services/create-images/node-banana-import-service.test.ts main/services/create-images/phase-two-integration.test.ts main/services/create-images/phase-three-integration.test.ts main/services/create-images/packaged-canvas-acceptance-core.test.ts main/services/create-images/phase-zero-contracts.test.ts && tsx --test main/services/create-images/run-journal-performance.test.ts && node --test scripts/create-images-notices.test.mjs scripts/package-source-fingerprint.test.mjs scripts/create-images-canvas-spike-main.test.mjs scripts/create-images-native-image.test.mjs scripts/bounded-child.test.mjs",
+    "test:create-images:canvas-spike": "node scripts/create-images-canvas-spike.mjs",
+    "test:create-images:canvas-product": "node scripts/create-images-product-canvas.mjs",
+    "test:create-images:packaged": "node scripts/create-images-packaged-acceptance.mjs",
+    "package:fingerprint": "node scripts/write-package-source-fingerprint.mjs",
+    "package:fingerprint:verify": "node scripts/verify-package-source-fingerprint.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
@@ -192,7 +199,12 @@
     "tailwind-merge": "^3.3.1",
     "thinking-orbs": "0.3.1",
     "unified": "11.0.5",
-    "yaml": "2.9.0"
+    "yaml": "2.9.0",
+    "@xyflow/react": "12.9.3",
+    "konva": "10.3.1",
+    "react-konva": "19.2.5",
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
@@ -222,7 +234,9 @@
     "tsx": "^4.20.5",
     "typescript": "^5.5.3",
     "vite": "^8.0.2",
-    "wait-on": "^9.0.10"
+    "wait-on": "^9.0.10",
+    "@types/yauzl": "3.4.0",
+    "@types/yazl": "3.3.1"
   },
   "engines": {
     "node": ">=22.19"
@@ -263,7 +277,13 @@
       "resources/model-capabilities.json",
       "THIRD_PARTY_NOTICES.md",
       "package.json",
-      "main/services/browser/PLAYWRIGHT-LICENSE"
+      "main/services/browser/PLAYWRIGHT-LICENSE",
+      "build/package-source-fingerprint.json",
+      "!node_modules/@xyflow/**/*",
+      "!node_modules/@types/d3-*/*",
+      "!node_modules/classcat/**/*",
+      "!node_modules/d3-*/*",
+      "!node_modules/zustand/**/*"
     ],
     "extraResources": [
       {

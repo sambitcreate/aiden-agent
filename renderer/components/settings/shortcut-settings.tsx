@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Keyboard, RotateCcw, Search } from "lucide-react";
 import { Badge, Button, Callout, FieldSet, Input, Switch, Text, toast } from "../ui";
 import { shortcutApi } from "../../lib/ipc";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { queryKeys, useShortcuts } from "../../lib/queries";
 import {
   COMMANDS,
@@ -153,6 +154,7 @@ function ShortcutRow({
 }
 
 export function ShortcutSettings() {
+  const { createImages } = useAppCapabilities();
   const queryClient = useQueryClient();
   const shortcuts = useShortcuts();
   const [query, setQuery] = React.useState("");
@@ -285,6 +287,7 @@ export function ShortcutSettings() {
         .toLocaleLowerCase();
       return (
         command.showInSettings &&
+        (command.id !== "images.open" || createImages) &&
         (!normalizedQuery || searchText.includes(normalizedQuery))
       );
     },
