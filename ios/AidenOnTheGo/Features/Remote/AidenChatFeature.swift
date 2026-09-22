@@ -702,6 +702,7 @@ final class AidenWorkspaceChatsModel {
     func load() async {
         guard let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
+        let metadataWriteToken = cache.reserveChatWrite()
         if chats.isEmpty, let cached = await cache.loadChats(instanceId: instanceId, workspaceId: workspaceId) {
             guard coordinator.isCurrent(context) else { return }
             chats = Self.sorted(AidenChat.regularWorkspaceChats(from: cached))
@@ -713,7 +714,7 @@ final class AidenWorkspaceChatsModel {
             let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
             guard coordinator.isCurrent(context) else { return }
             chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
@@ -782,6 +783,7 @@ final class AidenWorkspaceChatsModel {
     func remove(_ chat: AidenChat) async {
         guard !isMutating, let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
+        let metadataWriteToken = cache.reserveChatWrite()
         isMutating = true
         defer { isMutating = false }
         presentationGenerations[chat.id, default: 0] &+= 1
@@ -791,7 +793,7 @@ final class AidenWorkspaceChatsModel {
             guard coordinator.isCurrent(context) else { return }
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
-            try? await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            try? await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken)
             onChatRemoved(chat.id)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-remove:\(chat.id):\(chat.revision)")
         } catch let error where aidenIsCancellation(error) {
@@ -843,8 +845,8 @@ final class AidenWorkspaceChatsModel {
         upsert(chat)
         let publicationGeneration = presentationGenerations[chat.id] ?? 0
         do {
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
-            try await cache.reconcileChatSummary(chat, instanceId: instanceId)
+            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
+            try await cache.reconcileChatSummary(chat, instanceId: instanceId, writeToken: writeToken)
         } catch {}
         if publicationGeneration == (presentationGenerations[chat.id] ?? 0) {
             upsert(chat)
@@ -1895,11 +1897,12 @@ final class AidenChatViewModel {
     @discardableResult
     func upload(_ uploads: [AidenAttachmentUpload]) async -> Int {
         guard !uploads.isEmpty else { return 0 }
-        guard !isReadOnlyPresentation else { return uploads.count }
+        guard !isReadOnlyPresentation, !isRemoved else { return uploads.count }
         guard isConnected, !isUploadingAttachment, !isStreaming, pendingAttachments.count < 10 else {
             return uploads.count
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return uploads.count }
+        let imageWriteToken = cache.reserveChatWrite()
         composerGeneration &+= 1
         isUploadingAttachment = true
         presentedError = nil
@@ -1907,6 +1910,7 @@ final class AidenChatViewModel {
         var failedCount = 0
         var acceptedReferences: [AidenAttachmentReference] = []
         for upload in uploads.prefix(10 - pendingAttachments.count) {
+            guard !isRemoved else { return uploads.count }
             if Task.isCancelled {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
                 return uploads.count
@@ -1934,12 +1938,13 @@ final class AidenChatViewModel {
                         kind: .image,
                         size: reference.size
                     )
-                    try? await cache.saveAttachmentImage(
+                    _ = try? await cache.saveAttachmentImage(
                         data,
                         instanceId: instanceId,
                         deviceId: context.deviceId,
                         chatId: chat.id,
-                        attachment: attachment
+                        attachment: attachment,
+                        writeToken: imageWriteToken
                     )
                 }
             } catch let error where aidenIsCancellation(error) {
@@ -2014,18 +2019,21 @@ final class AidenChatViewModel {
     }
 
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
-        guard !isReadOnlyFixture else { return nil }
+        guard !isReadOnlyFixture, !isRemoved else { return nil }
         guard attachment.kind == .image,
               let context = try? coordinator.requestContext(for: instanceId)
         else { return nil }
+        let imageWriteToken = cache.reserveChatWrite()
         if let cached = await cache.attachmentImage(
             instanceId: instanceId,
             deviceId: context.deviceId,
             chatId: chat.id,
             attachment: attachment
         ) {
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
             return cached
         }
+        guard !isRemoved, coordinator.isCurrent(context) else { return nil }
         do {
             let content = try await coordinator.remoteClient(for: context).attachmentContent(
                 chatId: chat.id,
@@ -2039,13 +2047,16 @@ final class AidenChatViewModel {
                       declaredSize: attachment.size
                   )
             else { return nil }
-            try? await cache.saveAttachmentImage(
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            let accepted = (try? await cache.saveAttachmentImage(
                 data,
                 instanceId: instanceId,
                 deviceId: context.deviceId,
                 chatId: chat.id,
-                attachment: attachment
-            )
+                attachment: attachment,
+                writeToken: imageWriteToken
+            )) ?? true
+            guard accepted, !isRemoved, coordinator.isCurrent(context) else { return nil }
             return data
         } catch {
             _ = await coordinator.handleCredentialRevocation(error, context: context)

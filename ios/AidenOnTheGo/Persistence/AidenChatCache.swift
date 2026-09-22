@@ -131,6 +131,8 @@ actor AidenChatCache {
     }
 
     // Tests can hold an admitted caller while another actor operation wins.
+    private let beforeMetadataWrite: (@Sendable () async -> Void)?
+    private let beforeAttachmentImageWrite: (@Sendable () async -> Void)?
     private let beforeActiveStreamWrite: (@Sendable () async -> Void)?
     private let beforeChatWrite: (@Sendable () async -> Void)?
     private let root: URL
@@ -198,16 +200,22 @@ actor AidenChatCache {
         chatWriteClock.retains(token, instanceId: instanceId, chatId: chatId)
     }
 
+    private var workspaceWriteTokens: [String: [String: UInt64]] = [:]
+    private var summaryWriteTokens: [String: UInt64] = [:]
     private var summaryWriteGenerations: [String: UInt64] = [:]
 
     init(
         root: URL? = nil,
         beforeChatWrite: (@Sendable () async -> Void)? = nil,
         beforeActiveStreamWrite: (@Sendable () async -> Void)? = nil,
+        beforeAttachmentImageWrite: (@Sendable () async -> Void)? = nil,
+        beforeMetadataWrite: (@Sendable () async -> Void)? = nil,
         fileManager: FileManager = .default,
         legacyRoots: [URL]? = nil,
         maxSummaryCacheFileBytes: Int = 80 * 1_024 * 1_024
     ) {
+        self.beforeMetadataWrite = beforeMetadataWrite
+        self.beforeAttachmentImageWrite = beforeAttachmentImageWrite
         self.beforeActiveStreamWrite = beforeActiveStreamWrite
         self.beforeChatWrite = beforeChatWrite
         self.fileManager = fileManager
@@ -243,11 +251,20 @@ actor AidenChatCache {
         return envelope.chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }
     }
 
-    func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String) throws {
+    func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String, writeToken: UInt64) async throws {
+        await beforeMetadataWrite?()
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
+              writeToken >= (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0) else { return }
+        workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
         try save(
-            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }),
+            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id) }),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
+    }
+
+    private func metadataWriteIsRetained(_ token: UInt64, instanceId: String) -> Bool {
+        !chatWriteClock.isPending(instanceId: instanceId, chatId: "") &&
+        isChatWriteRetained(token, instanceId: instanceId, chatId: "")
     }
 
     private func isChatHidden(instanceId: String, chatId: String) -> Bool {
@@ -283,7 +300,7 @@ actor AidenChatCache {
         return true
     }
 
-    func loadChatSummaries(instanceId: String) -> SummarySnapshot? {
+    func loadChatSummaries(instanceId: String, includingRemoved: Bool = false) -> SummarySnapshot? {
         guard let envelope: ChatSummaryEnvelope = load(
             ChatSummaryEnvelope.self,
             from: fileURL(kind: "summaries", instanceId),
@@ -301,14 +318,25 @@ actor AidenChatCache {
               envelope.snapshot.nextCursor.map(AidenChatSummaryPage.isValidCursor) ?? true else {
             return nil
         }
-        return SummarySnapshot(summaries: summaries, nextCursor: envelope.snapshot.nextCursor)
+        return SummarySnapshot(summaries: includingRemoved ? summaries : summaries.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }, nextCursor: envelope.snapshot.nextCursor)
     }
 
     func saveChatSummaries(
         _ snapshot: SummarySnapshot,
         instanceId: String,
-        generation: UInt64? = nil
-    ) throws {
+        generation: UInt64? = nil,
+        writeToken: UInt64
+    ) async throws {
+        await beforeMetadataWrite?()
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId) else { return }
+        let retained = snapshot.summaries.filter {
+            !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id)
+        }
+        try persistChatSummaries(SummarySnapshot(summaries: retained, nextCursor: snapshot.nextCursor), instanceId: instanceId, generation: generation, writeToken: writeToken)
+    }
+
+    private func persistChatSummaries(_ snapshot: SummarySnapshot, instanceId: String, generation: UInt64? = nil, writeToken: UInt64) throws {
+        guard writeToken >= (summaryWriteTokens[instanceId] ?? 0) else { return }
         guard snapshot.summaries.count <= maxSummaryCacheItems else {
             throw CocoaError(.fileWriteOutOfSpace)
         }
@@ -319,6 +347,7 @@ actor AidenChatCache {
             guard generation >= (summaryWriteGenerations[instanceId] ?? 0) else { return }
             summaryWriteGenerations[instanceId] = generation
         }
+        summaryWriteTokens[instanceId] = writeToken
         try save(
             ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot)),
             to: fileURL(kind: "summaries", instanceId),
@@ -326,27 +355,30 @@ actor AidenChatCache {
         )
     }
 
-    func reconcileChatSummary(_ chat: AidenChat, instanceId: String) throws {
-        guard !chat.isBotChat else { return }
+    func reconcileChatSummary(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws {
+        await beforeMetadataWrite?()
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
+              !isChatHidden(instanceId: instanceId, chatId: chat.id),
+              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id), !chat.isBotChat else { return }
         let cached = loadChatSummaries(instanceId: instanceId)
         let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
         let summaries = AidenChatSummaryPage.merged(
             current: cached?.summaries ?? [],
             appending: [AidenChatSummary(chat: chat, preservingActivity: existingActivity)]
         )
-        try saveChatSummaries(
+        try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
-            instanceId: instanceId
+            instanceId: instanceId, writeToken: writeToken
         )
     }
 
     func removeChatSummary(instanceId: String, chatId: String) throws {
-        guard let cached = loadChatSummaries(instanceId: instanceId) else { return }
+        guard let cached = loadChatSummaries(instanceId: instanceId, includingRemoved: true) else { return }
         let summaries = cached.summaries.filter { $0.id != chatId }
         guard summaries.count != cached.summaries.count else { return }
-        try saveChatSummaries(
+        try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
-            instanceId: instanceId
+            instanceId: instanceId, writeToken: reserveChatWrite()
         )
     }
 
@@ -362,10 +394,10 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveActiveStream(_ stream: ActiveStream, instanceId: String, chatId: String, chatWriteToken: UInt64? = nil) async throws -> Bool {
+    func saveActiveStream(_ stream: ActiveStream, instanceId: String, chatId: String, chatWriteToken: UInt64) async throws -> Bool {
         await beforeActiveStreamWrite?()
         guard !isChatHidden(instanceId: instanceId, chatId: chatId) else { return false }
-        if let chatWriteToken, !isChatWriteRetained(chatWriteToken, instanceId: instanceId, chatId: chatId) { return false }
+        if !isChatWriteRetained(chatWriteToken, instanceId: instanceId, chatId: chatId) { return false }
         try save(
             StreamEnvelope(instanceId: instanceId, chatId: chatId, stream: stream),
             to: fileURL(kind: "streams", instanceId, chatId)
@@ -403,6 +435,7 @@ actor AidenChatCache {
         for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
             guard let envelope = load(ChatListEnvelope.self, from: url), envelope.instanceId == instanceId,
                   envelope.chats.contains(where: { $0.id == chatId }) else { continue }
+            workspaceWriteTokens[instanceId, default: [:]][envelope.workspaceId] = max(token, workspaceWriteTokens[instanceId]?[envelope.workspaceId] ?? 0)
             let remaining = envelope.chats.filter { $0.id != chatId }
             do {
                 try save(ChatListEnvelope(instanceId: instanceId, workspaceId: envelope.workspaceId, chats: remaining), to: url)
@@ -412,7 +445,8 @@ actor AidenChatCache {
             }
         }
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
-        try? removeChatSummary(instanceId: instanceId, chatId: chatId)
+        do { try removeChatSummary(instanceId: instanceId, chatId: chatId) }
+        catch { try? fileManager.removeItem(at: fileURL(kind: "summaries", instanceId)) }
         removeActiveStream(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: attachmentChatDirectory(instanceId: instanceId, chatId: chatId))
     }
@@ -427,6 +461,8 @@ actor AidenChatCache {
     private func purgeFilesForInstance(instanceId: String, token: UInt64) {
         chatPurgeGenerations[instanceId] = max(token, chatPurgeGenerations[instanceId] ?? 0)
         removedChatIDs.removeValue(forKey: instanceId)
+        workspaceWriteTokens.removeValue(forKey: instanceId)
+        summaryWriteTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
@@ -447,7 +483,7 @@ actor AidenChatCache {
         chatId: String,
         attachment: AidenMessageAttachment
     ) -> Data? {
-        guard attachment.kind == .image else { return nil }
+        guard !isChatHidden(instanceId: instanceId, chatId: chatId), attachment.kind == .image else { return nil }
         let url = attachmentImageURL(
             instanceId: instanceId,
             deviceId: deviceId,
@@ -474,13 +510,18 @@ actor AidenChatCache {
         return validated
     }
 
+    @discardableResult
     func saveAttachmentImage(
         _ data: Data,
         instanceId: String,
         deviceId: String,
         chatId: String,
-        attachment: AidenMessageAttachment
-    ) throws {
+        attachment: AidenMessageAttachment,
+        writeToken: UInt64
+    ) async throws -> Bool {
+        await beforeAttachmentImageWrite?()
+        guard !isChatHidden(instanceId: instanceId, chatId: chatId),
+              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chatId) else { return false }
         guard attachment.kind == .image,
               AidenAttachmentImageValidation.validatedData(
                   data,
@@ -501,6 +542,7 @@ actor AidenChatCache {
         )
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         pruneAttachmentImages(instanceId: instanceId, preserving: url)
+        return true
     }
 
     func removeAttachmentImage(instanceId: String, deviceId: String, chatId: String, attachmentId: String) {
