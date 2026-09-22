@@ -22868,6 +22868,51 @@
           "cache_read": 0.5
         }
       },
+      "x-ai/grok-4.7": {
+        "id": "x-ai/grok-4.7",
+        "name": "Grok 4.7",
+        "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+        "family": "grok",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-05",
+        "release_date": "2026-09-21",
+        "last_updated": "2026-09-21",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 500000,
+          "input": 500000,
+          "output": 500000
+        },
+        "cost": {
+          "input": 1.6,
+          "output": 4.8,
+          "cache_read": 0.4
+        }
+      },
       "meta-llama/llama-3.1-8b-instruct": {
         "id": "meta-llama/llama-3.1-8b-instruct",
         "name": "Llama 3.1 8b Instruct",
@@ -188026,6 +188071,46 @@
           "cache_read": 0.95
         }
       },
+      "mimo-v2-6-pro": {
+        "id": "mimo-v2-6-pro",
+        "name": "MiMo V2.6 Pro",
+        "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "cost": {
+          "input": 2.175,
+          "output": 4.35,
+          "cache_read": 2.175
+        }
+      },
       "fugu-ultra-v1-1": {
         "id": "fugu-ultra-v1-1",
         "name": "Fugu Ultra v1.1",
@@ -188520,6 +188605,46 @@
               }
             }
           ]
+        }
+      },
+      "mimo-v2-6-flash": {
+        "id": "mimo-v2-6-flash",
+        "name": "MiMo V2.6 Flash",
+        "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2026-09-22",
+        "release_date": "2026-09-22",
+        "last_updated": "2026-09-22",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "cost": {
+          "input": 0.7,
+          "output": 1.4,
+          "cache_read": 0.7
         }
       },
       "muse-spark-1-2": {
@@ -199583,7 +199708,7 @@
         },
         "cost": {
           "input": 0.04,
-          "output": 0.2,
+          "output": 0.4,
           "cache_read": 0.01
         }
       },
@@ -199620,13 +199745,13 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1024000,
-          "output": 384000
+          "context": 1048576,
+          "output": 393216
         },
         "cost": {
-          "input": 0.5544,
-          "output": 1.6632,
-          "cache_read": 0.01848
+          "input": 0.53196,
+          "output": 1.59588,
+          "cache_read": 0.016926
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -200816,6 +200941,49 @@
           "input": 0.435,
           "output": 0.87,
           "cache_read": 0.0036
+        }
+      },
+      "xiaomi/mimo-v2.6-pro-ultraspeed": {
+        "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+        "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
+        "description": "MiMo-V2.6-Pro-UltraSpeed is the fast speed edition of Xiaomi's flagship foundation model, MiMo-V2.6-Pro. Built from the same 1T MiMo-V2.6-Pro checkpoint, it matches the original model in quality while delivering roughly 10x...",
+        "family": "mimo",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "release_date": "2026-09-21",
+        "last_updated": "2026-09-21",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "cost": {
+          "input": 4.35,
+          "output": 8.7,
+          "cache_read": 0.036
         }
       },
       "xiaomi/mimo-v2.6-flash": {
@@ -204998,9 +205166,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.7,
-          "output": 8.5,
-          "cache_read": 0.17
+          "input": 1.5,
+          "output": 7.5,
+          "cache_read": 0.15
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -207200,7 +207368,7 @@
         },
         "open_weights": false,
         "limit": {
-          "context": 1048576,
+          "context": 128000,
           "output": 16384
         },
         "cost": {
@@ -211100,7 +211268,7 @@
         "open_weights": true,
         "limit": {
           "context": 1048576,
-          "output": 102400
+          "output": 943718
         },
         "cost": {
           "input": 0.15,
@@ -244139,7 +244307,7 @@
         },
         "cost": {
           "input": 0.04,
-          "output": 0.2,
+          "output": 0.4,
           "cache_read": 0.01
         }
       },
@@ -244179,12 +244347,12 @@
         "open_weights": false,
         "limit": {
           "context": 1048576,
-          "output": 384000
+          "output": 393216
         },
         "cost": {
-          "input": 0.5544,
-          "output": 1.6632,
-          "cache_read": 0.01848
+          "input": 0.53196,
+          "output": 1.59588,
+          "cache_read": 0.016926
         }
       },
       "~deepseek/deepseek-flash-latest": {
@@ -249836,9 +250004,9 @@
           "output": 943718
         },
         "cost": {
-          "input": 1.7,
-          "output": 8.5,
-          "cache_read": 0.17
+          "input": 1.5,
+          "output": 7.5,
+          "cache_read": 0.15
         }
       },
       "ibm-granite/granite-4.2-8b": {
@@ -250079,7 +250247,7 @@
         },
         "cost": {
           "input": 0.04,
-          "output": 0.32,
+          "output": 0.64,
           "cache_read": 0.016
         }
       },
@@ -250460,9 +250628,9 @@
           "output": 384000
         },
         "cost": {
-          "input": 0.91263,
-          "output": 1.82526,
-          "cache_read": 0.076053
+          "input": 0.883746,
+          "output": 1.767492,
+          "cache_read": 0.073646
         }
       },
       "deepseek/deepseek-chat-v3-0324": {
@@ -252040,8 +252208,8 @@
           "output": 16384
         },
         "cost": {
-          "input": 0.2,
-          "output": 0.8
+          "input": 0.1875,
+          "output": 0.6525
         }
       },
       "meta-llama/llama-4-scout": {
@@ -256067,12 +256235,12 @@
         "open_weights": true,
         "limit": {
           "context": 1310720,
-          "output": 102400
+          "output": 943718
         },
         "cost": {
-          "input": 0.075,
-          "output": 0.25,
-          "cache_read": 0.02
+          "input": 0.15,
+          "output": 0.5,
+          "cache_read": 0.05
         }
       },
       "z-ai/glm-4.5": {
