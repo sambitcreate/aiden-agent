@@ -49,8 +49,16 @@ class AidenChatTest {
     @Test
     fun heldInitialLoadCannotOverwriteSettledTranscriptOrCache() = assertStreamRecovery(holdInitialLoad = true)
 
+    @Test
+    fun anotherOwnersHeldLoadCannotOverwriteSettledTranscriptOrCache() =
+        assertStreamRecovery(holdInitialLoad = true, independentOwner = true)
+
+    @Test
+    fun anotherOwnersHeldLoadAdoptsWinnerWhenDiskWriteFails() =
+        assertStreamRecovery(holdInitialLoad = true, independentOwner = true, failDiskWrite = true)
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private fun assertStreamRecovery(holdInitialLoad: Boolean = false) {
+    private fun assertStreamRecovery(holdInitialLoad: Boolean = false, independentOwner: Boolean = false, failDiskWrite: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-stream-recovery-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
@@ -59,6 +67,7 @@ class AidenChatTest {
         val chatReads = java.util.concurrent.atomic.AtomicInteger()
         val eventReads = java.util.concurrent.atomic.AtomicInteger()
         val releaseInitialLoad = CountDownLatch(1)
+        val initialLoadArrived = CountDownLatch(1)
         val initial = AidenChat(
             id = "chat-recovery", workspaceId = "workspace-recovery", title = "Recovery",
             messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
@@ -87,6 +96,7 @@ class AidenChatTest {
                         """{"streamId":"stream-recovery","chatId":"chat-recovery","turnId":"turn-recovery","state":"running","lastSequence":1}"""
                     )
                     path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
+                        initialLoadArrived.countDown()
                         if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
                         MockResponse().setBody(json.encodeToString(initial))
                     }
@@ -110,11 +120,20 @@ class AidenChatTest {
                 ), null)
                 val cache = AidenChatCache(directory)
                 cache.saveChat(initial, "instance-recovery")
-                cache.saveActiveStream(AidenChatCache.ActiveStream("device-recovery", "stream-recovery", "turn-recovery", 27), "instance-recovery", initial.id)
                 val drafts = AidenChatDraftStore(directory)
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
                     scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
                 coordinator.refreshClient()
+                val otherOwner = if (independentOwner) {
+                    AidenChatViewModel(initial.id, coordinator, cache, drafts, initial).also {
+                        viewModels.put("other", it)
+                        withContext(Dispatchers.IO) { check(initialLoadArrived.await(5, TimeUnit.SECONDS)) }
+                    }
+                } else null
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-recovery", "stream-recovery", "turn-recovery", 27), "instance-recovery", initial.id)
+                if (failDiskWrite) {
+                    File(cache.root, "chats").apply { deleteRecursively(); writeText("blocked directory") }
+                }
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
                 viewModels.put("chat", model)
                 withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
@@ -124,7 +143,15 @@ class AidenChatTest {
                     releaseInitialLoad.countDown()
                     withTimeout(5_000) { model.isLoading.first { !it } }
                     assertEquals("final-reply", model.chat.value!!.messages.last().id)
-                    assertEquals("final-reply", cache.loadChat("instance-recovery", initial.id)!!.messages.last().id)
+                    assertEquals("final-reply", cache.admittedChat("instance-recovery", initial.id)!!.messages.last().id)
+                    if (otherOwner != null) {
+                        withTimeout(5_000) { otherOwner.isLoading.first { !it } }
+                        assertEquals("final-reply", otherOwner.chat.value!!.messages.lastOrNull()?.id)
+                        if (failDiskWrite) assertNull(AidenChatCache(directory).loadChat("instance-recovery", initial.id))
+                        else assertEquals("final-reply", AidenChatCache(directory).loadChat("instance-recovery", initial.id)!!.messages.lastOrNull()?.id)
+                        otherOwner.updateDraft("Continue from another destination")
+                        assertTrue(otherOwner.canSend)
+                    }
                     assertEquals("", model.liveText.value)
                 } else {
                     // Let the terminal reconciliation attempt and any illegally queued late frame run.

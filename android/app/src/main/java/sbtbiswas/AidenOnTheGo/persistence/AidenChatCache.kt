@@ -90,6 +90,7 @@ class AidenChatCache(
 
     private val writeClock = AtomicLong()
     private val chatWriteTokens = mutableMapOf<String, MutableMap<String, Long>>()
+    private val admittedChats = mutableMapOf<String, MutableMap<String, AidenChat>>()
     private val purgeWriteTokens = mutableMapOf<String, Long>()
 
     // Reserve before scheduling a deferred writer, not when its IO task runs.
@@ -331,11 +332,21 @@ class AidenChatCache(
         return envelope.chat
     }
 
+    // The accepted response remains usable even when its best-effort disk write fails.
+    @Synchronized
+    fun admittedChat(instanceId: String, chatId: String): AidenChat? {
+        admittedChats[instanceId]?.get(chatId)?.let { return it }
+        // Never recover a removed winner from a file left by a failed cleanup.
+        if (chatWriteTokens[instanceId]?.containsKey(chatId) == true || purgeWriteTokens.containsKey(instanceId)) return null
+        return loadChat(instanceId, chatId)
+    }
+
     @Synchronized
     fun saveChat(chat: AidenChat, instanceId: String, writeToken: Long = reserveChatWrite()): Boolean {
         if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
             writeToken <= (chatWriteTokens[instanceId]?.get(chat.id) ?: 0L)) return false
         chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chat.id] = writeToken
+        admittedChats.getOrPut(instanceId) { mutableMapOf() }[chat.id] = chat
         val envelope = ChatEnvelope(instanceId = instanceId, chat = chat)
         saveEnvelope(envelope, fileURL("chats", instanceId, chat.id))
         val map = _chats.value.toMutableMap()
@@ -386,6 +397,7 @@ class AidenChatCache(
     @Synchronized
     fun removeChat(instanceId: String, chatId: String) {
         chatWriteTokens.getOrPut(instanceId) { mutableMapOf() }[chatId] = reserveChatWrite()
+        admittedChats[instanceId]?.remove(chatId)
         val chatFile = fileURL("chats", instanceId, chatId)
         if (chatFile.exists()) chatFile.delete()
         removeActiveStream(instanceId, chatId)
@@ -401,6 +413,7 @@ class AidenChatCache(
     fun purge(instanceId: String) {
         purgeWriteTokens[instanceId] = reserveChatWrite()
         chatWriteTokens.remove(instanceId)
+        admittedChats.remove(instanceId)
         purgeNamespace(root, instanceId)
         for (legacy in legacyRoots) {
             if (legacy.canonicalPath != root.canonicalPath) {
