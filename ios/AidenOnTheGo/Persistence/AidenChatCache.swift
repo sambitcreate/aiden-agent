@@ -83,6 +83,8 @@ actor AidenChatCache {
         let stream: ActiveStream
     }
 
+    // Tests can hold an admitted caller while another actor operation wins.
+    private let beforeChatWrite: (@Sendable () async -> Void)?
     private let root: URL
     private let legacyRoots: [URL]
     private let fileManager: FileManager
@@ -116,10 +118,12 @@ actor AidenChatCache {
 
     init(
         root: URL? = nil,
+        beforeChatWrite: (@Sendable () async -> Void)? = nil,
         fileManager: FileManager = .default,
         legacyRoots: [URL]? = nil,
         maxSummaryCacheFileBytes: Int = 80 * 1_024 * 1_024
     ) {
+        self.beforeChatWrite = beforeChatWrite
         self.fileManager = fileManager
         self.maxSummaryCacheFileBytes = maxSummaryCacheFileBytes
         if let root {
@@ -171,7 +175,8 @@ actor AidenChatCache {
     }
 
     @discardableResult
-    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) throws -> Bool {
+    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
+        await beforeChatWrite?()
         guard writeToken > (chatPurgeGenerations[instanceId] ?? 0),
               writeToken > (chatWriteGenerations[instanceId]?[chat.id] ?? 0) else { return false }
         // Advance even if persistence fails: an older queued snapshot must not

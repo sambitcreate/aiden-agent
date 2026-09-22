@@ -656,6 +656,7 @@ enum AidenStreamFeedbackDecision {
 @MainActor
 @Observable
 final class AidenWorkspaceChatsModel {
+    private var presentationGenerations: [String: UInt64] = [:]
     private let coordinator: AidenRemoteCoordinator
     private let workspaceId: String
     private let cache: AidenChatCache
@@ -732,11 +733,10 @@ final class AidenWorkspaceChatsModel {
                 presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return nil
             }
-            upsert(chat)
-            try? await persist(chat: chat, instanceId: instanceId)
-            onChatUpdated(chat)
+            guard let admitted = await persist(chat: chat, instanceId: instanceId), coordinator.isCurrent(context) else { return nil }
+            onChatUpdated(admitted)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-create:\(chat.id):\(chat.revision)")
-            return chat
+            return admitted
         } catch let error where aidenIsCancellation(error) {
             return nil
         } catch {
@@ -763,9 +763,8 @@ final class AidenWorkspaceChatsModel {
                 title: cleaned
             )
             guard coordinator.isCurrent(context) else { return }
-            upsert(updated)
-            try? await persist(chat: updated, instanceId: instanceId)
-            onChatUpdated(updated)
+            guard let admitted = await persist(chat: updated, instanceId: instanceId), coordinator.isCurrent(context) else { return }
+            onChatUpdated(admitted)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context) else { return }
@@ -785,6 +784,7 @@ final class AidenWorkspaceChatsModel {
         let instanceId = context.instanceId
         isMutating = true
         defer { isMutating = false }
+        presentationGenerations[chat.id, default: 0] &+= 1
         chats.removeAll { $0.id == chat.id }
         do {
             try await coordinator.remoteClient(for: context).removeChat(id: chat.id, revision: chat.revision)
@@ -808,16 +808,48 @@ final class AidenWorkspaceChatsModel {
 
     private func upsert(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
+        presentationGenerations[chat.id, default: 0] &+= 1
         chats.removeAll { $0.id == chat.id }
         chats.append(chat)
         chats = Self.sorted(chats)
     }
 
-    private func persist(chat: AidenChat, instanceId: String) async throws {
+    private func persist(chat: AidenChat, instanceId: String) async -> AidenChat? {
+        let generation = presentationGenerations[chat.id] ?? 0
         let writeToken = cache.reserveChatWrite()
-        guard try await cache.saveChat(chat, instanceId: instanceId, writeToken: writeToken) else { return }
-        try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
-        try await cache.reconcileChatSummary(chat, instanceId: instanceId)
+        do {
+            guard try await cache.saveChat(chat, instanceId: instanceId, writeToken: writeToken) else {
+                guard let current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
+                      current.workspaceId == workspaceId, !current.isBotChat else {
+                    if generation == (presentationGenerations[chat.id] ?? 0) {
+                        presentationGenerations[chat.id, default: 0] &+= 1
+                        chats.removeAll { $0.id == chat.id }
+                    }
+                    return nil
+                }
+                guard generation == (presentationGenerations[chat.id] ?? 0) else { return chats.first { $0.id == chat.id } }
+                upsert(current)
+                return current
+            }
+        } catch {
+            // Disk failure remains best-effort; a normal fence rejection above
+            // instead means another owner invalidated this snapshot.
+            guard generation == (presentationGenerations[chat.id] ?? 0) else { return chats.first { $0.id == chat.id } }
+            upsert(chat)
+            return chat
+        }
+        guard generation == (presentationGenerations[chat.id] ?? 0) else { return chats.first { $0.id == chat.id } }
+        upsert(chat)
+        let publicationGeneration = presentationGenerations[chat.id] ?? 0
+        do {
+            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            try await cache.reconcileChatSummary(chat, instanceId: instanceId)
+        } catch {}
+        if publicationGeneration == (presentationGenerations[chat.id] ?? 0) {
+            upsert(chat)
+            return chat
+        }
+        return chats.first { $0.id == chat.id }
     }
 
     private static func sorted(_ chats: [AidenChat]) -> [AidenChat] {
@@ -1672,8 +1704,22 @@ final class AidenChatViewModel {
             // resume. Forgetting, revoking, or re-pairing the captured device
             // invalidates the context before any private cache/activity write.
             let writeToken = cache.reserveChatWrite()
+            var accepted = false
             let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)
+                accepted = (try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)) ?? true
+                while !accepted {
+                    // Rebase the receipt on the winning local snapshot. This
+                    // does not depend on another network read or resend POST.
+                    // Reserve before loading so removal/new writes still win.
+                    let retryToken = cache.reserveChatWrite()
+                    guard var current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
+                          coordinator.isRetained(context) else { return }
+                    if !current.messages.contains(where: { $0.id == response.message.id }) {
+                        current.messages.append(response.message)
+                    }
+                    accepted = (try? await cache.saveChat(current, instanceId: instanceId, writeToken: retryToken)) ?? true
+                    if accepted { acceptedChat = current }
+                }
                 try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
                 if let draftSession,
                    draftGeneration == clearedDraftGeneration,
@@ -1687,7 +1733,13 @@ final class AidenChatViewModel {
                     streamID: response.streamId
                 )
             }
-            guard retained else { return }
+            guard retained, accepted else {
+                if coordinator.isCurrent(context) {
+                    chat.messages.removeAll { $0.id == optimisticID }
+                    streamState = nil
+                }
+                return
+            }
             guard coordinator.isCurrent(context) else { return }
             turnAttempts.reset()
             chat = acceptedChat
@@ -2473,11 +2525,12 @@ final class AidenChatViewModel {
     ) async -> Bool {
         guard coordinator.isCurrent(context), !isStarting else { return false }
         let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        let accepted = (try? await cache.saveChat(remote, instanceId: instanceId, writeToken: writeToken)) ?? true
+        guard accepted else { return false }
+        guard coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
         chat = remote
         resolveModelSelection()
-        let writeToken = cache.reserveChatWrite()
-        try? await cache.saveChat(remote, instanceId: instanceId, writeToken: writeToken)
-        guard coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
         onChatUpdated(remote)
         if scheduleTitleRefresh, remote.isTitlePending {
             schedulePendingTitleRefresh(context: context)

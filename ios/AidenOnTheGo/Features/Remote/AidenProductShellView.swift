@@ -1,5 +1,29 @@
 import SwiftUI
 
+/// A rejected response may have lost to a newer snapshot or deletion. Use the
+/// currently cached chat for navigation, and never republish the rejected one.
+@MainActor
+func aidenPersistBotChatForPresentation(
+    _ chat: AidenChat,
+    context: AidenRemoteRequestContext,
+    coordinator: AidenRemoteCoordinator,
+    cache: AidenChatCache = .shared
+) async -> AidenChat? {
+    let writeToken = cache.reserveChatWrite()
+    var candidate: AidenChat?
+    let retained = await coordinator.withRetainedInstallationData(for: context) {
+        let accepted = (try? await cache.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)) ?? true
+        if accepted {
+            candidate = chat
+        } else {
+            candidate = await cache.loadChat(instanceId: context.instanceId, chatId: chat.id)
+        }
+    }
+    guard retained, coordinator.isCurrent(context),
+          let candidate, candidate.id == chat.id, candidate.botId == chat.botId else { return nil }
+    return candidate
+}
+
 enum AidenChromeSymbols {
     static let overflowMenu = "ellipsis"
     static let productSwitcherDisclosure = "chevron.down"
@@ -831,7 +855,7 @@ private struct AidenBotShellView: View {
             }
 
             let client = try coordinator.remoteClient(for: context)
-            let chat = if let cached {
+            var chat = if let cached {
                 cached
             } else {
                 try await client.chat(id: item.chatId)
@@ -840,11 +864,12 @@ private struct AidenBotShellView: View {
                   chat.botId == item.botId, presentationScope == scope,
                   path.last == item.chatId else { return }
             if cached == nil {
-                let writeToken = AidenChatCache.shared.reserveChatWrite()
-                let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
+                guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else {
+                    if coordinator.isCurrent(context), presentationScope == scope, path.last == item.chatId { path = [] }
+                    return
                 }
-                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                chat = admitted
+                guard coordinator.isCurrent(context), presentationScope == scope,
                       path.last == item.chatId else { return }
                 chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                     chat: chat,
@@ -909,7 +934,7 @@ private struct AidenBotShellView: View {
             )
             retainedCreateAttempt = attempt
             sentAttempt = attempt
-            let chat = try await client.createBotChat(
+            var chat = try await client.createBotChat(
                 botId: bot.id,
                 request: request,
                 idempotencyKey: attempt.idempotencyKey
@@ -917,11 +942,9 @@ private struct AidenBotShellView: View {
             guard coordinator.isCurrent(context), chat.botId == bot.id,
                   retainedCreateAttempt == attempt else { return }
             retainedCreateAttempt = nil
-            let writeToken = AidenChatCache.shared.reserveChatWrite()
-            let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
-            }
-            guard retained, coordinator.isCurrent(context) else { return }
+            guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else { return }
+            chat = admitted
+            guard coordinator.isCurrent(context) else { return }
             let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
             chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                 chat: chat,
@@ -1020,7 +1043,7 @@ private struct AidenBotShellView: View {
             }
 
             let client = try coordinator.remoteClient(for: context)
-            let chat = if let cached {
+            var chat = if let cached {
                 cached
             } else {
                 try await client.chat(id: chatID)
@@ -1030,11 +1053,12 @@ private struct AidenBotShellView: View {
                 return
             }
             if cached == nil {
-                let writeToken = AidenChatCache.shared.reserveChatWrite()
-                let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
+                guard let admitted = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) else {
+                    if coordinator.isCurrent(context), presentationScope == scope, path.last == chatID { path = [] }
+                    return
                 }
-                guard retained, coordinator.isCurrent(context), presentationScope == scope,
+                chat = admitted
+                guard coordinator.isCurrent(context), presentationScope == scope,
                       path.last == chatID else { return }
                 chatsByScope[scope, default: [:]][chat.id] = ChatPresentation(
                     chat: chat,
