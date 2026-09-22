@@ -67,6 +67,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
@@ -116,6 +117,7 @@ fun AidenChatDetailScreen(
         )
     )
 
+    val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
@@ -124,6 +126,8 @@ fun AidenChatDetailScreen(
     val tools by viewModel.tools.collectAsState()
     val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
+    val isStopping by viewModel.isStopping.collectAsState()
+    val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
@@ -318,7 +322,8 @@ fun AidenChatDetailScreen(
                 actions = {
                     if (isStreaming) {
                         IconButton(
-                            onClick = { viewModel.cancelTurn() }
+                            onClick = { viewModel.cancelTurn() },
+                            enabled = viewModel.canControlCurrentRun && !isStopping
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
                         }
@@ -409,7 +414,8 @@ fun AidenChatDetailScreen(
                                         horizontalArrangement = Arrangement.End
                                     ) {
                                         Button(
-                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY) },
+                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY, approval.id) },
+                                            enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
                                             shape = RoundedCornerShape(10.dp)
                                         ) {
                                             Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
@@ -417,7 +423,8 @@ fun AidenChatDetailScreen(
                                         if (approval.canAllow) {
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Button(
-                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW) },
+                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id) },
+                                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
                                                 colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
                                                 shape = RoundedCornerShape(10.dp)
                                             ) {
@@ -480,6 +487,7 @@ fun AidenChatDetailScreen(
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
+                    canStop = viewModel.canControlCurrentRun && !isStopping,
                     canSend = viewModel.canSend,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
