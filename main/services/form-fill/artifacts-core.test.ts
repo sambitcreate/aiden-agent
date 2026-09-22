@@ -407,3 +407,18 @@ test("removal preserves model files when the execution drain fails", async () =>
     assert.equal(await verifyFormFillPackage(root, TEST_FILES), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("real cancel-and-settle timeout leaves verified model files on disk", async () => {
+  const { cancelComputerUseAndSettle, ComputerUseGenerationGate } = await import("../computer-use/generation-gate.js");
+  const root = makeTemp();
+  writeTestTree(root);
+  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
+  const active = new Map([["cu", { computerUse: { closeAndSettle: () => new Promise<void>(() => {}) } }]]);
+  try {
+    await assert.rejects(store.remove(() => cancelComputerUseAndSettle({
+      gate: new ComputerUseGenerationGate(), initializations: () => new Map(), active: () => active,
+      cancel: () => { active.clear(); }, timeoutMs: 10,
+    })), /model was not removed/);
+    assert.equal(await verifyFormFillPackage(root, TEST_FILES), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

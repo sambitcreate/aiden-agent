@@ -42,4 +42,6 @@ Same-title/same-tree navigation defeats snapshot token rebinding. Removed the un
 
 Source extraction and renderer approval validation reject Unicode Cf; removal now cancels and awaits controller strict shutdown, outstanding driver calls, generation completion and ownership-map settlement. Timeout/teardown failure preserves model files and rejects removal. Ordinary cleanup remains non-throwing, while strict cleanup retains driver shutdown errors. New review and CI evidence pending.
 
-Follow-up local verification: 374 scoped JS + 41 Rust broker tests; 50 approval/IPC/Bot/onboarding tests; 70 remote-stream/timeline tests; focused Android parity (up to date), TypeScript and scoped lint pass. Blast-radius Sol re-review clear; adversarial final review pending.
+Follow-up local verification: 375 scoped JS + 41 Rust broker tests; 50 approval/IPC/Bot/onboarding tests; 70 remote-stream/timeline tests; focused Android parity (up to date), TypeScript and scoped lint pass. Blast-radius Sol re-review clear; adversarial final review clear, including the pinned driver contract audit and timeout-to-removal preservation regression.
+
+Both independent GPT-5.6 Sol medium follow-up reviews are clear. The adversarial audit confirmed the pinned driver lacks atomic document identity and all production form-fill entrypoints reject before driver access. The timeout integration regression verifies real settlement failure leaves model bytes intact.

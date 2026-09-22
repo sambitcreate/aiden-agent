@@ -325,6 +325,8 @@ and remaining manual acceptance on macOS.
 
 ## Follow-up validation
 
-374 Computer Use/form-fill JavaScript tests and 41 Rust broker tests passed; 50 focused approval/IPC/Bot/onboarding tests passed. TypeScript and scoped ESLint passed. Both native activity consumers were inspected; this patch adds no mobile wire payload or mobile mutation authority. Earlier native scorer and physical-iOS compile evidence remains valid for unchanged code; physical-iOS execution and signed live-window acceptance remain unperformed. React Doctor scanned the repository (60/100, existing broad diagnostics); no new changed-line UI error was identified. Two independent Sol re-reviews and current-head CI are tracked on the PR.
+375 Computer Use/form-fill JavaScript tests and 41 Rust broker tests passed; 50 focused approval/IPC/Bot/onboarding tests passed. TypeScript and scoped ESLint passed. Both native activity consumers were inspected; this patch adds no mobile wire payload or mobile mutation authority. Earlier native scorer and physical-iOS compile evidence remains valid for unchanged code; physical-iOS execution and signed live-window acceptance remain unperformed. React Doctor scanned the repository (60/100, existing broad diagnostics); no new changed-line UI error was identified. Two independent Sol re-reviews and current-head CI are tracked on the PR.
 
 Additional parity verification: 70 remote-stream/timeline tests and focused Android activity parity pass.
+
+Both independent GPT-5.6 Sol medium follow-up reviews are clear. The adversarial audit confirmed the pinned driver lacks atomic document identity and all production form-fill entrypoints reject before driver access. The timeout integration regression verifies real settlement failure leaves model bytes intact.
