@@ -222,6 +222,7 @@ actor AidenChatCache {
         chatWriteClock.retains(token, instanceId: instanceId, chatId: chatId)
     }
 
+    private var metadataDeletionTokens: [String: UInt64] = [:]
     private var workspaceWriteTokens: [String: [String: UInt64]] = [:]
     private var summaryWriteTokens: [String: UInt64] = [:]
     private var summaryWriteGenerations: [String: UInt64] = [:]
@@ -285,6 +286,7 @@ actor AidenChatCache {
     }
 
     private func metadataWriteIsRetained(_ token: UInt64, instanceId: String) -> Bool {
+        token > (metadataDeletionTokens[instanceId] ?? 0) &&
         !chatWriteClock.isPending(instanceId: instanceId, chatId: "") &&
         isChatWriteRetained(token, instanceId: instanceId, chatId: "")
     }
@@ -453,6 +455,9 @@ actor AidenChatCache {
     }
 
     private func removeChatFiles(instanceId: String, chatId: String, token: UInt64) {
+        // A suspended metadata writer may target an absent file or omit the
+        // deleted row. Fence it independently of the files found during cleanup.
+        metadataDeletionTokens[instanceId] = max(token, metadataDeletionTokens[instanceId] ?? 0)
         chatWriteGenerations[instanceId, default: [:]][chatId] = max(token, chatWriteGenerations[instanceId]?[chatId] ?? 0)
         removedChatIDs[instanceId, default: []].insert(chatId)
         let directory = root.appending(path: "lists", directoryHint: .isDirectory)

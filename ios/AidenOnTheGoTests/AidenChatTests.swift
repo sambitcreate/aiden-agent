@@ -253,6 +253,7 @@ final class AidenChatTests: XCTestCase {
         let session = URLSession(configuration: configuration)
         let coordinator = AidenRemoteCoordinator(
             installationStore: store,
+            chatCache: cache,
             clientFactory: { installation, credential in
                 AidenRemoteClient(
                     endpoint: installation.endpoint,
@@ -1171,6 +1172,21 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
+        try await assertRemovalJoinsUploadCleanup()
+    }
+
+    @MainActor
+    func testPurgeJoinsUploadCleanup() async throws {
+        try await assertRemovalJoinsUploadCleanup(purging: true)
+    }
+
+    @MainActor
+    func testUploadCleanupRevocationDoesNotDeadlockRemoval() async throws {
+        try await assertRemovalJoinsUploadCleanup(revokedCleanup: true)
+    }
+
+    @MainActor
+    private func assertRemovalJoinsUploadCleanup(purging: Bool = false, revokedCleanup: Bool = false) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-removed-upload-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = AidenChatWriteTestGate()
@@ -1178,6 +1194,12 @@ final class AidenChatTests: XCTestCase {
         let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
         let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2)) }
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "DELETE" {
+                if revokedCleanup {
+                    return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again.","requestId":"revoked-cleanup","retryable":false}}"#.utf8))
+                }
+                return (204, "application/json", Data())
+            }
             guard request.httpMethod == "POST" else { return nil }
             return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
                 "id": "att_" + String(repeating: "a", count: 43), "name": "fixture.png", "mimeType": "image/png", "kind": "image", "size": png.count,
@@ -1187,8 +1209,29 @@ final class AidenChatTests: XCTestCase {
         await gate.arm()
         let uploading = Task { await model.upload([.image(name: "fixture.png", mimeType: "image/png", data: png), .text(name: "next.txt", mimeType: "text/plain", text: "next")]) }
         await waitForChatWrite(gate)
-        await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        let returned = expectation(description: "removal waits for remote cleanup")
+        returned.isInverted = true
+        var cleanupHeld = true
+        let started = expectation(description: "removal started")
+        let removing = Task {
+            started.fulfill()
+            if purging { await cache.purge(instanceId: "instance-progress-lifecycle") }
+            else { await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) }
+            if cleanupHeld { returned.fulfill() }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        let deleteArrived = expectation(description: "remote DELETE held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments/att_" + String(repeating: "a", count: 43)) { deleteArrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
         await gate.release()
+        await fulfillment(of: [deleteArrived], timeout: 2)
+        await fulfillment(of: [returned], timeout: 0.1)
+        cleanupHeld = false
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        let finished = expectation(description: "upload and removal finish without self-await")
+        let completion = Task { await removing.value; _ = await uploading.value; finished.fulfill() }
+        await fulfillment(of: [finished], timeout: 3)
+        await completion.value
         let failures = await uploading.value
         XCTAssertEqual(failures, 2)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
@@ -1200,6 +1243,31 @@ final class AidenChatTests: XCTestCase {
         let reopened = AidenChatCache(root: root)
         let persisted = await reopened.attachmentImage(instanceId: "instance-progress-lifecycle", deviceId: "device-progress-lifecycle", chatId: model.chat.id, attachment: image)
         XCTAssertNil(persisted)
+    }
+
+    @MainActor
+    func testUploadPostRevocationCompletesPurgeWithoutSelfAwait() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-upload-revocation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        try await cache.saveChat(model.chat, instanceId: "instance-progress-lifecycle", writeToken: cache.reserveChatWrite())
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST" else { return nil }
+            return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again.","requestId":"revoked-upload","retryable":false}}"#.utf8))
+        }
+        let finished = expectation(description: "revoked upload finishes purge")
+        let task = Task {
+            let failed = await model.upload([.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")])
+            XCTAssertEqual(failed, 1)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 3)
+        await task.value
+        let persisted = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(persisted)
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
     }
 
     @MainActor
@@ -3206,6 +3274,55 @@ final class AidenChatTests: XCTestCase {
                 let workspace = await reopened.loadChats(instanceId: instanceId, workspaceId: chat.workspaceId)
                 XCTAssertEqual(home?.summaries.map(\.title), ["Fresh owner"])
                 XCTAssertEqual(workspace?.map(\.title), ["Fresh owner"])
+            }
+        }
+    }
+
+    @MainActor
+    func testDeletionFencesMetadataWithAbsentFileOrRowAfterDetailReadmission() async throws {
+        for existingRow in [false, true] {
+            for writer in ["workspace", "home"] {
+                let root = FileManager.default.temporaryDirectory.appending(path: "aiden-absent-metadata-\(UUID())")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let gate = AidenChatWriteTestGate()
+                let cache = AidenChatCache(root: root, beforeMetadataWrite: { await gate.waitIfArmed() })
+                let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+                let chat = model.chat
+                let instanceId = "instance-progress-lifecycle"
+                let other = AidenChat(id: "unrelated-chat", workspaceId: chat.workspaceId, title: "Retained row", providerId: chat.providerId, modelId: chat.modelId, messages: [], createdAt: chat.createdAt, updatedAt: chat.updatedAt, revision: chat.revision)
+                if existingRow {
+                    try await cache.saveChats([other], instanceId: instanceId, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+                    try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: other)], nextCursor: nil), instanceId: instanceId, writeToken: cache.reserveChatWrite())
+                }
+                let token = cache.reserveChatWrite()
+                await gate.arm()
+                let writing = Task {
+                    if writer == "workspace" {
+                        try await cache.saveChats([chat], instanceId: instanceId, workspaceId: chat.workspaceId, writeToken: token)
+                    } else {
+                        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat)], nextCursor: nil), instanceId: instanceId, writeToken: token)
+                    }
+                }
+                await waitForChatWrite(gate)
+                await cache.removeChat(instanceId: instanceId, chatId: chat.id)
+                var fresh = chat
+                fresh.title = "Fresh detail only"
+                try await cache.saveChat(fresh, instanceId: instanceId, writeToken: cache.reserveChatWrite())
+                await gate.release()
+                try await writing.value
+                let reopened = AidenChatCache(root: root)
+                let workspace = await reopened.loadChats(instanceId: instanceId, workspaceId: chat.workspaceId)
+                let home = await reopened.loadChatSummaries(instanceId: instanceId)
+                XCTAssertEqual(workspace?.map(\.id), existingRow ? [other.id] : nil)
+                XCTAssertEqual(home?.summaries.map(\.id), existingRow ? [other.id] : nil)
+                // Fresh metadata admission and another installation remain usable.
+                try await cache.saveChats([fresh, other], instanceId: instanceId, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+                try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh), AidenChatSummary(chat: other)], nextCursor: nil), instanceId: instanceId, writeToken: cache.reserveChatWrite())
+                try await cache.saveChats([chat], instanceId: "other-instance", workspaceId: chat.workspaceId, writeToken: token)
+                let admitted = await reopened.loadChats(instanceId: instanceId, workspaceId: chat.workspaceId)
+                let isolated = await reopened.loadChats(instanceId: "other-instance", workspaceId: chat.workspaceId)
+                XCTAssertEqual(admitted?.map(\.title), [fresh.title, other.title])
+                XCTAssertEqual(isolated?.map(\.id), [chat.id])
             }
         }
     }

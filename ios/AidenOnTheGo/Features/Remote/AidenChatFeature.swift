@@ -921,6 +921,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
+    @ObservationIgnored private var uploadRevocation: (AidenRemoteClientError, AidenRemoteRequestContext)?
     @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
     private var attachmentPreparationID: UUID?
     var isPreparingAttachments: Bool { attachmentPreparationID != nil }
@@ -1046,7 +1047,12 @@ final class AidenChatViewModel {
         lifetime.onRemoval = { [weak self] in self?.handleRemoval() }
         let draftInstanceId = coordinator.activeInstanceId ?? ""
         let draftChatId = chat.id
-        lifetime.onRemovalCleanup = {
+        lifetime.onRemovalCleanup = { @MainActor [weak self] in
+            // The worker never initiates purge itself, so joining it cannot
+            // create an upload -> purge -> upload dependency cycle.
+            let uploading = self?.uploadTask
+            uploading?.cancel()
+            _ = await uploading?.value
             await draftStore.remove(instanceId: draftInstanceId, chatId: draftChatId)
         }
     }
@@ -1922,12 +1928,24 @@ final class AidenChatViewModel {
         guard uploadTask == nil, !isRemoved else { return uploads.count }
         let task = Task { await performUpload(uploads) }
         uploadTask = task
-        defer { uploadTask = nil }
-        return await withTaskCancellationHandler {
+        let failures = await withTaskCancellationHandler {
             await task.value
         } onCancel: {
             task.cancel()
         }
+        uploadTask = nil
+        let revocation = uploadRevocation
+        uploadRevocation = nil
+        if let (error, context) = revocation {
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
+        }
+        return failures
+    }
+
+    private func deferUploadRevocation(_ error: Error, context: AidenRemoteRequestContext) -> Bool {
+        guard let error = error as? AidenRemoteClientError, error.isCredentialRevoked else { return false }
+        uploadRevocation = (error, context)
+        return true
     }
 
     private func performUpload(_ uploads: [AidenAttachmentUpload]) async -> Int {
@@ -1998,7 +2016,7 @@ final class AidenChatViewModel {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
                 return uploads.count
             } catch {
-                if await coordinator.handleCredentialRevocation(error, context: context) {
+                if deferUploadRevocation(error, context: context) {
                     return uploads.count
                 }
                 guard !isRemoved, coordinator.isCurrent(context) else { return uploads.count }
@@ -2035,7 +2053,7 @@ final class AidenChatViewModel {
                         attachmentId: reference.id
                     )
                 } catch {
-                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
+                    if deferUploadRevocation(error, context: context) { return }
                 }
             }
         }
