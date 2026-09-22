@@ -16,6 +16,53 @@ actor AidenChatCache {
         var lastSequence: Int
     }
 
+    @MainActor final class ChatLifetime {
+        let instanceId: String
+        let chatId: String
+        private(set) var isRemoved = false
+        var onRemoval: (() -> Void)?
+
+        init(instanceId: String, chatId: String) {
+            self.instanceId = instanceId
+            self.chatId = chatId
+        }
+
+        func remove() {
+            isRemoved = true
+            onRemoval?()
+            onRemoval = nil
+        }
+    }
+
+    @MainActor private final class Lifetimes {
+        private struct Entry { weak var value: ChatLifetime? }
+        private var entries: [Entry] = []
+        nonisolated init() {}
+
+        func register(_ lifetime: ChatLifetime) {
+            entries.removeAll { $0.value == nil }
+            entries.append(Entry(value: lifetime))
+        }
+
+        func remove(instanceId: String, chatId: String? = nil) {
+            for entry in entries {
+                guard let value = entry.value, value.instanceId == instanceId,
+                      chatId == nil || value.chatId == chatId else { continue }
+                value.remove()
+            }
+            entries.removeAll { $0.value == nil || $0.value?.isRemoved == true }
+        }
+    }
+
+    private nonisolated let lifetimes = Lifetimes()
+
+    @MainActor func registerLifetime(instanceId: String, chatId: String) -> ChatLifetime {
+        let lifetime = ChatLifetime(instanceId: instanceId, chatId: chatId)
+        if chatWriteClock.isPending(instanceId: instanceId, chatId: chatId) { lifetime.remove() }
+        else { lifetimes.register(lifetime) }
+        return lifetime
+    }
+
     private struct ChatListEnvelope: Codable {
         let instanceId: String
         let workspaceId: String
@@ -100,14 +147,28 @@ actor AidenChatCache {
         private var value: UInt64 = 0
         private var removed: [String: [String: UInt64]] = [:]
         private var purged: [String: UInt64] = [:]
+        private var pending: [UInt64: (instanceId: String, chatId: String?)] = [:]
 
         func invalidate(instanceId: String, chatId: String? = nil) -> UInt64 {
             lock.lock()
             defer { lock.unlock() }
             value += 1
+            pending[value] = (instanceId, chatId)
             if let chatId { removed[instanceId, default: [:]][chatId] = value }
             else { purged[instanceId] = value; removed.removeValue(forKey: instanceId) }
             return value
+        }
+
+        func finish(_ token: UInt64) {
+            lock.lock()
+            defer { lock.unlock() }
+            pending.removeValue(forKey: token)
+        }
+
+        func isPending(instanceId: String, chatId: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return pending.values.contains { $0.instanceId == instanceId && ($0.chatId == nil || $0.chatId == chatId) }
         }
 
         func retains(_ token: UInt64, instanceId: String, chatId: String) -> Bool {
@@ -126,6 +187,7 @@ actor AidenChatCache {
 
     private nonisolated let chatWriteClock = ChatWriteClock()
     private var chatWriteGenerations: [String: [String: UInt64]] = [:]
+    private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
 
     nonisolated func reserveChatWrite() -> UInt64 {
@@ -178,17 +240,22 @@ actor AidenChatCache {
         ), envelope.instanceId == instanceId, envelope.workspaceId == workspaceId else {
             return nil
         }
-        return envelope.chats
+        return envelope.chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }
     }
 
     func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String) throws {
         try save(
-            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: chats),
+            ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
     }
 
+    private func isChatHidden(instanceId: String, chatId: String) -> Bool {
+        chatWriteClock.isPending(instanceId: instanceId, chatId: chatId) || removedChatIDs[instanceId]?.contains(chatId) == true
+    }
+
     func loadChat(instanceId: String, chatId: String) -> AidenChat? {
+        guard !isChatHidden(instanceId: instanceId, chatId: chatId) else { return nil }
         guard let envelope: ChatEnvelope = load(
             ChatEnvelope.self,
             from: fileURL(kind: "chats", instanceId, chatId)
@@ -201,7 +268,9 @@ actor AidenChatCache {
     @discardableResult
     func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws -> Bool {
         await beforeChatWrite?()
-        guard writeToken > (chatPurgeGenerations[instanceId] ?? 0),
+        guard !chatWriteClock.isPending(instanceId: instanceId, chatId: chat.id),
+              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id),
+              writeToken > (chatPurgeGenerations[instanceId] ?? 0),
               writeToken > (chatWriteGenerations[instanceId]?[chat.id] ?? 0) else { return false }
         // Advance even if persistence fails: an older queued snapshot must not
         // become authoritative merely because the newest disk write failed.
@@ -210,6 +279,7 @@ actor AidenChatCache {
             ChatEnvelope(instanceId: instanceId, chat: chat),
             to: fileURL(kind: "chats", instanceId, chat.id)
         )
+        removedChatIDs[instanceId]?.remove(chat.id)
         return true
     }
 
@@ -281,6 +351,7 @@ actor AidenChatCache {
     }
 
     func loadActiveStream(instanceId: String, chatId: String) -> ActiveStream? {
+        guard !isChatHidden(instanceId: instanceId, chatId: chatId) else { return nil }
         guard let envelope: StreamEnvelope = load(
             StreamEnvelope.self,
             from: fileURL(kind: "streams", instanceId, chatId)
@@ -293,6 +364,7 @@ actor AidenChatCache {
     @discardableResult
     func saveActiveStream(_ stream: ActiveStream, instanceId: String, chatId: String, chatWriteToken: UInt64? = nil) async throws -> Bool {
         await beforeActiveStreamWrite?()
+        guard !isChatHidden(instanceId: instanceId, chatId: chatId) else { return false }
         if let chatWriteToken, !isChatWriteRetained(chatWriteToken, instanceId: instanceId, chatId: chatId) { return false }
         try save(
             StreamEnvelope(instanceId: instanceId, chatId: chatId, stream: stream),
@@ -314,16 +386,47 @@ actor AidenChatCache {
         return true
     }
 
-    func removeChat(instanceId: String, chatId: String) {
-        chatWriteGenerations[instanceId, default: [:]][chatId] = chatWriteClock.invalidate(instanceId: instanceId, chatId: chatId)
+    // Deletion and consumer admission share the main actor. Invalidation and
+    // cancellation happen without suspension; disk work rejects all writes for
+    // this identity until the deletion completes.
+    @MainActor func removeChat(instanceId: String, chatId: String) async {
+        let token = chatWriteClock.invalidate(instanceId: instanceId, chatId: chatId)
+        lifetimes.remove(instanceId: instanceId, chatId: chatId)
+        await removeChatFiles(instanceId: instanceId, chatId: chatId, token: token)
+        chatWriteClock.finish(token)
+    }
+
+    private func removeChatFiles(instanceId: String, chatId: String, token: UInt64) {
+        chatWriteGenerations[instanceId, default: [:]][chatId] = max(token, chatWriteGenerations[instanceId]?[chatId] ?? 0)
+        removedChatIDs[instanceId, default: []].insert(chatId)
+        let directory = root.appending(path: "lists", directoryHint: .isDirectory)
+        for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
+            guard let envelope = load(ChatListEnvelope.self, from: url), envelope.instanceId == instanceId,
+                  envelope.chats.contains(where: { $0.id == chatId }) else { continue }
+            let remaining = envelope.chats.filter { $0.id != chatId }
+            do {
+                try save(ChatListEnvelope(instanceId: instanceId, workspaceId: envelope.workspaceId, chats: remaining), to: url)
+            } catch {
+                // A failed rewrite must not retain a known deleted offline row.
+                try? fileManager.removeItem(at: url)
+            }
+        }
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
         try? removeChatSummary(instanceId: instanceId, chatId: chatId)
         removeActiveStream(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: attachmentChatDirectory(instanceId: instanceId, chatId: chatId))
     }
 
-    func purge(instanceId: String) {
-        chatPurgeGenerations[instanceId] = chatWriteClock.invalidate(instanceId: instanceId)
+    @MainActor func purge(instanceId: String) async {
+        let token = chatWriteClock.invalidate(instanceId: instanceId)
+        lifetimes.remove(instanceId: instanceId)
+        await purgeFilesForInstance(instanceId: instanceId, token: token)
+        chatWriteClock.finish(token)
+    }
+
+    private func purgeFilesForInstance(instanceId: String, token: UInt64) {
+        chatPurgeGenerations[instanceId] = max(token, chatPurgeGenerations[instanceId] ?? 0)
+        removedChatIDs.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)

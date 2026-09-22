@@ -371,6 +371,113 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRemovalAfterFinalRetentionCheckDoesNotAdmitConsumer() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-stream-companion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        model.beforeConsumerAdmission = { await gate.waitIfArmed() }
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/turns") == true {
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load()
+        model.draft = "Hello"
+        XCTAssertTrue(model.canSend)
+        await gate.arm()
+        let sending = Task { await model.send() }
+        await waitForChatWrite(gate)
+        let admitted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertTrue(admitted?.messages.contains { $0.id == "accepted-message" } == true)
+        await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await gate.release()
+        await sending.value
+        let stream = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(stream)
+        XCTAssertNil(persisted)
+        XCTAssertTrue(fixture.eventCursors.isEmpty)
+        XCTAssertFalse(model.chat.messages.contains { $0.id == "accepted-message" })
+        XCTAssertNil(model.streamState)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testRemovalWhileTurnResponseIsHeldDoesNotReviveDetail() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-stream-companion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/turns") == true {
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load()
+        model.draft = "Hello"
+        XCTAssertTrue(model.canSend)
+        let arrived = expectation(description: "turn response held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { arrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        let sending = Task { await model.send() }
+        await fulfillment(of: [arrived], timeout: 2)
+        await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await sending.value
+        let stream = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(stream)
+        XCTAssertNil(persisted)
+        XCTAssertTrue(fixture.eventCursors.isEmpty)
+        XCTAssertFalse(model.chat.messages.contains { $0.id == "accepted-message" })
+        XCTAssertNil(model.streamState)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testRemovalCancelsAdmittedConsumerBeforeHeldEventsPublish() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-stream-companion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.url?.path.hasSuffix("/turns") == true {
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load()
+        model.draft = "Hello"
+        XCTAssertTrue(model.canSend)
+        let arrived = expectation(description: "consumer events held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/events") { arrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        await model.send()
+        await fulfillment(of: [arrived], timeout: 2)
+        let admitted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertTrue(admitted?.messages.contains { $0.id == "accepted-message" } == true)
+        await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        for _ in 0..<10 { await Task.yield() }
+        let stream = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(stream)
+        XCTAssertNil(persisted)
+        XCTAssertEqual(fixture.eventCursors, [0])
+        XCTAssertEqual(model.liveText, "")
+        XCTAssertFalse(model.canSend)
+        XCTAssertNil(model.streamState)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
     func testSupersededAcceptedTurnRetainsReceiptWithoutAnotherNetworkRead() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-superseded-turn-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -524,6 +631,29 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedDetailReadmissionKeepsDeletedChatOutOfOfflineLists() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-failed-readmission-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let instanceId = "instance-progress-lifecycle"
+        try await cache.saveChats([model.chat], instanceId: instanceId, workspaceId: "workspace-1")
+        await cache.removeChat(instanceId: instanceId, chatId: model.chat.id)
+        // Make only detailed persistence fail; workspace list storage remains writable.
+        let chatsDirectory = root.appending(path: "chats")
+        try? FileManager.default.removeItem(at: chatsDirectory)
+        try Data("not a directory".utf8).write(to: chatsDirectory)
+        do {
+            try await cache.saveChat(model.chat, instanceId: instanceId, writeToken: cache.reserveChatWrite())
+            XCTFail("The detail write must fail")
+        } catch {}
+        try await cache.saveChats([model.chat], instanceId: instanceId, workspaceId: "workspace-1")
+        let reopened = AidenChatCache(root: root)
+        let offline = await reopened.loadChats(instanceId: instanceId, workspaceId: "workspace-1")
+        XCTAssertEqual(offline?.count, 0)
+    }
+
+    @MainActor
     func testRemovedWorkspaceMutationDoesNotPublishOrKeepOptimisticRow() async throws {
         for creating in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rejected-workspace-\(UUID())")
@@ -545,6 +675,7 @@ final class AidenChatTests: XCTestCase {
                 guard request.httpMethod == "POST" || request.httpMethod == "PATCH" else { return nil }
                 return (request.httpMethod == "POST" ? 201 : 200, "application/json", data)
             }
+            try await cache.saveChats([detail.chat], instanceId: "instance-progress-lifecycle", workspaceId: "workspace-1")
             await gate.arm()
             let mutation = Task { () -> AidenChat? in
                 if creating { return await workspace.create() }
@@ -561,6 +692,11 @@ final class AidenChatTests: XCTestCase {
             XCTAssertEqual(removals, [detail.chat.id])
             let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: detail.chat.id)
             XCTAssertNil(persisted)
+            // A delayed list producer cannot put the removed identity back.
+            try await cache.saveChats([remote], instanceId: "instance-progress-lifecycle", workspaceId: "workspace-1")
+            let reopened = AidenChatCache(root: root)
+            let offline = await reopened.loadChats(instanceId: "instance-progress-lifecycle", workspaceId: "workspace-1")
+            XCTAssertEqual(offline?.count, 0)
         }
     }
 

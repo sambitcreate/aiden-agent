@@ -898,6 +898,10 @@ final class AidenChatViewModel {
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     private let draftStore: AidenChatDraftStore
     private let hapticScope: UUID
+    @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
+    // Deterministic test seam immediately before consumer admission.
+    @ObservationIgnored var beforeConsumerAdmission: (() async -> Void)?
+    private var isRemoved: Bool { deletionLifetime?.isRemoved == true }
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var progressTask: Task<Void, Never>?
     @ObservationIgnored private var progressObservationGeneration: UInt64 = 0
@@ -1034,6 +1038,9 @@ final class AidenChatViewModel {
         self.onChatActivityChanged = onChatActivityChanged
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
+        let lifetime = cache.registerLifetime(instanceId: coordinator.activeInstanceId ?? "", chatId: chat.id)
+        deletionLifetime = lifetime
+        lifetime.onRemoval = { [weak self] in self?.handleRemoval() }
     }
 
 #if DEBUG
@@ -1059,13 +1066,34 @@ final class AidenChatViewModel {
         attachmentPreparationTask?.cancel()
     }
 
+    private func handleRemoval() {
+        transcriptGeneration &+= 1
+        streamTask?.cancel()
+        terminalReconciliationTask?.cancel()
+        titleRefreshTask?.cancel()
+        stopProgressObservation()
+        clearProgressState()
+        let removedStreamID = activeStreamID
+        activeStreamID = nil
+        liveText = ""
+        reasoning = ""
+        tools = []
+        activityTimeline = nil
+        pendingApproval = nil
+        streamState = nil
+        clearRecoveryWarning()
+        if let removedStreamID {
+            Task { await liveActivities.updateStatus(instanceID: instanceId, streamID: removedStreamID, state: .cancelled) }
+        }
+    }
+
     var isConnected: Bool {
         guard !isReadOnlyFixture else { return false }
         return coordinator.connectionState == .connected
     }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
     var canSend: Bool {
-        guard !isReadOnlyPresentation else { return false }
+        guard !isReadOnlyPresentation, !isRemoved else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
             && !isStarting && !isRestoringStream && activeStreamID == nil && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
@@ -1144,6 +1172,7 @@ final class AidenChatViewModel {
 
     func load(observeProgress: Bool = true) async {
         guard !isReadOnlyFixture else { return }
+        guard !isRemoved else { return }
         guard !instanceId.isEmpty, !isLoading, !isStarting else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else {
             clearProgressState()
@@ -1159,11 +1188,11 @@ final class AidenChatViewModel {
         if draftSession == nil {
             let restorationGeneration = composerGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             draftSession = session
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
-                guard coordinator.isCurrent(context), draftSession == session else { return }
+                guard !isRemoved, coordinator.isCurrent(context), draftSession == session else { return }
                 // Disk access yields the main actor while the composer remains
                 // editable. Text edits, uploads, attachment removal and Send
                 // must all win over restoring the previous composer's text.
@@ -1177,7 +1206,7 @@ final class AidenChatViewModel {
         async let restoration: Void = restoreStreamIfNeeded()
         let cacheGeneration = transcriptGeneration
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             if cacheGeneration == transcriptGeneration, !isStarting {
                 chat = cached
                 resolveModelSelection()
@@ -1188,7 +1217,7 @@ final class AidenChatViewModel {
             async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
             async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
             let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             catalog = remoteCatalog
             if generation == transcriptGeneration, !isStarting {
                 await acceptRemoteChat(remoteChat, context: context)
@@ -1196,11 +1225,11 @@ final class AidenChatViewModel {
         } catch {
             clearProgressStateIfCredentialRevoked(error)
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         await restoration
-        guard coordinator.isCurrent(context) else { return }
+        guard !isRemoved, coordinator.isCurrent(context) else { return }
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
         await loadProgressSnapshot(
@@ -1296,6 +1325,7 @@ final class AidenChatViewModel {
 
     func startProgressObservation() {
         guard !isReadOnlyFixture else { return }
+        guard !isRemoved else { return }
         clearProgressStateForLostAccess()
         guard progressTask == nil,
               canReadTaskProgress || canReadAgentRoster else { return }
@@ -1429,7 +1459,7 @@ final class AidenChatViewModel {
         _ generation: UInt64?,
         context: AidenRemoteRequestContext
     ) -> Bool {
-        guard coordinator.isCurrent(context) else {
+        guard !isRemoved, coordinator.isCurrent(context) else {
             clearProgressState()
             return false
         }
@@ -1545,7 +1575,7 @@ final class AidenChatViewModel {
                 chatId: chat.id,
                 turnId: turnId
             )
-            guard coordinator.isCurrent(context),
+            guard !isRemoved, coordinator.isCurrent(context),
                   snapshot.chatId == chat.id,
                   snapshot.turnId == turnId,
                   snapshot.epoch == agentRoster?.epoch else { return }
@@ -1671,7 +1701,7 @@ final class AidenChatViewModel {
         defer {
             isStarting = false
             transcriptGeneration &+= 1
-            if coordinator.isCurrent(context), chat.isTitlePending { schedulePendingTitleRefresh(context: context) }
+            if !isRemoved, coordinator.isCurrent(context), chat.isTitlePending { schedulePendingTitleRefresh(context: context) }
         }
         presentedError = nil
         draftPersistenceTask?.cancel()
@@ -1690,6 +1720,7 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
+            guard !isRemoved else { return }
             let stream = AidenChatCache.ActiveStream(
                 deviceId: context.deviceId,
                 streamId: response.streamId,
@@ -1709,14 +1740,16 @@ final class AidenChatViewModel {
             var startedActivity = false
             var accepted = false
             let retained = await coordinator.withRetainedInstallationData(for: context) {
+                guard !isRemoved else { return }
                 accepted = (try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)) ?? true
                 while !accepted {
+                    guard !isRemoved else { return }
                     // Rebase the receipt on the winning local snapshot. This
                     // does not depend on another network read or resend POST.
                     // Reserve before loading so removal/new writes still win.
                     let retryToken = cache.reserveChatWrite()
                     guard var current = await cache.loadChat(instanceId: instanceId, chatId: chat.id),
-                          coordinator.isRetained(context) else { return }
+                          !isRemoved, coordinator.isRetained(context) else { return }
                     if !current.messages.contains(where: { $0.id == response.message.id }) {
                         current.messages.append(response.message)
                     }
@@ -1730,7 +1763,7 @@ final class AidenChatViewModel {
                    draft.isEmpty {
                     _ = try? await draftStore.save("", session: draftSession)
                 }
-                guard cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id) else {
+                guard !isRemoved, cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id) else {
                     accepted = false
                     return
                 }
@@ -1743,7 +1776,8 @@ final class AidenChatViewModel {
                 )
             }
             accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
-            guard retained, accepted else {
+            await beforeConsumerAdmission?()
+            guard retained, accepted, !isRemoved else {
                 if startedActivity {
                     await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: .cancelled)
                 }
@@ -1753,7 +1787,7 @@ final class AidenChatViewModel {
                 }
                 return
             }
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             turnAttempts.reset()
             chat = acceptedChat
             liveText = ""
@@ -1765,7 +1799,7 @@ final class AidenChatViewModel {
             coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
         } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
             if draft.isEmpty { draft = text }
@@ -1773,7 +1807,7 @@ final class AidenChatViewModel {
             streamState = nil
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
             draft = AidenDraftSendReconciliation.failedDraft(
@@ -1882,7 +1916,7 @@ final class AidenChatViewModel {
                     chatId: chat.id,
                     upload: upload
                 )
-                guard coordinator.isCurrent(context) else {
+                guard !isRemoved, coordinator.isCurrent(context) else {
                     acceptedReferences.append(reference)
                     await cleanupCancelledUpload(acceptedReferences, context: context)
                     return uploads.count
@@ -1915,7 +1949,7 @@ final class AidenChatViewModel {
                 if await coordinator.handleCredentialRevocation(error, context: context) {
                     return uploads.count
                 }
-                guard coordinator.isCurrent(context) else { return uploads.count }
+                guard !isRemoved, coordinator.isCurrent(context) else { return uploads.count }
                 failedCount += 1
             }
         }
@@ -1997,7 +2031,7 @@ final class AidenChatViewModel {
                 chatId: chat.id,
                 attachmentId: attachment.id
             )
-            guard coordinator.isCurrent(context),
+            guard !isRemoved, coordinator.isCurrent(context),
                   content.mimeType == attachment.mimeType,
                   let data = await AidenAttachmentImageDecoding.validatedData(
                       content.data,
@@ -2033,13 +2067,14 @@ final class AidenChatViewModel {
     func stop() async {
         guard !isReadOnlyPresentation else { return }
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
+        guard !isRemoved else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let previousState = streamState
         pendingApproval = nil
         streamState = .cancelled
         do {
             let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             guard status.streamId == stream.streamId, status.chatId == chat.id else { return }
             if activeStreamID == stream.streamId {
                 await apply(
@@ -2051,11 +2086,11 @@ final class AidenChatViewModel {
             }
             coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
         } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             streamState = previousState
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
@@ -2101,16 +2136,16 @@ final class AidenChatViewModel {
         streamState = .running
         do {
             let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
             guard response.approvalId == approval.id, response.decision == decision else { return }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
         } catch let error where aidenIsCancellation(error) {
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = approval
             streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = approval
             streamState = previousState
             presentedError = error.localizedDescription
@@ -2142,7 +2177,7 @@ final class AidenChatViewModel {
     }
 
     private func restoreStreamIfNeeded() async {
-        guard activeStreamID == nil, !isStarting else { return }
+        guard !isRemoved, activeStreamID == nil, !isStarting else { return }
         isRestoringStream = true
         defer { isRestoringStream = false }
         let generation = transcriptGeneration
@@ -2159,7 +2194,7 @@ final class AidenChatViewModel {
         }
         do {
             let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-            guard coordinator.isCurrent(context), activeStreamID == nil,
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == nil,
                   !isStarting, generation == transcriptGeneration else { return }
             clearRecoveryWarning()
             activeStreamID = stream.streamId
@@ -2171,14 +2206,17 @@ final class AidenChatViewModel {
                     streamID: stream.streamId
                 )
             }
-            guard activeStreamID == stream.streamId else { return }
+            guard !isRemoved, activeStreamID == stream.streamId else {
+                if isRemoved { await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: .cancelled) }
+                return
+            }
             await apply(
                 status,
                 streamID: stream.streamId,
                 context: context,
                 feedbackPolicy: .restoredStream
             )
-            guard coordinator.isCurrent(context), activeStreamID == stream.streamId,
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
                   !isStarting, generation == transcriptGeneration else { return }
             // A terminal status can become visible before its final SSE event is
             // consumed. Keep the durable cursor and replay first so cancellation
@@ -2186,11 +2224,11 @@ final class AidenChatViewModel {
             startStreaming(stream, context: context, feedbackPolicy: .restoredStream)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
             guard activeStreamID == nil, !isStarting, generation == transcriptGeneration else { return }
             showRecoveryWarning(error.localizedDescription)
             await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
-            guard coordinator.isCurrent(context), activeStreamID == nil,
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == nil,
                   !isStarting, generation == transcriptGeneration else { return }
             // Retain and resume the stream identity even if the first status
             // probe happens while the phone is offline.
@@ -2203,6 +2241,7 @@ final class AidenChatViewModel {
         context: AidenRemoteRequestContext,
         feedbackPolicy: AidenStreamFeedbackPolicy
     ) {
+        guard !isRemoved else { return }
         terminalReconciliationTask?.cancel()
         terminalReconciliationTask = nil
         streamTask?.cancel()
@@ -2229,7 +2268,7 @@ final class AidenChatViewModel {
                 )
                 for try await event in events {
                     try Task.checkCancellation()
-                    guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+                    guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                     guard event.streamId == stream.streamId else { continue }
                     clearRecoveryWarning()
                     if event.sequence <= stream.lastSequence { continue }
@@ -2245,7 +2284,7 @@ final class AidenChatViewModel {
                 }
 
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-                guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+                guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 retryAttempt = 0
                 clearRecoveryWarning()
                 await apply(
@@ -2266,7 +2305,7 @@ final class AidenChatViewModel {
                 guard !Task.isCancelled else { return }
                 do {
                     let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-                    guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+                    guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                     retryAttempt = 0
                     clearRecoveryWarning()
                     await apply(
@@ -2285,7 +2324,7 @@ final class AidenChatViewModel {
                     return
                 } catch {
                     if await coordinator.handleCredentialRevocation(error, context: context) { return }
-                    guard coordinator.isCurrent(context) else { return }
+                    guard !isRemoved, !Task.isCancelled, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                     if AidenTerminalReconciliation.isDefinitiveMissingStream(error),
                        await reconcileMissingStream(
                            stream,
@@ -2294,6 +2333,7 @@ final class AidenChatViewModel {
                        ) {
                         return
                     }
+                    guard !isRemoved, !Task.isCancelled, activeStreamID == stream.streamId else { return }
                     showRecoveryWarning(error.localizedDescription)
                     await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
                     let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: retryAttempt)
@@ -2314,7 +2354,7 @@ final class AidenChatViewModel {
         context: AidenRemoteRequestContext,
         feedbackPolicy: AidenStreamFeedbackPolicy
     ) async {
-        guard coordinator.isCurrent(context),
+        guard !isRemoved, coordinator.isCurrent(context),
               activeStreamID == event.streamId,
               event.shouldApply,
               let payload = event.payload else { return }
@@ -2456,7 +2496,7 @@ final class AidenChatViewModel {
     ) async {
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
@@ -2484,7 +2524,7 @@ final class AidenChatViewModel {
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = nil
             streamState = .reconciling
             await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
@@ -2494,7 +2534,7 @@ final class AidenChatViewModel {
     private func approvalCapabilities(
         for context: AidenRemoteRequestContext
     ) -> AidenApprovalCapabilities {
-        guard coordinator.isCurrent(context),
+        guard !isRemoved, coordinator.isCurrent(context),
               let installation = coordinator.installationStore.activeInstallation,
               installation.instanceId == context.instanceId,
               installation.deviceId == context.deviceId else {
@@ -2512,7 +2552,7 @@ final class AidenChatViewModel {
         let generation = transcriptGeneration
         do {
             let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
-            guard coordinator.isCurrent(context) else { return false }
+            guard !isRemoved, coordinator.isCurrent(context) else { return false }
             guard generation == transcriptGeneration, !isStarting else { return false }
             // Supersede reads admitted while the authoritative fetch was pending,
             // before its cache write yields to the main actor again.
@@ -2524,7 +2564,7 @@ final class AidenChatViewModel {
             return true
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
-            guard coordinator.isCurrent(context), generation == transcriptGeneration, !isStarting else { return false }
+            guard !isRemoved, coordinator.isCurrent(context), generation == transcriptGeneration, !isStarting else { return false }
             showRecoveryWarning(error.localizedDescription)
             return false
         }
@@ -2536,12 +2576,12 @@ final class AidenChatViewModel {
         context: AidenRemoteRequestContext,
         scheduleTitleRefresh: Bool = true
     ) async -> Bool {
-        guard coordinator.isCurrent(context), !isStarting else { return false }
+        guard !isRemoved, coordinator.isCurrent(context), !isStarting else { return false }
         let generation = transcriptGeneration
         let writeToken = cache.reserveChatWrite()
         let accepted = (try? await cache.saveChat(remote, instanceId: instanceId, writeToken: writeToken)) ?? true
         guard accepted else { return false }
-        guard coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
+        guard !isRemoved, coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
         chat = remote
         resolveModelSelection()
         onChatUpdated(remote)
@@ -2569,7 +2609,7 @@ final class AidenChatViewModel {
                     guard !isStarting else { continue }
                     let generation = transcriptGeneration
                     let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
-                    guard coordinator.isCurrent(context) else { return }
+                    guard !isRemoved, coordinator.isCurrent(context) else { return }
                     guard generation == transcriptGeneration, !isStarting else { continue }
                     await acceptRemoteChat(remote, context: context, scheduleTitleRefresh: false)
                     if !remote.isTitlePending { return }
@@ -2586,7 +2626,7 @@ final class AidenChatViewModel {
     }
 
     private func finishStream(expectedStreamID: String, context: AidenRemoteRequestContext) async {
-        guard coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
         transcriptGeneration &+= 1
         guard await reconcileChat(context: context) else {
             scheduleTerminalReconciliation(expectedStreamID: expectedStreamID, context: context)
@@ -2667,7 +2707,7 @@ final class AidenChatViewModel {
                 do {
                     let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt)
                     try await Task.sleep(for: .milliseconds(delay))
-                    guard coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
+                    guard !isRemoved, coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
                     transcriptGeneration &+= 1
                     if await reconcileChat(context: context) {
                         guard activeStreamID == expectedStreamID else { return }
