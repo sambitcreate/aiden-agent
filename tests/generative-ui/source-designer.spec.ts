@@ -34,11 +34,32 @@ function testOwner(documentId: string): RendererDocumentOwner {
 }
 
 function isViteReloadNavigationAbort(error: unknown, target: URL): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes(`page.goto: net::ERR_ABORTED at ${target.toString()}`)
-  );
+  if (!(error instanceof Error)) return false;
+  if (error.message.includes(`page.goto: net::ERR_ABORTED at ${target.toString()}`)) {
+    return true;
+  }
+  // Vite can reload the current page after Aiden's atomic Apply/Undo write.
+  // The preview bootstrap strips its token/query before that reload occurs.
+  const reloaded = new URL(target);
+  reloaded.search = "";
+  reloaded.hash = "";
+  return error.message.split("\n", 1)[0] ===
+    `page.goto: Navigation to "${target.toString()}" is interrupted by another navigation to "${reloaded.toString()}"`;
 }
+
+test("source preview retries only recognized same-page reload interruptions", () => {
+  const target = new URL("http://127.0.0.1:49123/?__aiden_preview_token=fixture&aidenRevision=2");
+  const interrupted = (destination: string) => new Error(
+    `page.goto: Navigation to "${target}" is interrupted by another navigation to "${destination}"\nCall log:`,
+  );
+  expect(isViteReloadNavigationAbort(interrupted("http://127.0.0.1:49123/"), target)).toBe(true);
+  expect(isViteReloadNavigationAbort(new Error(`page.goto: net::ERR_ABORTED at ${target}`), target)).toBe(true);
+  for (const destination of ["https://example.com/", "http://127.0.0.1:49124/", "http://127.0.0.1:49123/other"]) {
+    expect(isViteReloadNavigationAbort(interrupted(destination), target)).toBe(false);
+  }
+  expect(isViteReloadNavigationAbort(new Error("page.goto: Timeout 30000ms exceeded"), target)).toBe(false);
+  expect(isViteReloadNavigationAbort("interrupted", target)).toBe(false);
+});
 
 async function expectSourcePreview(
   page: PlaywrightTestModule.Page,
