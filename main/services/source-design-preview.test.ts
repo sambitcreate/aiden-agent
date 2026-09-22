@@ -298,7 +298,12 @@ test("application shutdown waits until the owned preview process group is gone",
     ).sessions;
     const pid = [...sessions.values()][0]?.child.pid;
     assert.ok(pid);
+    const stopping = sourceDesignPreviewService.stop(owner, "source-preview-shutdown-project");
+    assert.equal(sourceDesignPreviewService.authority(owner.documentId,
+      "source-preview-shutdown-project", "source-preview-shutdown-workspace",
+      state.status === "running" ? state.sessionId : ""), undefined);
     await sourceDesignPreviewService.shutdown();
+    await stopping;
     assert.equal(sessions.size, 0);
     let processGroupExists = true;
     try {
@@ -389,7 +394,23 @@ test("preview sessions isolate two Design Projects connected to one workspace", 
       ),
       undefined,
     );
+    // An exited launcher still owns its process group; cleanup must retain the
+    // failure for a project reopened after its change notification was missed.
+    const sessions = (sourceDesignPreviewService as unknown as {
+      sessions: Map<string, { child: { pid: number }; stopping: boolean }>;
+    }).sessions;
+    const launcher = sessions.get(otherOwnerSameProject.sessionId)!;
+    process.kill(launcher.child.pid, "SIGTERM");
+    const deadline = Date.now() + 5_000;
+    while (sessions.has(otherOwnerSameProject.sessionId) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(sessions.has(otherOwnerSameProject.sessionId), false);
+    const failed = await sourceDesignPreviewService.state(otherOwner, "project:first", root);
+    assert.equal(failed.status, "failed");
+    if (failed.status === "failed") assert.match(failed.reason, /local app stopped/);
     await sourceDesignPreviewService.stopProject("project:first");
+    assert.equal((await sourceDesignPreviewService.state(otherOwner, "project:first", root)).status, "ready");
     assert.equal(
       sourceDesignPreviewService.authority(
         owner.documentId,

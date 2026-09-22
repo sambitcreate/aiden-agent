@@ -41,6 +41,12 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Update, Microphone, and Computer Use Hardening](update-microphone-computer-use-hardening-plan.md) | Partial | Installed acceptance found a silent stalled download; observable full-download recovery is implemented, while repaired-build → next-release and clean-TCC acceptance remain.                                              |
 | [Web Access Rehaul](web-access-rehaul-plan.md)                                                     | Partial | Implementation is complete through Phase 5: fresh profiles get request-free onboarding disclosure and default-on anonymous Exa, Settings exposes 17 reviewed shipped providers with fenced Fixed/Automatic routing, autonomous authority remains explicit, and a startup-bound Exa-only rollback preserves hidden state. Focused suites, Settings E2E, build, development packaging, and hardened package verification pass; the credential-backed live installed matrix remains a release-owner acceptance gate.       |
 
+## Studio follow-on
+
+| Plan | Status | Scope |
+| --- | --- | --- |
+| [Studio research improvements](studio-research-improvements-plan.md) | Implemented | PR #85 follow-on: authorized preview reuse, bounded History bodies, owned process teardown, and existing Explore shortcut. Final checks pending. |
+
 ## Completed
 
 | Plan                                                                                           | Status   | Completion note                                                                                                                                      |

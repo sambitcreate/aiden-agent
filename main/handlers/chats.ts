@@ -808,6 +808,7 @@ export function registerChatHistoryHandlers(): void {
       mediaId,
       theme: record.theme,
       designStudio,
+      ownerDocumentId: owner.documentId,
       ...(liveDesignCandidateGenerationId ? { liveDesignCandidateGenerationId } : {}),
     });
   });

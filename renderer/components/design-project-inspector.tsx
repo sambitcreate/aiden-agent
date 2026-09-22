@@ -180,12 +180,12 @@ export function DesignProjectInspector({
   const findRef = React.useRef<HTMLInputElement | null>(null);
   const closeRef = React.useRef<HTMLButtonElement | null>(null);
   const sourceLines = React.useMemo(
-    () => (source ? designProjectSourceLines(source.content) : []),
-    [source],
+    () => (activeTab === "code" && source ? designProjectSourceLines(source.content) : []),
+    [activeTab, source],
   );
   const findMatches = React.useMemo(
-    () => (source ? countDesignProjectSourceMatches(source.content, findQuery) : 0),
-    [findQuery, source],
+    () => (activeTab === "code" && source ? countDesignProjectSourceMatches(source.content, findQuery) : 0),
+    [activeTab, findQuery, source],
   );
   const sourceState = source
     ? "ready"
@@ -406,7 +406,7 @@ export function DesignProjectInspector({
         hidden={activeTab !== "code"}
         className="design-project-inspector-panel design-project-code-panel"
       >
-        {source ? (
+        {activeTab === "code" && source ? (
           <>
             {compareSource ? (
               <section
@@ -587,7 +587,7 @@ export function DesignProjectInspector({
                           {revision.previewed && !revision.active ? (
                             <small>Previewing</small>
                           ) : null}
-                          <small>{formatTimestamp(revision.createdAt)}</small>
+                          {revision.createdAt > 0 ? <small>{formatTimestamp(revision.createdAt)}</small> : null}
                           <small>
                             {revision.provenance}
                             {revision.model ? ` · ${revision.model}` : ""}

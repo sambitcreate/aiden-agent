@@ -87,7 +87,7 @@ import {
   toast,
 } from "./ui";
 import { HtmlArtifactIframe } from "./html-artifact-frame";
-import { htmlArtifactThemeTokensFromDocument } from "../lib/html-artifact-preview";
+import { useDesignPreview } from "../lib/use-design-preview";
 import {
   parseSourceElementDescriptor,
   SOURCE_DESIGN_PICKER_COMMAND,
@@ -150,6 +150,7 @@ interface DesignArtboardData extends Record<string, unknown> {
   onExitInspect: () => void;
   onVersionChange: (groupId: string, mediaId: string) => void;
   onExport: (artifact: ChatHtmlArtifactV1) => void;
+  onExplore?: () => void;
 }
 
 interface ImageNodeData extends Record<string, unknown> {
@@ -184,45 +185,11 @@ type MissingScreenNode = Node<MissingScreenNodeData, "missingScreen">;
 type StudioNode = DesignArtboardNode | DesignImageNode | SourceArtboardNode | MissingScreenNode;
 
 function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode>) {
-  const [preview, setPreview] = React.useState<{
-    src: string;
-    designCapability?: string;
-  }>();
-  const [error, setError] = React.useState<string>();
+  const { preview, ready, error } = useDesignPreview(
+    data.chatId, data.artifact.mediaId, data.artifact.id, data.livePreviewAuthority,
+  );
   const [exporting, setExporting] = React.useState(false);
   const size = VIEWPORT_SIZE[data.viewport];
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void chatsApi
-      .htmlArtifactSrcdoc(
-        data.chatId,
-        data.artifact.mediaId,
-        htmlArtifactThemeTokensFromDocument(),
-        true,
-        data.livePreviewAuthority,
-      )
-      .then((result) => {
-        if (cancelled) return;
-        if (!result?.src) {
-          setError("This design version is no longer available.");
-          return;
-        }
-        setPreview({
-          src: result.src,
-          designCapability: result.designCapability,
-        });
-        setError(undefined);
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          setError(cause instanceof Error ? cause.message : "Could not load this design.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [data.artifact.id, data.artifact.mediaId, data.chatId, data.livePreviewAuthority]);
 
   const exportArtifact = React.useCallback(async () => {
     if (exporting) return;
@@ -235,7 +202,7 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
   }, [data, exporting]);
 
   const selectedSelector = data.target?.selection?.selector;
-  const iframeInteractive = data.mode === "inspect" || data.mode === "preview";
+  const iframeInteractive = ready && (data.mode === "inspect" || data.mode === "preview");
 
   return (
     <article
@@ -282,6 +249,11 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
             </option>
           ))}
         </select>
+        {data.onExplore ? (
+          <Button size="small" variant="transparent" className="nodrag" onClick={data.onExplore}>
+            Explore variations
+          </Button>
+        ) : null}
         <Button
           iconOnly
           size="small"
@@ -304,6 +276,8 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
         </Text>
       </header>
       <div
+        inert={!ready}
+        aria-busy={!ready}
         className={cn(
           "nodrag nopan nowheel relative bg-control",
           !iframeInteractive && "pointer-events-none",
@@ -323,7 +297,7 @@ function DesignArtboardNodeView({ data, selected }: NodeProps<DesignArtboardNode
             title={`${data.artifact.title} ${data.viewport} preview`}
             onEscape={data.onExitInspect}
             designPicker={
-              preview.designCapability
+              ready && preview.designCapability
                 ? {
                     capability: preview.designCapability,
                     enabled: data.mode === "inspect",
@@ -890,8 +864,14 @@ export function DesignWorkspaceCanvas({
   );
   const selectedSource = selectedMediaId ? sourceByMediaId[selectedMediaId] : connectedSource;
   const compareSource = comparisonMediaId ? sourceByMediaId[comparisonMediaId] : undefined;
-  const selectedRevisionKey =
-    selectedGroup?.revisions.map(({ artifact }) => artifact.mediaId).join("\0") ?? "";
+  const sourceRequestKey = JSON.stringify([
+    savedProject?.id, selectedGroupNode?.lineageId,
+    [...new Set([selectedMediaId, comparisonMediaId])].filter(
+      (id): id is string => Boolean(id && selectedGroup?.revisions.some(({ artifact }) => artifact.mediaId === id)),
+    ),
+  ]);
+  const sourceRequestKeyRef = React.useRef(sourceRequestKey);
+  React.useLayoutEffect(() => { sourceRequestKeyRef.current = sourceRequestKey; }, [sourceRequestKey]);
   const selectedDirectEditTarget = targets.find(
     (target) =>
       target.mediaId === selectedMediaId &&
@@ -1428,11 +1408,14 @@ export function DesignWorkspaceCanvas({
         delete next[mediaId];
         return next;
       });
+      const requestKey = sourceRequestKeyRef.current;
       try {
         const source = await designerApi.readGeneratedSource(projectId, lineageId, mediaId);
+        if (sourceRequestKeyRef.current !== requestKey) return false;
         setSourceByMediaId((current) => ({ ...current, [mediaId]: source }));
         return true;
       } catch (cause) {
+        if (sourceRequestKeyRef.current !== requestKey) return false;
         setSourceByMediaId((current) => {
           const next = { ...current };
           delete next[mediaId];
@@ -1445,7 +1428,7 @@ export function DesignWorkspaceCanvas({
         }));
         return false;
       } finally {
-        setGeneratedSourceLoadingMediaIds((current) => {
+        if (sourceRequestKeyRef.current === requestKey) setGeneratedSourceLoadingMediaIds((current) => {
           const next = new Set(current);
           next.delete(mediaId);
           return next;
@@ -1456,20 +1439,21 @@ export function DesignWorkspaceCanvas({
   );
 
   React.useEffect(() => {
-    if (!savedProject || !selectedGroup || !selectedGroupNode?.lineageId) {
+    const [projectId, lineageId, mediaIds] = JSON.parse(sourceRequestKey) as [string | null, string | null, string[]];
+    if (!projectId || !lineageId) {
       setSourceByMediaId({});
       setGeneratedSourceErrors({});
       setGeneratedSourceLoadingMediaIds(new Set());
       return;
     }
     let cancelled = false;
-    const mediaIds = selectedGroup.revisions.map(({ artifact }) => artifact.mediaId);
+    // History rows use lightweight descriptors; only the displayed/compared bodies are read.
     setSourceByMediaId({});
     setGeneratedSourceErrors({});
     setGeneratedSourceLoadingMediaIds(new Set(mediaIds));
     for (const mediaId of mediaIds) {
       void designerApi
-        .readGeneratedSource(savedProject.id, selectedGroupNode.lineageId!, mediaId)
+        .readGeneratedSource(projectId, lineageId, mediaId)
         .then((source) => {
           if (!cancelled)
             setSourceByMediaId((current) => ({
@@ -1499,7 +1483,7 @@ export function DesignWorkspaceCanvas({
     return () => {
       cancelled = true;
     };
-  }, [savedProject?.id, selectedGroupId, selectedGroupNode?.lineageId, selectedRevisionKey]);
+  }, [sourceRequestKey]);
 
   React.useEffect(() => {
     if (!connectedWorkspaceId || !savedProject || unavailableMessage) {
@@ -2114,17 +2098,8 @@ export function DesignWorkspaceCanvas({
         editedMediaId: result.artifact.mediaId,
         revertMediaId,
       });
-      const sourceHydrated = await hydrateGeneratedSource(
-        result.project.id,
-        prototypeDirectEditPayload.lineageId,
-        result.artifact.mediaId,
-      );
       setDirectEditOpen(false);
-      if (sourceHydrated) {
-        toast.success("Created a new immutable Design revision.");
-      } else {
-        toast.info("Direct edit saved. Reload the Code view to read its source.");
-      }
+      toast.success("Created a new immutable Design revision.");
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "The direct edit could not be proven.");
     } finally {
@@ -2135,7 +2110,6 @@ export function DesignWorkspaceCanvas({
     commitSelection,
     connectedDirectEditPayload,
     directEditBusy,
-    hydrateGeneratedSource,
     prototypeDirectEditPayload,
     savedProject,
     selectedGroupNode,
@@ -2172,17 +2146,8 @@ export function DesignWorkspaceCanvas({
           revision: { mediaId: result.artifact.mediaId, artifactId: result.artifact.id },
         }),
       );
-      const sourceHydrated = await hydrateGeneratedSource(
-        result.project.id,
-        undo.lineageId,
-        result.artifact.mediaId,
-      );
       setPrototypeDirectEditUndo(undefined);
-      if (sourceHydrated) {
-        toast.success("Created a new exact-revert Design revision.");
-      } else {
-        toast.info("Undo saved. Reload the Code view to read its source.");
-      }
+      toast.success("Created a new exact-revert Design revision.");
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "The direct edit could not be undone.");
     } finally {
@@ -2191,7 +2156,6 @@ export function DesignWorkspaceCanvas({
   }, [
     acceptProjectUpdate,
     commitSelection,
-    hydrateGeneratedSource,
     prototypeDirectEditUndo,
     prototypeDirectEditUndoBusy,
   ]);
@@ -2509,6 +2473,7 @@ export function DesignWorkspaceCanvas({
           group.revisions[group.revisions.length - 1]!;
         const artifact = revision.artifact;
         const target = targets.find((item) => item.mediaId === artifact.mediaId);
+        const lineageId = savedProject?.canvas.nodes.find((node) => node.id === group.id)?.lineageId;
         return {
           id: group.id,
           type: "designArtboard",
@@ -2539,6 +2504,18 @@ export function DesignWorkspaceCanvas({
             onExitInspect: () => setMode("select"),
             onVersionChange: previewVersion,
             onExport: (item) => void exportArtifact(item),
+            ...(!generating && revision.source === "persisted" && lineageId ? {
+              onExplore: () => {
+                onGenerationRequest({ version: 1, operation: "explore", count: 2,
+                  creativeRange: "balanced", aspects: [], base: { lineageId, mediaId: artifact.mediaId } });
+                commitSelection(EMPTY_DESIGN_WORKBENCH_SELECTION);
+                onSelectedImagesChange([]);
+                onSourceSelectionChange(undefined);
+                setInspectorOpen(false);
+                setCommentsOpen(false);
+                onRequestComposerFocus();
+              },
+            } : {}),
           },
         };
       });
@@ -2584,6 +2561,12 @@ export function DesignWorkspaceCanvas({
     initialArtifactId,
     initialMediaId,
     livePreviewAuthority,
+    generating,
+    onGenerationRequest,
+    onRequestComposerFocus,
+    commitSelection,
+    onSelectedImagesChange,
+    onSourceSelectionChange,
     missingScreens,
     mode,
     onRetryProjectReconciliation,
@@ -3057,8 +3040,8 @@ export function DesignWorkspaceCanvas({
         id: artifact.mediaId,
         lineageId: selectedGroupNode?.lineageId ?? `unavailable:${artifact.id}`,
         label: `Revision ${index + 1}`,
-        createdAt: source?.createdAt ?? savedProject?.createdAt ?? 0,
-        provenance: source?.provenance ?? "Generated by Aiden",
+        createdAt: source?.createdAt ?? 0,
+        provenance: source?.provenance ?? "Select to view source details",
         ...(source?.model ? { model: source.model } : {}),
         active: artifact.mediaId === durableActiveMediaId,
         previewed: artifact.mediaId === selectedMediaId,

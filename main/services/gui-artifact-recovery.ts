@@ -1,5 +1,6 @@
+import { DesignPreviewCache } from "./design-preview-cache.js";
 import { BrowserWindow, dialog } from "../platform.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import {
@@ -19,6 +20,8 @@ import { isValidDesignArtifactSource } from "./design-project-health.js";
 import { designProjectStore } from "./design-project-store-main.js";
 import { projectOwnsPublishedDesignSource } from "./design-generation-context.js";
 import { isUsableLiveDesignCandidateSource } from "./design-artifact-source-authority.js";
+
+const designPreviewCache = new DesignPreviewCache();
 
 async function storedHtmlSource(chatId: string, mediaId: string) {
   if (mediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX)) {
@@ -87,9 +90,11 @@ export async function wrapStoredHtmlArtifact(input: {
   mediaId: string;
   theme?: unknown;
   designStudio?: boolean;
+  /** Main-resolved document identity; never supplied by the renderer. */
+  ownerDocumentId?: string;
   /** Main-authorized active generation; never accepted by export or persisted reads. */
   liveDesignCandidateGenerationId?: string;
-}): Promise<{ title: string; src: string; designCapability?: string } | undefined> {
+}): Promise<{ title: string; src: string; contentHash?: string; designCapability?: string } | undefined> {
   if (!isHtmlArtifactMediaId(input.mediaId)) return undefined;
   const liveSource = input.designStudio === true && input.liveDesignCandidateGenerationId
     ? await liveDesignCandidateSource(
@@ -103,19 +108,32 @@ export async function wrapStoredHtmlArtifact(input: {
   const { artifact, html } = source;
   const designCapability =
     input.designStudio === true && isDesignHtmlArtifact(artifact) ? randomUUID() : undefined;
+  const theme = parseGenerativeUiTheme(input.theme);
+  const contentHash = designCapability
+    ? createHash("sha256").update(JSON.stringify([html, artifact.title, theme])).digest("hex")
+    : undefined;
+  // Source validation above must run even when the document bytes are unchanged.
+  if (contentHash && input.ownerDocumentId) {
+    const cached = designPreviewCache.get(input.ownerDocumentId, input.chatId, contentHash);
+    if (cached) return cached;
+  }
   const srcdoc = wrapGenerativeUiHtml(
     html,
     artifact.title,
-    parseGenerativeUiTheme(input.theme),
+    theme,
     designCapability ? { designCapability } : undefined,
   );
-  return {
+  const document = {
     title: artifact.title,
     src: registerGenerativeUiPreviewDocument(srcdoc, {
       designStudio: designCapability !== undefined,
     }),
-    ...(designCapability ? { designCapability } : {}),
+    ...(designCapability ? { designCapability, contentHash } : {}),
   };
+  if (contentHash && designCapability && input.ownerDocumentId) {
+    designPreviewCache.set(input.ownerDocumentId, input.chatId, { ...document, contentHash, designCapability });
+  }
+  return document;
 }
 
 export async function exportStoredHtmlArtifact(input: {

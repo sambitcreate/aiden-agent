@@ -149,7 +149,7 @@
     "test:settings-design": "tsx --test renderer/lib/workspace-path-display.test.ts renderer/components/settings/settings-design.test.tsx renderer/shared/appearance.test.ts renderer/components/chat-sidebar.test.tsx renderer/components/settings/memory-settings.test.tsx",
     "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx",
     "test:design-v2-policy": "tsx --test main/services/design-project-v2-policy.test.ts main/services/design-project-contract-v2.test.ts",
-    "test:design-recovery": "tsx --test main/services/design-project-health.test.ts main/services/design-artifact-recovery.test.ts main/services/design-generation-context.test.ts main/services/design-generation-publication.test.ts",
+    "test:design-recovery": "tsx --test main/services/design-preview-cache.test.ts main/services/design-project-health.test.ts main/services/design-artifact-recovery.test.ts main/services/design-generation-context.test.ts main/services/design-generation-publication.test.ts",
     "test:custom-model-options": "tsx --test main/services/custom-model-options.test.ts"
   },
   "dependencies": {

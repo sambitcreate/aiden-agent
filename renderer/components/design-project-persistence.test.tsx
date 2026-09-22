@@ -134,7 +134,7 @@ test("canvas persists layout while active selection uses a dedicated main-owned 
   assert.doesNotMatch(canvas, /projectRevision: savedProject\?\.revision/u);
   assert.match(
     canvas,
-    /data\.artifact\.id, data\.artifact\.mediaId, data\.chatId/u,
+    /data\.chatId, data\.artifact\.mediaId, data\.artifact\.id, data\.livePreviewAuthority/u,
     "preview reloads only when immutable artifact identity changes",
   );
   assert.doesNotMatch(
@@ -457,9 +457,15 @@ test("connected direct edits retain one strict operation identity through durabl
 });
 
 test("a saved prototype edit remains successful when ancillary source hydration needs retry", () => {
-  assert.match(canvas, /const sourceHydrated = await hydrateGeneratedSource/u);
-  assert.match(canvas, /Direct edit saved\. Reload the Code view to read its source\./u);
-  assert.match(canvas, /Undo saved\. Reload the Code view to read its source\./u);
+  assert.doesNotMatch(canvas, /const sourceHydrated = await hydrateGeneratedSource/u);
+  assert.match(canvas, /toast.success\("Created a new immutable Design revision\."\)/u);
+  assert.match(canvas, /toast.success\("Created a new exact-revert Design revision\."\)/u);
   assert.match(canvas, /generatedSourceErrors\[selectedMediaId\]/u);
   assert.match(canvas, /onRetrySource=/u);
+});
+
+test("History reads only displayed and comparison bodies and fences late source replies", () => {
+  assert.match(canvas, /new Set\(\[selectedMediaId, comparisonMediaId\]\)/u);
+  assert.doesNotMatch(canvas, /const mediaIds = selectedGroup\.revisions\.map/u);
+  assert.match(canvas, /sourceRequestKeyRef\.current !== requestKey/u);
 });

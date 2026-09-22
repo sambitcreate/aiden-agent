@@ -1231,7 +1231,7 @@ export const chatsApi = {
     designStudio = false,
     liveDesignCandidateGenerationId?: string,
   ) =>
-    invoke<{ title: string; src: string; designCapability?: string } | undefined>(
+    invoke<{ title: string; src: string; contentHash?: string; designCapability?: string } | undefined>(
       "chats:htmlArtifactSrcdoc",
       {
         chatId,

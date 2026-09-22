@@ -74,6 +74,8 @@ interface PreviewSession {
   logs: string[];
   terminal?: { reason: string };
   stopping: boolean;
+  stopPromise?: Promise<void>;
+  removeAbortListener?: () => void;
 }
 
 interface VitePreviewRuntimeAdapter {
@@ -242,7 +244,7 @@ function appendLog(session: PreviewSession, chunk: string): void {
 }
 
 function terminateOwnedProcess(child: ChildProcess): void {
-  if (!child.pid || child.exitCode !== null) return;
+  if (!child.pid || (process.platform === "win32" && child.exitCode !== null)) return;
   try {
     if (process.platform === "win32") child.kill("SIGTERM");
     else process.kill(-child.pid, "SIGTERM");
@@ -256,7 +258,7 @@ function terminateOwnedProcess(child: ChildProcess): void {
 }
 
 function forceTerminateOwnedProcess(child: ChildProcess): void {
-  if (!child.pid || child.exitCode !== null) return;
+  if (!child.pid || (process.platform === "win32" && child.exitCode !== null)) return;
   try {
     if (process.platform === "win32") child.kill("SIGKILL");
     else process.kill(-child.pid, "SIGKILL");
@@ -270,20 +272,19 @@ function forceTerminateOwnedProcess(child: ChildProcess): void {
 }
 
 async function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return true;
-  return new Promise((resolve) => {
-    const finish = (exited: boolean): void => {
-      clearTimeout(timer);
-      child.off("exit", onExit);
-      child.off("close", onExit);
-      resolve(exited);
-    };
-    const onExit = (): void => finish(true);
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    timer.unref();
-    child.once("exit", onExit);
-    child.once("close", onExit);
-  });
+  const exited = () => {
+    if (process.platform === "win32" || !child.pid) {
+      return child.exitCode !== null || child.signalCode !== null;
+    }
+    try { process.kill(-child.pid, 0); return false; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  };
+  const deadline = Date.now() + timeoutMs;
+  while (!exited()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return true;
 }
 
 function sourceBridge(capability: string): string {
@@ -775,6 +776,11 @@ function publicState(session: PreviewSession): SourcePreviewStateV1 {
 export class SourceDesignPreviewService {
   private readonly sessions = new Map<string, PreviewSession>();
   private readonly retiredOrigins = new Set<string>();
+  private readonly terminalStates = new Map<string, { projectId: string; root: string; state: SourcePreviewStateV1 }>();
+
+  private terminalKey(owner: RendererDocumentOwner, projectId: string): string {
+    return JSON.stringify([owner.documentId, projectId]);
+  }
 
   frameNavigationAuthorities(): Array<{ origin: string; active: boolean }> {
     return [
@@ -799,10 +805,12 @@ export class SourceDesignPreviewService {
   private markTerminal(session: PreviewSession, reason: string): void {
     if (session.stopping || session.terminal) return;
     session.terminal = { reason };
-    session.webSocketProxy.close();
-    session.proxy.closeAllConnections();
-    void new Promise<void>((resolve) => session.proxy.close(() => resolve()));
-    session.admission.release();
+    const key = this.terminalKey(session.owner, session.projectId);
+    this.terminalStates.delete(key);
+    this.terminalStates.set(key, { projectId: session.projectId, root: session.root, state: publicState(session) });
+    while (this.terminalStates.size > 32) this.terminalStates.delete(this.terminalStates.keys().next().value!);
+    // A launcher can exit while descendants remain. Use the same owned teardown.
+    void this.stopSession(session);
     if (!session.owner.isDestroyed()) {
       session.owner.send("designer:preview-changed", {
         projectId: session.projectId,
@@ -819,6 +827,8 @@ export class SourceDesignPreviewService {
   ): Promise<SourcePreviewStateV1> {
     const session = this.ownedSession(owner, projectId);
     if (session) return publicState(session);
+    const terminal = this.terminalStates.get(this.terminalKey(owner, projectId));
+    if (terminal?.root === root) return terminal.state;
     const scripts = await detectSourcePreviewScripts(root);
     return scripts.length > 0
       ? { version: SOURCE_DESIGNER_VERSION, status: "ready", scripts }
@@ -837,12 +847,19 @@ export class SourceDesignPreviewService {
     root: string;
     scriptId: string;
   }): Promise<SourcePreviewStateV1> {
+    this.terminalStates.delete(this.terminalKey(input.owner, input.projectId));
     const existing = this.ownedSession(input.owner, input.projectId);
-    if (existing && !existing.terminal) {
+    if (existing && !existing.terminal && !existing.stopping &&
+      existing.root === input.root && existing.workspaceId === input.workspaceId &&
+      existing.script.id === input.scriptId) {
       input.admission.release();
       return publicState(existing);
     }
     if (existing) await this.stopSession(existing);
+    if (input.owner.isDestroyed() || input.admission.signal.aborted) {
+      input.admission.release();
+      throw new Error("The preview owner is no longer active.");
+    }
     const adapters = await detectSourcePreviewRuntimeAdapters(input.root);
     const adapter = adapters.find((candidate) => publicScript(candidate).id === input.scriptId);
     if (!adapter) {
@@ -867,6 +884,9 @@ export class SourceDesignPreviewService {
       );
       const launch = launchArguments(adapter, targetPort);
       try {
+        if (input.owner.isDestroyed() || input.admission.signal.aborted) {
+          throw new Error("The preview owner is no longer active.");
+        }
         const child = spawn(launch.command, launch.args, {
           cwd: input.root,
           env: { ...process.env, BROWSER: "none" },
@@ -912,6 +932,8 @@ export class SourceDesignPreviewService {
     child.stderr?.on("data", (chunk: string) => appendLog(session, chunk));
     const terminateFromAdmission = () => void this.stopSession(session);
     input.admission.signal.addEventListener("abort", terminateFromAdmission, { once: true });
+    session.removeAbortListener = () => input.admission.signal.removeEventListener("abort", terminateFromAdmission);
+    if (input.admission.signal.aborted) terminateFromAdmission();
     child.once("error", (error) => {
       this.markTerminal(session, error.message);
     });
@@ -932,11 +954,15 @@ export class SourceDesignPreviewService {
   }
 
   async stop(owner: RendererDocumentOwner, projectId: string): Promise<void> {
+    this.terminalStates.delete(this.terminalKey(owner, projectId));
     const session = this.ownedSession(owner, projectId);
     if (session) await this.stopSession(session);
   }
 
   async stopProject(projectId: string): Promise<void> {
+    for (const [key, terminal] of this.terminalStates) {
+      if (terminal.projectId === projectId) this.terminalStates.delete(key);
+    }
     await Promise.all(
       [...this.sessions.values()]
         .filter((session) => session.projectId === projectId)
@@ -944,10 +970,20 @@ export class SourceDesignPreviewService {
     );
   }
 
-  private async stopSession(session: PreviewSession): Promise<void> {
-    if (session.stopping) return;
+  private stopSession(session: PreviewSession): Promise<void> {
+    if (session.stopPromise) return session.stopPromise;
     session.stopping = true;
-    this.sessions.delete(session.id);
+    // Keep ownership registered while teardown runs so shutdown and repeated Stop
+    // await the same cleanup instead of reporting completion with a live child.
+    session.stopPromise = this.disposeSession(session).finally(() => {
+      this.sessions.delete(session.id);
+      session.removeAbortListener?.();
+      session.admission.release();
+    });
+    return session.stopPromise;
+  }
+
+  private async disposeSession(session: PreviewSession): Promise<void> {
     const retiredOrigin = `http://127.0.0.1:${session.proxyPort}`;
     this.retiredOrigins.add(retiredOrigin);
     while (this.retiredOrigins.size > 64) {
@@ -964,7 +1000,6 @@ export class SourceDesignPreviewService {
       forceTerminateOwnedProcess(session.child);
       await waitForProcessExit(session.child, 1_000);
     }
-    session.admission.release();
   }
 
   authority(
@@ -976,6 +1011,7 @@ export class SourceDesignPreviewService {
     const session = this.sessions.get(sessionId);
     return session &&
       !session.terminal &&
+      !session.stopping &&
       session.owner.documentId === ownerDocumentId &&
       session.projectId === projectId &&
       session.workspaceId === workspaceId
@@ -990,6 +1026,7 @@ export class SourceDesignPreviewService {
   }
 
   async shutdown(): Promise<void> {
+    this.terminalStates.clear();
     await Promise.all([...this.sessions.values()].map((session) => this.stopSession(session)));
   }
 }

@@ -857,3 +857,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - Studio's September 12 head required 13 conflict resolutions against current main. Preserve Design layout/authority alongside detached-generation recovery, Aiden Live, and publication receipts; source-contract tests need Studio's conditional layout and prepared workspace argument.
 - Sandbox filesystem watching prevents the real Bot watcher fixtures from receiving events. The same focused suite passes outside the sandbox (122/122); tsx also requires its local IPC socket.
+- Studio follow-on review: removing all-revision source hydration also removes row metadata; never substitute project creation time for revision time. Keep unknown details explicit.
+- Preview process cleanup must retain a bounded failure outcome after dropping live process ownership, or a reopened project silently looks ready after a crash.
+- Local iOS commands need DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer; the default xcode-select directory is CommandLineTools. Swift package resolution and native compiler temporary files require sandbox escalation on this task host.
