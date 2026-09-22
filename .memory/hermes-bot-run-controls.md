@@ -54,3 +54,10 @@ and `/continue` suppress the generic busy notice so each command produces one
 confirmation. Six regressions cover preparing/running and unknown acknowledgment
 outcomes with redelivery. Telegram suite: 233 passed; scoped lint passes. This
 fix is carried into stacked PR #220 without changing the native input contract.
+
+Command-edit follow-up: classify the duplicate success acknowledgment and
+post-dequeue command re-admission as actionable. Explicit edited-message gates
+for /queue, /continue and /interrupt now produce unchanged/not-sent receipts,
+never a new admission or interrupt. Five regressions cover pending/dequeued
+sources. Telegram238 passed, both Sol medium re-reviews clear; plan documents
+exact text and unchanged ordinary-prompt edit behavior.

@@ -2184,3 +2184,43 @@ for (const command of ["/queue follow-up", "/continue follow-up"]) {
     h.service.stop(); h.turnMock.completePendingTurn();
   });
 }
+
+
+for (const command of ["/queue", "/continue"]) {
+  test(`editing queued ${command} reports unchanged text without contradictory success`, async () => {
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [
+        makeUpdate(2, makeMessage(2, person(42), `${command} original`)),
+        { update_id: 3, edited_message: makeMessage(2, person(42), `${command} edited`) },
+      ]],
+    });
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 3);
+    assert.equal(h.service.queueSize, 1);
+    assert.equal(h.api.sentMessages.filter(({ text }) => /Follow-up accepted|Continuation queued/u.test(text)).length, 1);
+    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This message is already queued; its saved text is unchanged. Use /queue to manage it.").length, 1);
+    h.turnMock.completePendingTurn();
+    await waitFor(() => h.turnMock.startCalls() === 2);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "original"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}
+
+
+for (const command of ["/queue", "/continue", "/interrupt"]) {
+  test(`editing dequeued ${command} cannot start or interrupt another turn`, async () => {
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), `${command} original`))], [
+        { update_id: 2, edited_message: makeMessage(1, person(42), `${command} edited`) },
+      ]],
+      abortChat: async () => assert.fail("a command edit must not abort the active turn"),
+    });
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 2);
+    assert.equal(h.turnMock.startCalls(), 1);
+    assert.equal(h.service.queueSize, 0);
+    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This command edit was not sent because the original message is not queued.").length, 1);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["original"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}
