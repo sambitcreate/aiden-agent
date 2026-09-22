@@ -1064,14 +1064,18 @@ class AidenChatViewModel(
         _streamState.value = status.state
     }
 
-    private suspend fun restorePendingApproval(streamId: String) {
+    private var approvalSnapshotGeneration = 0L
+
+    internal suspend fun restorePendingApproval(streamId: String) {
         val client = activeClient() ?: return
-        if (_streamState.value?.isTerminal == true) return
+        if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        val snapshotGeneration = ++approvalSnapshotGeneration
         val expectedApproval = _pendingApproval.value
         val expectedState = _streamState.value
         try {
             val snapshot = client.streamApproval(streamId)
             if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != approvalSnapshotGeneration ||
                 _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             val approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
@@ -1088,6 +1092,7 @@ class AidenChatViewModel(
             }
         } catch (_: Exception) {
             if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != approvalSnapshotGeneration ||
                 _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             _pendingApproval.value = null
             _streamState.value = AidenStreamState.RECONCILING

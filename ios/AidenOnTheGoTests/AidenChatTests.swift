@@ -257,6 +257,35 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testLatestAdmittedApprovalSnapshotWinsOverOlderCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let firstArrived = expectation(description: "older approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { firstArrived.fulfill() }
+        let first = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [firstArrived], timeout: 5)
+        let releaseFirst = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let secondArrived = expectation(description: "newer approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { secondArrived.fulfill() }
+        let second = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        await model.restorePendingApproval(streamID: "stale-stream", context: context)
+        releaseFirst?()
+        await first.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await second.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
     func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
     }
@@ -3040,14 +3069,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() {
-        let completion = lock.withLock {
+    static func takeHeldRequest() -> (@Sendable () -> Void)? {
+        lock.withLock {
             let completion = heldCompletion
             heldCompletion = nil
             return completion
         }
-        completion?()
     }
+
+    static func releaseHeldRequest() { takeHeldRequest()?() }
 
     static var progressRequestCount: Int {
         lock.lock()

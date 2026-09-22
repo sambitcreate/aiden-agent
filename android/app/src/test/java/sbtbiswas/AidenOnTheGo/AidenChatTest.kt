@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -161,6 +162,9 @@ class AidenChatTest {
     fun lateApprovalFailureCannotUndoTerminalEvent() = exerciseRunControl("approval-terminal")
 
     @Test
+    fun latestAdmittedApprovalReadWinsWhenOlderCompletesFirst() = exerciseRunControl("approval-overlap")
+
+    @Test
     fun mismatchedStopAcknowledgementShowsFailure() = exerciseRunControl("stop-mismatch")
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -173,6 +177,10 @@ class AidenChatTest {
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
+        val oldRead = CountDownLatch(1)
+        val newRead = CountDownLatch(1)
+        val releaseOld = CountDownLatch(1)
+        val releaseNew = CountDownLatch(1)
         val server = MockWebServer()
         val viewModels = ViewModelStore()
         val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE) +
@@ -190,7 +198,14 @@ class AidenChatTest {
                 }
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
                 request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
-                request.path == "/api/aiden/v1/streams/stream-control/approval" -> MockResponse().setBody("""{"approval":{"approvalId":"${snapshotId.get()}","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}""")
+                request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
+                    val id = snapshotId.get()
+                    if (scenario == "approval-overlap" && id != "approval-current") {
+                        (if (id == "approval-old") oldRead else newRead).countDown()
+                        check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
+                    }
+                    MockResponse().setBody("""{"approval":{"approvalId":"${id}","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}""")
+                }
                 request.method == "POST" -> {
                     writes.incrementAndGet()
                     arrived.countDown()
@@ -226,6 +241,21 @@ class AidenChatTest {
                 val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
                 viewModels.put("control", model)
                 withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
+                if (scenario == "approval-overlap") {
+                    snapshotId.set("approval-old")
+                    val old = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    val newer = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
+                    model.restorePendingApproval("stale-stream")
+                    releaseOld.countDown()
+                    old.await()
+                    releaseNew.countDown()
+                    newer.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    return@runBlocking
+                }
                 model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-stale")
                 assertEquals(0, writes.get())
                 if (scenario == "unsupported" || scenario == "bot-denied") {
@@ -282,6 +312,8 @@ class AidenChatTest {
                 assertEquals(1, writes.get())
             }
         } finally {
+            releaseOld.countDown()
+            releaseNew.countDown()
             release.countDown()
             finishRead.countDown()
             runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }
