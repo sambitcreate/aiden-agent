@@ -852,3 +852,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 MCP guidance test compatibility
+
+The repository TypeScript library target does not include Array.at; use slice(-1)[0] in fixtures without raising the target. Onboarding's source fixture is already loaded with readFileSync; reuse it for copy assertions instead of adding an unimported async reader. These test-only errors were corrected before commit.

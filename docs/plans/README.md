@@ -4,6 +4,8 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
+[Scoped MCP server instructions](mcp-server-instructions-plan.md) — Implemented for review: bounded generation-owned service guidance filtered by final tool admission. Resource operations and trusted AGENTS request-boundary refresh remain open. Related slices: #214 and #226.
+
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Managed Worktree Lifecycle](managed-worktree-lifecycle-plan.md) | Partial | P0 lifecycle is implemented and under PR #185 review: hook-free managed creation, free-space admission, `.worktreeinclude` provisioning, durable snapshot records + synthetic `refs/aiden/snapshots/*` commits, byte-exact provisioned-ignored blob restore, journal v4 snapshot-aware quarantine deletion with force semantics, and first-class restore. GC/owner-kind/setup-script/UI phases remain open. |

@@ -429,3 +429,8 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
 });
+
+
+test("MCP onboarding discloses service-supplied tool guidance", () => {
+  assert.match(source, /Connected services may also provide guidance for using those tools\./u);
+});
