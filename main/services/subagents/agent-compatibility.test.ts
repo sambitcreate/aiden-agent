@@ -646,11 +646,11 @@ test("forked initial context is semantically compacted before the first provider
     initialMessages: Array.from({ length: 10 }, (_, index) => [
       {
         role: "user" as const,
-        content: `FORK-START-${index}-${"x".repeat(10_000)}-FORK-END`,
+        content: `FORK-START-${index}-${"x".repeat(5_500)}-FORK-END`,
         timestamp: index * 2 + 1,
       },
       {
-        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(10_000)}`),
+        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(5_500)}`),
         timestamp: index * 2 + 2,
       },
     ]).flat(),

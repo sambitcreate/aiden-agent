@@ -462,7 +462,7 @@ export class PiCompactionCoordinator {
             }
           : await compact(
               preparation,
-              this.options.models,
+              boundedCompactionModels(this.options.models),
               this.options.model,
               undefined,
               abortController.signal,
@@ -639,6 +639,44 @@ export function createPiCompactionModels(
       if (property === "completeSimple") {
         return (...args: Parameters<Models["completeSimple"]>) => streamSimple(...args).result();
       }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Models;
+}
+
+/** Fail closed on estimated summary overflow before provider I/O; this is not a provider tokenizer. */
+function boundedCompactionModels(models: Models): Models {
+  const assertFits = (...[model, context, options]: Parameters<Models["completeSimple"]>) => {
+    // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
+    // for non-ASCII text; keep the existing content estimate for the remainder.
+    const unicodeAllowance = (text: string) => {
+      const nonAscii = text.replace(/\p{ASCII}/gu, "");
+      return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
+    };
+    const systemPrompt = context.systemPrompt ?? "";
+    const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
+      context.messages.reduce((total, message) => {
+        const text = typeof message.content === "string" ? message.content : message.content
+          .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+        return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
+      }, 0);
+    const outputTokens = options?.maxTokens ?? model.maxTokens;
+    const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
+    if (inputTokens + outputTokens + safetyTokens > model.contextWindow) {
+      throw new Error("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+    }
+  };
+  return new Proxy(models, {
+    get(target, property) {
+      if (property === "completeSimple") return (...args: Parameters<Models["completeSimple"]>) => {
+        assertFits(...args);
+        return models.completeSimple(...args);
+      };
+      if (property === "streamSimple") return (...args: Parameters<Models["streamSimple"]>) => {
+        assertFits(...args);
+        return models.streamSimple(...args);
+      };
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },

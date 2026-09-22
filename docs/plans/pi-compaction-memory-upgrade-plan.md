@@ -296,3 +296,5 @@ This plan is complete only when:
 ## 2026-09-22 small-context budget follow-up
 
 A separate bounded fix applies the existing VCC reserve/retained-tail bounds to LLM settings only when their pair cannot fit the selected model context. This prevents negative automatic thresholds and unnecessary child/restart checkpoints while preserving feasible Pi defaults and the pinned runtime. Boundary, manual/automatic restart and child regressions pass locally. See [implementation and remaining scope](../../.memory/upgrade-pi-small-context-budgets.md); PR/CI review is tracked separately. Persisted user-defined compaction-policy overrides remain unimplemented; custom model context/output limits already ship. No rollout or operator-acceptance stage advances.
+
+PR #228 also adds an estimated-capacity fence to assembled hidden summary requests (output and Unicode allowance included), failing before provider I/O without publishing a checkpoint. Oversized histories require a larger-context model; the fence is not a tokenizer-exact guarantee. Replay fixtures were recalibrated to feasible windows without advancing rollout or substituting for installed acceptance.

@@ -147,7 +147,8 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
 });
 
 test("repeated compaction updates the previous Pi summary", async () => {
-  const { faux, models, model } = compactionFixture();
+  const { faux, models, model: fixtureModel } = compactionFixture();
+  const model = { ...fixtureModel, contextWindow: 2_000 };
   const summarySeen: boolean[] = [];
   faux.setResponses([
     fauxAssistantMessage(structuredSummary("first checkpoint")),
@@ -164,11 +165,11 @@ test("repeated compaction updates the previous Pi summary", async () => {
     thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
-  const first = await appendCompressibleHistory(session, model, "first");
-  assert.equal((await coordinator.check(first)).compacted, true);
+  await appendCompressibleHistory(session, model, "first");
+  assert.equal((await coordinator.compact()).compacted, true);
   const second = await appendCompressibleHistory(session, model, "second");
   second.timestamp = Date.now() + 1_000;
-  assert.equal((await coordinator.check(second)).compacted, true);
+  assert.equal((await coordinator.compact()).compacted, true);
 
   assert.deepEqual(summarySeen, [true]);
   const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
@@ -2009,3 +2010,84 @@ for (const reserveTokens of [0, 1]) {
     assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
   });
 }
+
+for (const mode of ["manual", "automatic"] as const) {
+  test(`${mode} long-history small-model summary fails before provider I/O`, async () => {
+    const { faux, models, model } = compactionFixture();
+    const smallModel = { ...model, contextWindow: 8_192 };
+    let providerRequests = 0;
+    faux.setResponses([() => {
+      providerRequests += 1;
+      return fauxAssistantMessage(structuredSummary("must not be requested"));
+    }]);
+    const session = await memorySession();
+    for (let turn = 0; turn < 10; turn += 1) {
+      await session.appendMessage(user("old context " + "x".repeat(8_000), turn * 2));
+      await session.appendMessage(assistant(smallModel, { input: 7_000, timestamp: turn * 2 + 1 }));
+    }
+    await session.appendMessage(user("recent request", 30));
+    const last = assistant(smallModel, { input: 7_000, timestamp: 31 });
+    await session.appendMessage(last);
+    const entriesBefore = await session.getEntries();
+    const coordinator = new PiCompactionCoordinator({
+      session, models, model: smallModel, thinkingLevel: "off",
+    });
+    const result = mode === "manual" ? await coordinator.compact() : await coordinator.check(last);
+    assert.equal(result.compacted, false);
+    assert.equal(result.shouldRetry, false);
+    assert.match(result.errorMessage ?? "", /summary exceeds the selected model context window/u);
+    assert.equal(providerRequests, 0);
+    assert.deepEqual(await session.getEntries(), entriesBefore);
+  });
+}
+
+test("summary preflight includes output reserve and does not retry a local budget rejection", async () => {
+  const { faux, models, model } = compactionFixture();
+  let providerRequests = 0;
+  let retries = 0;
+  faux.setResponses([() => {
+    providerRequests += 1;
+    return fauxAssistantMessage(structuredSummary("must not be requested"));
+  }]);
+  const session = await memorySession();
+  await session.appendMessage(user("short old request", 10));
+  await session.appendMessage(assistant(model, { timestamp: 20 }));
+  const events: PiCompactionEvent[] = [];
+  const result = await new PiCompactionCoordinator({
+    session, models, model: { ...model, maxTokens: 1_000 }, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 900, keepRecentTokens: 100 },
+    onEvent: (event) => events.push(event),
+    summaryRetryCallbacks: {
+      onRetryScheduled: () => { retries += 1; },
+      onRetryAttemptStart: () => { retries += 1; },
+      onRetryFinished: () => { retries += 1; },
+    },
+  }).compact();
+  assert.equal(result.failureCode, "compaction-failed");
+  assert.match(result.errorMessage ?? "", /summary exceeds/u);
+  assert.equal(providerRequests, 0);
+  assert.equal(retries, 0);
+  assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
+  assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+});
+
+test("summary preflight accounts conservatively for high-density Unicode", async () => {
+  const { faux, models, model } = compactionFixture();
+  let providerRequests = 0;
+  faux.setResponses([() => {
+    providerRequests += 1;
+    return fauxAssistantMessage(structuredSummary("must not be requested"));
+  }]);
+  const session = await memorySession();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  await session.appendMessage(user("漢".repeat(20_000), 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 20 }));
+  await session.appendMessage(user("retained suffix " + "x".repeat(16_000), 30));
+  await session.appendMessage(assistant(smallModel, { timestamp: 40 }));
+  const result = await new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off",
+  }).compact();
+  assert.match(result.errorMessage ?? "", /summary exceeds/u);
+  assert.equal(providerRequests, 0);
+  assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+});

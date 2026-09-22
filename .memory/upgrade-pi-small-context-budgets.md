@@ -16,7 +16,7 @@ Retained-tail limits remain Pi's soft cut-point targets: an indivisible user/too
 
 ## Verification
 
-- New core boundary/restart coverage and revised child compatibility assertion: 10 failures against unchanged production core; fixed full suite is 22 VCC + 321 compaction-related tests passing.
+- New core boundary/restart coverage and revised child compatibility assertion: 10 failures against unchanged production core; fixed full suite is 22 VCC + 325 compaction-related tests passing.
 - The focused compatibility/rollout audit before this change passed 42/42.
 - Type-check, lint, and diff checks pass locally. Both independent Sol medium reviewers cleared the final patch. Adversarial review additionally caught explicit reserve values 0/1 bypassing normalization; final effective-reserve validation and two enabled/disabled controls close that edge case. PR records final latest-head CI and review evidence.
 - Native consumers still receive the same compact_context contract. This host efficiency fix has no shared DTO/transcript/activity-shape/UI or onboarding-capability change, so it does not require new native implementation or illustrations.
@@ -24,3 +24,9 @@ Retained-tail limits remain Pi's soft cut-point targets: an indivisible user/too
 ## Remaining original assignment boundaries
 
 See `pi-compaction-scope-reconciliation-20260922.md`. Configurable per-provider/model compaction policy remains a separate unimplemented product feature. It needs validated portable intent and one policy across foreground/manual/child, preflight/emergency and model switches; adding a coordinator-only map is intentionally excluded. A newer dependency upgrade is not justified by a current-pin API mismatch and still requires its paired-package, migration, rollback and installed acceptance gates. Automatic replay of interrupted external effects and #206's partial subagent/maxTurns work remain excluded.
+
+## PR #228 summary-request follow-up
+
+Pullfrog identified that lowering the retained tail can expose an oversized hidden summary request. The coordinator now fences both Models completion entry points around Pi's fully assembled prompt, before provider transport/accounting. It rejects estimated input + requested output + 5% window safety (minimum 64 tokens) over capacity, with no checkpoint, retry, or automatic replay. Non-ASCII text gets a conservative UTF-8-byte allowance; ASCII uses the existing Pi content heuristic. This is an estimated-capacity preflight, not a provider-tokenizer guarantee. Oversized histories require a larger-context model; this patch does not silently truncate summary input.
+
+Manual/automatic long-history, output-reservation/no-retry/event, and Unicode regressions cover the boundary. Existing fake-provider fixtures previously accepted histories larger than their declared windows; their payloads or windows now fit. The executable semantic replay uses a 64k window with synthetic usage recalibrated around its threshold, preserving the original replay objectives; those synthetic metrics are not installed/provider acceptance evidence. The bot replay has an 8k window. Rollout stages and receipt schemas remain unchanged.
