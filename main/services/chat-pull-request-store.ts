@@ -22,7 +22,7 @@ import {
   type ChatPullRequestRef,
   type ChatPullRequestSnapshot,
 } from "../../renderer/shared/chat-pull-requests.js";
-import { DataStore } from "./data-store.js";
+import { DataStore, isDataStoreRecoveryFile } from "./data-store.js";
 
 const MAX_FILE_BYTES = 256 * 1_024;
 const MAX_PENDING_CREATES = 16;
@@ -312,7 +312,7 @@ export class ChatPullRequestStore {
         .catch(() => undefined);
     }
     const root = this.root();
-    const recoveryPrefix = `.${chatId}.json.`;
+    const destination = path.join(root, `${chatId}.json`);
     let names: string[];
     try {
       names = await fs.readdir(root);
@@ -324,14 +324,11 @@ export class ChatPullRequestStore {
     // this chat's exact DataStore recovery names before removing the source;
     // deletion must fail if any artifact cannot be removed.
     for (const name of names) {
-      if (
-        name.startsWith(recoveryPrefix) &&
-        (name.endsWith(".held") || name.endsWith(".previous"))
-      ) {
+      if (isDataStoreRecoveryFile(name, destination)) {
         await fs.rm(path.join(root, name), { force: true, recursive: true });
       }
     }
-    await fs.rm(path.join(root, `${chatId}.json`), { force: true });
+    await fs.rm(destination, { force: true });
     this.stores.delete(chatId);
   }
 

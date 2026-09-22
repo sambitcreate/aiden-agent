@@ -8,6 +8,20 @@ import * as path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
+/** Match the complete destination basename plus the fixed recovery suffix. */
+export function isDataStoreRecoveryFile(
+  name: string,
+  destination: string,
+): boolean {
+  const prefix = `.${path.basename(destination)}.`;
+  return (
+    name.startsWith(prefix) &&
+    /^(?:absent|[a-f0-9]{64})\.[^.]+\.(?:held|previous)$/u.test(
+      name.slice(prefix.length),
+    )
+  );
+}
+
 export interface DataStoreOptions<T> {
   /** Refuse descriptor reads larger than this byte ceiling, including files that grow mid-read. */
   maxBytes?: number;
@@ -279,7 +293,7 @@ export class DataStore<T> {
     let names: string[];
     try {
       names = (await fs.readdir(directory)).filter(
-        (name) => name.startsWith(prefix) && (name.endsWith(".held") || name.endsWith(".previous")),
+        (name) => isDataStoreRecoveryFile(name, destination),
       );
     } catch {
       return;

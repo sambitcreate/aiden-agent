@@ -862,3 +862,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-22 PR #184 recovery follow-up: draining DataStore updates does not await initial load recovery. Join existing.load() after revoking admission, then drain writes and remove the file.
 
 - 2026-09-22 PR #184 recovery cleanup: DataStore.load can settle while leaving an unreadable held candidate eligible for a later recovery. Chat deletion must consume exact chat .held/.previous artifacts, including when no store was loaded, and fail if cleanup cannot finish.
+
+- PR #184: Recovery filename prefixes are ambiguous for valid dotted chat IDs. Match the full basename plus fixed recovery fields in both load and deletion; test dotted siblings in both directions.

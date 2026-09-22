@@ -349,7 +349,7 @@ test("deletion waits for a read that is recovering a held PR file", async (t) =>
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await fs.writeFile(
-    path.join(directory, ".chat-1.json.recovery.held"),
+    path.join(directory, ".chat-1.json.absent.recovery.held"),
     JSON.stringify({
       schemaVersion: 1,
       chatId: "chat-1",
@@ -407,13 +407,16 @@ test("deletion consumes failed recovery artifacts before restart without touchin
     links: [link(12)],
     pendingCreates: [],
   });
-  await fs.writeFile(path.join(directory, ".chat-1.json.failed.held"), payload);
   await fs.writeFile(
-    path.join(directory, ".chat-1.json.failed.previous"),
+    path.join(directory, ".chat-1.json.absent.failed.held"),
     payload,
   );
   await fs.writeFile(
-    path.join(directory, ".chat-10.json.other.held"),
+    path.join(directory, ".chat-1.json.absent.failed.previous"),
+    payload,
+  );
+  await fs.writeFile(
+    path.join(directory, ".chat-10.json.absent.other.held"),
     "other chat",
   );
   const prototype = DataStore.prototype as unknown as {
@@ -428,14 +431,16 @@ test("deletion consumes failed recovery artifacts before restart without touchin
   mocked.mock.restore();
   const restarted = new ChatPullRequestStore(() => directory);
   assert.deepEqual(await restarted.list("chat-1"), []);
-  assert.deepEqual(await fs.readdir(directory), [".chat-10.json.other.held"]);
+  assert.deepEqual(await fs.readdir(directory), [
+    ".chat-10.json.absent.other.held",
+  ]);
 });
 
 test("deletion consumes recovery artifacts even when no store was loaded", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await fs.writeFile(
-    path.join(directory, ".chat-1.json.unread.held"),
+    path.join(directory, ".chat-1.json.absent.unread.held"),
     JSON.stringify({
       schemaVersion: 1,
       chatId: "chat-1",
@@ -450,3 +455,40 @@ test("deletion consumes recovery artifacts even when no store was loaded", async
   );
   assert.deepEqual(await fs.readdir(directory), []);
 });
+
+for (const [deletedId, siblingId] of [
+  ["chat-1", "chat-1.json"],
+  ["chat-1.json", "chat-1"],
+]) {
+  for (const cached of [false, true]) {
+    test(`deleting a chat preserves dotted sibling recovery files (${deletedId}, cached=${cached})`, async (t) => {
+      const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const store = new ChatPullRequestStore(() => directory);
+      if (cached) await store.list(deletedId);
+      const siblingNames = ["held", "previous"].map(
+        (suffix) => `.${siblingId}.json.absent.sibling.${suffix}`,
+      );
+      for (const name of siblingNames)
+        await fs.writeFile(path.join(directory, name), "sibling data");
+      await fs.writeFile(
+        path.join(directory, `.${deletedId}.json.absent.own.held`),
+        "own data",
+      );
+      await fs.writeFile(
+        path.join(directory, `.${deletedId}.json.absent.own.previous`),
+        "own data",
+      );
+      await store.deleteChat(deletedId);
+      assert.deepEqual(
+        (await fs.readdir(directory)).sort(),
+        siblingNames.sort(),
+      );
+      for (const name of siblingNames)
+        assert.equal(
+          await fs.readFile(path.join(directory, name), "utf8"),
+          "sibling data",
+        );
+    });
+  }
+}
