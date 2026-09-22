@@ -29,25 +29,16 @@ authority. Ordinary model reads and application startup remain offline.
 
 ## Release behavior
 
-- `.github/workflows/ci.yml` verifies pull requests and pushes with independent desktop,
-  Apple, iOS, and Android jobs. Main pushes always run the full suite; see [CI](ci.md).
+- `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub's `macos-26` image.
 - `.github/workflows/release.yml` is considered enabled only when the source repository variable
   `RELEASES_ENABLED` is exactly `true`.
 - A release uses the complete SemVer declared in `package.json` exactly. For example, `0.35.0`
   publishes only as `v0.35.0`; workflow run numbers never become application versions.
-- A successful push CI run on `main` triggers release admission on Ubuntu. Admission requires
-  successful `CI required` coverage in the latest attempt for the exact source SHA and checks
-  that it still matches `main`. One direct catalog-only commit from the catalog bot is allowed;
-  any other intervening change rejects admission. PR and fork CI cannot authorize a release.
-- If the exact declared tag already exists, admission completes as a green no-op without
-  allocating a macOS release runner. Publishing another build requires an explicit reviewed
-  version change in both `package.json` and `package-lock.json`.
-- Manual dispatch requires `source_sha`, the complete 40-character SHA of a successful main
-  push CI run, and passes the same admission checks. It never substitutes the latest main SHA.
-- The release checks out that admitted source and reuses its completed TypeScript, lint,
-  regression, Rust, Swift, iOS, Android, and Electron E2E gates. It installs dependencies and
-  builds a fresh signed distribution; it does not reuse unsigned CI build artifacts. Immediately
-  before publication it verifies that `main` has not changed since admission.
+- If the exact declared tag already exists, an enabled push to `main` completes the release job as
+  a green no-op. Publishing another build requires an explicit reviewed version change in both
+  `package.json` and `package-lock.json`.
+- The release job runs the full TypeScript, lint, JavaScript/TypeScript, Rust, Swift, and build
+  gates before preparing signing material.
 - GitHub-hosted macOS VMs do not enforce Aiden's live kernel launch constraint. CI still verifies
   its exact pinned requirement bytes and the other 39 broker tests; the two live enforcement
   checks remain mandatory on a physical Mac during packaged acceptance.
@@ -152,8 +143,7 @@ its history scan, before changing visibility.
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses
    its scoped `GITHUB_TOKEN` with `contents: write`; no separate release-repository token exists.
-5. Push a reviewed version commit to `main` and let its successful CI trigger release admission.
-   To retry manually, dispatch `Release macOS` with the exact successful main CI `source_sha`.
+5. Trigger `Release macOS` manually for the first release or push a reviewed commit to `main`.
 6. Install the published DMG, then publish one higher version and verify the installed app
    downloads it, reports it ready, and installs it through the in-app Update and Restart action.
    For the 0.27 recovery release, repeat this from an installed 0.27.0 build because older

@@ -6,7 +6,6 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parse } from "yaml";
 import { URL } from "node:url";
 import {
   AIDEN_UPDATE_FEED_URL,
@@ -208,8 +207,7 @@ test("release publication checks deployed consumers before building", async () =
   assert.match(workflow, /git ls-remote --tags origin/u);
   assert.doesNotMatch(workflow, /GITHUB_RUN_NUMBER|--allow-same-version/u);
   assert.match(workflow, /node scripts\/prepare-ci-release\.mjs "\$base_tag_exists"/u);
-  const { jobs } = parse(workflow);
-  assert.match(jobs.release.if, /needs\.admit\.outputs\.publish == 'true'/u);
+  assert.match(workflow, /steps\.version\.outputs\.publish == 'true'/u);
   assert.ok(versionResolution >= 0 && versionResolution < dependencyInstall);
   for (const stepName of [
     "Install locked dependencies",
@@ -218,9 +216,14 @@ test("release publication checks deployed consumers before building", async () =
     "Verify diagnostics in the signed packaged app",
     "Publish verified release assets",
   ]) {
-    const step = jobs.release.steps.find((entry) => entry.name === stepName);
-    assert.ok(step, stepName);
-    assert.equal(step.if, undefined, `${stepName} must inherit the job admission gate`);
+    assert.match(
+      workflow,
+      new RegExp(
+        `- name: ${stepName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n` +
+          " {8}if: \\$\\{\\{ steps\\.version\\.outputs\\.publish == 'true' \\}\\}",
+        "u",
+      ),
+    );
   }
   assert.ok(consumerCheck >= 0, "the release workflow must check Homebrew and the website");
   assert.ok(

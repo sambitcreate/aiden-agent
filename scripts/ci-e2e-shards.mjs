@@ -6,27 +6,30 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// Serial file windows from hosted main CI 35245275117, including fixture work.
-// These weights only balance work: every new deterministic spec is included.
+// Serial file windows from hosted CI 35667578649 (105 collected tests), including fixture work.
+// Weights affect scheduling only; newly discovered specs always run.
 export const FILE_SECONDS = Object.freeze({
-  "draft-agent-chats.spec.ts": 91,
-  "chat-message-queue.spec.ts": 91,
-  "browser-cancellation.spec.ts": 78,
-  "chat-shell-interactions.spec.ts": 67,
-  "settings-unification.spec.ts": 66,
-  "browser.spec.ts": 58,
-  "browser-agent.spec.ts": 46,
-  "onboarding-lmstudio.spec.ts": 44,
-  "browser-lifecycle.spec.ts": 37,
-  "guided-setup.spec.ts": 29,
-  "model-pad-responsive.spec.ts": 25,
-  "assistant-scheduled-profile.spec.ts": 24,
-  "settings-model-picker.spec.ts": 19,
-  "provider-artwork.spec.ts": 16,
+  "assistant-scheduled-profile.spec.ts": 31,
+  "browser-agent.spec.ts": 56,
+  "browser-cancellation.spec.ts": 90,
+  "browser-initial-crash.spec.ts": 2,
+  "browser-lifecycle.spec.ts": 331,
+  "browser.spec.ts": 77,
+  "chat-message-queue.spec.ts": 127,
+  "chat-shell-interactions.spec.ts": 219,
   "custom-model-options.spec.ts": 13,
-  "terminal.spec.ts": 12,
-  "lmstudio-chat-attachments.spec.ts": 11,
-  "remote-access-lifecycle.spec.ts": 11,
+  "diagnostics-production.spec.ts": 9,
+  "draft-agent-chats.spec.ts": 86,
+  "environment-focus.spec.ts": 100,
+  "guided-setup.spec.ts": 27,
+  "lmstudio-chat-attachments.spec.ts": 10,
+  "model-pad-responsive.spec.ts": 20,
+  "onboarding-lmstudio.spec.ts": 40,
+  "provider-artwork.spec.ts": 15,
+  "remote-access-lifecycle.spec.ts": 10,
+  "settings-model-picker.spec.ts": 17,
+  "settings-unification.spec.ts": 71,
+  "terminal.spec.ts": 13
 });
 
 export function discoverSpecs(directory = path.join(root, "tests/e2e")) {

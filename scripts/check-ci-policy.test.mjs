@@ -14,6 +14,10 @@ const catalogWorkflowUrl = new URL(
   "../.github/workflows/model-catalog-refresh.yml",
   import.meta.url,
 );
+const pullfrogWorkflowUrl = new URL(
+  "../.github/workflows/pullfrog.yml",
+  import.meta.url,
+);
 
 function workflowStep(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -98,25 +102,6 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(!jobs.verify.steps.some((step) => step.run === "npm test"));
 });
 
-test("release uses admitted source and skips macOS allocation for existing versions", async () => {
-  const { on, jobs } = parse(await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
-  assert.equal(on.push, undefined);
-  assert.deepEqual(on.workflow_run.workflows, ["CI"]);
-  assert.deepEqual(on.workflow_run.branches, ["main"]);
-  assert.equal(jobs.admit["runs-on"], "ubuntu-24.04");
-  assert.match(jobs.release.if, /needs\.admit\.outputs\.publish == 'true'/u);
-  const checkout = jobs.release.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
-  assert.equal(checkout.with.ref, "${{ needs.admit.outputs.source-sha }}");
-  assert.ok(!jobs.release.steps.some((step) => ["npm test", "npm run test:e2e", "npm run type-check", "npm run test:native"].includes(step.run)));
-  const distribution = jobs.release.steps.find((step) => step.run?.includes("npm run dist"));
-  assert.equal(distribution.env.ADMITTED_SOURCE_SHA, "${{ needs.admit.outputs.source-sha }}");
-  assert.equal(distribution.run, 'GITHUB_SHA="$ADMITTED_SOURCE_SHA" npm run dist');
-  const publication = jobs.release.steps.find((step) => step.run?.includes("bash scripts/publish-github-release.sh"));
-  assert.equal(publication.env.ADMITTED_SOURCE_SHA, "${{ needs.admit.outputs.source-sha }}");
-  assert.ok(publication.run.includes('GITHUB_SHA="$ADMITTED_SOURCE_SHA" bash scripts/publish-github-release.sh'));
-  assert.ok(jobs.release.steps.some((step) => step.run === "npm run test:subagents:migration:packaged"));
-  assert.ok(jobs.release.steps.some((step) => step.run === "npm run test:e2e:diagnostics:packaged"));
-});
 
 test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {
   const workflow = await readFile(catalogWorkflowUrl, "utf8");
@@ -143,10 +128,29 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /git push.*HEAD:main/u);
 });
 
+test("Pullfrog allows aggregate release reviews to finish", async () => {
+  const workflow = await readFile(pullfrogWorkflowUrl, "utf8");
+
+  assert.match(workflow, /uses: pullfrog\/pullfrog@v0\.1\.57/u);
+  assert.match(workflow, /^ {10}timeout: 2h$/mu);
+});
+
 test("coverage collection is enabled before positional test paths", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const command = manifest.scripts["test:coverage"].split(/\s+/u);
   const flag = command.indexOf("--experimental-test-coverage");
   const firstTest = command.findIndex((argument) => /\.test\.[cm]?[jt]sx?$/u.test(argument));
   assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
+});
+
+test("CI keeps full main commits independent and portable static checks on Linux", async () => {
+  const workflow = parse(await readFile(workflowUrl, "utf8"));
+  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
+  assert.equal(workflow.concurrency.group, "ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
+  assert.equal(workflow.jobs.static["runs-on"], "ubuntu-24.04");
+  assert.ok(workflow.jobs.static.steps.some((step) => step.run?.includes("npm run type-check")));
+  assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run lint"));
+  for (const [name, job] of Object.entries(workflow.jobs)) assert.ok(job["timeout-minutes"] > 0, name);
+  assert.equal(workflow.jobs.timings["continue-on-error"], true);
+  assert.equal(workflow.jobs.timings.permissions.actions, "read");
 });

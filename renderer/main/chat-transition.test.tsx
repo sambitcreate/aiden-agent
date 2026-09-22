@@ -6,6 +6,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { QueryClient } from "@tanstack/react-query";
+import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
+import type { Chat } from "../lib/types.js";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -318,6 +321,58 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
+test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
+  assert.match(pane, /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u);
+  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
+  assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
+  assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
+  assert.match(pane, /canSteer=\{ready && \(\(isGenerating && canStopGeneration\) \|\| Boolean\(visibleDetachedProjection\)\)/u);
+  assert.match(pane, /if \(!\(canStopGeneration \|\| visibleDetachedProjection\) \|\| isStoppingGeneration\) return/u);
+  assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
+  assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
+  assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
+  assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
+  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+});
+
+test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
+  const pane = source("./chat-pane.tsx");
+  const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
+  const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
+  const start = send.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(install >= 0 && start > install);
+
+  const queryClient = new QueryClient();
+  const chatId = "chat-read-race";
+  const assistantTail = {
+    id: chatId,
+    messages: [{ id: "previous", role: "assistant", content: "Previous answer", createdAt: 1 }],
+  } as Chat;
+  const appendedTurn = {
+    ...assistantTail,
+    messages: [
+      ...assistantTail.messages,
+      { id: "current", role: "user", content: "Current prompt", createdAt: 2 },
+    ],
+  } as Chat;
+  let resolveOldRead!: (chat: Chat) => void;
+  const oldRead = queryClient.fetchQuery({
+    queryKey: queryKeys.chat(chatId),
+    queryFn: () => new Promise<Chat>((resolve) => { resolveOldRead = resolve; }),
+  });
+
+  await Promise.resolve();
+  await installAppendedChatSnapshot(queryClient, chatId, appendedTurn);
+  resolveOldRead(assistantTail);
+  await assert.rejects(oldRead);
+  const cached = queryClient.getQueryData<Chat>(queryKeys.chat(chatId));
+  assert.equal(cached?.messages[cached.messages.length - 1]?.role, "user");
+  queryClient.clear();
+});
+
 test("root recovery reconciles missed detached terminals against authoritative activity", () => {
   const root = source("./root-view.tsx");
   const recovery = between(
@@ -350,7 +405,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   assert.match(pane, /useChat\(draft \? undefined : chatId\)/u);
   assert.match(send, /chatsApi\.createWithFirstMessage\(/u);
-  const seed = send.indexOf("qc.setQueryData(queryKeys.chat(chatId), updated)");
+  const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
   const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
   const start = send.indexOf("await runGeneration(messageTurnId)");

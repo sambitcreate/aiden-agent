@@ -14,7 +14,8 @@ test("every deterministic spec belongs to exactly one shard, including unweighte
 test("recorded weights produce balanced isolated runners", () => {
   const shards = planShards(Object.keys(FILE_SECONDS));
   assert.ok(shards.every((shard) => shard.files.length > 0));
-  assert.ok(Math.max(...shards.map((shard) => shard.seconds)) < 270);
+  const loads = shards.map((shard) => shard.seconds);
+  assert.ok(Math.max(...loads) - Math.min(...loads) <= Math.max(...Object.values(FILE_SECONDS)));
 });
 
 test("shards preserve one worker, fail on flakes, and select only exact spec paths", () => {

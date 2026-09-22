@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  REQUIRED_JOB_RULES,
   evaluateRequiredEnvironment,
   evaluateRequiredGate,
   parseChangedAreaDecisions,
@@ -17,6 +18,7 @@ function needsFor(decisions = allTrue, overrides = {}) {
     e2e: { result: "success" },
     ios: { result: "success" },
     policy: { result: "success" },
+    static: { result: "success" },
     unit: { result: "success" },
     verify: { result: "success" },
   };
@@ -28,7 +30,7 @@ test("the aggregate gate accepts successful required jobs", () => {
   const result = evaluateRequiredGate(needs, decisions);
   assert.equal(result.ok, true);
   assert.equal(result.failures.length, 0);
-  assert.equal(result.checkedCount, 8);
+  assert.equal(result.checkedCount, Object.keys(REQUIRED_JOB_RULES).length);
 });
 
 test("a conditional job may be skipped only for its explicitly false area", () => {

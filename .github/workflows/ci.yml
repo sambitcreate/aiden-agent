@@ -10,13 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
     name: Detect changed areas
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
       apple: ${{ steps.filter.outputs.apple }}
@@ -92,12 +93,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  verify:
-    name: Desktop static checks and diagnostics
+  static:
+    name: Desktop TypeScript and lint
     needs: changes
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: macos-26
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -112,6 +113,23 @@ jobs:
         run: npm run type-check && npm run type-check:e2e
       - name: Verify lint
         run: npm run lint
+
+  verify:
+    name: Desktop build and diagnostics
+    needs: changes
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
       - name: Verify diagnostics privacy and storage contracts
         run: npm run test:diagnostics
       - name: Verify branding, updater, and release policy
@@ -279,7 +297,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, verify, unit, e2e, apple, ios, android]
+    needs: [changes, policy, static, verify, unit, e2e, apple, ios, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -294,3 +312,25 @@ jobs:
           CI_NEEDS_JSON: ${{ toJSON(needs) }}
           CI_CHANGES_JSON: ${{ toJSON(needs.changes.outputs) }}
         run: node scripts/ci-required.mjs
+
+  timings:
+    name: CI timing report
+    needs: required
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+      - name: Summarize this CI attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci-timings.mjs

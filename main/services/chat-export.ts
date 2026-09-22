@@ -173,7 +173,9 @@ export function safeExportFileName(title: string): string {
     .normalize("NFKC")
     .replace(/[\\/:*?"<>|\p{Cc}\p{Cf}]+/gu, " ")
     .replace(/\s+/gu, " ")
-    .trim();
+    .trim()
+    // Dotfile-oriented chat titles must not produce hidden export files.
+    .replace(/^[.\s]+/u, "");
   const base = Array.from(normalized).slice(0, 80).join("");
   return `${base || "Aiden chat"}.aiden-chat.json`;
 }

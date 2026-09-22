@@ -22,6 +22,8 @@ function area(name) {
 test("changed-area classification is conservative and table-driven", () => {
   const cases = [
     ["docs/guide.md", allFalse],
+    ["docs/executable.js", allTrue],
+    ["docs/chatgpt-ui-element-specimen.html", allTrue],
     ["README.md", allFalse],
     ["CHANGELOG.markdown", allFalse],
     [".papercuts/troubleshooting.md", allFalse],
@@ -46,7 +48,7 @@ test("changed-area classification is conservative and table-driven", () => {
 });
 
 test("documentation-only decisions are restricted to the explicit safe paths", () => {
-  assert.equal(isSafeDocumentationPath("docs/reference.txt"), true);
+  assert.equal(isSafeDocumentationPath("docs/reference.txt"), false);
   assert.equal(isSafeDocumentationPath("README.md"), true);
   assert.equal(isSafeDocumentationPath(".papercuts/notes.md"), true);
   assert.equal(isSafeDocumentationPath("android/README.md"), false);
@@ -180,4 +182,11 @@ test("FORCE_FULL applies to main pushes while pull requests keep path selection"
   });
   assert.deepEqual({ desktop: selected.desktop, apple: selected.apple, ios: selected.ios, android: selected.android }, allFalse);
   assert.equal(selected.reason, "documentation-only");
+});
+
+test("empty change results select full validation rather than skipping every lane", () => {
+  assert.deepEqual(decideChangedAreas([]), allTrue);
+  const empty = fakeGit({ diffOutput: "" });
+  const result = detectChangedAreas({ baseSha: "base", headSha: "head", eventName: "pull_request", env: {}, spawn: empty.spawn });
+  assert.deepEqual(result.areas, allTrue);
 });

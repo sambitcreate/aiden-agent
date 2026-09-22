@@ -207,6 +207,8 @@ function collectDirectTestFiles(segment, scriptName) {
     const buildCommand = segment.slice(index).join(" ");
     const allowedBuildCommands = new Set([
       "node scripts/build-worktree-remover.mjs",
+      "node scripts/build-worktree-file-io.mjs",
+      "node scripts/build-worktree-file-io.mjs --test",
       "node scripts/build-worktree-remover.mjs --test",
       "node scripts/build-subagent-run-store.mjs",
       "node scripts/build-subagent-run-store.mjs --test",
@@ -262,6 +264,7 @@ export function collectSourceTests({
   const sourceNames = sourceScriptNames(packageManifest, sourceScripts);
   const visited = new Set();
   const filesByScript = new Map();
+  const builds = [];
 
   const visit = (scriptName, required) => {
     if (visited.has(scriptName)) return;
@@ -289,6 +292,8 @@ export function collectSourceTests({
         if (!child.startsWith("pre") && !child.startsWith("post")) visit(`post${child}`, false);
       } else {
         for (const file of collectDirectTestFiles(segment, scriptName)) files.add(file);
+        const direct = segment.slice(index);
+        if ((direct[0] === "node" && direct[1] !== "--test") || direct[0] === "esbuild") builds.push(direct);
       }
     }
     filesByScript.set(scriptName, files);
@@ -306,7 +311,7 @@ export function collectSourceTests({
       files.set(file, owners);
     }
   }
-  return { files, visited: [...visited].sort(), filesByScript };
+  return { files, visited: [...visited].sort(), filesByScript, builds };
 }
 
 function flattenLaneFiles(registry) {
@@ -351,6 +356,31 @@ export function validateRegistry({
     packageManifest,
     sourceScripts: registry.sourceScripts,
   });
+  // File coverage alone cannot prove that native builds, browser execution,
+  // coverage thresholds, Ruby checks or Rust checks are still executed.
+  for (const script of ["test:browser", "test:generative-ui", "test:terminal:coverage", "test:ios-release", "test:computer-use:native"]) {
+    if (!source.visited.includes(script)) continue;
+    if (!(registry.preserved ?? []).some((entry) => entry.sourceScripts?.includes(script) &&
+      JSON.stringify(entry.command) === JSON.stringify(["npm", "run", script]))) {
+      throw new Error(`Missing preserved execution mode: ${script}`);
+    }
+  }
+  const prerequisites = new Set((registry.prerequisites ?? []).map((entry) => entry.id));
+  const usedPrerequisites = new Set([
+    ...(registry.lanes ?? []).flatMap((lane) => lane.prerequisites ?? []),
+    ...(registry.preserved ?? []).flatMap((entry) => entry.requires ?? []),
+  ]);
+  for (const id of prerequisites) if (!usedPrerequisites.has(id)) throw new Error(`Unassigned build prerequisite: ${id}`);
+  for (const id of usedPrerequisites) if (!prerequisites.has(id)) throw new Error(`Unknown build prerequisite: ${id}`);
+  const registeredBuilds = new Set((registry.prerequisites ?? []).flatMap((entry) => {
+    const command = entry.command;
+    return command?.[0] === "npm" && command[1] === "run" && command.length === 3
+      ? tokenizeScript(packageManifest.scripts[command[2]] ?? "", command[2]).map((tokens) => JSON.stringify(tokens))
+      : [JSON.stringify(command)];
+  }));
+  for (const command of source.builds) {
+    if (!registeredBuilds.has(JSON.stringify(command))) throw new Error(`Missing build prerequisite: ${command.join(" ")}`);
+  }
   const unitFiles = flattenLaneFiles(registry);
   const preservedFiles = registryPreservedFiles(registry, packageManifest);
   const preservedIds = new Set((registry.preserved ?? []).map((entry) => entry.id));

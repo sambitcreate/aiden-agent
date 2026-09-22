@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 export const REQUIRED_JOB_RULES = Object.freeze({
   changes: Object.freeze({ always: true }),
   policy: Object.freeze({ always: true }),
+  static: Object.freeze({ area: "desktop" }),
   verify: Object.freeze({ area: "desktop" }),
   unit: Object.freeze({ area: "desktop" }),
   e2e: Object.freeze({ area: "desktop" }),

@@ -18,11 +18,11 @@ durations and automatically assigns newly added specs. After `npm run build`, re
 one shard with `node scripts/ci-e2e-shards.mjs 1/3`; append `--list` to inspect its files.
 Never run these shards concurrently against the same checkout or desktop session.
 
-The production-profile diagnostics spec runs separately after the static-check job's
+The production-profile diagnostics spec runs separately after the desktop build job's
 build through `npm run test:e2e:diagnostics:production:run`. The original
 `npm run test:e2e:diagnostics:production` still prepares its own build for local use.
-Releases reuse successful main CI for deterministic coverage and retain their signed-app
-migration and packaged diagnostics acceptance tests.
+The release workflow retains its own deterministic and signed-app migration/packaged
+diagnostics acceptance tests.
 
 Useful static checks are `npm run type-check:e2e` and
 `npm run test:e2e:list`. The fixture constructs the app environment from a

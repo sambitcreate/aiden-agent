@@ -1,5 +1,6 @@
 /* global console, process */
 
+import { appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -276,6 +277,9 @@ function printTimingSummary(timings) {
   if (timings.length === 0) {
     console.log("\nCI timing summary: dry-run (no elapsed timings)");
     return;
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Test lane execution\n\n" + timings.map((timing) => `- ${timing.id}: ${timing.status}, ${timing.files} files, ${timing.seconds.toFixed(1)}s`).join("\n") + "\n");
   }
   console.log("\nCI timing summary:");
   for (const timing of timings) {

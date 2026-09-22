@@ -80,6 +80,7 @@ const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
     .sort(),
 );
 const WORKTREE_REMOVER_EXECUTABLE = "aiden-worktree-remover";
+const WORKTREE_FILE_IO_EXECUTABLE = "aiden-worktree-file-io";
 const BOT_INBOX_WRITER_EXECUTABLE = "aiden-bot-inbox-writer";
 const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
 const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
@@ -630,6 +631,7 @@ export async function verifyMacPackage(appPath) {
   const paths = packagedComputerUsePaths(appPath);
   const appAsar = path.join(paths.app, "Contents", "Resources", "app.asar");
   const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
+  const worktreeFileIo = path.join(paths.app, "Contents", "Helpers", WORKTREE_FILE_IO_EXECUTABLE);
   const botInboxWriter = path.join(paths.app, "Contents", "Helpers", BOT_INBOX_WRITER_EXECUTABLE);
   const subagentRunStore = path.join(
     paths.app,
@@ -671,6 +673,7 @@ export async function verifyMacPackage(appPath) {
     paths.electronExecutable,
     ...electronHelpers,
     worktreeRemover,
+    worktreeFileIo,
     botInboxWriter,
     subagentRunStore,
     subagentFileMutator,
@@ -689,6 +692,7 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
   assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
+  assertComputerUseExecutableMode((await lstat(worktreeFileIo)).mode, worktreeFileIo);
   assertComputerUseExecutableMode((await lstat(botInboxWriter)).mode, botInboxWriter);
   assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
   assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
@@ -734,6 +738,10 @@ export async function verifyMacPackage(appPath) {
     identifier: WORKTREE_REMOVER_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(worktreeFileIo, {
+    identifier: WORKTREE_FILE_IO_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   await verifySignature(botInboxWriter, {
     identifier: BOT_INBOX_WRITER_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
@@ -760,6 +768,7 @@ export async function verifyMacPackage(appPath) {
         paths.electronExecutable,
         ...electronHelpers,
         worktreeRemover,
+        worktreeFileIo,
         botInboxWriter,
         subagentRunStore,
         subagentFileMutator,
@@ -778,6 +787,7 @@ export async function verifyMacPackage(appPath) {
   ]);
   assertComputerUseMachOMinimum(`${brokerBuild}\n${brokerBuildErrors}`);
   await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
+  await verifyUniversalMacOSHelper(worktreeFileIo, "Managed worktree file I/O");
   await verifyUniversalMacOSHelper(botInboxWriter, "Bot inbox writer");
   await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
   await verifyUniversalMacOSHelper(subagentFileMutator, "Subagent file mutator");
@@ -797,6 +807,7 @@ export async function verifyMacPackage(appPath) {
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.helperApp));
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));
   assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
+  assertMinimalComputerUseEntitlements(await readEntitlements(worktreeFileIo));
   assertMinimalComputerUseEntitlements(await readEntitlements(botInboxWriter));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));

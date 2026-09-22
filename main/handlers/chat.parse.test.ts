@@ -46,6 +46,14 @@ test("chat lifecycle handling detaches the renderer instead of aborting inferenc
   );
 });
 
+test("user Stop acknowledges only a generation owned by the calling document", () => {
+  const handler = readFileSync(new URL("./chat.ts", import.meta.url), "utf8");
+  assert.match(handler, /const cancelled = llmClient\.cancel\(streamId, "user_stop", owner\.documentId\)/u);
+  assert.match(handler, /return cancelled;/u);
+  const runtime = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
+  assert.match(runtime, /cancel\([\s\S]*?ownerDocumentId\?: string,[\s\S]*?owner\.documentId !== ownerDocumentId/u);
+});
+
 test("parseParams accepts only the attended Assistant mode", () => {
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
   assert.equal(parseParams(base).mode, undefined);

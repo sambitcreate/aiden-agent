@@ -10,7 +10,9 @@
       "description": "Core handlers, services, Git, workspace, and package policy tests.",
       "prerequisites": [
         "worktree-remover-build",
-        "vcc-build"
+        "vcc-build",
+        "worktree-file-io-build",
+        "worktree-file-io-test-build"
       ],
       "files": [
         "main/handlers/assistant-parse.test.ts",
@@ -80,11 +82,13 @@
         "main/services/managed-worktree-admission.test.ts",
         "main/services/managed-worktree-creation-core.test.ts",
         "main/services/managed-worktree-deletion-recovery.test.ts",
+        "main/services/managed-worktree-lifecycle.test.ts",
         "main/services/managed-worktree-removal-core.test.ts",
         "main/services/managed-worktree-remover.test.ts",
         "main/services/mcp-config-lease.test.ts",
         "main/services/mcp-oauth-client-metadata.test.ts",
         "main/services/mcp-presets.test.ts",
+        "main/services/mcp-remote-transport.test.ts",
         "main/services/memory-context.test.ts",
         "main/services/memory-store.test.ts",
         "main/services/memory-surface-matrix.test.ts",
@@ -111,6 +115,7 @@
         "main/services/portable-config-watch-core.test.ts",
         "main/services/process-diagnostics.test.ts",
         "main/services/profile-share-files.test.ts",
+        "main/services/profile-share.test.ts",
         "main/services/profile.test.ts",
         "main/services/provider-artwork-core.test.ts",
         "main/services/provider-artwork.test.ts",
@@ -170,9 +175,10 @@
         "scripts/check-ci-policy.test.mjs",
         "scripts/ci-changes.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
-        "scripts/ci-release-admission-core.test.mjs",
         "scripts/ci-required.test.mjs",
-        "scripts/ci-test-registry.test.mjs"
+        "scripts/ci-test-registry.test.mjs",
+        "scripts/ci-timings.test.mjs",
+        "scripts/worktree-file-io.test.mjs"
       ],
       "preserved": [
         "browser",
@@ -191,7 +197,8 @@
         "subagent-file-mutator-build",
         "subagent-file-mutator-test-build",
         "subagent-shell-runner-build",
-        "subagent-shell-runner-test-build"
+        "subagent-shell-runner-test-build",
+        "worktree-file-io-build"
       ],
       "files": [
         "main/handlers/aiden-remote.test.ts",
@@ -409,6 +416,7 @@
         "renderer/components/assistant/use-assistant-live.test.tsx",
         "renderer/components/btw-card.test.tsx",
         "renderer/components/chat-sidebar.test.tsx",
+        "renderer/components/composer-attachments-mounted.test.tsx",
         "renderer/components/composer.test.tsx",
         "renderer/components/environment-subagents-contract.test.ts",
         "renderer/components/interface-polish.test.tsx",
@@ -444,6 +452,7 @@
         "renderer/lib/codex-auth-session.test.ts",
         "renderer/lib/codex-provider-cache.test.ts",
         "renderer/lib/command-system-core.test.ts",
+        "renderer/lib/composer-attachment-operation.test.ts",
         "renderer/lib/composer-placeholder.test.ts",
         "renderer/lib/computer-use-control.test.ts",
         "renderer/lib/computer-use-notice.test.ts",
@@ -674,6 +683,24 @@
         "build:vcc"
       ],
       "reason": "pretest:vcc builds the VCC worker before its tests."
+    },
+    {
+      "id": "worktree-file-io-build",
+      "command": [
+        "npm",
+        "run",
+        "build:worktree-file-io"
+      ],
+      "reason": "Managed worktree lifecycle tests require the confined native file-I/O helper."
+    },
+    {
+      "id": "worktree-file-io-test-build",
+      "command": [
+        "node",
+        "scripts/build-worktree-file-io.mjs",
+        "--test"
+      ],
+      "reason": "Native file-I/O fault-injection regression helper."
     }
   ],
   "preserved": [

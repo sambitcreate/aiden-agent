@@ -44,11 +44,8 @@ struct AidenSSEParser {
         return nil
     }
 
-    mutating func finish() throws -> AidenRemoteStreamEvent? {
-        guard frameBytes > 0 else { return nil }
-        return try finishFrame()
-    }
-
+    // Only a consumed blank line completes a frame. EOF must discard this
+    // parser, leaving any pending event available for replay on reconnect.
     private mutating func finishFrame() throws -> AidenRemoteStreamEvent? {
         defer { reset() }
         guard !dataLines.isEmpty else {

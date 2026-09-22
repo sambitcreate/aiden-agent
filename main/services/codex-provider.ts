@@ -711,7 +711,12 @@ export class CodexProviderService {
       try {
         const { attempt, auth } = await this.prepareRuntimeAuth(model, options?.signal);
         let headers = mergeProviderHeaders(auth.auth.headers, options?.headers);
-        if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
+        if (options?.transformHeaders) {
+          headers = await waitForAbort(
+            Promise.resolve().then(() => options.transformHeaders!(headers ?? {})),
+            [options.signal, attempt.generationSignal],
+          );
+        }
         const env =
           auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
         const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
@@ -741,12 +746,28 @@ export class CodexProviderService {
             apiKey: options?.apiKey ?? auth.auth.apiKey,
             headers,
             env,
+            // Pi awaits hooks before checking cancellation. Fence those waits
+            // too, so a stalled hook cannot hold Stop or account replacement.
+            ...(options?.onPayload
+              ? {
+                  onPayload: (payload, payloadModel) =>
+                    waitForAbort(
+                      Promise.resolve().then(() => options.onPayload!(payload, payloadModel)),
+                      [signal],
+                    ),
+                }
+              : {}),
             onResponse: async (response, responseModel) => {
               if (response.status === 401) this.updateRemoteAttention(attempt, true);
               else if (response.status >= 200 && response.status < 300) {
                 this.updateRemoteAttention(attempt, false);
               }
-              await options?.onResponse?.(response, responseModel);
+              if (options?.onResponse) {
+                await waitForAbort(
+                  Promise.resolve().then(() => options.onResponse!(response, responseModel)),
+                  [signal],
+                );
+              }
             },
           },
           observeResult: (result, metadata) => {

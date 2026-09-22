@@ -65,7 +65,7 @@ function isSafePath(path) {
 export function isSafeDocumentationPath(path) {
   return (
     isSafePath(path) &&
-    (path.startsWith("docs/") || SAFE_ROOT_DOCUMENT.test(path) || SAFE_PAPERCUT_DOCUMENT.test(path))
+    ((path.startsWith("docs/") && /\.(?:md|markdown)$/u.test(path)) || SAFE_ROOT_DOCUMENT.test(path) || SAFE_PAPERCUT_DOCUMENT.test(path))
   );
 }
 
@@ -145,7 +145,7 @@ export function decideChangedAreas(paths, options = {}) {
   if (forceFullRequested(options)) {
     return fullAreas();
   }
-  if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || path.length === 0)) {
+  if (!Array.isArray(paths) || paths.length === 0 || paths.some((path) => typeof path !== "string" || path.length === 0)) {
     return fullAreas();
   }
 
@@ -169,7 +169,7 @@ export function analyzeChangedPaths(paths, options = {}) {
       reason: "forced-full",
     };
   }
-  if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || path.length === 0)) {
+  if (!Array.isArray(paths) || paths.length === 0 || paths.some((path) => typeof path !== "string" || path.length === 0)) {
     return {
       ...fullAreas(),
       areas: fullAreas(),
