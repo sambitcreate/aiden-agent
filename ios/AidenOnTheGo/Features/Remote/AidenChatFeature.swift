@@ -902,6 +902,7 @@ final class AidenChatViewModel {
     private let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
+    @ObservationIgnored var beforeRemovalAttachmentCleanup: (() async -> Void)?
     @ObservationIgnored var beforeConsumerAdmission: (() async -> Void)?
     private var isRemoved: Bool { deletionLifetime?.isRemoved == true }
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -921,6 +922,8 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
+    @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
+    @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var uploadRevocation: (AidenRemoteClientError, AidenRemoteRequestContext)?
     @ObservationIgnored private var attachmentPreparationTask: Task<Void, Never>?
     private var attachmentPreparationID: UUID?
@@ -1053,6 +1056,7 @@ final class AidenChatViewModel {
             let uploading = self?.uploadTask
             uploading?.cancel()
             _ = await uploading?.value
+            await self?.cleanupOwnedAttachmentsForRemoval()
             await draftStore.remove(instanceId: draftInstanceId, chatId: draftChatId)
         }
     }
@@ -1752,6 +1756,7 @@ final class AidenChatViewModel {
                 idempotencyKey: idempotencyKey
             )
             guard !isRemoved else { return }
+            for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(
                 deviceId: context.deviceId,
                 streamId: response.streamId,
@@ -1955,6 +1960,7 @@ final class AidenChatViewModel {
             return uploads.count
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return uploads.count }
+        guard let uploadClient = try? coordinator.remoteClient(for: context) else { return uploads.count }
         let imageWriteToken = cache.reserveChatWrite()
         composerGeneration &+= 1
         isUploadingAttachment = true
@@ -1964,26 +1970,25 @@ final class AidenChatViewModel {
         var acceptedReferences: [AidenAttachmentReference] = []
         for upload in uploads.prefix(10 - pendingAttachments.count) {
             if isRemoved || Task.isCancelled {
-                await cleanupCancelledUpload(acceptedReferences, context: context)
+                await cleanupCancelledUpload(acceptedReferences)
                 return uploads.count
             }
             do {
-                let reference = try await coordinator.remoteClient(for: context).uploadAttachment(
+                let reference = try await uploadClient.uploadAttachment(
                     chatId: chat.id,
                     upload: upload
                 )
+                guard reference.isValid() else { throw AidenRemoteClientError.invalidResponse }
+                ownedUploadReferences[reference.id] = (reference, context, uploadClient)
                 guard !isRemoved, coordinator.isCurrent(context) else {
                     acceptedReferences.append(reference)
-                    await cleanupCancelledUpload(acceptedReferences, context: context)
+                    await cleanupCancelledUpload(acceptedReferences)
                     return uploads.count
                 }
                 if Task.isCancelled {
                     acceptedReferences.append(reference)
-                    await cleanupCancelledUpload(acceptedReferences, context: context)
+                    await cleanupCancelledUpload(acceptedReferences)
                     return uploads.count
-                }
-                guard reference.isValid() else {
-                    throw AidenRemoteClientError.invalidResponse
                 }
                 pendingAttachments.append(reference)
                 acceptedReferences.append(reference)
@@ -1996,7 +2001,7 @@ final class AidenChatViewModel {
                         size: reference.size
                     )
                     if isRemoved || Task.isCancelled {
-                        await cleanupCancelledUpload(acceptedReferences, context: context)
+                        await cleanupCancelledUpload(acceptedReferences)
                         return uploads.count
                     }
                     _ = try? await cache.saveAttachmentImage(
@@ -2008,12 +2013,12 @@ final class AidenChatViewModel {
                         writeToken: imageWriteToken
                     )
                     if isRemoved || Task.isCancelled {
-                        await cleanupCancelledUpload(acceptedReferences, context: context)
+                        await cleanupCancelledUpload(acceptedReferences)
                         return uploads.count
                     }
                 }
             } catch let error where aidenIsCancellation(error) {
-                await cleanupCancelledUpload(acceptedReferences, context: context)
+                await cleanupCancelledUpload(acceptedReferences)
                 return uploads.count
             } catch {
                 if deferUploadRevocation(error, context: context) {
@@ -2033,31 +2038,39 @@ final class AidenChatViewModel {
     }
 
     private func cleanupCancelledUpload(
-        _ references: [AidenAttachmentReference],
-        context: AidenRemoteRequestContext
+        _ references: [AidenAttachmentReference]
     ) async {
-        guard !references.isEmpty else { return }
-        let cleanup = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for reference in references {
-                pendingAttachments.removeAll { $0.id == reference.id }
-                await cache.removeAttachmentImage(
-                    instanceId: instanceId,
-                    deviceId: context.deviceId,
-                    chatId: chat.id,
-                    attachmentId: reference.id
-                )
-                do {
-                    try await coordinator.remoteClient(for: context).removeAttachment(
-                        chatId: chat.id,
-                        attachmentId: reference.id
-                    )
-                } catch {
-                    if deferUploadRevocation(error, context: context) { return }
-                }
+        for reference in references { await cleanupOwnedAttachment(reference.id) }
+    }
+
+    private func cleanupOwnedAttachment(_ id: String) async {
+        if let cleanup = attachmentCleanupTasks[id] { await cleanup.value; return }
+        guard let (reference, context, cleanupClient) = ownedUploadReferences.removeValue(forKey: id) else { return }
+        pendingAttachments.removeAll { $0.id == id }
+        let cleanup = Task { @MainActor [self] in
+            await cache.removeAttachmentImage(instanceId: instanceId, deviceId: context.deviceId, chatId: chat.id, attachmentId: reference.id)
+            do {
+                try await cleanupClient.removeAttachment(chatId: chat.id, attachmentId: reference.id)
+            } catch {
+                _ = deferUploadRevocation(error, context: context)
             }
         }
+        attachmentCleanupTasks[id] = cleanup
         await cleanup.value
+        attachmentCleanupTasks.removeValue(forKey: id)
+    }
+
+    private func cleanupOwnedAttachmentsForRemoval() async {
+        await beforeRemovalAttachmentCleanup?()
+        for id in Set(ownedUploadReferences.keys).union(attachmentCleanupTasks.keys) {
+            await cleanupOwnedAttachment(id)
+        }
+        if let (error, context) = uploadRevocation {
+            uploadRevocation = nil
+            // Do not await a purge from the lifetime cleanup that purge joins.
+            let coordinator = coordinator
+            Task { _ = await coordinator.handleCredentialRevocation(error, context: context) }
+        }
     }
 
     @discardableResult
@@ -2066,20 +2079,12 @@ final class AidenChatViewModel {
     }
 
     func removeAttachment(_ attachment: AidenAttachmentReference) async {
-        guard !isReadOnlyPresentation else { return }
-        pendingAttachments.removeAll { $0.id == attachment.id }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
-        await cache.removeAttachmentImage(
-            instanceId: instanceId,
-            deviceId: context.deviceId,
-            chatId: chat.id,
-            attachmentId: attachment.id
-        )
-        do {
-            try await coordinator.remoteClient(for: context).removeAttachment(chatId: chat.id, attachmentId: attachment.id)
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            // The reference is short lived and server cleanup is automatic. Local removal remains authoritative for the composer.
+        guard !isReadOnlyPresentation, !isStarting, !isRemoved,
+              pendingAttachments.contains(where: { $0.id == attachment.id }) else { return }
+        await cleanupOwnedAttachment(attachment.id)
+        if let (error, context) = uploadRevocation {
+            uploadRevocation = nil
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
         }
     }
 

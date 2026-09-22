@@ -195,6 +195,12 @@ actor AidenChatCache {
             return pending.values.contains { $0.instanceId == instanceId && ($0.chatId == nil || $0.chatId == chatId) }
         }
 
+        func hasPendingRemoval(instanceId: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return pending.values.contains { $0.instanceId == instanceId }
+        }
+
         func retains(_ token: UInt64, instanceId: String, chatId: String) -> Bool {
             lock.lock()
             defer { lock.unlock() }
@@ -287,7 +293,7 @@ actor AidenChatCache {
 
     private func metadataWriteIsRetained(_ token: UInt64, instanceId: String) -> Bool {
         token > (metadataDeletionTokens[instanceId] ?? 0) &&
-        !chatWriteClock.isPending(instanceId: instanceId, chatId: "") &&
+        !chatWriteClock.hasPendingRemoval(instanceId: instanceId) &&
         isChatWriteRetained(token, instanceId: instanceId, chatId: "")
     }
 

@@ -1271,6 +1271,99 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedUploadsRemainOwnedThroughRemovalAndExplicitCleanup() async throws {
+        for mode in ["remove", "purge", "explicit", "unpair", "consumed", "failed", "removal_wins", "invalid"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-completed-upload-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var coordinator: AidenRemoteCoordinator!
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+            let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                if request.httpMethod == "DELETE" { return (204, "application/json", Data()) }
+                if request.url?.path.hasSuffix("/turns") == true {
+                    if mode == "consumed" || mode == "removal_wins" {
+                        return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+                    }
+                    return fixture.response(request)
+                }
+                guard request.httpMethod == "POST" else { return fixture.response(request) }
+                return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                    "id": "att_" + String(repeating: "b", count: 43), "name": "fixture.txt", "mimeType": "text/plain", "kind": "text", "size": 7,
+                    "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(mode == "invalid" ? -3600 : 3600)),
+                ]))
+            }
+            let failed = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
+            if mode == "invalid" {
+                XCTAssertEqual(failed, 1)
+                await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+                continue
+            }
+            XCTAssertEqual(failed, 0)
+            XCTAssertFalse(model.isUploadingAttachment)
+            let reference = try XCTUnwrap(model.pendingAttachments.first)
+            if mode == "removal_wins" {
+                await model.load(observeProgress: false)
+                model.draft = "Hello"
+                let turnArrived = expectation(description: "turn receipt held")
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { turnArrived.fulfill() }
+                let sending = Task { await model.send() }
+                await fulfillment(of: [turnArrived], timeout: 2)
+                let gate = AidenChatWriteTestGate()
+                model.beforeRemovalAttachmentCleanup = { await gate.waitIfArmed() }
+                await gate.arm()
+                let removing = Task { await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) }
+                await waitForChatWrite(gate)
+                AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+                await sending.value
+                await gate.release()
+                await removing.value
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
+                continue
+            }
+            if mode == "consumed" || mode == "failed" {
+                await model.load(observeProgress: false)
+                model.draft = "Hello"
+                XCTAssertTrue(model.canSend)
+                await model.send()
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 1)
+            }
+            if mode == "consumed" {
+                await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+                XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+                continue
+            }
+            let arrived = expectation(description: "completed reference DELETE held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments/" + reference.id) { arrived.fulfill() }
+            defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+            var explicit: Task<Void, Never>?
+            if mode == "explicit" {
+                explicit = Task { await model.removeAttachment(reference) }
+                await fulfillment(of: [arrived], timeout: 2)
+            }
+            let early = expectation(description: "removal waits for completed upload cleanup")
+            early.isInverted = true
+            var held = true
+            let removal = Task {
+                if mode == "unpair" { await coordinator.removeInstallation("instance-progress-lifecycle") }
+                else if mode == "purge" { await cache.purge(instanceId: "instance-progress-lifecycle") }
+                else { await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) }
+                if held { early.fulfill() }
+            }
+            if mode != "explicit" { await fulfillment(of: [arrived], timeout: 2) }
+            await fulfillment(of: [early], timeout: 0.1)
+            held = false
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await removal.value
+            await explicit?.value
+            XCTAssertTrue(model.pendingAttachments.isEmpty)
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 1)
+        }
+    }
+
+    @MainActor
     func testCallerCancellationDuringImageCacheWriteCleansAcceptedUploads() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-removed-upload-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3324,6 +3417,45 @@ final class AidenChatTests: XCTestCase {
                 XCTAssertEqual(admitted?.map(\.title), [fresh.title, other.title])
                 XCTAssertEqual(isolated?.map(\.id), [chat.id])
             }
+        }
+    }
+
+    @MainActor
+    func testMetadataCannotWriteWhileChatRemovalCleanupIsPending() async throws {
+        for writer in ["workspace", "home"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-pending-metadata-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+            let chat = model.chat
+            let instance = "instance-progress-lifecycle"
+            let other = AidenChat(id: "unrelated-chat", workspaceId: chat.workspaceId, title: "Retained row", providerId: chat.providerId, modelId: chat.modelId, messages: [], createdAt: chat.createdAt, updatedAt: chat.updatedAt, revision: chat.revision)
+            try await cache.saveChats([other], instanceId: instance, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+            try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: other)], nextCursor: nil), instanceId: instance, writeToken: cache.reserveChatWrite())
+            let oldToken = cache.reserveChatWrite()
+            let gate = AidenChatWriteTestGate()
+            let lifetime = cache.registerLifetime(instanceId: instance, chatId: chat.id)
+            lifetime.onRemovalCleanup = { await gate.waitIfArmed() }
+            await gate.arm()
+            let removing = Task { await cache.removeChat(instanceId: instance, chatId: chat.id) }
+            await waitForChatWrite(gate)
+            for token in [oldToken, cache.reserveChatWrite()] {
+                if writer == "workspace" {
+                    try await cache.saveChats([chat], instanceId: instance, workspaceId: chat.workspaceId, writeToken: token)
+                } else {
+                    try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat)], nextCursor: nil), instanceId: instance, writeToken: token)
+                }
+            }
+            let reopened = AidenChatCache(root: root)
+            let list = await reopened.loadChats(instanceId: instance, workspaceId: chat.workspaceId)
+            let home = await reopened.loadChatSummaries(instanceId: instance)
+            XCTAssertEqual(list?.map(\.id), [other.id])
+            XCTAssertEqual(home?.summaries.map(\.id), [other.id])
+            try await cache.saveChats([chat], instanceId: "other-instance", workspaceId: chat.workspaceId, writeToken: oldToken)
+            let isolated = await reopened.loadChats(instanceId: "other-instance", workspaceId: chat.workspaceId)
+            XCTAssertEqual(isolated?.map(\.id), [chat.id])
+            await gate.release()
+            await removing.value
         }
     }
 
