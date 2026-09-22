@@ -57,7 +57,11 @@ function normalizeFile(chatId: string) {
     }
     const record = value as Record<string, unknown>;
     // A file renamed between chats must not leak another chat's links.
-    if (record.chatId !== chatId) return emptyFile(chatId);
+    if (
+      record.chatId !== chatId ||
+      record.schemaVersion !== CHAT_PULL_REQUEST_SCHEMA_VERSION
+    )
+      return emptyFile(chatId);
     const rawLinks = Array.isArray(record.links) ? record.links : [];
     const deduped = new Map<string, ChatPullRequestLink>();
     for (const raw of rawLinks) {
@@ -99,7 +103,18 @@ function isSafeFile(chatId: string) {
       record.chatId === chatId &&
       Array.isArray(record.links) &&
       (record.pendingCreates === undefined ||
-        Array.isArray(record.pendingCreates))
+        (Array.isArray(record.pendingCreates) &&
+          record.pendingCreates.length <= MAX_PENDING_CREATES &&
+          new Set(
+            record.pendingCreates.map(
+              (intent) =>
+                normalizeChatPullRequestCreateIntent(intent)?.operationId,
+            ),
+          ).size === record.pendingCreates.length &&
+          record.pendingCreates.every(
+            (intent) =>
+              normalizeChatPullRequestCreateIntent(intent) !== undefined,
+          )))
     );
   };
 }
@@ -295,6 +310,8 @@ export class ChatPullRequestStore {
         maxBytes: MAX_FILE_BYTES,
         fileMode: 0o600,
         preserveCorruptFile: true,
+        reloadBeforeWrite: true,
+        rejectUnsafeWrite: true,
         normalize: normalizeFile(chatId),
         isSafe: isSafeFile(chatId),
       },

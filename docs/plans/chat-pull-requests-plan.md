@@ -1,6 +1,6 @@
 # Durable chat pull requests
 
-Status: Implemented; PR #184 final checks and review follow-through in progress.
+Status: Implemented and independently reviewed; hosted CI acceptance is tracked on PR #184.
 
 ## Scope
 
@@ -26,4 +26,4 @@ The existing #184 onboarding Git workflows tile already introduces multiple PR l
 
 ## Validation
 
-Focused regression suite: `npm run test:chat-pull-requests`. Build and TypeScript checks; full `npm test` (including Remote contracts, onboarding, Git and IPC tests). Independent GPT-5.6 Sol medium blast-radius and adversarial reviews; follow-up reviews after remediation. React Doctor reported 78/100 with three pre-existing render-ref findings in Composer/Environment/Chat pane; those lines are unchanged by this PR and out of scope. Exact-head hosted checks and unresolved review-thread audit before completion.
+Focused regression suite: `npm run test:chat-pull-requests`. Build and TypeScript checks; full `npm test` (including Remote contracts, onboarding, Git and IPC tests). Independent GPT-5.6 Sol medium blast-radius and adversarial reviews; follow-up reviews after remediation. React Doctor reported 78/100 with three pre-existing render-ref findings in Composer/Environment/Chat pane; those lines are unchanged by this PR and out of scope. Local full suite: 6,825 pass, 1 skipped, 0 failures; focused final store suite: 87 pass; IPC: 14 pass. TypeScript and production build pass. Future schema versions and malformed durable pending expectations are write-protected with byte-preservation regressions. Exact-head hosted checks and review-thread audit are tracked on PR #184.

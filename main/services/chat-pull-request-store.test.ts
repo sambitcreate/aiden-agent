@@ -258,3 +258,74 @@ test("stale create completion cannot resurrect an explicitly unlinked PR", async
     1,
   );
 });
+
+test("future schema and malformed pending expectations stay write-protected", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const payload of [
+    {
+      schemaVersion: 2,
+      chatId: "chat-1",
+      links: [link(1)],
+      pendingCreates: [],
+    },
+    {
+      schemaVersion: 1,
+      chatId: "chat-1",
+      links: [],
+      pendingCreates: [
+        {
+          operationId: "op",
+          host: "github.com",
+          repository: "owner/repo",
+          headBranch: "feature/x",
+          baseBranch: "main",
+          title: "Title",
+          requestedAt: 1700,
+          expectedHeadSha: "invalid",
+        },
+      ],
+    },
+  ]) {
+    const bytes = JSON.stringify(payload);
+    const file = path.join(directory, "chat-1.json");
+    await fs.writeFile(file, bytes);
+    const store = new ChatPullRequestStore(() => directory);
+    assert.deepEqual(await store.list("chat-1"), []);
+    await assert.rejects(store.link("chat-1", link(2)));
+    assert.equal(await fs.readFile(file, "utf8"), bytes);
+  }
+});
+
+test("oversized or duplicate pending intent inventories preserve every byte", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const intent = {
+    operationId: "op",
+    host: "github.com",
+    repository: "owner/repo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    title: "Title",
+    requestedAt: 1700,
+  };
+  for (const pendingCreates of [
+    Array.from({ length: 17 }, (_, i) => ({
+      ...intent,
+      operationId: `op-${i}`,
+    })),
+    [intent, { ...intent, headBranch: "other" }],
+  ]) {
+    const file = path.join(directory, "chat-1.json");
+    const bytes = JSON.stringify({
+      schemaVersion: 1,
+      chatId: "chat-1",
+      links: [],
+      pendingCreates,
+    });
+    await fs.writeFile(file, bytes);
+    const store = new ChatPullRequestStore(() => directory);
+    await assert.rejects(store.link("chat-1", link(1)));
+    assert.equal(await fs.readFile(file, "utf8"), bytes);
+  }
+});

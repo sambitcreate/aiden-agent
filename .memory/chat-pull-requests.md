@@ -7,3 +7,5 @@ Never normalize a supplied malformed expectedHeadSha to omission. Unknown create
 Two requested Sol medium reviews identified empty-list retries, split link/intent publication, selected-remote routing, and source IPC mismatch; all remediated with focused coverage. Final verification tracked in docs/plans/chat-pull-requests-plan.md and PR #184.
 
 Follow-up review fixes: store settlement checks that the operation is still pending inside the serialized write, preventing stale completions from undoing unlink. Unknown/retargeted/advanced-head attempts can be explicitly cleared only after a confirmation to check GitHub first. Within-repository create destination is named in the dialog; cross-fork upstream creation remains manual.
+
+Local verification: full npm test 6,825 pass/1 skipped/0 fail; focused final suite 87 pass; IPC 14 pass; type-check and build pass. Future-schema and malformed-intent files remain write-protected. PR #184 hosted CI is tracked separately; do not infer pending checks passed.
