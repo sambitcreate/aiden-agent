@@ -99,10 +99,17 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   await toggle.click();
   await expect
     .poll(async () => {
-      const stored = JSON.parse(
-        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-      );
-      return stored.settings?.appearance?.autoHideComposerContext;
+      try {
+        const stored = JSON.parse(
+          await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+        );
+        return stored.settings?.appearance?.autoHideComposerContext;
+      } catch (error) {
+        // A fresh profile may not have written settings.json yet. Poll until
+        // the toggled value is durable, but surface any other read failure.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
     })
     .toBe(false);
   await openSentChat();
