@@ -740,7 +740,8 @@ test("existing Full and Custom Bot MCP grants never admit the separate resource 
   const server = { id: connection.sourceId, name: "Calendar" };
   const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true } };
   for (const accessMode of ["full", "custom"] as const) {
-    const admitted = exactBotMcpToolNames({ ...customAuthority, accessMode }, [current], (_id, name) => mcpAgentToolName(server, name));
+    const authority = { ...customAuthority, accessMode };
+    const admitted = exactBotMcpToolNames(authority, [current], (_id, name) => mcpAgentToolName(server, name));
     assert.equal(admitted.has(mcpAgentToolName(server, mcpTool.name)), true);
     assert.equal(admitted.has(mcpResourceToolName(server)), false);
   }
