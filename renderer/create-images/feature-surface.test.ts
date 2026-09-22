@@ -195,7 +195,11 @@ test("packaged acceptance observes production network policy and records interac
     /import\(\s*"\.\/services\/create-images\/packaged-canvas-acceptance-runner\.js"/u,
   );
   assert.doesNotMatch(main, /CREATE_IMAGES_ACCEPTANCE_FOCUS_/u);
-  assert.match(acceptance, /observeCreateImagesRequestPolicy\(\(observation\) =>/u);
+  assert.match(main, /observeRequestPolicy: observeCreateImagesRequestPolicy/u);
+  assert.match(main, /service: createImagesService\(\)/u);
+  assert.match(acceptance, /options\.observeRequestPolicy\(\(observation\) =>/u);
+  assert.match(acceptance, /const service = options\.service/u);
+  assert.doesNotMatch(acceptance, /import \{ (?:createImagesService|observeCreateImagesRequestPolicy) \}/u);
   assert.match(
     acceptance,
     /observation\.kind === "renderer-egress"\)[\s\S]*networkRequests \+= 1/u,
