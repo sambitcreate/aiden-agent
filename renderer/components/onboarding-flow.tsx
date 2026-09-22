@@ -347,7 +347,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Reusable Bots",
     description:
-      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
+      "Create reusable teammates with durable instructions, one persistent chat, image understanding, access controls, and Telegram. Steer or queue instructions from your paired phone with a supported Mac.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
     size: "standard",

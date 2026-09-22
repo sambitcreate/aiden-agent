@@ -1183,3 +1183,21 @@ object AidenChatModelAuthority {
         )
     }
 }
+
+@Serializable
+enum class AidenRunInputMode {
+    @SerialName("steer") STEER,
+    @SerialName("queue") QUEUE
+}
+@Serializable
+data class AidenRunInputRequest(val requestId: String, val mode: AidenRunInputMode, val text: String)
+@Serializable
+data class AidenRunInputReceipt(
+    val requestId: String, val streamId: String, val mode: AidenRunInputMode, val accepted: Boolean,
+    val admission: String? = null, val messageId: String? = null, val reason: String? = null
+) {
+    fun validates(request: AidenRunInputRequest, expectedStreamId: String): Boolean =
+        requestId == request.requestId && streamId == expectedStreamId && mode == request.mode &&
+            if (accepted) admission == "queued" && !messageId.isNullOrEmpty() && messageId.codePointCount(0, messageId.length) <= 128 && reason == null
+            else admission == null && messageId == null && reason in listOf("not-active", "cancelled", "capacity")
+}

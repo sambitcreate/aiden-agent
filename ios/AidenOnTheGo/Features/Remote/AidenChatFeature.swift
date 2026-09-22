@@ -899,6 +899,10 @@ final class AidenChatViewModel {
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
+    private(set) var isSubmittingRunInput = false
+    private(set) var hasUnconfirmedRunInput = false
+    private var hasLoadedRunInputMarker = false
+    private(set) var runInputNotice: String?
     private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
         didSet {
             if pendingAttachments != oldValue { composerGeneration &+= 1 }
@@ -1032,6 +1036,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
+            && hasLoadedRunInputMarker && !hasUnconfirmedRunInput && !isSubmittingRunInput
             && !isStarting && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
     }
 
@@ -1116,11 +1121,14 @@ final class AidenChatViewModel {
         let observationGeneration = progressObservationGeneration
         isLoading = true
         defer { isLoading = false }
-        if draftSession == nil {
+        if draftSession == nil || !hasLoadedRunInputMarker {
             let restorationGeneration = composerGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard coordinator.isCurrent(context) else { return }
             draftSession = session
+            hasUnconfirmedRunInput = await draftStore.hasUnconfirmedRunInput(session: session)
+            guard coordinator.isCurrent(context), draftSession == session else { return }
+            hasLoadedRunInputMarker = true
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard coordinator.isCurrent(context), draftSession == session else { return }
@@ -1938,6 +1946,70 @@ final class AidenChatViewModel {
             kind: attachment.kind,
             size: attachment.size
         ))
+    }
+
+    var supportsRunInput: Bool {
+        chat.isBotChat && coordinator.server?.features.contains("chat-run-input-v1") == true
+    }
+
+    var canSubmitRunInput: Bool {
+        supportsRunInput && canControlCurrentRun && hasLoadedRunInputMarker
+            && !isSubmittingRunInput && !hasUnconfirmedRunInput && !isStopping && !isRespondingToApproval
+            && (streamState == .running || streamState == .queued)
+            && pendingAttachments.isEmpty && !isPreparingAttachments && !isUploadingAttachment
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.utf8.count <= 16 * 1024
+    }
+
+    var currentRunControlID: String? { activeStreamID }
+
+    func submitRunInput(_ mode: AidenRunInputMode, streamID: String) async {
+        guard canSubmitRunInput, activeStreamID == streamID, let session = draftSession,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        let text = draft
+        let editGeneration = composerGeneration
+        let request = AidenRunInputRequest(requestId: UUID().uuidString.lowercased(), mode: mode, text: text)
+        isSubmittingRunInput = true
+        defer { isSubmittingRunInput = false }
+        do {
+            guard try await draftStore.save(text, session: session),
+                  try await draftStore.setUnconfirmedRunInput(true, session: session) else { return }
+            hasUnconfirmedRunInput = true
+            // Persistence yields. Revalidate identity, authority and exact run before dispatch.
+            guard coordinator.isCurrent(context), activeStreamID == streamID, canControlCurrentRun,
+                  supportsRunInput, !isStopping, streamState == .running || streamState == .queued else {
+                if try await draftStore.setUnconfirmedRunInput(false, session: session) { hasUnconfirmedRunInput = false }
+                return
+            }
+            let receipt = try await coordinator.remoteClient(for: context).submitRunInput(streamID: streamID, request: request)
+            guard coordinator.isCurrent(context), draftSession == session else { return }
+            if receipt.accepted, composerGeneration == editGeneration, draft == text {
+                draftPersistenceTask?.cancel()
+                guard try await draftStore.save("", session: session) else { return }
+                guard coordinator.isCurrent(context), draftSession == session else { return }
+                if composerGeneration == editGeneration, draft == text { draft = "" }
+                else { guard try await draftStore.save(draft, session: session) else { return } }
+            } else {
+                guard try await draftStore.save(draft, session: session) else { return }
+            }
+            guard try await draftStore.setUnconfirmedRunInput(false, session: session) else { return }
+            hasUnconfirmedRunInput = false
+            runInputNotice = receipt.accepted
+                ? String(localized: "Queued on your Mac. This does not confirm that the model has read it.")
+                : String(localized: "Your Mac did not queue this instruction. The draft is kept; review the run before choosing an action again.")
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), draftSession == session else { return }
+            runInputNotice = String(localized: "The instruction was not confirmed. Review the chat before sending it again.")
+        }
+    }
+
+    func acknowledgeUnconfirmedRunInput() async {
+        guard !isSubmittingRunInput, let session = draftSession else { return }
+        do {
+            guard try await draftStore.setUnconfirmedRunInput(false, session: session) else { return }
+            hasUnconfirmedRunInput = false
+            runInputNotice = nil
+        } catch { presentedError = error.localizedDescription }
     }
 
     var canControlCurrentRun: Bool {
@@ -5048,6 +5120,31 @@ private struct AidenComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if model.hasUnconfirmedRunInput && !model.isSubmittingRunInput {
+                Text("An instruction may already be queued on your Mac. Review the chat before sending again.")
+                    .font(.caption).foregroundStyle(palette.secondary)
+                Button("I’ve reviewed the chat") {
+                    Task { await model.acknowledgeUnconfirmedRunInput() }
+                }
+                .buttonStyle(.bordered)
+                .frame(minHeight: 44)
+            } else if let notice = model.runInputNotice {
+                Text(notice).font(.caption).foregroundStyle(palette.secondary)
+            }
+            if model.supportsRunInput && model.isStreaming, let streamID = model.currentRunControlID {
+                HStack(spacing: 8) {
+                    Button("Steer") { Task { await model.submitRunInput(.steer, streamID: streamID) } }
+                        .accessibilityHint("Queue guidance for the current Bot run")
+                    Button("Queue") { Task { await model.submitRunInput(.queue, streamID: streamID) } }
+                        .accessibilityHint("Queue a follow-up for the current Bot run")
+                    if model.isSubmittingRunInput { ProgressView().controlSize(.small) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.canSubmitRunInput)
+                Text("Plain text only. Your Mac queues the instruction before the model reads it.")
+                    .font(.caption2).foregroundStyle(palette.secondary)
+            }
             if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {

@@ -69,7 +69,8 @@ actor AidenChatDraftStore {
     func save(_ text: String, session: Session) throws -> Bool {
         guard isCurrent(session), isBounded(text) else { return false }
         if text.isEmpty {
-            try? fileManager.removeItem(at: fileURL(instanceId: session.instanceId, chatId: session.chatId))
+            let url = fileURL(instanceId: session.instanceId, chatId: session.chatId)
+            if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
             return true
         }
         let data = try JSONEncoder().encode(Envelope(
@@ -90,8 +91,31 @@ actor AidenChatDraftStore {
         return true
     }
 
+    func hasUnconfirmedRunInput(session: Session) -> Bool {
+        isCurrent(session) && fileManager.fileExists(atPath: runInputMarkerURL(session).path)
+    }
+
+    @discardableResult
+    func setUnconfirmedRunInput(_ value: Bool, session: Session) throws -> Bool {
+        guard isCurrent(session) else { return false }
+        let url = runInputMarkerURL(session)
+        if value {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            try Data("unconfirmed".utf8).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } else if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+        return true
+    }
+
+    private func runInputMarkerURL(_ session: Session) -> URL {
+        fileURL(instanceId: session.instanceId, chatId: session.chatId).appendingPathExtension("run-input")
+    }
+
     func remove(instanceId: String, chatId: String) {
         invalidate(instanceId: instanceId, chatId: chatId)
+        try? fileManager.removeItem(at: fileURL(instanceId: instanceId, chatId: chatId).appendingPathExtension("run-input"))
         try? fileManager.removeItem(at: fileURL(instanceId: instanceId, chatId: chatId))
     }
 

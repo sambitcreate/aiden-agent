@@ -206,7 +206,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
         case .control:
-            return String(localized: "Approve actions, manage scheduled work, use voice, and follow private usage from your iPhone or iPad.")
+            return String(localized: "Approve actions, manage scheduled work, and use voice. With a supported Mac, Steer a Bot or Queue a follow-up. Review unconfirmed instructions before sending again.")
         }
     }
 

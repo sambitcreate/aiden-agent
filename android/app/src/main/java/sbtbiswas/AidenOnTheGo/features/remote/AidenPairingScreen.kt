@@ -194,7 +194,7 @@ fun AidenPairingScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
+                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here. With a supported Mac, you can Steer a Bot or Queue a follow-up; review unconfirmed instructions before sending again.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.secondary
             )

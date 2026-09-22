@@ -429,3 +429,8 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
 });
+
+// Existing Bots artwork covers its supported mobile control capability.
+test("Bots tour introduces capability-gated mobile run controls", () => {
+  assert.match(source, /Steer or queue instructions from your paired phone with a supported Mac/u);
+});

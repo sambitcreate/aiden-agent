@@ -7,6 +7,45 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testSharedRunInputReceiptsRequireExactIdentityAndAdmission() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let input = try XCTUnwrap(fixture["chatRunInput"] as? [String: Any])
+        let request = try JSONDecoder().decode(AidenRunInputRequest.self, from: JSONSerialization.data(withJSONObject: input["request"]!))
+        for key in ["accepted", "rejected"] {
+            var body = try XCTUnwrap(input[key] as? [String: Any])
+            let valid = try JSONDecoder().decode(AidenRunInputReceipt.self, from: JSONSerialization.data(withJSONObject: body))
+            XCTAssertTrue(valid.validates(request: request, streamID: "stream-input-1"))
+            XCTAssertFalse(valid.validates(request: request, streamID: "other-stream"))
+            body["requestId"] = UUID().uuidString.lowercased()
+            let stale = try JSONDecoder().decode(AidenRunInputReceipt.self, from: JSONSerialization.data(withJSONObject: body))
+            XCTAssertFalse(stale.validates(request: request, streamID: "stream-input-1"))
+        }
+        var malformed = try XCTUnwrap(input["accepted"] as? [String: Any])
+        malformed["admission"] = "consumed"
+        let receipt = try JSONDecoder().decode(AidenRunInputReceipt.self, from: JSONSerialization.data(withJSONObject: malformed))
+        XCTAssertFalse(receipt.validates(request: request, streamID: "stream-input-1"))
+    }
+
+    func testUnconfirmedRunInputMarkerSurvivesRestartAndPurgesWithInstallation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let session = await store.beginSession(instanceId: "mac", chatId: "bot")
+        _ = try await store.setUnconfirmedRunInput(true, session: session)
+        _ = try await store.save("", session: session)
+        let reopened = AidenChatDraftStore(root: root)
+        let next = await reopened.beginSession(instanceId: "mac", chatId: "bot")
+        let survivesEmptyDraft = await reopened.hasUnconfirmedRunInput(session: next)
+        XCTAssertTrue(survivesEmptyDraft)
+        await reopened.purge(instanceId: "mac")
+        let staleWrite = try await reopened.setUnconfirmedRunInput(true, session: next)
+        XCTAssertFalse(staleWrite)
+        let current = await reopened.beginSession(instanceId: "mac", chatId: "bot")
+        let remains = await reopened.hasUnconfirmedRunInput(session: current)
+        XCTAssertFalse(remains)
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -257,6 +296,84 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRunInputWaitsForReceiptAndRejectsStaleOrDuplicateTap() async throws {
+        try await exerciseRunInput(.inputAccepted)
+    }
+
+    @MainActor
+    func testRunInputFailedDraftDeletionKeepsUnconfirmedGate() async throws {
+        try await exerciseRunInput(.inputDeleteFailure)
+    }
+
+    @MainActor
+    func testRunInputKeepsNewerDraft() async throws {
+        try await exerciseRunInput(.inputNewer)
+    }
+
+    @MainActor
+    func testRunInputUnknownOutcomeSurvivesDraftStoreRestart() async throws {
+        try await exerciseRunInput(.inputUnknown)
+    }
+
+    @MainActor
+    func testRunInputRejectionKeepsDraft() async throws {
+        try await exerciseRunInput(.inputRejected)
+    }
+
+    @MainActor
+    func testRunInputRequiresHostFeature() async throws {
+        try await exerciseRunInput(.inputUnsupported)
+    }
+
+    @MainActor
+    private func exerciseRunInput(_ mode: AidenChatProgressLifecycleURLProtocol.Mode) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let cache = AidenChatCache(root: root.appendingPathComponent("cache"))
+        let drafts = AidenChatDraftStore(root: root.appendingPathComponent("drafts"),
+            fileManager: mode == .inputDeleteFailure ? AidenRejectDraftDeleteFileManager() : FileManager.default)
+        let model = try await makeProgressLifecycleModel(mode: mode, cache: cache, draftStore: drafts)
+        defer {
+            AidenChatProgressLifecycleURLProtocol.reset()
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        await model.load(observeProgress: false)
+        model.draft = "Original instruction"
+        await model.submitRunInput(.steer, streamID: "stale-stream")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+        if mode == .inputUnsupported {
+            XCTAssertFalse(model.supportsRunInput)
+            await model.submitRunInput(.steer, streamID: "stream-control")
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+            return
+        }
+        XCTAssertTrue(model.canSubmitRunInput)
+        let arrived = expectation(description: "Run input held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/inputs") { arrived.fulfill() }
+        let task = Task { await model.submitRunInput(.steer, streamID: "stream-control") }
+        await fulfillment(of: [arrived], timeout: 5)
+        XCTAssertEqual(model.draft, "Original instruction")
+        await model.submitRunInput(.queue, streamID: "stream-control")
+        if mode == .inputNewer { model.draft = "Newer instruction" }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await task.value
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+        XCTAssertEqual(model.draft, mode == .inputAccepted ? "" : mode == .inputNewer ? "Newer instruction" : "Original instruction")
+        XCTAssertEqual(model.hasUnconfirmedRunInput, mode == .inputUnknown || mode == .inputDeleteFailure)
+        let reopened = AidenChatDraftStore(root: root.appendingPathComponent("drafts"))
+        let session = await reopened.beginSession(instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        let marker = await reopened.hasUnconfirmedRunInput(session: session)
+        XCTAssertEqual(marker, mode == .inputUnknown || mode == .inputDeleteFailure)
+        if mode == .inputUnknown {
+            XCTAssertFalse(model.canSend)
+            await model.submitRunInput(.steer, streamID: "stream-control")
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+            await model.acknowledgeUnconfirmedRunInput()
+            XCTAssertFalse(model.hasUnconfirmedRunInput)
+        }
+    }
+
+    @MainActor
     private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let cache = AidenChatCache(root: root)
@@ -334,7 +451,7 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond] + (mode.isRunInput ? [.botRead, .botWrite] : []),
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -361,7 +478,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(coordinator.connectionState, .connected)
         onCoordinator?(coordinator)
 
-        let chat = try AidenRemoteJSONDecoder.decode(
+        var chat = try AidenRemoteJSONDecoder.decode(
             AidenChat.self,
             from: Data(
                 """
@@ -369,6 +486,7 @@ final class AidenChatTests: XCTestCase {
                 """.utf8
             )
         )
+        if mode.isRunInput { chat.botId = "bot-control" }
         return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore)
     }
 
@@ -2935,6 +3053,13 @@ private final class AidenHeldAttachmentPreparation {
     }
 }
 
+private final class AidenRejectDraftDeleteFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws {
+        if URL.pathExtension == "json" { throw CocoaError(.fileWriteNoPermission) }
+        try super.removeItem(at: URL)
+    }
+}
+
 private final class AidenHeldDraftReadFileManager: FileManager, @unchecked Sendable {
     private let lock = NSLock()
     private let release = DispatchSemaphore(value: 0)
@@ -3004,6 +3129,13 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case mismatchedStop
         case revokedControls
         case unsupportedControls
+        case inputAccepted, inputNewer, inputUnknown, inputRejected, inputUnsupported, inputDeleteFailure
+        var isRunInput: Bool {
+            switch self {
+            case .inputAccepted, .inputNewer, .inputUnknown, .inputRejected, .inputUnsupported, .inputDeleteFailure: true
+            default: false
+            }
+        }
     }
 
     private static let lock = NSLock()
@@ -3081,6 +3213,12 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 "features": ["chat-tasks-v1", "chat-agents-v1"],
                 "connectionMode": "lan", "serverTime": "2026-09-14T12:00:00Z",
             ]
+            let mode = Self.lock.withLock { Self.mode }
+            if mode.isRunInput {
+                body["capabilities"] = (body["capabilities"] as! [String]) + ["bot:read", "bot:write"]
+                body["serverCapabilities"] = body["capabilities"]
+                body["features"] = mode == .inputUnsupported ? [] : ["chat-run-input-v1"]
+            }
             if Self.lock.withLock({ Self.mode == .unsupportedControls }) {
                 body["capabilities"] = (body["capabilities"] as! [String]).filter { $0 != "approval:respond" }
             }
@@ -3091,7 +3229,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: try! JSONSerialization.data(withJSONObject: body))
         case "/api/aiden/v1/streams/stream-control":
-            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            let state = Self.lock.withLock { Self.mode.isRunInput ? "running" : "waiting_for_approval" }
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"\#(state)","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
         case "/api/aiden/v1/streams/stream-control/events":
             shouldFinish = false
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
@@ -3100,6 +3239,29 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
                 """.utf8))
+        case "/api/aiden/v1/streams/stream-control/inputs":
+            Self.lock.withLock { Self._controlWriteCount += 1 }
+            var data = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let input = try! JSONDecoder().decode(AidenRunInputRequest.self, from: data)
+            let mode = Self.lock.withLock { Self.mode }
+            if mode == .inputUnknown {
+                result = Self.response(for: request, status: 503, contentType: "application/json", data: Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8))
+            } else {
+                let receipt = AidenRunInputReceipt(requestId: input.requestId, streamId: "stream-control", mode: input.mode,
+                    accepted: mode != .inputRejected, admission: mode == .inputRejected ? nil : "queued",
+                    messageId: mode == .inputRejected ? nil : "message-input", reason: mode == .inputRejected ? "not-active" : nil)
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: try! JSONEncoder().encode(receipt))
+            }
         case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
             Self.lock.withLock { Self._controlWriteCount += 1 }
             if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
