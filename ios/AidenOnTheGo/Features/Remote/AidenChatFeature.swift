@@ -868,8 +868,11 @@ final class AidenChatViewModel {
     @ObservationIgnored private var progressTask: Task<Void, Never>?
     @ObservationIgnored private var progressObservationGeneration: UInt64 = 0
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var titleRefreshID: UUID?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
-    @ObservationIgnored private var activeStreamID: String?
+    private var activeStreamID: String?
+    @ObservationIgnored private var sendGeneration: UInt64 = 0
+    @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
@@ -1030,7 +1033,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
-            && !isStarting && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
+            && !isStarting && activeStreamID == nil && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
     }
 
     var selectedProvider: AidenProvider? {
@@ -1106,7 +1109,8 @@ final class AidenChatViewModel {
 
     func load(observeProgress: Bool = true) async {
         guard !isReadOnlyFixture else { return }
-        guard !instanceId.isEmpty, !isLoading else { return }
+        guard !instanceId.isEmpty, !isLoading, !isStarting else { return }
+        let generation = sendGeneration
         guard let context = try? coordinator.requestContext(for: instanceId) else {
             clearProgressState()
             return
@@ -1132,6 +1136,7 @@ final class AidenChatViewModel {
         }
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard coordinator.isCurrent(context) else { return }
+            guard generation == sendGeneration, !isStarting else { return }
             chat = cached
             resolveModelSelection()
         }
@@ -1140,6 +1145,7 @@ final class AidenChatViewModel {
             async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
             let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
             guard coordinator.isCurrent(context) else { return }
+            guard generation == sendGeneration, !isStarting else { return }
             catalog = remoteCatalog
             await acceptRemoteChat(remoteChat, context: context)
         } catch {
@@ -1149,6 +1155,7 @@ final class AidenChatViewModel {
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         guard coordinator.isCurrent(context) else { return }
+        guard generation == sendGeneration, !isStarting else { return }
         await restoreStreamIfNeeded()
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
@@ -1612,8 +1619,16 @@ final class AidenChatViewModel {
         )
 
         composerGeneration &+= 1
+        sendGeneration &+= 1
+        titleRefreshTask?.cancel()
+        titleRefreshTask = nil
+        titleRefreshID = nil
         isStarting = true
-        defer { isStarting = false }
+        defer {
+            isStarting = false
+            sendGeneration &+= 1
+            if coordinator.isCurrent(context), chat.isTitlePending { schedulePendingTitleRefresh(context: context) }
+        }
         presentedError = nil
         draftPersistenceTask?.cancel()
         suppressesDraftPersistence = true
@@ -2039,8 +2054,24 @@ final class AidenChatViewModel {
         selectedThinkingLevel = selection.thinkingLevel
     }
 
+    private func showRecoveryWarning(_ message: String) {
+        presentedError = message
+        recoveryWarning = message
+    }
+
+    private func clearRecoveryWarning() {
+        if let recoveryWarning, presentedError == recoveryWarning { presentedError = nil }
+        recoveryWarning = nil
+    }
+
     private func restoreStreamIfNeeded() async {
-        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
+        guard activeStreamID == nil, !isStarting else { return }
+        let generation = sendGeneration
+        guard var stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
+        guard activeStreamID == nil, !isStarting, generation == sendGeneration else { return }
+        // Only the stream identity is durable. The live text/reasoning/tool buffers
+        // are process-local, so a cold owner must reconstruct them from sequence zero.
+        stream.lastSequence = 0
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         guard stream.deviceId == context.deviceId else {
             await cache.removeActiveStream(instanceId: instanceId, chatId: chat.id)
@@ -2049,7 +2080,9 @@ final class AidenChatViewModel {
         }
         do {
             let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context), activeStreamID == nil,
+                  !isStarting, generation == sendGeneration else { return }
+            clearRecoveryWarning()
             activeStreamID = stream.streamId
             if !status.state.isTerminal {
                 await liveActivities.start(
@@ -2066,6 +2099,8 @@ final class AidenChatViewModel {
                 context: context,
                 feedbackPolicy: .restoredStream
             )
+            guard coordinator.isCurrent(context), activeStreamID == stream.streamId,
+                  !isStarting, generation == sendGeneration else { return }
             // A terminal status can become visible before its final SSE event is
             // consumed. Keep the durable cursor and replay first so cancellation
             // and provider-failure details are never skipped on reopen.
@@ -2073,9 +2108,12 @@ final class AidenChatViewModel {
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
-            presentedError = error.localizedDescription
+            guard activeStreamID == nil, !isStarting, generation == sendGeneration else { return }
+            showRecoveryWarning(error.localizedDescription)
             await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
-            // Retain and resume the durable cursor even if the first status
+            guard coordinator.isCurrent(context), activeStreamID == nil,
+                  !isStarting, generation == sendGeneration else { return }
+            // Retain and resume the stream identity even if the first status
             // probe happens while the phone is offline.
             startStreaming(stream, context: context, feedbackPolicy: .restoredStream)
         }
@@ -2090,6 +2128,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask = nil
         streamTask?.cancel()
         activeStreamID = stream.streamId
+        if streamState == nil { streamState = .reconciling }
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context, feedbackPolicy: feedbackPolicy)
         }
@@ -2113,6 +2152,7 @@ final class AidenChatViewModel {
                     try Task.checkCancellation()
                     guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                     guard event.streamId == stream.streamId else { continue }
+                    clearRecoveryWarning()
                     if event.sequence <= stream.lastSequence { continue }
                     if event.sequence != stream.lastSequence + 1 {
                         await reconcileChat(context: context)
@@ -2121,12 +2161,14 @@ final class AidenChatViewModel {
                     guard activeStreamID == stream.streamId else { return }
                     stream.lastSequence = event.sequence
                     if event.terminal { return }
-                    try await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
+                    // Advance only with the in-memory buffers. Persisting a cursor
+                    // alone loses their prefix after relaunch and writes on every token.
                 }
 
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                 guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 retryAttempt = 0
+                clearRecoveryWarning()
                 await apply(
                     status,
                     streamID: stream.streamId,
@@ -2146,6 +2188,8 @@ final class AidenChatViewModel {
                 do {
                     let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                     guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+                    retryAttempt = 0
+                    clearRecoveryWarning()
                     await apply(
                         status,
                         streamID: stream.streamId,
@@ -2171,7 +2215,7 @@ final class AidenChatViewModel {
                        ) {
                         return
                     }
-                    presentedError = error.localizedDescription
+                    showRecoveryWarning(error.localizedDescription)
                     await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
                     let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: retryAttempt)
                     retryAttempt += 1
@@ -2385,15 +2429,19 @@ final class AidenChatViewModel {
 
     @discardableResult
     private func reconcileChat(context: AidenRemoteRequestContext) async -> Bool {
+        guard !isStarting else { return false }
+        let generation = sendGeneration
         do {
             let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
             guard coordinator.isCurrent(context) else { return false }
+            guard generation == sendGeneration, !isStarting else { return false }
             await acceptRemoteChat(remote, context: context)
+            clearRecoveryWarning()
             return true
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
-            guard coordinator.isCurrent(context) else { return false }
-            presentedError = error.localizedDescription
+            guard coordinator.isCurrent(context), generation == sendGeneration, !isStarting else { return false }
+            showRecoveryWarning(error.localizedDescription)
             return false
         }
     }
@@ -2404,6 +2452,7 @@ final class AidenChatViewModel {
         scheduleTitleRefresh: Bool = true
     ) async {
         guard coordinator.isCurrent(context) else { return }
+        guard !isStarting else { return }
         chat = remote
         resolveModelSelection()
         try? await cache.saveChat(remote, instanceId: instanceId)
@@ -2415,14 +2464,24 @@ final class AidenChatViewModel {
 
     private func schedulePendingTitleRefresh(context: AidenRemoteRequestContext) {
         guard titleRefreshTask == nil else { return }
+        let refreshID = UUID()
+        titleRefreshID = refreshID
         titleRefreshTask = Task { [weak self] in
             guard let self else { return }
-            defer { titleRefreshTask = nil }
+            defer {
+                if titleRefreshID == refreshID {
+                    titleRefreshTask = nil
+                    titleRefreshID = nil
+                }
+            }
             for delay in AidenChatTitleReconciliation.retryMilliseconds {
                 do {
                     try await Task.sleep(for: .milliseconds(delay))
+                    guard !isStarting else { continue }
+                    let generation = sendGeneration
                     let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
                     guard coordinator.isCurrent(context) else { return }
+                    guard generation == sendGeneration, !isStarting else { continue }
                     await acceptRemoteChat(remote, context: context, scheduleTitleRefresh: false)
                     if !remote.isTitlePending { return }
                 } catch let error where aidenIsCancellation(error) {
@@ -2537,11 +2596,14 @@ final class AidenChatViewModel {
 
     private func clearFinishedStream(expectedStreamID: String) async {
         guard activeStreamID == expectedStreamID else { return }
-        guard await cache.removeActiveStream(
+        _ = await cache.removeActiveStream(
             instanceId: instanceId,
             chatId: chat.id,
             ifStreamId: expectedStreamID
-        ) else { return }
+        )
+        // A failed initial cache write must not keep a reconciled stream alive.
+        // Conditional removal still preserves another owner's newer record.
+        guard activeStreamID == expectedStreamID else { return }
         liveText = ""
         reasoning = ""
         tools = []

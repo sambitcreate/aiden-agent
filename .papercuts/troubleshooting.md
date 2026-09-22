@@ -852,3 +852,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — native recovery verification
+
+- The initial isolated checkout was behind main; fetched `c8c09e0d2` before coding. The local Hermex study checkout also lacked the cited commits; verified/fetched upstream HEAD `aa7830b28a071769c2d26bc08949e38e09f4b388` into Git objects for read-only comparison.
+- Effective task policy still requires workspace-write escalations for shared `.git` metadata, Gradle cache and Xcode/CoreDevice despite the coordinator's global full-access preference; reused authorized commands without changing permissions.
+- Cursor-zero HTTP requests omit both `after` and Last-Event-ID; the first regression assertion was corrected to match that existing wire behavior. Original ViewModel then fails four enhanced regressions and the fixed implementation passes.
+- Physical iPhone 13 Pro is shared and locked (`com.apple.dt.deviceprep Code=-3: Unlock Sambit’s iPhone to Continue` from the preceding coordinated run). Generic unsigned build-for-testing is compilation evidence only. No simulator or device-unlock bypass.

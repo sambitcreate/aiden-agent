@@ -274,6 +274,96 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testColdStreamReplayKeepsWarmCursorWithoutPerEventPersistence() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-recovery", turnId: "turn-recovery", lastSequence: 27),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id
+        )
+        await model.load(observeProgress: false)
+        for _ in 0..<200 {
+            if model.streamState == .done, fixture.chatReads >= 2 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.streamState, .done)
+        model.draft = "Next turn"
+        XCTAssertFalse(model.canSend)
+        XCTAssertEqual(model.liveText, "prefix suffix")
+        XCTAssertEqual(fixture.eventCursors, [0, 1])
+        let persisted = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(persisted?.lastSequence, 27)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 0)
+        // A warm foreground load must not restart from the cold cache cursor.
+        await model.load(observeProgress: false)
+        XCTAssertEqual(fixture.eventCursors, [0, 1])
+        XCTAssertEqual(model.liveText, "prefix suffix")
+        fixture.allowReconciliation = true
+        for _ in 0..<200 {
+            if await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) == nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let finished = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(finished)
+        XCTAssertTrue(model.canSend)
+    }
+
+    @MainActor
+    func testStopStillCancelsAnInMemoryRecoveredStream() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recovery-stop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-recovery", turnId: "turn-recovery", lastSequence: 27),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id
+        )
+        await model.load(observeProgress: false)
+        for _ in 0..<100 {
+            if !model.liveText.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(model.isStreaming)
+        await model.stop()
+        XCTAssertEqual(fixture.cancelReads, 1)
+        fixture.allowReconciliation = true
+        for _ in 0..<200 {
+            if await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) == nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    @MainActor
+    func testReloadCannotRemovePendingOptimisticMessage() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-send-reload-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root))
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        await model.load(observeProgress: false)
+        let arrived = expectation(description: "turn POST pending")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { arrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        model.draft = "Optimistic message"
+        XCTAssertTrue(model.canSend)
+        let send = Task { await model.send() }
+        await fulfillment(of: [arrived], timeout: 5)
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.last?.text, "Optimistic message")
+        XCTAssertTrue(model.chat.messages.last?.id.hasPrefix("local-") == true)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await send.value
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(model.draft, "Optimistic message")
+    }
+
+    @MainActor
     func testDraftRestorationPreservesTypingDuringDiskRead() async throws {
         try await assertDraftRestoration(edit: "New message", expected: "New message")
     }
@@ -2902,6 +2992,12 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case rosterEpochRotates
     }
 
+    typealias Override = @Sendable (URLRequest) -> (Int, String, Data)?
+    nonisolated(unsafe) private static var responseOverride: Override?
+    static func setResponseOverride(_ handler: @escaping Override) {
+        lock.withLock { responseOverride = handler }
+    }
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
@@ -2944,6 +3040,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         releaseHeldRequest()
         lock.lock()
         self.mode = mode
+        responseOverride = nil
         _progressRequestCount = 0
         _agentRequestCount = 0
         _turnRequestCount = 0
@@ -2961,6 +3058,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         if path.hasSuffix("/turns") { Self.lock.withLock { Self._turnRequestCount += 1 } }
         let result: (HTTPURLResponse, Data)
         var shouldFinish = true
+        if let custom = Self.lock.withLock({ Self.responseOverride })?(request) {
+            result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
+        } else {
         switch path {
         case "/api/aiden/v1/server":
             result = Self.response(
@@ -3084,6 +3184,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             )
         }
 
+        }
         let finishes = shouldFinish
         let onHold = Self.lock.withLock { () -> (@Sendable () -> Void)? in
             guard let suffix = Self.heldPathSuffix, path.hasSuffix(suffix) else { return nil }
@@ -4201,5 +4302,64 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .notDetermined), .requestingPermission)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
+    }
+}
+
+private final class AidenStreamRecoveryFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let chat: AidenChat
+    private var reads = 0
+    private var permitsReconciliation = false
+    var allowReconciliation: Bool {
+        get { lock.withLock { permitsReconciliation } }
+        set { lock.withLock { permitsReconciliation = newValue } }
+    }
+    private var cursors: [Int] = []
+    private var cancellations = 0
+    var cancelReads: Int { lock.withLock { cancellations } }
+    var chatReads: Int { lock.withLock { reads } }
+    var eventCursors: [Int] { lock.withLock { cursors } }
+    init(chat: AidenChat) { self.chat = chat }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            let error = Data(#"{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"#.utf8)
+            if path.hasSuffix("/models") {
+                return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+            }
+            if path.hasSuffix("/chats/" + chat.id) {
+                reads += 1
+                if reads > 1, !permitsReconciliation { return (503, "application/json", error) }
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return (200, "application/json", try! encoder.encode(chat))
+            }
+            if path.hasSuffix("/streams/stream-recovery/cancel") {
+                cancellations += 1
+                return (202, "application/json", Data("""
+                {"streamId":"stream-recovery","chatId":"\(chat.id)","turnId":"turn-recovery","state":"cancelled","lastSequence":2,"updatedAt":"2026-09-22T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/streams/stream-recovery") {
+                return (200, "application/json", Data("""
+                {"streamId":"stream-recovery","chatId":"\(chat.id)","turnId":"turn-recovery","state":"running","lastSequence":1,"updatedAt":"2026-09-22T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/streams/stream-recovery/events") {
+                let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "after" }?.value
+                cursors.append(Int(after ?? "0") ?? -1)
+                let body = cursors.count == 1
+                    ? event(1, "text_delta", #"{"text":"prefix "}"#)
+                    : event(2, "text_delta", #"{"text":"suffix"}"#) + event(3, "done", #"{"messageId":"reply"}"#, terminal: true) + event(4, "text_delta", #"{"text":"LATE"}"#)
+                return (200, "text/event-stream", Data(body.utf8))
+            }
+            if path.hasSuffix("/turns") { return (503, "application/json", error) }
+            return nil
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
