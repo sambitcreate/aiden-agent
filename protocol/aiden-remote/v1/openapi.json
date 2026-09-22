@@ -6554,7 +6554,9 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 16384,
-            "description": "Nonblank text; at most 16384 UTF-8 bytes."
+            "pattern": "\\S",
+            "x-aiden-max-utf8-bytes": 16384,
+            "description": "Must contain a non-whitespace character. Clients MUST enforce x-aiden-max-utf8-bytes on the UTF-8 encoding before submission; JSON Schema maxLength alone is insufficient for multibyte text."
           }
         }
       },

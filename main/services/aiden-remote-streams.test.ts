@@ -1063,3 +1063,54 @@ test("run input receipt survives stream eviction and restart but rechecks curren
   }), (error: unknown) => (error as { status: number }).status === 403);
   await assert.rejects(restored.submitInput("device-2", "stream-1", input.requestId, input));
 });
+
+test("pre-admission authorization failure leaves the same run-input UUID retryable", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  let submissions = 0;
+  const service = new AidenRemoteStreamService({ now: () => 1000, cancel: () => true, approve: () => true, idempotency: ledger,
+    submitInput: async (streamId, _owner, input) => {
+      submissions++;
+      return { requestId: input.requestId, streamId, mode: input.mode, accepted: true, admission: "queued", messageId: "input-1" };
+    },
+  });
+  service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { requestId: "019a0000-0000-4000-8000-000000000004", mode: "steer", text: "Retry after access is restored" };
+  await assert.rejects(service.submitInput("device-1", "stream-1", input.requestId, input, async () => {
+    throw new AidenRemoteServiceError("capability_denied", "Temporarily unavailable", 403);
+  }), (error: unknown) => (error as { status: number }).status === 403);
+  assert.equal(submissions, 0);
+  assert.equal(ledger.snapshot().entries.length, 0);
+  assert.equal((await service.submitInput("device-1", "stream-1", input.requestId, input)).accepted, true);
+  assert.equal(submissions, 1);
+  await assert.rejects(service.submitInput("device-1", "missing-stream", input.requestId, input));
+  assert.equal(ledger.snapshot().entries.length, 1, "unknown evicted stream cannot reserve a new key");
+  await assert.rejects(service.submitInput("device-1", "stream-1", input.requestId, input, async () => {
+    throw new AidenRemoteServiceError("capability_denied", "Revoked", 403);
+  }));
+  assert.equal((await service.submitInput("device-1", "stream-1", input.requestId, input)).accepted, true);
+  assert.equal(submissions, 1);
+});
+
+test("a host admission with an unknown outcome remains protected from repeat execution", async () => {
+  let now = 1000;
+  const ledger = new AidenIdempotencyLedger(undefined, { now: () => now, ttlMs: 10 });
+  let submissions = 0;
+  const service = new AidenRemoteStreamService({ now: () => 1000, cancel: () => true, approve: () => true, idempotency: ledger,
+    submitInput: async () => { submissions++; throw new Error("host outcome unknown"); },
+  });
+  service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { requestId: "019a0000-0000-4000-8000-000000000005", mode: "queue", text: "Uncertain input" };
+  await assert.rejects(service.submitInput("device-1", "stream-1", input.requestId, input));
+  await assert.rejects(service.submitInput("device-1", "stream-1", input.requestId, input), (error: unknown) => (error as { status: number }).status === 409);
+  assert.equal(submissions, 1);
+  const snapshot = ledger.snapshot();
+  assert.equal(snapshot.entries[0]?.state, "in_flight");
+  now = 2000;
+  const restored = new AidenRemoteStreamService({ now: () => now, cancel: () => true, approve: () => true,
+    idempotency: new AidenIdempotencyLedger(snapshot, { now: () => now, ttlMs: 10 }),
+    submitInput: async () => { submissions++; throw new Error("must not repeat after expiry/restart"); },
+  });
+  restored.create("device-1", "stream-1", "chat-1", "turn-1");
+  await assert.rejects(restored.submitInput("device-1", "stream-1", input.requestId, input), (error: unknown) => (error as { status: number }).status === 409);
+  assert.equal(submissions, 1);
+});

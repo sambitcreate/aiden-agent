@@ -89,3 +89,11 @@ edit was not sent because the original message is not queued.” Neither path
 admits another turn or aborts a running one. Five regressions cover pending edits
 and all three commands after dequeue. This closes a misleading success receipt
 in the source-deduplication path rather than deferring it as a cosmetic issue.
+
+Remote admission review follow-up: authorization failures before the live host
+callback leave no idempotency record; exact retries can succeed after access is
+restored. Evicted streams allow only read-only lookup of existing receipts with
+current chat authorization. OpenAPI's nonblank pattern and required UTF-8 byte
+extension are part of the native client validation contract. Host unknown outcomes
+still prevent repeat execution. Regression coverage includes denial/retry,
+missing-stream lookup, revoked replay access, clock rollback, and Unicode limits.

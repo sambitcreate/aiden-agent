@@ -1613,3 +1613,27 @@ test("canonical Chat fixtures validate bounded classification and every known Me
     /exceeds the 1 MiB JSON response ceiling/u,
   );
 });
+
+test("read-only receipt lookup preserves isolation, expiry, rollback, and unknown outcomes", async () => {
+  let now = 1000;
+  const scope = { deviceId: "device", route: "inputs", resourceId: "stream", key: "request-123456789" };
+  const input = { text: "hello" };
+  const ledger = new AidenIdempotencyLedger(undefined, { now: () => now, ttlMs: 100 });
+  assert.equal(ledger.replayExisting(scope, input), undefined);
+  assert.equal(ledger.snapshot().entries.length, 0);
+  await ledger.execute(scope, input, async () => ({ chatId: "chat", receipt: { accepted: true } }));
+  const first = await ledger.replayExisting<{ receipt: { accepted: boolean } }>(scope, input);
+  first!.receipt.accepted = false;
+  assert.equal((await ledger.replayExisting<{ receipt: { accepted: boolean } }>(scope, input))?.receipt.accepted, true);
+  assert.throws(() => ledger.replayExisting(scope, { text: "changed" }), /idempotency_conflict/u);
+  assert.equal(ledger.replayExisting({ ...scope, deviceId: "other" }, input), undefined);
+  now = 1200;
+  assert.equal(ledger.replayExisting(scope, input), undefined);
+  now = 900;
+  assert.ok(await ledger.replayExisting(scope, input), "read-only future lookup did not prune or advance the clock");
+
+  const unknown = new AidenIdempotencyLedger();
+  await assert.rejects(unknown.execute(scope, input, async () => { throw new AidenOperationUnknownOutcomeError(); }));
+  const restored = new AidenIdempotencyLedger(unknown.snapshot());
+  assert.throws(() => restored.replayExisting(scope, input), /idempotency_in_flight/u);
+});

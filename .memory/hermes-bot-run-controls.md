@@ -61,3 +61,16 @@ for /queue, /continue and /interrupt now produce unchanged/not-sent receipts,
 never a new admission or interrupt. Five regressions cover pending/dequeued
 sources. Telegram238 passed, both Sol medium re-reviews clear; plan documents
 exact text and unchanged ordinary-prompt edit behavior.
+
+PR #220 Pullfrog follow-up: pre-admission authorization now wraps the live
+idempotency action, so policy denial cannot poison a fresh request UUID. Evicted
+stream receipts use read-only replayExisting: no reservation, pruning, or clock
+advance; stored chat access is rechecked before returning the receipt. Unknown
+host outcomes remain non-repeatable. OpenAPI now declares nonblank text and the
+required x-aiden-max-utf8-bytes extension, with whitespace and Unicode boundary
+contract tests. Focused ledger/stream/protocol suite93 passed. Native owner was
+asked to confirm the same byte/nonblank checks; public DTO shape is unchanged.
+Ambiguous exceptions after entering the host callback become indefinite in-flight
+ledger entries, not expiring internal-error rejections. A short-TTL restart test
+proves no second host call after expiry. Final focused93 +router42 tests pass;
+type-check and scoped lint pass, both Sol medium re-reviews clear.

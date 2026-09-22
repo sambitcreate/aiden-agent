@@ -406,3 +406,10 @@ Invalid input is 400, revoked/insufficient authority 403, unknown or unowned str
 is an unknown outcome: clients preserve the captured draft and do not silently
 fall back to a new turn. Clients disable duplicate taps, preserve newer edits,
 and show no controls when the negotiated feature is absent.
+
+
+Run-input clients must validate text before submission using both OpenAPI's
+nonblank `pattern` and `x-aiden-max-utf8-bytes: 16384`. The latter is a required
+Aiden validation extension: encode the text as UTF-8 and count bytes, not Unicode
+characters or UTF-16 code units. For example, 4,096 `😀` characters fit exactly;
+4,097 do not. Whitespace-only text (including nonbreaking spaces) is invalid.

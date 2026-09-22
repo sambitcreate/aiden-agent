@@ -26,6 +26,7 @@ import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
   AidenOperationContractError,
+  AidenOperationUnknownOutcomeError,
 } from "./aiden-remote-operation-contract.js";
 
 const MAX_STREAMS = 256;
@@ -1139,23 +1140,37 @@ export class AidenRemoteStreamService {
     if (key.toLowerCase() !== input.requestId) throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key must match requestId.", 400);
     if (!this.options.submitInput) throw new AidenRemoteServiceError("not_found", "Run input is unavailable.", 404);
     try {
-      // Retain only the authorization resource with the durable receipt. Stream
-      // event eviction must not erase the ability to authorize an exact retry.
-      const result = await this.executeIdempotent(
-        { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key: input.requestId },
-        input,
-        async () => {
-          const stream = this.requireStream(deviceId, streamId);
-          const receipt = await authorize(stream.chatId, async (): Promise<ChatRunInputReceipt> => {
-            if (terminal(stream.state) || stream.cancelRequested) {
-              return { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: stream.cancelRequested ? "cancelled" : "not-active" };
+      const scope = { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key: input.requestId };
+      this.prune();
+      const stream = this.streams.get(streamId);
+      if (!stream || stream.deviceId !== deviceId) {
+        // Evicted event journals may still have a durable receipt. Inspecting
+        // it must never reserve a fresh key or poison a pre-admission failure.
+        const replay = this.idempotency.replayExisting<{ chatId: string; receipt: ChatRunInputReceipt }>(scope, input);
+        if (!replay) throw new AidenRemoteServiceError("not_found", "This Aiden stream is unavailable.", 404);
+        const result = await replay;
+        return await authorize(result.chatId, async () => result.receipt);
+      }
+      // Keep current authorization around ledger execution and the host effect.
+      // A policy denial before the callback runs must leave no ledger entry.
+      return await authorize(stream.chatId, async () => {
+        const result = await this.executeIdempotent(scope, input, async () => {
+          let receipt: ChatRunInputReceipt;
+          if (terminal(stream.state) || stream.cancelRequested) {
+            receipt = { requestId: input.requestId, streamId, mode: input.mode, accepted: false, reason: stream.cancelRequested ? "cancelled" : "not-active" };
+          } else {
+            try {
+              receipt = await this.options.submitInput!(streamId, stream.owner.owner.documentId, input);
+            } catch {
+              // Once the host callback starts, an exception can follow a
+              // committed transcript write. Never expire this into a new effect.
+              throw new AidenOperationUnknownOutcomeError();
             }
-            return this.options.submitInput!(streamId, stream.owner.owner.documentId, input);
-          });
+          }
           return { chatId: stream.chatId, receipt };
-        },
-      );
-      return await authorize(result.chatId, async () => result.receipt);
+        });
+        return result.receipt;
+      });
     } catch (error) { return this.mapIdempotencyError(error); }
   }
 
