@@ -298,6 +298,9 @@ export class ChatPullRequestStore {
     this.deletedChats.add(chatId);
     const existing = this.stores.get(chatId);
     if (existing) {
+      // Loads recover held files outside the mutation queue. Join any active
+      // recovery before draining writes, so it cannot republish after removal.
+      await existing.load();
       // Join DataStore's queue without publishing anything. Earlier writes
       // observe the deletion fence; even one already publishing finishes
       // before the file is removed.

@@ -7,6 +7,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { DataStore } from "./data-store.js";
 import { MAX_CHAT_PULL_REQUEST_LINKS } from "../../renderer/shared/chat-pull-requests.js";
 import { ChatPullRequestStore } from "./chat-pull-request-store.js";
 
@@ -340,5 +342,58 @@ test("deletion drains admitted writes and rejects every later write", async (t) 
   await rejected;
   await assert.rejects(store.link("chat-1", link(2)), /deleted/);
   await assert.rejects(store.clearCreateIntent("chat-1", "op"), /deleted/);
+  assert.deepEqual(await fs.readdir(directory), []);
+});
+
+test("deletion waits for a read that is recovering a held PR file", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(
+    path.join(directory, ".chat-1.json.recovery.held"),
+    JSON.stringify({
+      schemaVersion: 1,
+      chatId: "chat-1",
+      links: [link(12)],
+      pendingCreates: [],
+    }),
+  );
+  const prototype = DataStore.prototype as unknown as {
+    recoverHeldFiles(destination: string): Promise<void>;
+  };
+  const recover = prototype.recoverHeldFiles;
+  let release!: () => void;
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  t.mock.method(
+    prototype,
+    "recoverHeldFiles",
+    async function (this: typeof prototype, destination: string) {
+      entered();
+      await blocked;
+      return recover.call(this, destination);
+    },
+  );
+  const store = new ChatPullRequestStore(() => directory);
+  const reading = store.list("chat-1");
+  await started;
+  let deleted = false;
+  const deletion = store.deleteChat("chat-1").then(() => {
+    deleted = true;
+  });
+  // The broken barrier completes here while recovery is held. The fixed
+  // deletion stays pending until the recovery is released.
+  await Promise.race([deletion, delay(100)]);
+  const completedBeforeRecovery = deleted;
+  release();
+  await Promise.all([reading, deletion]);
+  assert.equal(completedBeforeRecovery, false);
+  await assert.rejects(fs.stat(path.join(directory, "chat-1.json")), {
+    code: "ENOENT",
+  });
   assert.deepEqual(await fs.readdir(directory), []);
 });

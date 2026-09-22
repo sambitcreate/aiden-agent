@@ -31,3 +31,5 @@ Focused regression suite: `npm run test:chat-pull-requests`. Build and TypeScrip
 ## Automated review follow-up
 
 Deletion revokes admission before draining queued PR-store writes and removing the file; late provider responses cannot recreate state. Every completed create attempt notifies the renderer after its durable outcome, including unknown and ambiguous outcomes. Delayed link/create deletion and pending-notification regressions pass. Focused PR tests: 91; service-boundary tests: 103; TypeScript and Electron build pass. Both bounded Sol follow-up reviews are clean. Hosted verify and Electron E2E passed on 9d8928a4; the follow-up commit requires its own hosted checks.
+
+Recovery-read deletion follow-up: deletion also awaits an existing DataStore load before draining writes, because held-file recovery runs outside the mutation queue. A regression blocks actual recovery across deletion and verifies no PR file survives. Focused PR tests92, service-boundary tests103, TypeScript/Electron build and both bounded Sol reviews pass.
