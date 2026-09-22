@@ -58,3 +58,13 @@ test("a skill tool created before global disable refuses to return its instructi
   enabled = false;
   await assert.rejects(tool.execute("second", {}), /Skills are disabled/u);
 });
+
+test("direct model execution cannot load a user-only skill body", async () => {
+  const tool = makeSkillTool({
+    stableId: "global:user-only", name: "User only", description: "Explicit only",
+    instructions: "SECRET_BODY", source: "global", enabled: true, available: true,
+    invocationId: `sk1_${"a".repeat(43)}`, toolKey: "skill_user_only", modelInvocable: false,
+  });
+  assert.doesNotMatch(tool.description, /SECRET_BODY/u);
+  await assert.rejects(tool.execute("forged", {}), /does not allow model invocation/u);
+});

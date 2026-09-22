@@ -318,7 +318,7 @@ const featureBentos: FeatureBento[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Create reusable instructions, then type $ to attach one. Turn all skills off anytime in Settings → Skills.",
+    description: "Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     imageUrl: FEATURE_ILLUSTRATIONS.skills,
     size: "wide",

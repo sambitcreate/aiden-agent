@@ -852,3 +852,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 skill invocation policy validation
+
+- Isolated worktree Git metadata lives outside the writable sandbox; branch creation needed the existing git-switch escalation. tsx CLI also needs local socket permission.
+- Native validation needs explicit local SDK paths: `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`, Android Studio JBR, and `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. System xcode-select points at CommandLineTools; do not change it globally. Coordinate the physical iPhone slot with the upgrade coordinator.

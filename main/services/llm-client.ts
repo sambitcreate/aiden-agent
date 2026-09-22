@@ -1,3 +1,4 @@
+import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
@@ -14,7 +15,6 @@ import { createVccRecallTool } from "./pi-vcc/recall.js";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
-  type AgentHarnessResources,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -341,24 +341,6 @@ function uniqueResponseImages(
   return images;
 }
 
-function piResourcesForSkillSnapshot(
-  snapshot: SkillRegistrySnapshot | undefined,
-): AgentHarnessResources {
-  if (!snapshot) return {};
-  return {
-    // Pi resources promise a truthful filePath. Configured database skills
-    // keep their existing leased invocation path until Pi supports in-memory
-    // resource locations.
-    skills: snapshot.available
-      .filter((skill) => Boolean(skill.path))
-      .map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        content: skill.instructions,
-        filePath: skill.path!,
-      })),
-  };
-}
 
 export interface GenerationExecutionOptions {
   /** Main-owned Telegram queue provenance, resolved freshly at generation. */

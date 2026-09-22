@@ -514,6 +514,9 @@ export interface Skill {
 
 /** An Agent Skill discovered on disk from a skill folder (read-only). */
 export interface DiscoveredSkill {
+  /** Omitted legacy metadata permits both invocation surfaces. */
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
   id: string;
   name: string;
   description: string;
