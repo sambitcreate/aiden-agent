@@ -852,3 +852,16 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — chat state wireframe review
+- Browser automation blocked the local Downloads `file://` preview (request-header error, then explicit URL-policy block). Do not retry through another browser surface; validate syntax and leave visual review to the user.
+- OpenCode lists `opencode-go/deepseek-v4-flash` but no exact `v4.1-flash` model; label the available V4 Flash substitution.
+- OpenCode Workers launched two isolated worktrees but failed on unsupported `opencode run --dir` in v2.0.3. Direct CLI review from each worktree worked; use the absolute NVM v2 binary because a worktree shell resolves Homebrew OpenCode v1.18.5 first.
+
+## 2026-09-22 — chronological chat motion
+- Fresh Aiden worktrees need `npm ci` before `npm run type-check`; the dependency install completed locally.
+- Android Gradle needed both Android Studio's JBR as `JAVA_HOME` and `~/Library/Android/sdk` as `ANDROID_HOME` in this shell.
+- `npm run build` reached the Bot inbox native helper, where plain `/usr/bin/xcrun clang` selected the malformed CLT macOS 27 SDK (`arm64e.x1`). Setting `SDKROOT` alone did not change that selection; validate Vite/Electron separately and use hosted CI for the full build gate.
+- The full `npm run test` pretest initially stopped at an iOS source-contract regex that assumed the old activity-first branch. Update this contract when the chronological branch changes, while preserving whole-reply Copy actions.
+- Local Electron Playwright smoke tests closed before the first window on this host, before any chat assertion ran; use hosted CI for that gate.
+- Re-running the focused iOS simulator suite on the already booted iPad became unreliable after a parallel clone launch; Xcode reported `Application failed preflight checks: Busy`. The first focused run passed before the final test refinement; use a clean simulator or hosted iOS CI for the final gate.

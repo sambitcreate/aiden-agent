@@ -251,6 +251,41 @@ test("chat projection is path-free and excludes private Pi protocol and reasonin
   assert.match(projection.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
 });
 
+test("chat history carries bounded displayable parent reasoning with valid spans", () => {
+  const source = chat({ messages: [{
+    id: "assistant-1", role: "assistant", content: "Done.", createdAt: 2_000,
+    reasoning: "First\n\nSecond",
+    timeline: {
+      version: 3, generationId: "stream-1", status: "completed", startedAt: 1_000,
+      finishedAt: 2_000, steps: [
+        { id: "think-1", order: 0, kind: "thinking", startedAt: 1_000, updatedAt: 1_100,
+          finishedAt: 1_100, contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+        { id: "tool-1", order: 1, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+          label: "Read file", status: "completed", startedAt: 1_100, updatedAt: 1_200,
+          finishedAt: 1_200, contentOffset: 0 },
+        { id: "think-2", order: 2, kind: "thinking", startedAt: 1_200, updatedAt: 1_300,
+          finishedAt: 1_300, contentOffset: 0, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+      ],
+    },
+  }] });
+  const projection = projectAidenRemoteChat(source);
+  assert.equal(projection.messages[0]?.reasoning, "First\n\nSecond");
+  assert.equal(projection.messages[0]?.timeline?.steps[2]?.kind === "thinking" &&
+    projection.messages[0]?.timeline?.steps[2]?.reasoningEndOffset, 13);
+});
+
+test("optional history reasoning yields to the whole response budget", () => {
+  const source = chat({ messages: Array.from({ length: 12 }, (_, index) => ({
+    id: `assistant-${index}`, role: "assistant" as const, content: "Done.",
+    reasoning: "r".repeat(90_000), createdAt: 2_000 + index,
+  })) });
+  const projection = projectAidenRemoteChat(source);
+  assert.ok(projection.messages.some((message) => message.reasoning));
+  assert.ok(projection.messages.some((message) => !message.reasoning));
+  assert.ok(Buffer.byteLength(JSON.stringify(projection), "utf8") <= 1_048_576);
+  assert.equal(projection.messages.length, source.messages.length);
+});
+
 test("chat projection preserves visible parent message text exactly regardless of appearance", () => {
   const exactTexts = [
     "Unicode stays exact: Zażółć gęślą jaźń — 你好 — 👩🏽‍💻",

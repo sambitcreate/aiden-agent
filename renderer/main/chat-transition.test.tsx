@@ -274,15 +274,16 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
   const effect = between(
     scrollArea,
-    'if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");',
-    "resizeObserver.observe(element);",
+    "React.useLayoutEffect(() => {\n    const element = viewport.current;",
+    "const resolvedToolbar",
   );
 
-  const syncIndex = effect.indexOf("\n    update();");
+  const syncIndex = effect.indexOf('if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");');
   const frameIndex = effect.indexOf("requestAnimationFrame(update)");
-  assert.notEqual(syncIndex, -1, "ScrollArea must run update() synchronously in the layout effect");
+  assert.notEqual(syncIndex, -1, "ScrollArea must settle synchronously in the layout effect");
   assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
+  assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
 });
 
 test("scroll area still pads the viewport for its overlaid chrome", () => {

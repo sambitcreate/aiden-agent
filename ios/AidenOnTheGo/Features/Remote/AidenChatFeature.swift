@@ -3433,6 +3433,18 @@ private struct AidenMessageView: View {
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
+            if message.role == .assistant,
+               presentationStyle != .botMessages,
+               let rows = AidenChronologicalProjection.rows(
+                   text: message.text,
+                   reasoning: message.reasoning ?? "",
+                   timeline: message.timeline
+               ) {
+                AidenChronologicalTranscript(rows: rows, active: false)
+            } else {
+            if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
+                AidenReasoningCard(text: reasoning, label: "Thought", active: false)
+            }
             if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
@@ -3443,6 +3455,7 @@ private struct AidenMessageView: View {
             }
             if !visibleText.isEmpty {
                 messageText
+            }
             }
             if let attachments = message.attachments, !attachments.isEmpty {
                 let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
@@ -4589,6 +4602,15 @@ private struct AidenLiveResponseView: View {
         return AidenAgentActivityPresentation.visualizingLabel(model.activityTimeline)
     }
 
+    private var chronologicalRows: [AidenChronologicalRow]? {
+        guard presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: model.liveText,
+            reasoning: model.reasoning,
+            timeline: model.activityTimeline
+        )
+    }
+
     private var activity: (label: String, orb: OrbState) {
         if model.streamState == .waitingForApproval {
             return ("Waiting for approval", .listening)
@@ -4610,7 +4632,7 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
+            if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
                     Text(activity.label)
@@ -4621,7 +4643,7 @@ private struct AidenLiveResponseView: View {
                 .transition(.opacity)
             }
 
-            if !model.reasoning.isEmpty {
+            if chronologicalRows == nil && !model.reasoning.isEmpty {
                 AidenReasoningCard(
                     text: model.reasoning,
                     label: AidenAgentActivityPresentation.reasoningLabel(
@@ -4633,7 +4655,7 @@ private struct AidenLiveResponseView: View {
                     .transition(.opacity)
             }
 
-            if let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
+            if chronologicalRows == nil, let timeline = model.activityTimeline, !visibleActivitySteps.isEmpty {
                 AidenActivityFeed(
                     timeline: timeline,
                     active: model.isStreaming,
@@ -4642,11 +4664,34 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if !model.tools.isEmpty {
+            } else if chronologicalRows == nil && !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
             }
 
-            if let visualizingLabel {
+            if let chronologicalRows {
+                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isStreaming)
+                    .contextMenu {
+                        if !visibleText.isEmpty {
+                            Button {
+                                UIPasteboard.general.string = visibleText
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+                    .accessibilityActions {
+                        if !visibleText.isEmpty {
+                            Button("Copy response") {
+                                UIPasteboard.general.string = visibleText
+                            }
+                        }
+                    }
+            }
+
+            if let visualizingLabel,
+               !(chronologicalRows?.contains(where: { row in
+                   row.kind == .tool && row.steps.contains(where: { $0.toolName == "render_artifact" && $0.isActive })
+               }) ?? false) {
                 AidenActivityPhaseCard(label: visualizingLabel)
                     .transition(.opacity)
             }
@@ -4665,7 +4710,7 @@ private struct AidenLiveResponseView: View {
                 .id(approval.id)
             }
 
-            if !visibleText.isEmpty {
+            if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
@@ -4873,6 +4918,42 @@ private extension View {
     }
 }
 
+private struct AidenChronologicalTranscript: View {
+    @Environment(\.aidenPalette) private var palette
+    let rows: [AidenChronologicalRow]
+    let active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(rows) { row in
+                switch row.kind {
+                case .text:
+                    AidenMessageTextView(role: .assistant, content: row.text)
+                        .foregroundStyle(palette.foreground)
+                case .reasoning:
+                    if let step = row.steps.first {
+                        let label = step.finishedAt == nil ? "Thinking" : "Thought \(AidenAgentActivityPresentation.duration(step.durationMs))"
+                        if row.text.isEmpty {
+                            AidenActivityPhaseCard(label: label, active: active && step.finishedAt == nil)
+                        } else {
+                            AidenReasoningCard(text: row.text, label: label, active: active && step.finishedAt == nil)
+                        }
+                    }
+                case .tool:
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(row.steps) { step in
+                            AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -4938,12 +5019,13 @@ private struct AidenReasoningCard: View {
 private struct AidenActivityPhaseCard: View {
     @Environment(\.aidenPalette) private var palette
     let label: String
+    var active: Bool = true
 
     var body: some View {
         Text(label)
             .font(.caption.weight(.semibold))
             .foregroundStyle(palette.secondary)
-            .aidenActivityShimmer(true)
+            .aidenActivityShimmer(active)
             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             .padding(.horizontal, 12)
             .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))

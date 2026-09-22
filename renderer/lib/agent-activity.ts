@@ -24,6 +24,17 @@ export interface AgentActivity {
   orbState: OrbState;
 }
 
+/** Hold transient phase changes briefly without delaying safety-critical controls. */
+export function activityPresentationDelay(
+  current: AgentActivity | null,
+  next: AgentActivity | null,
+  reduceMotion = false,
+): number {
+  if (reduceMotion || !current || !next || next.phase === "stopping" || next.phase === "waiting" ||
+    next.phase === "preparing" || current.phase === next.phase) return 0;
+  return 120;
+}
+
 interface AgentActivityVisibility {
   reasoningVisible: boolean;
   visualizingVisible: boolean;

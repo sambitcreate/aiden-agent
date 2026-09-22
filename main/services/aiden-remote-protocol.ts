@@ -1976,6 +1976,9 @@ export function parseAidenRemoteChatProjection(
         200_000,
         true,
       );
+      if (hasOwn(entry, "reasoning") && entry.role !== "assistant") {
+        throw new Error(`${label} message ${index} reasoning is assistant-only.`);
+      }
       const message: AidenRemoteChatProjection["messages"][number] = {
         id: boundedText(entry.id, `${label} message ${index} id`, 128),
         role: enumMember(
@@ -1984,6 +1987,9 @@ export function parseAidenRemoteChatProjection(
           `${label} message ${index} role`,
         ),
         text,
+        ...(hasOwn(entry, "reasoning") && entry.role === "assistant"
+          ? { reasoning: boundedText(entry.reasoning, `${label} message ${index} reasoning`, 100_000) }
+          : {}),
         createdAt: dateTimeValue(entry.createdAt, `${label} message ${index} createdAt`),
         ...(hasOwn(entry, "attachments")
           ? {
@@ -2013,7 +2019,7 @@ export function parseAidenRemoteChatProjection(
       if (hasOwn(entry, "timeline")) {
         // Generation timeline offsets are persisted as JavaScript UTF-16 code
         // units, while the public text ceiling remains Unicode-scalar based.
-        const timeline = parseGenerationTimeline(entry.timeline, text.length);
+        const timeline = parseGenerationTimeline(entry.timeline, text.length, message.reasoning?.length);
         if (!timeline) throw new Error(`${label} message ${index} timeline is invalid.`);
         message.timeline = timeline;
       }

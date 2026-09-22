@@ -10,6 +10,7 @@ import {
   PI_AUTH_COMPATIBILITY_TOKEN,
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
+  terminalAssistantActivityAnchors,
   resolveGenerationThinkingLevel,
   reconcileTerminalAssistantProjection,
   resolveRuntimeApiKey,
@@ -19,6 +20,7 @@ import {
   settleGenerationCleanup,
   shouldExposeReasoning,
   terminalAssistantReasoning,
+  terminalAssistantThinkingSegments,
   terminalAssistantReasoningFallback,
   terminalAssistantText,
   terminalAssistantTextFallback,
@@ -29,6 +31,36 @@ import {
   waitForAbortableDelay,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
+
+test("canonical thinking spans keep separators and skip non-assistant boundaries", () => {
+  const message = { role: "assistant", content: [
+    { type: "thinking", thinking: "" },
+    { type: "thinking", thinking: "first" },
+    { type: "toolCall", name: "read_file" },
+    { type: "thinking", thinking: "second" },
+  ] };
+  assert.equal(terminalAssistantReasoning(message), "\n\nfirst\n\nsecond");
+  assert.deepEqual(terminalAssistantThinkingSegments(message), [
+    { start: 2, end: 7 }, { start: 9, end: 15 },
+  ]);
+  assert.equal(terminalAssistantThinkingSegments({ role: "toolResult", content: [] }), null);
+  assert.deepEqual(terminalAssistantThinkingSegments({ role: "assistant", content: [
+    { type: "thinking", thinking: "" },
+    { type: "toolCall", name: "read_file" },
+    { type: "thinking", thinking: "visible" },
+  ] }), [{ start: 0, end: 0 }, { start: 2, end: 9 }]);
+});
+
+test("canonical Pi content anchors activity between rewritten text blocks", () => {
+  const anchors = terminalAssistantActivityAnchors({ role: "assistant", content: [
+    { type: "text", text: "a" },
+    { type: "toolCall", id: "call-a", name: "read_file" },
+    { type: "text", text: "XYZ" },
+    { type: "thinking", thinking: "later" },
+  ] });
+  assert.deepEqual(anchors?.thinkingOffsets, [4]);
+  assert.equal(anchors?.toolOffsets.get("call-a"), 1);
+});
 
 test("uses only the connection-bound runtime model as the image gate", () => {
   assert.equal(runtimeSupportsImages({ input: ["text"] }), false);

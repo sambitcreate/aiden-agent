@@ -7,6 +7,44 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
+        let regular = """
+        {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}
+        """
+        let decoder = JSONDecoder.aidenRemote()
+        XCTAssertEqual(try decoder.decodeAidenRemote(AidenChat.self, from: Data(regular.utf8)).messages[0].reasoning, "Visible")
+        let bot = regular.replacingOccurrences(of: "\"workspaceId\"", with: "\"botId\":\"bot-1\",\"workspaceId\"")
+        XCTAssertThrowsError(try decoder.decodeAidenRemote(AidenChat.self, from: Data(bot.utf8)))
+    }
+
+    func testChronologicalReasoningSurvivesRemoteDecodeAndKeepsToolOrder() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let message = try decoder.decode(AidenChatMessage.self, from: Data(
+            #"{"id":"message-1","role":"assistant","text":"Before.After.","reasoning":"First\n\nSecond","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1200,"finishedAt":1200,"contentOffset":0,"reasoningStartOffset":0,"reasoningEndOffset":5},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1200,"updatedAt":1400,"finishedAt":1400,"contentOffset":0},{"id":"think-2","order":2,"kind":"thinking","startedAt":1400,"updatedAt":1600,"finishedAt":1600,"contentOffset":7,"reasoningStartOffset":7,"reasoningEndOffset":13}]}}"#.utf8
+        ))
+        XCTAssertTrue(message.isWireSafe)
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: message.text, reasoning: message.reasoning ?? "", timeline: message.timeline)?
+                .map { ($0.kind, $0.text) }
+                .map { "\($0.0):\($0.1)" },
+            ["reasoning:First", "tool:", "text:Before.", "reasoning:Second", "text:After."]
+        )
+        XCTAssertNil(AidenChronologicalProjection.rows(text: message.text, reasoning: "First", timeline: message.timeline))
+        let noReasoningTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: noReasoningTimeline)?
+                .map(\.kind),
+            [.text, .reasoning, .tool, .text]
+        )
+        let legacyTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":2,"generationId":"stream-old","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000}]}"#.utf8
+        ))
+        XCTAssertNil(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: legacyTimeline))
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
