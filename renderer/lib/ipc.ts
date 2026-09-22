@@ -766,8 +766,10 @@ export const gitApi = {
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
 };
 
 // ── Chat ↔ pull requests ──────────────────────────────────────────────
@@ -785,14 +787,14 @@ export const pullRequestsApi = {
   link: (chatId: string, input: { url: string }) =>
     invoke<ChatPullRequestLinkResult>("pullRequests:link", chatId, input),
   linkRef: (chatId: string, ref: ChatPullRequestRef, source?: "manual" | "branch-discovered") =>
-    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, ref, source),
+    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, { ...ref, source }),
   unlink: (chatId: string, ref: ChatPullRequestRef) =>
     invoke<{ ok: boolean }>("pullRequests:unlink", chatId, ref),
   refresh: (chatId: string, ref?: ChatPullRequestRef) =>
     invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
   detectAfterPush: (
     chatId: string,
-    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string },
+    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
   ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
   create: (
     chatId: string,
@@ -803,9 +805,12 @@ export const pullRequestsApi = {
       baseBranch: string;
       headBranch: string;
       expectedHeadSha?: string;
+      repository?: string;
       draft?: boolean;
     },
   ) => invoke<ChatPullRequestCreateResult>("pullRequests:create", chatId, input),
+  dismissPending: (chatId: string, operationId: string) =>
+    invoke<void>("pullRequests:dismissPending", chatId, operationId),
   pending: (chatId: string) =>
     invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
   adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
@@ -1125,6 +1130,11 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };

@@ -23,6 +23,8 @@ if (process.platform !== "darwin") {
 
 await mkdir(path.dirname(output), { recursive: true });
 const args = [
+  "--sdk",
+  "macosx",
   "clang",
   "-std=c17",
   "-Wall",

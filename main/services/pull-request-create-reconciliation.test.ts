@@ -1,5 +1,5 @@
 // Unknown-outcome reconciliation for `gh pr create`: adopt exactly one match,
-// allow a safe retry on none, never guess on multiple, stay pending when the
+// report absence without proving non-creation, never guess on multiple, stay pending when the
 // lookup itself is unavailable.
 
 import assert from "node:assert/strict";
@@ -10,7 +10,10 @@ import {
   intentMatchesRef,
   type ReconciliationGitHub,
 } from "./pull-request-create-reconciliation.js";
-import type { GitHubPullRequestListStatus, GitHubPullRequestSummary } from "./types.js";
+import type {
+  GitHubPullRequestListStatus,
+  GitHubPullRequestSummary,
+} from "./types.js";
 
 const INTENT: ChatPullRequestCreateIntent = {
   operationId: "op-1",
@@ -23,7 +26,10 @@ const INTENT: ChatPullRequestCreateIntent = {
   requestedAt: 1_700,
 };
 
-function summary(number: number, overrides: Partial<GitHubPullRequestSummary> = {}) {
+function summary(
+  number: number,
+  overrides: Partial<GitHubPullRequestSummary> = {},
+) {
   return {
     number,
     title: `PR ${number}`,
@@ -47,7 +53,7 @@ function github(list: GitHubPullRequestListStatus): ReconciliationGitHub {
   };
 }
 
-test("zero matching PRs means the create never landed — safe to retry", async () => {
+test("zero matching PRs reports only that the lookup currently has no candidates", async () => {
   const outcome = await reconcilePullRequestCreate({
     github: github({ availability: "ready", pullRequests: [] }),
     cwd: "/work",
@@ -68,7 +74,10 @@ test("exactly one matching PR is adopted", async () => {
 
 test("multiple matching PRs are returned for the user instead of guessed", async () => {
   const outcome = await reconcilePullRequestCreate({
-    github: github({ availability: "ready", pullRequests: [summary(1), summary(2)] }),
+    github: github({
+      availability: "ready",
+      pullRequests: [summary(1), summary(2)],
+    }),
     cwd: "/work",
     intent: INTENT,
   });
@@ -81,7 +90,7 @@ test("multiple matching PRs are returned for the user instead of guessed", async
   }
 });
 
-test("a matching branch but different head SHA is not adopted", async () => {
+test("a matching branch with an advanced head stays unresolved", async () => {
   const outcome = await reconcilePullRequestCreate({
     github: github({
       availability: "ready",
@@ -90,7 +99,7 @@ test("a matching branch but different head SHA is not adopted", async () => {
     cwd: "/work",
     intent: INTENT,
   });
-  assert.equal(outcome.kind, "none");
+  assert.equal(outcome.kind, "multiple");
 });
 
 test("a matching head branch targeting another base branch is not adopted", async () => {
@@ -160,7 +169,10 @@ test("PRs on the same branch name in another repository do not match", async () 
 
 test("an unavailable GitHub lookup keeps the intent pending", async () => {
   const outcome = await reconcilePullRequestCreate({
-    github: github({ availability: "unauthenticated", message: "gh auth login required" }),
+    github: github({
+      availability: "unauthenticated",
+      message: "gh auth login required",
+    }),
     cwd: "/work",
     intent: INTENT,
   });
@@ -169,11 +181,48 @@ test("an unavailable GitHub lookup keeps the intent pending", async () => {
 
 test("intentMatchesRef compares host + repository only", () => {
   assert.equal(
-    intentMatchesRef(INTENT, { host: "github.com", repository: "owner/repo", number: 7 }),
+    intentMatchesRef(INTENT, {
+      host: "github.com",
+      repository: "owner/repo",
+      number: 7,
+    }),
     true,
   );
   assert.equal(
-    intentMatchesRef(INTENT, { host: "ghe.example.com", repository: "owner/repo", number: 7 }),
+    intentMatchesRef(INTENT, {
+      host: "ghe.example.com",
+      repository: "owner/repo",
+      number: 7,
+    }),
     false,
   );
+});
+
+test("malformed expectations stay unavailable without querying GitHub", async () => {
+  const outcome = await reconcilePullRequestCreate({
+    cwd: "/other-repo",
+    intent: { ...INTENT, expectedHeadSha: "invalid" },
+    github: {
+      ...github({ availability: "ready", pullRequests: [summary(1)] }),
+      findForBranch: async () => {
+        throw new Error("must not query");
+      },
+    },
+  });
+  assert.equal(outcome.kind, "unavailable");
+});
+
+test("reconciliation pins its lookup to the durable repository after workspace changes", async () => {
+  const outcome = await reconcilePullRequestCreate({
+    cwd: "/other-repo",
+    intent: INTENT,
+    github: {
+      ...github({ availability: "ready", pullRequests: [] }),
+      findForBranch: async (_cwd, _branch, _signal, repository) => {
+        assert.equal(repository, "github.com/owner/repo");
+        return { availability: "ready", pullRequests: [summary(1)] };
+      },
+    },
+  });
+  assert.equal(outcome.kind, "adopted");
 });

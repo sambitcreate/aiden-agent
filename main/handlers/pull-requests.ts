@@ -6,15 +6,22 @@ import { ipcMain } from "../platform.js";
 import {
   isSafeChatPullRequestChatId,
   normalizePullRequestRef,
+  parseExpectedHeadSha,
+  parsePullRequestRepository,
 } from "../../renderer/shared/chat-pull-requests.js";
 import { chatPullRequestService } from "../services/chat-pull-request-service-main.js";
 
 function asChatId(value: unknown): string {
-  if (!isSafeChatPullRequestChatId(value)) throw new Error("The chat identifier is invalid.");
+  if (!isSafeChatPullRequestChatId(value))
+    throw new Error("The chat identifier is invalid.");
   return value;
 }
 
-function asBoundedString(value: unknown, name: string, maxLength: number): string {
+function asBoundedString(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): string {
   if (typeof value !== "string") throw new Error(`${name} must be a string.`);
   const trimmed = value.replace(/\p{Cc}+/gu, " ").trim();
   if (!trimmed || trimmed.length > maxLength) {
@@ -58,7 +65,8 @@ function asCreateInput(value: unknown) {
     body: asOptionalBoundedString(input.body, "body", 64 * 1_024),
     baseBranch: asBoundedString(input.baseBranch, "baseBranch", 256),
     headBranch: asBoundedString(input.headBranch, "headBranch", 256),
-    expectedHeadSha: asOptionalBoundedString(input.expectedHeadSha, "expectedHeadSha", 64),
+    expectedHeadSha: parseExpectedHeadSha(input.expectedHeadSha),
+    repository: parsePullRequestRepository(input.repository),
     draft: input.draft === true,
   };
 }
@@ -68,7 +76,8 @@ function asDetectInput(value: unknown) {
   return {
     workspaceId: asBoundedString(input.workspaceId, "workspaceId", 128),
     headBranch: asBoundedString(input.headBranch, "headBranch", 256),
-    expectedHeadSha: asOptionalBoundedString(input.expectedHeadSha, "expectedHeadSha", 64),
+    expectedHeadSha: parseExpectedHeadSha(input.expectedHeadSha),
+    repository: parsePullRequestRepository(input.repository),
   };
 }
 
@@ -81,43 +90,70 @@ export function registerPullRequestHandlers(): void {
     chatPullRequestService.current(asChatId(chatId)),
   );
 
-  ipcMain.handle("pullRequests:candidates", async (_event, chatId: unknown, workspaceId: unknown) =>
-    chatPullRequestService.candidates(
-      asChatId(chatId),
-      asOptionalBoundedString(workspaceId, "workspaceId", 128),
-    ),
+  ipcMain.handle(
+    "pullRequests:candidates",
+    async (_event, chatId: unknown, workspaceId: unknown) =>
+      chatPullRequestService.candidates(
+        asChatId(chatId),
+        asOptionalBoundedString(workspaceId, "workspaceId", 128),
+      ),
   );
 
-  ipcMain.handle("pullRequests:link", async (_event, chatId: unknown, input: unknown) =>
-    chatPullRequestService.link(asChatId(chatId), asLinkInput(input)),
+  ipcMain.handle(
+    "pullRequests:link",
+    async (_event, chatId: unknown, input: unknown) =>
+      chatPullRequestService.link(asChatId(chatId), asLinkInput(input)),
   );
 
-  ipcMain.handle("pullRequests:linkRef", async (_event, chatId: unknown, input: unknown) => {
-    const record = asRecord(input, "input");
-    return chatPullRequestService.linkExisting(
-      asChatId(chatId),
-      asPullRequestRef(record),
-      record.source === "branch-discovered" ? "branch-discovered" : "manual",
-    );
-  });
-
-  ipcMain.handle("pullRequests:unlink", async (_event, chatId: unknown, ref: unknown) =>
-    chatPullRequestService.unlink(asChatId(chatId), asPullRequestRef(ref)),
+  ipcMain.handle(
+    "pullRequests:linkRef",
+    async (_event, chatId: unknown, input: unknown) => {
+      const record = asRecord(input, "input");
+      return chatPullRequestService.linkExisting(
+        asChatId(chatId),
+        asPullRequestRef(record),
+        record.source === "branch-discovered" ? "branch-discovered" : "manual",
+      );
+    },
   );
 
-  ipcMain.handle("pullRequests:refresh", async (_event, chatId: unknown, ref: unknown) =>
-    chatPullRequestService.refresh(
-      asChatId(chatId),
-      ref === undefined || ref === null ? undefined : asPullRequestRef(ref),
-    ),
+  ipcMain.handle(
+    "pullRequests:unlink",
+    async (_event, chatId: unknown, ref: unknown) =>
+      chatPullRequestService.unlink(asChatId(chatId), asPullRequestRef(ref)),
   );
 
-  ipcMain.handle("pullRequests:detectAfterPush", async (_event, chatId: unknown, input: unknown) =>
-    chatPullRequestService.detectAfterPush(asChatId(chatId), asDetectInput(input)),
+  ipcMain.handle(
+    "pullRequests:refresh",
+    async (_event, chatId: unknown, ref: unknown) =>
+      chatPullRequestService.refresh(
+        asChatId(chatId),
+        ref === undefined || ref === null ? undefined : asPullRequestRef(ref),
+      ),
   );
 
-  ipcMain.handle("pullRequests:create", async (_event, chatId: unknown, input: unknown) =>
-    chatPullRequestService.create(asChatId(chatId), asCreateInput(input)),
+  ipcMain.handle(
+    "pullRequests:detectAfterPush",
+    async (_event, chatId: unknown, input: unknown) =>
+      chatPullRequestService.detectAfterPush(
+        asChatId(chatId),
+        asDetectInput(input),
+      ),
+  );
+
+  ipcMain.handle(
+    "pullRequests:create",
+    async (_event, chatId: unknown, input: unknown) =>
+      chatPullRequestService.create(asChatId(chatId), asCreateInput(input)),
+  );
+
+  ipcMain.handle(
+    "pullRequests:dismissPending",
+    async (_event, chatId: unknown, operationId: unknown) =>
+      chatPullRequestService.dismissPending(
+        asChatId(chatId),
+        asBoundedString(operationId, "operationId", 64),
+      ),
   );
 
   ipcMain.handle("pullRequests:pending", async (_event, chatId: unknown) =>

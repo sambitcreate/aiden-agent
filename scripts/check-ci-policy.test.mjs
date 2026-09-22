@@ -32,6 +32,10 @@ test("Android CI only runs for Android or CI workflow changes", async () => {
   assert.match(workflow, /^ {4}needs: changes$/mu);
   assert.match(workflow, /^ {4}if: \$\{\{ needs\.changes\.outputs\.android == 'true' \}\}$/mu);
   assert.match(workflow, /npm run test:model-catalog/u);
+  assert.match(
+    workflow,
+    /^ {2}e2e:\n {4}name: Deterministic Electron E2E\n {4}runs-on: macos-26\n {4}timeout-minutes: 45$/mu,
+  );
 
   const sdkSetup = workflowStep(workflow, "Set up Android SDK tools");
   assert.match(sdkSetup, /^ {10}packages: platform-tools$/mu);

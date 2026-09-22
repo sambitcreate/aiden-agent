@@ -12,11 +12,16 @@ import {
   normalizeGitHubHost,
   normalizeGitHubRepositoryIdentity,
   parseGitHubPullRequestUrl,
+  parseExpectedHeadSha,
+  pullRequestRepositoryFromPushEndpoint,
+  parsePullRequestRepository,
   pullRequestRefKey,
 } from "./chat-pull-requests";
 
 test("parseGitHubPullRequestUrl resolves canonical host/repository/number", () => {
-  const parsed = parseGitHubPullRequestUrl("https://github.com/Owner/Repo/pull/123");
+  const parsed = parseGitHubPullRequestUrl(
+    "https://github.com/Owner/Repo/pull/123",
+  );
   assert.deepEqual(parsed, {
     host: "github.com",
     repository: "owner/repo",
@@ -25,7 +30,9 @@ test("parseGitHubPullRequestUrl resolves canonical host/repository/number", () =
 });
 
 test("parseGitHubPullRequestUrl accepts GitHub Enterprise hosts", () => {
-  const parsed = parseGitHubPullRequestUrl("https://ghe.example.com/Team/Service/pull/9");
+  const parsed = parseGitHubPullRequestUrl(
+    "https://ghe.example.com/Team/Service/pull/9",
+  );
   assert.deepEqual(parsed, {
     host: "ghe.example.com",
     repository: "team/service",
@@ -34,11 +41,14 @@ test("parseGitHubPullRequestUrl accepts GitHub Enterprise hosts", () => {
 });
 
 test("parseGitHubPullRequestUrl tolerates the /pulls/ listing path shape", () => {
-  assert.deepEqual(parseGitHubPullRequestUrl("https://github.com/o/r/pulls/7"), {
-    host: "github.com",
-    repository: "o/r",
-    number: 7,
-  });
+  assert.deepEqual(
+    parseGitHubPullRequestUrl("https://github.com/o/r/pulls/7"),
+    {
+      host: "github.com",
+      repository: "o/r",
+      number: 7,
+    },
+  );
 });
 
 test("parseGitHubPullRequestUrl rejects non-pull-request shapes", () => {
@@ -60,7 +70,10 @@ test("parseGitHubPullRequestUrl rejects non-pull-request shapes", () => {
 });
 
 test("normalizeGitHubRepositoryIdentity lowercases and drops .git", () => {
-  assert.equal(normalizeGitHubRepositoryIdentity("Owner/Repo.GIT"), "owner/repo");
+  assert.equal(
+    normalizeGitHubRepositoryIdentity("Owner/Repo.GIT"),
+    "owner/repo",
+  );
   assert.equal(normalizeGitHubRepositoryIdentity("owner/repo"), "owner/repo");
   assert.equal(normalizeGitHubRepositoryIdentity("a/b/c"), undefined);
   assert.equal(normalizeGitHubRepositoryIdentity("no-slash"), undefined);
@@ -77,12 +90,19 @@ test("normalizeGitHubHost lowercases and bounds hostnames", () => {
 test("canonicalGitHubPullRequestUrl round-trips a parsed ref", () => {
   const ref = parseGitHubPullRequestUrl("https://github.com/owner/repo/pull/5");
   assert.ok(ref);
-  assert.equal(canonicalGitHubPullRequestUrl(ref), "https://github.com/owner/repo/pull/5");
+  assert.equal(
+    canonicalGitHubPullRequestUrl(ref),
+    "https://github.com/owner/repo/pull/5",
+  );
 });
 
 test("pullRequestRefKey identifies (host, repository, number)", () => {
   assert.equal(
-    pullRequestRefKey({ host: "github.com", repository: "owner/repo", number: 3 }),
+    pullRequestRefKey({
+      host: "github.com",
+      repository: "owner/repo",
+      number: 3,
+    }),
     "github.com/owner/repo#3",
   );
 });
@@ -149,7 +169,7 @@ test("normalizeChatPullRequestCreateIntent has no pull request number", () => {
   assert.ok(intent);
   assert.equal("number" in intent, false);
   assert.equal(intent.expectedHeadSha, "a".repeat(40));
-  // An unverifiable head SHA is dropped rather than persisted.
+  // An unverifiable expectation invalidates the intent rather than weakening it.
   const withoutSha = normalizeChatPullRequestCreateIntent({
     operationId: "op-2",
     host: "github.com",
@@ -160,8 +180,7 @@ test("normalizeChatPullRequestCreateIntent has no pull request number", () => {
     requestedAt: 10,
     expectedHeadSha: "not a sha!!",
   });
-  assert.ok(withoutSha);
-  assert.equal(withoutSha.expectedHeadSha, undefined);
+  assert.equal(withoutSha, undefined);
   assert.equal(
     normalizeChatPullRequestCreateIntent({
       operationId: "bad op id",
@@ -185,4 +204,62 @@ test("isSafeChatPullRequestChatId rejects path-shaped ids", () => {
 
 test("link cap constant is sane", () => {
   assert.ok(MAX_CHAT_PULL_REQUEST_LINKS >= 16);
+});
+
+test("supplied malformed commit expectations are rejected rather than omitted", () => {
+  assert.equal(parseExpectedHeadSha(undefined), undefined);
+  assert.equal(parseExpectedHeadSha("A".repeat(40)), "a".repeat(40));
+  for (const value of [
+    null,
+    "",
+    " ",
+    "not-a-sha",
+    "a".repeat(65),
+    "a".repeat(40) + "\n",
+    123,
+  ]) {
+    assert.throws(() => parseExpectedHeadSha(value), /expectedHeadSha/);
+  }
+});
+
+test("stored link URL is always derived from its canonical identity", () => {
+  const link = normalizeChatPullRequestLink({
+    host: "github.com",
+    repository: "o/r",
+    number: 1,
+    url: "https://evil.example/other/repo/pull/999",
+    source: "manual",
+    linkedAt: 1,
+  });
+  assert.equal(link?.url, "https://github.com/o/r/pull/1");
+});
+
+test("push endpoint identity preserves the selected host and repository without credentials", () => {
+  for (const endpoint of [
+    "git@github.com:Fork/Repo.git",
+    "ssh://git@github.com/Fork/Repo.git",
+    "https://github.com/Fork/Repo.git",
+  ]) {
+    assert.equal(
+      pullRequestRepositoryFromPushEndpoint(endpoint),
+      "github.com/fork/repo",
+    );
+  }
+  assert.equal(
+    pullRequestRepositoryFromPushEndpoint("git@ghe.example.com:Team/Repo.git"),
+    "ghe.example.com/team/repo",
+  );
+  for (const endpoint of [
+    "/tmp/repo",
+    "https://token@github.com/a/b",
+    "ssh://git@ghe.example:2222/a/b",
+    "https://github.com/a/b?token=secret",
+  ]) {
+    assert.equal(pullRequestRepositoryFromPushEndpoint(endpoint), undefined);
+  }
+  assert.equal(
+    parsePullRequestRepository("github.com/Fork/Repo"),
+    "github.com/fork/repo",
+  );
+  assert.throws(() => parsePullRequestRepository("github.com/a/b/extra"));
 });

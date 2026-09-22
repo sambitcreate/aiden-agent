@@ -16,6 +16,7 @@ import {
   normalizeChatPullRequestLink,
   normalizeChatPullRequestSnapshot,
   pullRequestRefKey,
+  normalizePullRequestRef,
   type ChatPullRequestCreateIntent,
   type ChatPullRequestLink,
   type ChatPullRequestRef,
@@ -30,6 +31,7 @@ export interface ChatPullRequestFile {
   schemaVersion: 1;
   chatId: string;
   links: ChatPullRequestLink[];
+  dismissed: ChatPullRequestRef[];
   /**
    * Durable intents for `gh pr create` calls whose remote outcome is unknown.
    * Recorded before the CLI runs so a crash cannot turn a created PR into a
@@ -39,7 +41,13 @@ export interface ChatPullRequestFile {
 }
 
 function emptyFile(chatId: string): ChatPullRequestFile {
-  return { schemaVersion: CHAT_PULL_REQUEST_SCHEMA_VERSION, chatId, links: [], pendingCreates: [] };
+  return {
+    schemaVersion: CHAT_PULL_REQUEST_SCHEMA_VERSION,
+    chatId,
+    links: [],
+    dismissed: [],
+    pendingCreates: [],
+  };
 }
 
 function normalizeFile(chatId: string) {
@@ -59,7 +67,9 @@ function normalizeFile(chatId: string) {
       if (deduped.size >= MAX_CHAT_PULL_REQUEST_LINKS) break;
       deduped.set(pullRequestRefKey(link), link);
     }
-    const rawPending = Array.isArray(record.pendingCreates) ? record.pendingCreates : [];
+    const rawPending = Array.isArray(record.pendingCreates)
+      ? record.pendingCreates
+      : [];
     const pending = new Map<string, ChatPullRequestCreateIntent>();
     for (const raw of rawPending) {
       const intent = normalizeChatPullRequestCreateIntent(raw);
@@ -71,6 +81,9 @@ function normalizeFile(chatId: string) {
       schemaVersion: CHAT_PULL_REQUEST_SCHEMA_VERSION,
       chatId,
       links: [...deduped.values()],
+      dismissed: (Array.isArray(record.dismissed) ? record.dismissed : [])
+        .map(normalizePullRequestRef)
+        .filter((ref): ref is ChatPullRequestRef => !!ref),
       pendingCreates: [...pending.values()],
     };
   };
@@ -85,7 +98,8 @@ function isSafeFile(chatId: string) {
       record.schemaVersion === CHAT_PULL_REQUEST_SCHEMA_VERSION &&
       record.chatId === chatId &&
       Array.isArray(record.links) &&
-      (record.pendingCreates === undefined || Array.isArray(record.pendingCreates))
+      (record.pendingCreates === undefined ||
+        Array.isArray(record.pendingCreates))
     );
   };
 }
@@ -100,7 +114,10 @@ export class ChatPullRequestStore {
     return file.links.map((link) => structuredClone(link));
   }
 
-  async get(chatId: string, ref: ChatPullRequestRef): Promise<ChatPullRequestLink | undefined> {
+  async get(
+    chatId: string,
+    ref: ChatPullRequestRef,
+  ): Promise<ChatPullRequestLink | undefined> {
     const key = pullRequestRefKey(ref);
     const file = await this.store(chatId).load();
     const found = file.links.find((link) => pullRequestRefKey(link) === key);
@@ -111,12 +128,33 @@ export class ChatPullRequestStore {
    * Insert or refresh a link. Deduplicates on (host, repository, number): a
    * re-link keeps the original `linkedAt` and merges the freshest snapshot.
    */
-  async link(chatId: string, link: ChatPullRequestLink): Promise<ChatPullRequestLink> {
+  async link(
+    chatId: string,
+    link: ChatPullRequestLink,
+    operationId?: string,
+  ): Promise<ChatPullRequestLink> {
     const normalized = normalizeChatPullRequestLink(link);
     if (!normalized) throw new Error("The pull request link is invalid.");
     return this.store(chatId).update((file) => {
       const key = pullRequestRefKey(normalized);
-      const existing = file.links.find((entry) => pullRequestRefKey(entry) === key);
+      if (operationId) {
+        if (
+          !file.pendingCreates.some(
+            (intent) => intent.operationId === operationId,
+          )
+        ) {
+          throw new Error("The pull request creation is no longer pending.");
+        }
+        file.pendingCreates = file.pendingCreates.filter(
+          (intent) => intent.operationId !== operationId,
+        );
+      }
+      file.dismissed = file.dismissed.filter(
+        (ref) => pullRequestRefKey(ref) !== key,
+      );
+      const existing = file.links.find(
+        (entry) => pullRequestRefKey(entry) === key,
+      );
       if (existing) {
         existing.url = normalized.url;
         existing.source = normalized.source;
@@ -124,7 +162,9 @@ export class ChatPullRequestStore {
         return structuredClone(existing);
       }
       if (file.links.length >= MAX_CHAT_PULL_REQUEST_LINKS) {
-        throw new Error("This chat already has the maximum number of linked pull requests.");
+        throw new Error(
+          "This chat already has the maximum number of linked pull requests.",
+        );
       }
       file.links.push(normalized);
       return structuredClone(normalized);
@@ -134,11 +174,23 @@ export class ChatPullRequestStore {
   async unlink(chatId: string, ref: ChatPullRequestRef): Promise<boolean> {
     const key = pullRequestRefKey(ref);
     return this.store(chatId).update((file) => {
-      const next = file.links.filter((entry) => pullRequestRefKey(entry) !== key);
+      const next = file.links.filter(
+        (entry) => pullRequestRefKey(entry) !== key,
+      );
       if (next.length === file.links.length) return false;
       file.links = next;
+      if (!file.dismissed.some((entry) => pullRequestRefKey(entry) === key))
+        file.dismissed.push({
+          host: ref.host,
+          repository: ref.repository,
+          number: ref.number,
+        });
       return true;
     });
+  }
+
+  async listDismissed(chatId: string): Promise<ChatPullRequestRef[]> {
+    return structuredClone((await this.store(chatId).load()).dismissed);
   }
 
   async updateSnapshot(
@@ -150,7 +202,9 @@ export class ChatPullRequestStore {
     if (!normalized) throw new Error("The pull request snapshot is invalid.");
     const key = pullRequestRefKey(ref);
     return this.store(chatId).update((file) => {
-      const existing = file.links.find((entry) => pullRequestRefKey(entry) === key);
+      const existing = file.links.find(
+        (entry) => pullRequestRefKey(entry) === key,
+      );
       if (!existing) return undefined;
       existing.snapshot = normalized;
       return structuredClone(existing);
@@ -167,8 +221,23 @@ export class ChatPullRequestStore {
     intent: ChatPullRequestCreateIntent,
   ): Promise<ChatPullRequestCreateIntent> {
     const normalized = normalizeChatPullRequestCreateIntent(intent);
-    if (!normalized) throw new Error("The pull request creation intent is invalid.");
+    if (!normalized)
+      throw new Error("The pull request creation intent is invalid.");
     await this.store(chatId).update((file) => {
+      if (
+        file.pendingCreates.some(
+          (entry) =>
+            entry.operationId !== normalized.operationId &&
+            entry.host === normalized.host &&
+            entry.repository === normalized.repository &&
+            entry.headBranch === normalized.headBranch &&
+            entry.baseBranch === normalized.baseBranch,
+        )
+      ) {
+        throw new Error(
+          "This branch already has an unresolved pull request creation. Refresh it before retrying.",
+        );
+      }
       file.pendingCreates = file.pendingCreates.filter(
         (entry) => entry.operationId !== normalized.operationId,
       );
@@ -185,7 +254,9 @@ export class ChatPullRequestStore {
     return structuredClone(normalized);
   }
 
-  async listCreateIntents(chatId: string): Promise<ChatPullRequestCreateIntent[]> {
+  async listCreateIntents(
+    chatId: string,
+  ): Promise<ChatPullRequestCreateIntent[]> {
     const file = await this.store(chatId).load();
     return file.pendingCreates.map((intent) => structuredClone(intent));
   }
@@ -205,13 +276,15 @@ export class ChatPullRequestStore {
    * touches GitHub. Missing files are fine.
    */
   async deleteChat(chatId: string): Promise<void> {
-    if (!isSafeChatPullRequestChatId(chatId)) throw new Error("Invalid chat id.");
+    if (!isSafeChatPullRequestChatId(chatId))
+      throw new Error("Invalid chat id.");
     this.stores.delete(chatId);
     await fs.rm(path.join(this.root(), `${chatId}.json`), { force: true });
   }
 
   private store(chatId: string): DataStore<ChatPullRequestFile> {
-    if (!isSafeChatPullRequestChatId(chatId)) throw new Error("Invalid chat id.");
+    if (!isSafeChatPullRequestChatId(chatId))
+      throw new Error("Invalid chat id.");
     const existing = this.stores.get(chatId);
     if (existing) return existing;
     const created = new DataStore<ChatPullRequestFile>(

@@ -438,6 +438,8 @@ export interface GitPushInput {
 }
 
 export interface GitPushResult {
+  /** Credential-free repository captured from the reviewed push endpoint. */
+  pullRequestRepository?: string;
   branch: string;
   commit: string;
   destinationBranch: string;

@@ -38,6 +38,7 @@ import type {
   ModelInfo,
   ModelInsightsStatus,
   Provider,
+  Chat,
   UsageDateRange,
 } from "./types";
 
@@ -101,6 +102,17 @@ export const queryKeys = {
     ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
+
+/** Keep a pre-append read from replacing the durable new user turn. */
+export async function installAppendedChatSnapshot(
+  queryClient: QueryClient,
+  chatId: string,
+  updated: Chat,
+): Promise<void> {
+  const chatKey = queryKeys.chat(chatId);
+  await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+  queryClient.setQueryData(chatKey, updated);
+}
 
 async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
   await Promise.all([

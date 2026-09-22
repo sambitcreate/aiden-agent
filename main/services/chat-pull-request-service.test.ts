@@ -34,7 +34,10 @@ interface FakeCalls {
   currentPullRequest: number;
 }
 
-function summary(number: number, overrides: Partial<GitHubPullRequestSummary> = {}) {
+function summary(
+  number: number,
+  overrides: Partial<GitHubPullRequestSummary> = {},
+) {
   return {
     number,
     title: `PR ${number}`,
@@ -54,7 +57,9 @@ function ready<T extends Record<string, unknown>>(value: T) {
 
 function fakeService(
   directory: string,
-  github: Partial<Record<keyof FakeCalls, (...args: never[]) => Promise<unknown>>> = {},
+  github: Partial<
+    Record<keyof FakeCalls, (...args: never[]) => Promise<unknown>>
+  > = {},
   options: {
     workspaceFolderPath?: string | undefined;
     chatWorkspaceId?: string | undefined;
@@ -88,9 +93,12 @@ function fakeService(
       getPullRequest: call<GitHubPullRequestStatus>("getPullRequest", {
         availability: "no-pull-request",
       }),
-      getPullRequestByUrl: call<GitHubPullRequestStatus>("getPullRequestByUrl", {
-        availability: "no-pull-request",
-      }),
+      getPullRequestByUrl: call<GitHubPullRequestStatus>(
+        "getPullRequestByUrl",
+        {
+          availability: "no-pull-request",
+        },
+      ),
       findForBranch: call<GitHubPullRequestListStatus>("findForBranch", {
         availability: "ready",
         pullRequests: [],
@@ -99,22 +107,29 @@ function fakeService(
         availability: "ready",
         pullRequests: [],
       }),
-      createPullRequest: call<GitHubPullRequestCreateResult>("createPullRequest", {
-        kind: "failed",
-        availability: "error",
-        message: "not configured",
-      }),
+      createPullRequest: call<GitHubPullRequestCreateResult>(
+        "createPullRequest",
+        {
+          kind: "failed",
+          availability: "error",
+          message: "not configured",
+        },
+      ),
       currentPullRequest: call<GitHubPullRequestStatus>("currentPullRequest", {
         availability: "no-pull-request",
       }),
     },
     gitInfo: async () => ({
       isRepo: true,
-      ...(options.branch !== undefined ? { branch: options.branch } : { branch: "feature/x" }),
+      ...(options.branch !== undefined
+        ? { branch: options.branch }
+        : { branch: "feature/x" }),
     }),
     chatWorkspaceId: async () => options.chatWorkspaceId ?? "workspace-1",
     workspaceFolderPath: async () =>
-      options.workspaceFolderPath === undefined ? "/work/repo" : options.workspaceFolderPath,
+      options.workspaceFolderPath === undefined
+        ? "/work/repo"
+        : options.workspaceFolderPath,
     onChanged: options.onChanged,
   };
   return { service: new ChatPullRequestService(deps), calls, deps };
@@ -124,10 +139,13 @@ test("link resolves canonical identity through gh and stores it", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
-    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () =>
+      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
 
-  const result = await service.link(CHAT, { url: "https://github.com/Owner/Repo/pull/12" });
+  const result = await service.link(CHAT, {
+    url: "https://github.com/Owner/Repo/pull/12",
+  });
   assert.equal(result.ok, true);
   assert.equal(calls.getPullRequestByUrl, 1);
   if (result.ok) {
@@ -144,7 +162,9 @@ test("link rejects a non-pull-request URL without calling GitHub", async (t) => 
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory);
-  const result = await service.link(CHAT, { url: "https://example.com/not-a-pr" });
+  const result = await service.link(CHAT, {
+    url: "https://example.com/not-a-pr",
+  });
   assert.equal(result.ok, false);
   assert.equal(calls.getPullRequestByUrl, 0);
 });
@@ -153,7 +173,8 @@ test("linking the same PR twice deduplicates; unlink removes it", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service } = fakeService(directory, {
-    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () =>
+      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
   const url = "https://github.com/owner/repo/pull/12";
   assert.equal((await service.link(CHAT, { url })).ok, true);
@@ -170,8 +191,10 @@ test("detectAfterPush offers unlinked open PRs and refreshes linked ones", async
   t.after(() => rm(directory, { recursive: true, force: true }));
   let found: GitHubPullRequestSummary[] = [summary(41, { title: "Old title" })];
   const { service } = fakeService(directory, {
-    getPullRequestByUrl: async () => ready({ pullRequest: summary(41) }) as GitHubPullRequestStatus,
-    findForBranch: async () => ready({ pullRequests: found }) as GitHubPullRequestListStatus,
+    getPullRequestByUrl: async () =>
+      ready({ pullRequest: summary(41) }) as GitHubPullRequestStatus,
+    findForBranch: async () =>
+      ready({ pullRequests: found }) as GitHubPullRequestListStatus,
   });
   await service.link(CHAT, { url: "https://github.com/owner/repo/pull/41" });
 
@@ -239,7 +262,10 @@ test("an unknown create outcome with one match adopts it — never a blind retry
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
     createPullRequest: async () =>
-      ({ kind: "unknown", message: "timed out" }) as GitHubPullRequestCreateResult,
+      ({
+        kind: "unknown",
+        message: "timed out",
+      }) as GitHubPullRequestCreateResult,
     findForBranch: async () =>
       ready({ pullRequests: [summary(77)] }) as GitHubPullRequestListStatus,
   });
@@ -256,13 +282,17 @@ test("an unknown create outcome with one match adopts it — never a blind retry
   assert.equal(links[0]?.source, "created");
 });
 
-test("an unknown outcome with zero matches clears the intent for a safe retry", async (t) => {
+test("an unknown outcome with zero matches stays pending instead of allowing a duplicate retry", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
-      ({ kind: "unknown", message: "timed out" }) as GitHubPullRequestCreateResult,
-    findForBranch: async () => ready({ pullRequests: [] }) as GitHubPullRequestListStatus,
+      ({
+        kind: "unknown",
+        message: "timed out",
+      }) as GitHubPullRequestCreateResult,
+    findForBranch: async () =>
+      ready({ pullRequests: [] }) as GitHubPullRequestListStatus,
   });
   const result = await service.create(CHAT, {
     workspaceId: "workspace-1",
@@ -270,8 +300,8 @@ test("an unknown outcome with zero matches clears the intent for a safe retry", 
     baseBranch: "main",
     headBranch: "feature/x",
   });
-  assert.equal(result.kind, "failed");
-  assert.deepEqual(await service.pendingCreates(CHAT), []);
+  assert.equal(result.kind, "pending");
+  assert.equal((await service.pendingCreates(CHAT)).length, 1);
 });
 
 test("an unknown outcome with several matches is ambiguous and keeps the intent", async (t) => {
@@ -279,10 +309,16 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
-      ({ kind: "unknown", message: "timed out" }) as GitHubPullRequestCreateResult,
+      ({
+        kind: "unknown",
+        message: "timed out",
+      }) as GitHubPullRequestCreateResult,
     findForBranch: async () =>
-      ready({ pullRequests: [summary(1), summary(2)] }) as GitHubPullRequestListStatus,
-    getPullRequest: async () => ready({ pullRequest: summary(2) }) as GitHubPullRequestStatus,
+      ready({
+        pullRequests: [summary(1), summary(2)],
+      }) as GitHubPullRequestListStatus,
+    getPullRequest: async () =>
+      ready({ pullRequest: summary(2) }) as GitHubPullRequestStatus,
   });
   const result = await service.create(CHAT, {
     workspaceId: "workspace-1",
@@ -298,11 +334,15 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
   assert.equal(pending[0]?.candidates?.length, 2);
 
   // Adopting a candidate links it and clears the intent.
-  const adopted = await service.adoptCandidate(CHAT, pending[0]!.intent.operationId, {
-    host: "github.com",
-    repository: REPO,
-    number: 2,
-  });
+  const adopted = await service.adoptCandidate(
+    CHAT,
+    pending[0]!.intent.operationId,
+    {
+      host: "github.com",
+      repository: REPO,
+      number: 2,
+    },
+  );
   assert.equal(adopted.ok, true);
   assert.deepEqual(await service.pendingCreates(CHAT), []);
   assert.equal((await service.list(CHAT)).links[0]?.number, 2);
@@ -313,12 +353,19 @@ test("adopting a candidate outside the intent is rejected and keeps it pending",
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
     createPullRequest: async () =>
-      ({ kind: "unknown", message: "timed out" }) as GitHubPullRequestCreateResult,
+      ({
+        kind: "unknown",
+        message: "timed out",
+      }) as GitHubPullRequestCreateResult,
     findForBranch: async () =>
-      ready({ pullRequests: [summary(1), summary(2)] }) as GitHubPullRequestListStatus,
+      ready({
+        pullRequests: [summary(1), summary(2)],
+      }) as GitHubPullRequestListStatus,
     // The fetched PR does not match the recorded intent (wrong head branch).
     getPullRequest: async () =>
-      ready({ pullRequest: summary(2, { headBranch: "other" }) }) as GitHubPullRequestStatus,
+      ready({
+        pullRequest: summary(2, { headBranch: "other" }),
+      }) as GitHubPullRequestStatus,
   });
   await service.create(CHAT, {
     workspaceId: "workspace-1",
@@ -435,8 +482,11 @@ test("current resolves through the precedence model with workspace context", asy
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service } = fakeService(directory, {
     getPullRequestByUrl: async () =>
-      ready({ pullRequest: summary(12, { headBranch: "other" }) }) as GitHubPullRequestStatus,
-    currentPullRequest: async () => ready({ pullRequest: summary(9) }) as GitHubPullRequestStatus,
+      ready({
+        pullRequest: summary(12, { headBranch: "other" }),
+      }) as GitHubPullRequestStatus,
+    currentPullRequest: async () =>
+      ready({ pullRequest: summary(9) }) as GitHubPullRequestStatus,
   });
   // Discovered workspace PR wins when nothing is linked.
   const discovered = await service.current(CHAT);
@@ -453,7 +503,8 @@ test("deleteChat removes the link file and never calls GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { service, calls } = fakeService(directory, {
-    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+    getPullRequestByUrl: async () =>
+      ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
   });
   await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
   const callsBefore = { ...calls };
@@ -506,4 +557,102 @@ test("an unknown create reconciles against the normalized intent SHA", async (t)
   assert.equal(result.kind, "created");
   if (result.kind === "created") assert.equal(result.pullRequest.number, 88);
   assert.equal((await service.pendingCreates(CHAT)).length, 0);
+});
+
+test("invalid supplied SHA cannot start detection or creation", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service, calls } = fakeService(directory);
+  for (const expectedHeadSha of ["invalid", "", "a".repeat(65), " aaaa"]) {
+    const input = {
+      workspaceId: "workspace-1",
+      headBranch: "feature/x",
+      expectedHeadSha,
+    };
+    await assert.rejects(
+      service.detectAfterPush(CHAT, input),
+      /expectedHeadSha/,
+    );
+    await assert.rejects(
+      service.create(CHAT, { ...input, title: "Title", baseBranch: "main" }),
+      /expectedHeadSha/,
+    );
+  }
+  assert.equal(calls.findForBranch, 0);
+  assert.equal(calls.createPullRequest, 0);
+  assert.deepEqual(await service.pendingCreates(CHAT), []);
+});
+
+test("failed link publication retains the successful create intent for restart", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service, deps } = fakeService(directory, {
+    createPullRequest: async () => ({
+      kind: "created",
+      pullRequest: summary(12),
+    }),
+  });
+  deps.store.link = async () => {
+    throw new Error("disk full");
+  };
+  await assert.rejects(
+    service.create(CHAT, {
+      workspaceId: "workspace-1",
+      headBranch: "feature/x",
+      baseBranch: "main",
+      title: "Title",
+    }),
+    /disk full/,
+  );
+  assert.equal(
+    (await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT))
+      .length,
+    1,
+  );
+});
+
+test("unlink survives restart and suppresses automatic current-PR discovery until explicitly relinked", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const github = {
+    getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }),
+    currentPullRequest: async () => ready({ pullRequest: summary(12) }),
+  };
+  const { service } = fakeService(directory, github);
+  await service.link(CHAT, { url: summary(12).url });
+  await service.unlink(CHAT, {
+    host: "github.com",
+    repository: REPO,
+    number: 12,
+  });
+  const restarted = fakeService(directory, github).service;
+  assert.equal((await restarted.current(CHAT)).reason, "none");
+  assert.deepEqual((await restarted.list(CHAT)).links, []);
+  await restarted.link(CHAT, { url: summary(12).url });
+  assert.equal((await restarted.current(CHAT)).pullRequest?.number, 12);
+});
+
+test("only explicit manual resolution clears an unknown create that is absent from lookup", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { service, calls } = fakeService(directory, {
+    createPullRequest: async () => ({
+      kind: "unknown",
+      message: "network error",
+    }),
+  });
+  const input = {
+    workspaceId: "workspace-1",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    title: "Title",
+  };
+  assert.equal((await service.create(CHAT, input)).kind, "pending");
+  assert.equal((await service.create(CHAT, input)).kind, "failed");
+  assert.equal(calls.createPullRequest, 1);
+  const [pending] = await service.pendingCreates(CHAT);
+  await service.dismissPending(CHAT, pending.intent.operationId);
+  assert.deepEqual(await service.pendingCreates(CHAT), []);
+  assert.equal((await service.create(CHAT, input)).kind, "pending");
+  assert.equal(calls.createPullRequest, 2);
 });

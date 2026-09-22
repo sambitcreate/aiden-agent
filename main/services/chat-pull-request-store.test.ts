@@ -53,7 +53,11 @@ test("malformed link input is rejected", async (t) => {
 
   // A bad display URL falls back to the canonical URL; a bad ref rejects.
   await assert.rejects(
-    store.link("chat-1", { host: "github.com", repository: "bad", number: 0 } as never),
+    store.link("chat-1", {
+      host: "github.com",
+      repository: "bad",
+      number: 0,
+    } as never),
   );
   await assert.rejects(store.link("chat 1/../escape", link(1)));
 });
@@ -150,7 +154,9 @@ test("create intents persist, cap, and clear", async (t) => {
   await store.clearCreateIntent("chat-1", "op-1");
   assert.deepEqual(await store.listCreateIntents("chat-1"), []);
 
-  await assert.rejects(store.recordCreateIntent("chat-1", { ...intent, operationId: "bad id" }));
+  await assert.rejects(
+    store.recordCreateIntent("chat-1", { ...intent, operationId: "bad id" }),
+  );
 });
 
 test("pending intents are never evicted — capacity rejects the new intent", async (t) => {
@@ -167,7 +173,11 @@ test("pending intents are never evicted — capacity rejects the new intent", as
     requestedAt: 1_700,
   };
   for (let index = 0; index < 16; index += 1) {
-    await store.recordCreateIntent("chat-1", { ...intent, operationId: `op-${index}` });
+    await store.recordCreateIntent("chat-1", {
+      ...intent,
+      operationId: `op-${index}`,
+      headBranch: `feature/${index}`,
+    });
   }
   await assert.rejects(
     store.recordCreateIntent("chat-1", { ...intent, operationId: "op-16" }),
@@ -197,4 +207,54 @@ test("a file with foreign chatId or wrong schema is not adopted", async (t) => {
   );
   const store = new ChatPullRequestStore(() => directory);
   assert.deepEqual(await store.list("chat-1"), []);
+});
+
+test("created link and settled intent publish together and cannot reappear after unlink", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatPullRequestStore(() => directory);
+  await store.recordCreateIntent("chat-1", {
+    operationId: "op",
+    host: "github.com",
+    repository: "owner/repo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    title: "Title",
+    requestedAt: 1700,
+  });
+  await store.link("chat-1", link(12), "op");
+  const restarted = new ChatPullRequestStore(() => directory);
+  assert.equal((await restarted.list("chat-1")).length, 1);
+  assert.deepEqual(await restarted.listCreateIntents("chat-1"), []);
+  await restarted.unlink("chat-1", link(12));
+  const again = new ChatPullRequestStore(() => directory);
+  assert.deepEqual(await again.list("chat-1"), []);
+  assert.equal((await again.listDismissed("chat-1")).length, 1);
+});
+
+test("stale create completion cannot resurrect an explicitly unlinked PR", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatPullRequestStore(() => directory);
+  await store.recordCreateIntent("chat-1", {
+    operationId: "op",
+    host: "github.com",
+    repository: "owner/repo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    title: "Title",
+    requestedAt: 1700,
+  });
+  await store.link("chat-1", link(12), "op");
+  await store.unlink("chat-1", link(12));
+  await assert.rejects(
+    store.link("chat-1", link(12), "op"),
+    /no longer pending/,
+  );
+  assert.deepEqual(await store.list("chat-1"), []);
+  assert.equal(
+    (await new ChatPullRequestStore(() => directory).listDismissed("chat-1"))
+      .length,
+    1,
+  );
 });
