@@ -329,3 +329,16 @@ test("oversized or duplicate pending intent inventories preserve every byte", as
     assert.equal(await fs.readFile(file, "utf8"), bytes);
   }
 });
+
+test("deletion drains admitted writes and rejects every later write", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatPullRequestStore(() => directory);
+  const linking = store.link("chat-1", link(1));
+  const rejected = assert.rejects(linking);
+  await store.deleteChat("chat-1");
+  await rejected;
+  await assert.rejects(store.link("chat-1", link(2)), /deleted/);
+  await assert.rejects(store.clearCreateIntent("chat-1", "op"), /deleted/);
+  assert.deepEqual(await fs.readdir(directory), []);
+});

@@ -856,3 +856,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
 
 - 2026-09-22 PR #184: a branch-list lookup is not authoritative negative evidence after an unknown GitHub create. Preserve pending intent on empty/retargeted/advanced-head results, and publish a link plus intent settlement atomically so a crash cannot later undo an unlink. Post-push PR operations must carry the frozen push endpoint's repository; gh's workspace inference can select another remote.
+
+- 2026-09-22 PR #184 automated follow-up: evicting a per-chat DataStore does not revoke delayed provider callbacks or admitted writes. Mark deletion before queue drain, fence publication, and remove the file only after the barrier. Notify pending-create cache consumers after the create outcome, not while the remote request is still active.

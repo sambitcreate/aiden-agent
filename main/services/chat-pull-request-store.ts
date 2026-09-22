@@ -121,6 +121,7 @@ function isSafeFile(chatId: string) {
 
 export class ChatPullRequestStore {
   private readonly stores = new Map<string, DataStore<ChatPullRequestFile>>();
+  private readonly deletedChats = new Set<string>();
 
   constructor(private readonly root: () => string) {}
 
@@ -150,7 +151,7 @@ export class ChatPullRequestStore {
   ): Promise<ChatPullRequestLink> {
     const normalized = normalizeChatPullRequestLink(link);
     if (!normalized) throw new Error("The pull request link is invalid.");
-    return this.store(chatId).update((file) => {
+    return this.update(chatId, (file) => {
       const key = pullRequestRefKey(normalized);
       if (operationId) {
         if (
@@ -188,7 +189,7 @@ export class ChatPullRequestStore {
 
   async unlink(chatId: string, ref: ChatPullRequestRef): Promise<boolean> {
     const key = pullRequestRefKey(ref);
-    return this.store(chatId).update((file) => {
+    return this.update(chatId, (file) => {
       const next = file.links.filter(
         (entry) => pullRequestRefKey(entry) !== key,
       );
@@ -216,7 +217,7 @@ export class ChatPullRequestStore {
     const normalized = normalizeChatPullRequestSnapshot(snapshot);
     if (!normalized) throw new Error("The pull request snapshot is invalid.");
     const key = pullRequestRefKey(ref);
-    return this.store(chatId).update((file) => {
+    return this.update(chatId, (file) => {
       const existing = file.links.find(
         (entry) => pullRequestRefKey(entry) === key,
       );
@@ -238,7 +239,7 @@ export class ChatPullRequestStore {
     const normalized = normalizeChatPullRequestCreateIntent(intent);
     if (!normalized)
       throw new Error("The pull request creation intent is invalid.");
-    await this.store(chatId).update((file) => {
+    await this.update(chatId, (file) => {
       if (
         file.pendingCreates.some(
           (entry) =>
@@ -278,7 +279,7 @@ export class ChatPullRequestStore {
 
   /** Drop the intent once its outcome is known (linked, retried, or resolved). */
   async clearCreateIntent(chatId: string, operationId: string): Promise<void> {
-    await this.store(chatId).update((file) => {
+    await this.update(chatId, (file) => {
       file.pendingCreates = file.pendingCreates.filter(
         (entry) => entry.operationId !== operationId,
       );
@@ -293,11 +294,37 @@ export class ChatPullRequestStore {
   async deleteChat(chatId: string): Promise<void> {
     if (!isSafeChatPullRequestChatId(chatId))
       throw new Error("Invalid chat id.");
+    // Revoke admission before waiting for writes that already hold a store.
+    this.deletedChats.add(chatId);
+    const existing = this.stores.get(chatId);
+    if (existing) {
+      // Join DataStore's queue without publishing anything. Earlier writes
+      // observe the deletion fence; even one already publishing finishes
+      // before the file is removed.
+      await existing
+        .update(
+          () => undefined,
+          () => false,
+        )
+        .catch(() => undefined);
+    }
     this.stores.delete(chatId);
     await fs.rm(path.join(this.root(), `${chatId}.json`), { force: true });
   }
 
+  private update<R>(
+    chatId: string,
+    mutation: (file: ChatPullRequestFile) => R,
+  ): Promise<R> {
+    return this.store(chatId).update(
+      mutation,
+      () => !this.deletedChats.has(chatId),
+    );
+  }
+
   private store(chatId: string): DataStore<ChatPullRequestFile> {
+    if (this.deletedChats.has(chatId))
+      throw new Error("This chat has been deleted.");
     if (!isSafeChatPullRequestChatId(chatId))
       throw new Error("Invalid chat id.");
     const existing = this.stores.get(chatId);

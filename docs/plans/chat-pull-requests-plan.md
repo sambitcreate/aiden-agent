@@ -27,3 +27,7 @@ The existing #184 onboarding Git workflows tile already introduces multiple PR l
 ## Validation
 
 Focused regression suite: `npm run test:chat-pull-requests`. Build and TypeScript checks; full `npm test` (including Remote contracts, onboarding, Git and IPC tests). Independent GPT-5.6 Sol medium blast-radius and adversarial reviews; follow-up reviews after remediation. React Doctor reported 78/100 with three pre-existing render-ref findings in Composer/Environment/Chat pane; those lines are unchanged by this PR and out of scope. Local full suite: 6,825 pass, 1 skipped, 0 failures; focused final store suite: 87 pass; IPC: 14 pass. TypeScript and production build pass. Future schema versions and malformed durable pending expectations are write-protected with byte-preservation regressions. Exact-head hosted checks and review-thread audit are tracked on PR #184.
+
+## Automated review follow-up
+
+Deletion revokes admission before draining queued PR-store writes and removing the file; late provider responses cannot recreate state. Every completed create attempt notifies the renderer after its durable outcome, including unknown and ambiguous outcomes. Delayed link/create deletion and pending-notification regressions pass. Focused PR tests: 91; service-boundary tests: 103; TypeScript and Electron build pass. Both bounded Sol follow-up reviews are clean. Hosted verify and Electron E2E passed on 9d8928a4; the follow-up commit requires its own hosted checks.

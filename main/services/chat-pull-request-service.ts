@@ -613,45 +613,52 @@ export class ChatPullRequestService {
             : "The pull request creation intent could not be recorded.",
       };
     }
-    const result = await this.deps.github.createPullRequest(folderPath, {
-      title: input.title,
-      body: input.body,
-      baseBranch: input.baseBranch,
-      headBranch: input.headBranch,
-      draft: input.draft,
-      repository: `${recordedIntent.host}/${recordedIntent.repository}`,
-    });
-    if (result.kind === "created") {
-      if (!matchesCreateIntent(recordedIntent, result.pullRequest)) {
-        return {
-          kind: "pending",
-          message:
-            "The created pull request no longer matches the recorded intent. Refresh to reconcile it.",
-        };
+    try {
+      const result = await this.deps.github.createPullRequest(folderPath, {
+        title: input.title,
+        body: input.body,
+        baseBranch: input.baseBranch,
+        headBranch: input.headBranch,
+        draft: input.draft,
+        repository: `${recordedIntent.host}/${recordedIntent.repository}`,
+      });
+      if (result.kind === "created") {
+        if (!matchesCreateIntent(recordedIntent, result.pullRequest)) {
+          return {
+            kind: "pending",
+            message:
+              "The created pull request no longer matches the recorded intent. Refresh to reconcile it.",
+          };
+        }
+        const linked = await this.linkSummary(
+          chatId,
+          result.pullRequest,
+          "created",
+          recordedIntent.operationId,
+        );
+        return linked.ok
+          ? { kind: "created", pullRequest: linked.pullRequest }
+          : { kind: "failed", message: linked.message };
       }
-      const linked = await this.linkSummary(
+      if (result.kind === "failed") {
+        await this.deps.store.clearCreateIntent(
+          chatId,
+          recordedIntent.operationId,
+        );
+        return { kind: "failed", message: result.message };
+      }
+      return await this.reconcileIntent(
         chatId,
-        result.pullRequest,
-        "created",
-        recordedIntent.operationId,
+        folderPath,
+        recordedIntent,
+        result.message,
       );
-      return linked.ok
-        ? { kind: "created", pullRequest: linked.pullRequest }
-        : { kind: "failed", message: linked.message };
+    } finally {
+      // Publish pending/ambiguous/failed outcomes as well as successful links.
+      // Do not notify while the remote create is still running: a pending
+      // query would otherwise race its own in-flight operation.
+      this.notify(chatId);
     }
-    if (result.kind === "failed") {
-      await this.deps.store.clearCreateIntent(
-        chatId,
-        recordedIntent.operationId,
-      );
-      return { kind: "failed", message: result.message };
-    }
-    return this.reconcileIntent(
-      chatId,
-      folderPath,
-      recordedIntent,
-      result.message,
-    );
   }
 
   /** Reconcile one pending intent; returns the same vocabulary as `create`. */

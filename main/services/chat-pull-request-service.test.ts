@@ -656,3 +656,106 @@ test("only explicit manual resolution clears an unknown create that is absent fr
   assert.equal((await service.create(CHAT, input)).kind, "pending");
   assert.equal(calls.createPullRequest, 2);
 });
+
+test("chat deletion fences a delayed GitHub link response", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let release!: (value: GitHubPullRequestStatus) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const response = new Promise<GitHubPullRequestStatus>((resolve) => {
+    release = resolve;
+  });
+  const { service } = fakeService(directory, {
+    getPullRequestByUrl: async () => {
+      entered();
+      return response;
+    },
+  });
+  const linking = service.link(CHAT, { url: summary(12).url });
+  const rejected = assert.rejects(linking, /deleted/);
+  await started;
+  await service.deleteChat(CHAT);
+  release(ready({ pullRequest: summary(12) }));
+  await rejected;
+  assert.deepEqual(
+    await new ChatPullRequestStore(() => directory).list(CHAT),
+    [],
+  );
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test("chat deletion fences a delayed successful remote create", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let release!: (value: GitHubPullRequestCreateResult) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const response = new Promise<GitHubPullRequestCreateResult>((resolve) => {
+    release = resolve;
+  });
+  const { service } = fakeService(directory, {
+    createPullRequest: async () => {
+      entered();
+      return response;
+    },
+  });
+  const creating = service.create(CHAT, {
+    workspaceId: "workspace-1",
+    title: "Title",
+    headBranch: "feature/x",
+    baseBranch: "main",
+  });
+  const rejected = assert.rejects(creating, /deleted/);
+  await started;
+  await service.deleteChat(CHAT);
+  release({ kind: "created", pullRequest: summary(12) });
+  await rejected;
+  assert.deepEqual(
+    await new ChatPullRequestStore(() => directory).listCreateIntents(CHAT),
+    [],
+  );
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test("every unresolved create outcome notifies after its durable intent is visible", async (t) => {
+  for (const lookup of [
+    ready({ pullRequests: [] }),
+    ready({ pullRequests: [summary(1), summary(2)] }),
+    { availability: "error" as const },
+  ]) {
+    const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const visible: Promise<ChatPullRequestCreateIntent[]>[] = [];
+    const { service } = fakeService(
+      directory,
+      {
+        createPullRequest: async () => ({
+          kind: "unknown",
+          message: "uncertain",
+        }),
+        findForBranch: async () => lookup,
+      },
+      {
+        onChanged: (chatId) => {
+          visible.push(
+            new ChatPullRequestStore(() => directory).listCreateIntents(chatId),
+          );
+        },
+      },
+    );
+    const result = await service.create(CHAT, {
+      workspaceId: "workspace-1",
+      title: "Title",
+      headBranch: "feature/x",
+      baseBranch: "main",
+    });
+    assert.ok(result.kind === "pending" || result.kind === "ambiguous");
+    assert.equal(visible.length, 1);
+    assert.equal((await visible[0]).length, 1);
+  }
+});
