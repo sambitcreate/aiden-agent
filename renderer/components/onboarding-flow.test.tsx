@@ -429,3 +429,7 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
 });
+
+test("MCP tour explains connected-service resource reads", () => {
+  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+});

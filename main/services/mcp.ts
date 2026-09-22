@@ -2,6 +2,7 @@
 // / SSE) via the official MCP SDK, caches clients, and exposes their tools as
 // pi agent tools for the generation loop.
 
+import { createMcpResourceTool } from "./mcp-resources.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Type } from "@earendil-works/pi-ai";
@@ -368,9 +369,14 @@ class McpManager {
     server: McpServer,
     generation: number,
   ): Promise<AgentTool[]> {
+    const lease = mcpConfigurationLeases.acquire(server.id);
     const client = await this.ensureConnected(server, generation);
-    const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-    return tools.map((t): AgentTool => ({
+    lease.assertCurrent();
+    const { tools } = client.getServerCapabilities()?.tools
+      ? (await client.listTools()) as { tools: McpToolInfo[] }
+      : { tools: [] };
+    lease.assertCurrent();
+    const agentTools = tools.map((t): AgentTool => ({
       name: mcpAgentToolName(server, t.name),
       label: t.name,
       description: t.description ?? t.name,
@@ -391,6 +397,10 @@ class McpManager {
         );
       },
     }));
+    if (client.getServerCapabilities()?.resources) {
+      agentTools.push(createMcpResourceTool(server, client, lease));
+    }
+    return agentTools;
   }
 
   connectionGeneration(id: string): number {

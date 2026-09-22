@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mcpResourceToolName } from "./mcp-resources.js";
+import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
@@ -732,4 +734,14 @@ test("skill publication joins the exact fresh catalog resource and runtime conte
     ),
     /skill changed while this response was starting/u,
   );
+});
+
+test("existing Full and Custom Bot MCP grants never admit the separate resource operation", () => {
+  const server = { id: connection.sourceId, name: "Calendar" };
+  const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true } };
+  for (const accessMode of ["full", "custom"] as const) {
+    const admitted = exactBotMcpToolNames({ ...customAuthority, accessMode }, [current], (_id, name) => mcpAgentToolName(server, name));
+    assert.equal(admitted.has(mcpAgentToolName(server, mcpTool.name)), true);
+    assert.equal(admitted.has(mcpResourceToolName(server)), false);
+  }
 });
