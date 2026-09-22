@@ -896,6 +896,7 @@ final class AidenChatViewModel {
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
     private(set) var activityTimeline: AidenGenerationTimeline?
+    private var approvalSnapshotGeneration: UInt64 = 0
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
@@ -2406,17 +2407,21 @@ final class AidenChatViewModel {
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
     }
 
-    private func restorePendingApproval(
+    func restorePendingApproval(
         streamID: String,
         context: AidenRemoteRequestContext,
         announce: Bool = false
     ) async {
-        guard streamState?.isTerminal != true else { return }
+        guard coordinator.isCurrent(context), activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        approvalSnapshotGeneration &+= 1
+        let snapshotGeneration = approvalSnapshotGeneration
         let expectedApproval = pendingApproval
         let expectedState = streamState
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
             guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
                   pendingApproval == expectedApproval, streamState == expectedState else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
@@ -2446,6 +2451,7 @@ final class AidenChatViewModel {
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == approvalSnapshotGeneration,
                   pendingApproval == expectedApproval, streamState == expectedState else { return }
             pendingApproval = nil
             streamState = .reconciling
