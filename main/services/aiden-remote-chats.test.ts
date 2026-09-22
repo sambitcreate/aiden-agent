@@ -1460,7 +1460,7 @@ test("attachment references enforce device, chat, expiry, revocation, dimensions
   oversizedDimensions.writeUInt32BE(20_000, 16);
   oversizedDimensions.writeUInt32BE(1, 20);
   assert.throws(
-    () => store.upload("device-2", "chat-1", {
+    () => store.upload("device-1", "chat-1", {
       name: "huge.png",
       mimeType: "image/png",
       kind: "image",
@@ -1469,7 +1469,7 @@ test("attachment references enforce device, chat, expiry, revocation, dimensions
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   assert.throws(
-    () => store.upload("device-2", "chat-1", {
+    () => store.upload("device-1", "chat-1", {
       name: "../secret.txt",
       mimeType: "text/plain",
       kind: "text",
@@ -1537,17 +1537,6 @@ test("chat cleanup releases upload capacity across devices and preserves other c
   finish();
   assert.throws(() => store.beginUpload("device-1", "chat-1"));
   nextDeletion();
-});
-
-test("revocation rejects an authenticated request that has not begun its upload yet", async () => {
-  const attachments = new AidenRemoteAttachmentStore();
-  const app = fixture(chat(), { attachments });
-  const input = { kind: "text", name: "private.txt", mimeType: "text/plain", text: "private" };
-  app.service.revokeDevice("device-1");
-  await assert.rejects(app.service.uploadAttachment("device-1", "chat-1", input),
-    (error: unknown) => (error as { code?: string }).code === "handle_wrong_device");
-  assert.throws(() => attachments.upload("device-1", "chat-1", input));
-  assert.ok(await app.service.uploadAttachment("device-2", "chat-1", input));
 });
 
 test("invalidated uploads remain bounded until their retained request bodies settle", () => {

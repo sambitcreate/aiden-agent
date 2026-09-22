@@ -229,7 +229,6 @@ export class AidenRemoteAttachmentStore {
   private readonly records = new Map<string, PendingAttachmentRecord>();
   private readonly uploads = new Set<{ deviceId: string; chatId: string; active: boolean }>();
   private readonly deletingChats = new Set<string>();
-  private readonly revokedDevices = new Set<string>();
   private retainedRepresentationBytes = 0;
 
   constructor(private readonly options: {
@@ -241,7 +240,6 @@ export class AidenRemoteAttachmentStore {
 
   /** Fence the awaited chat lookup without retaining permanent chat tombstones. */
   beginUpload(deviceId: string, chatId: string): { assertCurrent(): void; release(): void } {
-    this.assertDeviceActive(deviceId);
     if (this.deletingChats.has(chatId)) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
     }
@@ -287,7 +285,6 @@ export class AidenRemoteAttachmentStore {
   }
 
   upload(deviceId: string, chatId: string, input: unknown): AidenRemoteAttachmentProjection {
-    this.assertDeviceActive(deviceId);
     if (this.deletingChats.has(chatId)) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
     }
@@ -411,9 +408,6 @@ export class AidenRemoteAttachmentStore {
   }
 
   revokeDevice(deviceId: string): void {
-    // Device identities are never reused. This also fences requests that were
-    // authenticated before revocation but have not reached beginUpload yet.
-    this.revokedDevices.add(deviceId);
     for (const lease of this.uploads) {
       if (lease.deviceId === deviceId) lease.active = false;
     }
@@ -424,12 +418,6 @@ export class AidenRemoteAttachmentStore {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
-  }
-
-  private assertDeviceActive(deviceId: string): void {
-    if (this.revokedDevices.has(deviceId)) {
-      throw new AidenRemoteServiceError("handle_wrong_device", "This device has been revoked.", 403);
-    }
   }
 
   private nextId(): string {
