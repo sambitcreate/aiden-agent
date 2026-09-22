@@ -614,6 +614,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
     // Control lane: commands are handled immediately (no LLM).
     if (rawText?.startsWith("/")) {
+      if (update.edited_message && ["/queue", "/continue", "/interrupt"].includes(commandName(rawText))) {
+        const pending = queue.findBySource(message.chat.id, message.message_id, message.message_thread_id, binding);
+        await deps.api.sendMessage({
+          chatId: message.chat.id, threadId: message.message_thread_id,
+          text: pending ? "This message is already queued; its saved text is unchanged. Use /queue to manage it." : "This command edit was not sent because the original message is not queued.",
+        }).catch(() => undefined);
+        return;
+      }
       await handleCommand(rawText.trim(), message, selectedWorkspaceId, threadWorkspaceId !== undefined, binding);
       return;
     }
@@ -824,16 +832,17 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     workspaceId?: string,
     workspaceCaptured = false,
     options: { acknowledgeBusy?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     const settings = workspaceCaptured ? undefined : await deps.config.getSettings();
     const duplicate = turn.sourceMessageId === undefined ? undefined : queue.findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
-    if (duplicate) return;
+    if (duplicate) return false;
     checkPendingCapacity(turn);
     queue.enqueue({ ...turn, workspaceId: workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId });
     if (options.acknowledgeBusy !== false && !turn.dispatchNext && (activeTurn || dispatchPending)) {
       // Admission already succeeded; a failed acknowledgement must not replay it.
       await deps.api.sendMessage({ chatId: turn.chatId, threadId: turn.threadId, text: "⏳ Queued for the next turn. Use /queue to manage pending prompts or /stop to clear them." }).catch(() => undefined);
     }
+    return true;
   }
 
   async function controlStatus(
@@ -1331,7 +1340,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         return;
       }
       const interruptedDispatch = dispatchCancellation;
-      await enqueuePrompt({
+      const admitted = await enqueuePrompt({
         lane: cmd === "/interrupt" ? "priority" : "default",
         dispatchNext: cmd === "/interrupt",
         text: prompt,
@@ -1342,6 +1351,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         fromUsername: message.from?.username,
         binding,
       }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
+      if (!admitted) {
+        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This message is already queued; its saved text is unchanged. Use /queue to manage it." }).catch(() => undefined);
+        return;
+      }
       if (cmd === "/interrupt" && dispatchCancellation === interruptedDispatch) {
         try {
           await abortCurrentTurn(binding, message);
@@ -1377,7 +1390,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     if (cmd === "/continue") {
-      await enqueuePrompt({
+      const admitted = await enqueuePrompt({
         lane: "priority",
         text: commandArgument(command) || "Continue.",
         chatId,
@@ -1387,6 +1400,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         fromUsername: message.from?.username,
         binding,
       }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
+      if (!admitted) {
+        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This message is already queued; its saved text is unchanged. Use /queue to manage it." }).catch(() => undefined);
+        return;
+      }
       await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "▶️ Continuation queued." }).catch(() => undefined);
       return;
     }

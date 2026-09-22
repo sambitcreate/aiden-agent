@@ -68,3 +68,14 @@ Do not advertise Steer/Queue server capability until the full path works.
 - Delegation remains ephemeral child work, separate from durable Bot identities.
 - Pending request cards and subagent controls need their own negotiated authority
   contract; this plan does not claim they are delivered by existing read-only DTOs.
+
+## Telegram command edits
+
+Ordinary queued prompt edits retain their existing FIFO update behavior. Editing
+an already sent `/queue`, `/continue`, or `/interrupt` command is not a new action:
+while its original is pending, reply “This message is already queued; its saved
+text is unchanged. Use /queue to manage it.” After dequeue, reply “This command
+edit was not sent because the original message is not queued.” Neither path
+admits another turn or aborts a running one. Five regressions cover pending edits
+and all three commands after dequeue. This closes a misleading success receipt
+in the source-deduplication path rather than deferring it as a cosmetic issue.
