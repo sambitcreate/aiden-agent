@@ -292,3 +292,7 @@ This plan is complete only when:
 4. Aiden runs the audited current Pi compaction primitives without legacy checkpoint translation;
 5. durable memory is scoped, bounded, searchable, approval-controlled, and demonstrably separate from compaction;
 6. automated gates and the credentialed/installed operator matrix pass without an unresolved P0/P1 review finding.
+
+## 2026-09-22 bounded compatibility follow-up
+
+Model-switch pressure checks now fence usage by exact provider/model and measure retained content across reopened checkpoints; effect-store startup recovery is single-flight. See [audit and scope](../../.memory/upgrade-pi-budget-recovery.md). Pi remains pinned to audited 0.84.4. Persisted per-model budget overrides and a newer paired Pi upgrade are deferred pending configuration/preflight integration and the existing upgrade gates. No rollout stage or installed acceptance status advances.

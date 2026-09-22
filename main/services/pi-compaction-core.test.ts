@@ -1904,3 +1904,106 @@ test("skill-free visible context compacts and reopens through the real JSONL rep
     "rich history is still durable when the user re-enables skills");
   assert.doesNotMatch(JSON.stringify(await reopened.buildContext()), /HIDDEN_SKILL/u);
 });
+
+for (const entryPoint of ["check", "pressure", "prepare"] as const) {
+  for (const changedIdentity of ["model", "provider"] as const) {
+    test(`model ownership: ${entryPoint} ignores stale ${changedIdentity} usage`, async () => {
+      const { models, model } = compactionFixture();
+      const session = await memorySession();
+      const previous = { ...model, [changedIdentity === "model" ? "id" : "provider"]: "previous" };
+      await session.appendMessage(user("short history", 10));
+      const last = assistant(previous, { input: 999_999, timestamp: 20 });
+      await session.appendMessage(last);
+      const coordinator = new PiCompactionCoordinator({
+        session, models, model, thinkingLevel: "off",
+        settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+      });
+      const result = entryPoint === "check" ? await coordinator.check(last)
+        : entryPoint === "pressure" ? await coordinator.checkContextPressure()
+        : await coordinator.prepareForPrompt();
+      assert.equal(result.compacted, false);
+      assert.equal(result.shouldRetry, false);
+      assert.equal(result.errorMessage, undefined);
+      assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+    });
+  }
+}
+
+for (const entryPoint of ["check", "pressure"] as const) {
+  test(`model ownership: ${entryPoint} measures content after switching to a smaller model`, async () => {
+    const { faux, models, model } = compactionFixture();
+    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("switched model"))));
+    const session = await memorySession();
+    const previous = { ...model, id: "previous" };
+    await session.appendMessage(user("large history " + "x".repeat(8_000), 10));
+    await session.appendMessage(assistant(previous, { input: 1, output: 0, timestamp: 20 }));
+    await session.appendMessage(user("next", 30));
+    const last = assistant(previous, { input: 1, output: 0, timestamp: 40 });
+    await session.appendMessage(last);
+    const coordinator = new PiCompactionCoordinator({
+      session, models, model, thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    });
+    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    assert.equal(result.compacted, true);
+    assert.equal(result.shouldRetry, false);
+  });
+}
+
+for (const entryPoint of ["check", "pressure"] as const) {
+  test(`model ownership: ${entryPoint} rejects foreign fallback usage after a zero-usage response`, async () => {
+    const { models, model } = compactionFixture();
+    const session = await memorySession();
+    await session.appendMessage(user("old", 10));
+    await session.appendMessage(assistant({ ...model, provider: "previous-provider" }, { input: 999_999, timestamp: 20 }));
+    await session.appendMessage(user("new", 30));
+    const last = assistant(model, { input: 0, output: 0, timestamp: 40 });
+    await session.appendMessage(last);
+    const coordinator = new PiCompactionCoordinator({
+      session, models, model, thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    });
+    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    assert.equal(result.compacted, false);
+    assert.equal(result.errorMessage, undefined);
+  });
+
+  test(`model ownership: ${entryPoint} remeasures a reopened checkpoint for the new model`, async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-model-switch-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const { faux, models, model } = compactionFixture();
+    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("new model checkpoint"))));
+    const initial = await new PiCompactionSessionStore({ root: async () => directory }).openChat("switch");
+    const last = assistant({ ...model, id: "previous" }, { input: 1, output: 0, timestamp: 20 });
+    await initial.appendCompaction({
+      id: "prior-checkpoint", summary: "old summary", tokensBefore: 10,
+      retainedTail: [user("retained " + "x".repeat(8_000), 10), last],
+    });
+    await initial.appendMessage(user("new turn", 30));
+    const session = await new PiCompactionSessionStore({ root: async () => directory }).openChat("switch");
+    const coordinator = new PiCompactionCoordinator({
+      session, models, model, thinkingLevel: "off",
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    });
+    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    assert.equal(result.compacted, true);
+    assert.equal(result.shouldRetry, false);
+  });
+}
+
+test("foreign response labels preserve transient retry and success resets its allowance", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession();
+  await session.appendMessage(user("work", 10));
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+  const foreign = { ...model, id: "provider-response-alias" };
+  const failed = assistant(foreign, { stopReason: "error", errorMessage: "503 Service Unavailable", input: 0, output: 0 });
+  assert.equal((await coordinator.check(failed)).shouldRetry, true);
+  assert.equal((await coordinator.check(failed)).failureCode, "retry-exhausted");
+  assert.equal((await coordinator.check(failed)).shouldRetry, true);
+  assert.equal((await coordinator.check(assistant(foreign, { input: 10 }))).compacted, false);
+  assert.equal((await coordinator.check(failed)).shouldRetry, true);
+});

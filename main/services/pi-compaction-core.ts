@@ -163,6 +163,13 @@ export class PiCompactionCoordinator {
     this.activeAbortController?.abort();
   }
 
+  private isCurrentModel(message: AssistantMessage): boolean {
+    return (
+      message.provider === this.options.model.provider &&
+      message.model === this.options.model.id
+    );
+  }
+
   /** Pi resets overflow recovery when a new user prompt enters the agent. */
   beginPrompt(): void {
     this.overflowRecoveryAttempted = false;
@@ -227,6 +234,11 @@ export class PiCompactionCoordinator {
       return this.run("threshold", false, true);
     }
     if (!previousAssistant) return { compacted: false, shouldRetry: false };
+    if (!this.isCurrentModel(previousAssistant)) {
+      return shouldCompact(estimatedMessageTokens(context.messages), this.options.model.contextWindow, this.settings)
+        ? this.run("threshold", false)
+        : { compacted: false, shouldRetry: false };
+    }
     if (
       compactionEntry &&
       previousAssistant.timestamp <= new Date(compactionEntry.timestamp).getTime()
@@ -246,11 +258,14 @@ export class PiCompactionCoordinator {
       if (
         compactionEntry &&
         usageMessage?.role === "assistant" &&
+        this.isCurrentModel(usageMessage) &&
         usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
       ) {
         return { compacted: false, shouldRetry: false };
       }
-      contextTokens = estimate.tokens;
+      contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
+        ? estimatedMessageTokens(context.messages)
+        : estimate.tokens;
     }
     if (!shouldCompact(contextTokens, this.options.model.contextWindow, this.settings)) {
       return { compacted: false, shouldRetry: false };
@@ -286,6 +301,7 @@ export class PiCompactionCoordinator {
     const compactionEntry = latestCompaction(branch);
     if (
       compactionEntry &&
+      this.isCurrentModel(assistantMessage) &&
       assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
     ) {
       return { compacted: false, shouldRetry: false };
@@ -366,6 +382,23 @@ export class PiCompactionCoordinator {
       };
     }
 
+    // Provider counters describe the originating model's request. After a
+    // switch, measure the actual retained content against the new budget.
+    if (!sameModel) {
+      try {
+        const context = await sessionOperation(() => this.options.session.buildContext());
+        return shouldCompact(estimatedMessageTokens(context.messages), contextWindow, this.settings)
+          ? this.run("threshold", false)
+          : { compacted: false, shouldRetry: false };
+      } catch (error) {
+        return {
+          compacted: false,
+          shouldRetry: false,
+          failureCode: "session-failed",
+          errorMessage: error instanceof Error ? error.message : "Pi journal read failed.",
+        };
+      }
+    }
     const directContextTokens = assistantMessage.usage
       ? calculateContextTokens(assistantMessage.usage)
       : 0;
@@ -390,11 +423,14 @@ export class PiCompactionCoordinator {
         if (
           compactionEntry &&
           usageMessage.role === "assistant" &&
+          this.isCurrentModel(usageMessage) &&
           usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
         ) {
           return { compacted: false, shouldRetry: false };
         }
-        contextTokens = estimate.tokens;
+        contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
+          ? estimatedMessageTokens(context.messages)
+          : estimate.tokens;
       }
     }
 

@@ -808,3 +808,61 @@ test("corrupt and unsupported stores are rejected without overwriting their byte
     assert.equal(await readFile(filename, "utf8"), unsupported);
   });
 });
+
+test("concurrent startup callers share recovery and cannot interrupt newly admitted work", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory);
+    await first.initialize();
+    const old = operation("old");
+    await first.startOperation(old);
+    const sent = effect(old, "sent", { toolName: "write_file", replay: "never" });
+    await first.prepareEffect(sent);
+    await first.markEffectDispatchStarted(effectOwner(sent));
+
+    const dataStore = new DataStore(STORE_NAME, emptyPiRuntimeEffectDatabase(), () => directory);
+    const check = dataStore.loadedFromCorruptFile.bind(dataStore);
+    let loadCalls = 0;
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    dataStore.loadedFromCorruptFile = async () => {
+      loadCalls += 1;
+      if (loadCalls === 2) await secondGate;
+      return check();
+    };
+    const restarted = new PiRuntimeEffectStore({ dataStore });
+    const initial = restarted.initialize();
+    const concurrent = restarted.initialize();
+    await initial;
+    const fresh = operation("fresh");
+    await restarted.startOperation(fresh);
+    const freshEffect = effect(fresh, "fresh-effect");
+    await restarted.prepareEffect(freshEffect);
+    await restarted.markEffectDispatchStarted(effectOwner(freshEffect));
+    releaseSecond();
+    await concurrent;
+    assert.equal(loadCalls, 1);
+    assert.equal((await restarted.getEffect(effectOwner(sent)))?.state, "unknown");
+    assert.equal((await restarted.getEffect(effectOwner(freshEffect)))?.state, "dispatch_started");
+    assert.equal((await restarted.listOperationsByChat(fresh.chatId)).find((entry) => entry.operationId === fresh.operationId)?.state, "running");
+  });
+});
+
+test("failed shared startup stays closed and can retry recovery", async () => {
+  await withTempDirectory(async (directory) => {
+    const dataStore = new DataStore(STORE_NAME, emptyPiRuntimeEffectDatabase(), () => directory);
+    const check = dataStore.loadedFromCorruptFile.bind(dataStore);
+    let calls = 0;
+    dataStore.loadedFromCorruptFile = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("startup unavailable");
+      return check();
+    };
+    const store = new PiRuntimeEffectStore({ dataStore });
+    const results = await Promise.allSettled([store.initialize(), store.initialize()]);
+    assert.deepEqual(results.map((result) => result.status), ["rejected", "rejected"]);
+    await assert.rejects(store.startOperation(operation()), /not initialized/u);
+    await store.initialize();
+    await store.startOperation(operation());
+    assert.equal(calls, 2);
+  });
+});
