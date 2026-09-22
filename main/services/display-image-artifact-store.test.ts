@@ -126,10 +126,7 @@ test("pending usage projections do not clone staged image payloads", async () =>
     artifact: artifact("image-1"),
     pixels: 1,
   });
-  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "structuredClone",
-  );
+  const structuredCloneDescriptor = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
   Object.defineProperty(globalThis, "structuredClone", {
     configurable: true,
     writable: true,
@@ -363,6 +360,14 @@ test("main blocks new sends and copies until staged artifacts are recovered", as
   assert.match(handlers, /unresolvedGuiArtifactMessage\(parsed\.chatId\)/u);
   assert.match(recovery, /Delete this chat to discard it/iu);
   assert.match(recovery, /Settings → About → Diagnostics and choose Reveal/iu);
+  assert.match(
+    recovery,
+    /generativeUiArtifactStore\.committedRecoverySourceFor\(chatId, mediaId\)/u,
+  );
+  assert.match(recovery, /designProjectStore\.getByChatId\(chatId\)/u);
+  assert.match(recovery, /projectOwnsPublishedDesignSource\(project, source\)/u);
+  assert.match(recovery, /isValidDesignArtifactSource\(source\)/u);
+  assert.match(recovery, /finalSource = await storedHtmlSource/u);
   const exportHandler = handlers.slice(handlers.indexOf('ipcMain.handle("chats:export"'));
   assert.match(exportHandler, /unresolvedGuiArtifactMessage\(chatId\)/u);
   assert.ok(

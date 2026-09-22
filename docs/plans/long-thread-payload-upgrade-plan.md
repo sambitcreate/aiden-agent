@@ -1,7 +1,7 @@
 # Long-thread payload upgrades
 
-Status: planned; first cut shipped (no-op streaming timeline republish)  
-Date: 2026-08-30  
+Status: planned; first cut shipped (no-op streaming timeline republish)
+Date: 2026-08-30
 Inspiration: T3 Code PRs `#4006`, `#4622`, `#4705`, `#4788`, `#4791`, `#6675` (context only; Aiden’s architecture does not map 1:1)
 
 ## Verdict

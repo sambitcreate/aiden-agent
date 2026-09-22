@@ -140,7 +140,7 @@ test("a committed append is not presented as unsent when generation start later 
     "const handleStop = React.useCallback",
   );
   const append = handleSend.indexOf("await chatsApi.appendMessage(");
-  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  const start = handleSend.indexOf("await runGeneration(messageTurnId");
   assert.ok(append >= 0 && start > append);
   assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
@@ -163,7 +163,7 @@ test("an unpersisted image response blocks sends, copies, and the composer until
   );
   assert.match(
     pane,
-    /ready=\{\s*ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable\s*\}/u,
+    /ready=\{\s*ready\s*&&\s*!imageArtifactRecoveryPending\s*&&\s*!imageArtifactRecoveryUnavailable/u,
   );
   assert.match(pane, /Delete this chat to discard it/iu);
   assert.match(pane, /imageArtifactRecoveryUnavailable/u);
@@ -191,9 +191,14 @@ test("terminal chat snapshots reach cache before visual stream handoff awaits", 
 
 test("a persisted provider failure replaces the transient stream error", () => {
   const pane = source("./chat-pane.tsx");
-  const terminal = between(
+  const generation = between(
     pane,
-    "onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {",
+    "const runGeneration = React.useCallback(",
+    "const handleSend = React.useCallback(",
+  );
+  const terminal = between(
+    generation,
+    "onError: (",
     "messageTurnId,",
   );
   assert.match(terminal, /updatedChat\?\.messages\[updatedChat\.messages\.length - 1\]/u);
@@ -285,16 +290,17 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
 });
 
-test("scroll area still pads the viewport for its overlaid chrome", () => {
+test("scroll area pads ordinary chrome while allowing the Design composer to overlay", () => {
   const ui = source("../components/ui.tsx");
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height or the composer overlaps the transcript.
+  // their measured height unless the caller explicitly requests an overlay footer.
   assert.match(
     scrollArea,
-    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: overlayFooter \? 0 : footerHeight\s*\}\}/u,
   );
+  assert.match(scrollArea, /overlayFooter = false/u);
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
 });
@@ -335,14 +341,14 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
-  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+  assert.match(pane, /enabled: presentation === "chat" && !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
 });
 
 test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("await runGeneration(messageTurnId, preparedWorkspaceId)");
   assert.ok(install >= 0 && start > install);
 
   const queryClient = new QueryClient();
@@ -408,11 +414,11 @@ test("first-message promotion seeds the real cache before releasing draft state 
   const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
   const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("await runGeneration(messageTurnId, preparedWorkspaceId)");
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
-  assert.match(pane, /enabled: !draft && ready/u);
+  assert.match(pane, /enabled: presentation === "chat" && !draft && ready/u);
 });
 
 

@@ -1,3 +1,4 @@
+import { reconcileDesignGenerationAppend } from "./services/design-generation-append.js";
 import {
   app,
   BrowserWindow,
@@ -65,10 +66,7 @@ import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.
 import { scheduleService } from "./services/schedule-service.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
-import {
-  effectiveBindings,
-  migrateLegacyKeybindings,
-} from "../renderer/shared/keybindings.js";
+import { effectiveBindings, migrateLegacyKeybindings } from "../renderer/shared/keybindings.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -91,9 +89,24 @@ import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import {
+  designReferenceAssetStore,
+  pruneUnreferencedDesignAssetsAtStartup,
+} from "./services/design-reference-asset-store.js";
+import {
+  designProjectLifecycle,
+  designProjectStore,
+} from "./services/design-project-store-main.js";
+import { designProjectExportHistoryStore } from "./services/design-project-export-history.js";
+import { designCommentStore } from "./services/design-comment-store-main.js";
+import { designSystemSnapshotStore } from "./services/design-system-attachment-service-main.js";
+import { designHandoffApplicationService } from "./services/design-handoff-application-service-main.js";
+import { designGeneratedRevisionService } from "./services/design-generated-revision-service-main.js";
+import { recoverSourceDesignerMultifileActions } from "./services/source-designer-multifile-main.js";
+import {
   registerGenerativeUiProtocol,
   registerGenerativeUiScheme,
 } from "./services/generative-ui-protocol.js";
+import { shouldBlockGenerativeUiGuestNavigation } from "../renderer/shared/generative-ui.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -137,6 +150,7 @@ import { initializeBotApplicationService } from "./services/bot-application-serv
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
+import { sourceDesignPreviewService } from "./services/source-design-preview.js";
 
 registerGenerativeUiScheme();
 
@@ -155,19 +169,16 @@ let closeGuard = {
   path: undefined as string | undefined,
   saving: false,
 };
-let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
-  null;
+let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
-const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
-  (snapshot) => {
-    ipcMain.broadcast("app:update-state", snapshot);
-  },
-);
+const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) => {
+  ipcMain.broadcast("app:update-state", snapshot);
+});
 
 const SUBAGENT_PACKAGED_SOAK_WAIT_MS = 30_000;
 const SUBAGENT_PACKAGED_SOAK_POLL_MS = 25;
@@ -224,10 +235,7 @@ function hasCloseGuard(): boolean {
   return closeGuard.dirty || closeGuard.gitBusy || closeGuard.saving;
 }
 
-function confirmProtectedAction(
-  window: BrowserWindow,
-  action: "close" | "reload",
-): boolean {
+function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload"): boolean {
   if (closeGuard.gitBusy) {
     dialog.showMessageBoxSync(window, {
       type: "info",
@@ -265,9 +273,7 @@ function confirmProtectedAction(
         : "Reloading Aiden will permanently discard those edits.",
     buttons: [
       "Keep Editing",
-      action === "close"
-        ? "Discard Edits and Close"
-        : "Discard Edits and Reload",
+      action === "close" ? "Discard Edits and Close" : "Discard Edits and Reload",
     ],
     defaultId: 0,
     cancelId: 0,
@@ -293,6 +299,7 @@ function cleanupApplication(): void {
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
+  void sourceDesignPreviewService.shutdown();
   void mcpManager.closeAll();
 }
 
@@ -305,11 +312,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     } catch (error) {
       shutdownStarted = false;
       computerUseSettings.resumeAfterCancelledShutdown();
-      logger.error(
-        "main",
-        "Computer Use state was not durable; Aiden will stay open.",
-        error,
-      );
+      logger.error("main", "Computer Use state was not durable; Aiden will stay open.", error);
       return;
     }
   }
@@ -328,11 +331,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       );
     }
   } catch (error) {
-    logger.error(
-      "main",
-      "Parent generation shutdown did not complete cleanly.",
-      error,
-    );
+    logger.error("main", "Parent generation shutdown did not complete cleanly.", error);
   }
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
@@ -343,17 +342,16 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   }
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
-  const quitReceiptFinalization =
-    await tryFinalizeSubagentPackagedSoakQuitReceipt(
-      session,
-      parentSettled,
-      subagentsSettled,
-      {
-        flushMetrics: () => subagentHealthMetrics.flush(),
-        snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
-        writeReceipt: writeSubagentPackagedSoakReceipt,
-      },
-    );
+  const quitReceiptFinalization = await tryFinalizeSubagentPackagedSoakQuitReceipt(
+    session,
+    parentSettled,
+    subagentsSettled,
+    {
+      flushMetrics: () => subagentHealthMetrics.flush(),
+      snapshotMetrics: () => subagentHealthMetrics.snapshotForPackagedSoak(),
+      writeReceipt: writeSubagentPackagedSoakReceipt,
+    },
+  );
   if (quitReceiptFinalization.status === "lifecycle_unsettled") {
     logger.warn(
       "main",
@@ -371,9 +369,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       quitReceiptFinalization.error,
     );
   }
-  if (
-    requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)
-  ) {
+  if (requiresSubagentPackagedSoakFailureExit(session, quitReceiptFinalization)) {
     logger.error(
       "main",
       "Packaged subagent soak finalization did not create a valid receipt; exiting with failure.",
@@ -388,6 +384,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     await stopAidenRemoteServiceAndSettle();
   } catch (error) {
     logger.error("aiden-remote", "Remote Access did not stop cleanly.", error);
+  }
+  try {
+    await sourceDesignPreviewService.shutdown();
+  } catch (error) {
+    logger.error("main", "Source preview shutdown did not complete cleanly.", error);
   }
   cleanupApplication();
   try {
@@ -404,11 +405,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       browserService.shutdown(),
     ]);
   } catch (error) {
-    logger.error(
-      "main",
-      "Application service shutdown did not complete cleanly.",
-      error,
-    );
+    logger.error("main", "Application service shutdown did not complete cleanly.", error);
   }
   await flushSubagentRuntimeDiagnostics(1_000);
   await flushDiagnosticJournal(1_000);
@@ -425,9 +422,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   app.quit();
 }
 
-async function refreshCloseGuardFromRenderer(
-  window: BrowserWindow,
-): Promise<number | null> {
+async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<number | null> {
   try {
     const latest = (await window.webContents.executeJavaScript(
       `({
@@ -449,8 +444,7 @@ async function refreshCloseGuardFromRenderer(
       path: closeGuard.path,
       saving: latest?.saving === true,
     };
-    return Number.isSafeInteger(latest?.revision) &&
-      Number(latest.revision) >= 0
+    return Number.isSafeInteger(latest?.revision) && Number(latest.revision) >= 0
       ? Number(latest.revision)
       : 0;
   } catch (error) {
@@ -471,10 +465,7 @@ async function refreshCloseGuardFromRenderer(
   }
 }
 
-async function armRendererUnload(
-  window: BrowserWindow,
-  revision: number,
-): Promise<boolean> {
+async function armRendererUnload(window: BrowserWindow, revision: number): Promise<boolean> {
   try {
     return (
       (await window.webContents.executeJavaScript(
@@ -500,8 +491,7 @@ async function authorizeProtectedAction(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const revision = await refreshCloseGuardFromRenderer(window);
     if (revision === null) return false;
-    if (hasCloseGuard() && !confirmProtectedAction(window, action))
-      return false;
+    if (hasCloseGuard() && !confirmProtectedAction(window, action)) return false;
     if (await armRendererUnload(window, revision)) return true;
   }
   if (!window.isDestroyed()) {
@@ -574,19 +564,13 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       await computerUseSettings.shutdown();
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
-      logger.error(
-        "main",
-        "Computer Use state was not durable; quit was cancelled.",
-        error,
-      );
+      logger.error("main", "Computer Use state was not durable; quit was cancelled.", error);
       if (!window.isDestroyed()) {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Aiden will stay open because Computer Use could not be safely turned off.",
-          detail:
-            "Check that the app can write its settings, then try quitting again.",
+          message: "Aiden will stay open because Computer Use could not be safely turned off.",
+          detail: "Check that the app can write its settings, then try quitting again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -611,9 +595,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   }
 }
 
-async function clearRendererOnboardingCompletion(
-  window: BrowserWindow,
-): Promise<boolean> {
+async function clearRendererOnboardingCompletion(window: BrowserWindow): Promise<boolean> {
   try {
     return (
       (await window.webContents.executeJavaScript(
@@ -627,14 +609,8 @@ async function clearRendererOnboardingCompletion(
       )) === true
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not clear the onboarding completion marker.",
-      error,
-    );
-    throw new Error(
-      "Aiden couldn’t prepare onboarding for restart. Try again.",
-    );
+    logger.error("main", "Could not clear the onboarding completion marker.", error);
+    throw new Error("Aiden couldn’t prepare onboarding for restart. Try again.");
   }
 }
 
@@ -649,21 +625,12 @@ async function restoreRendererOnboardingCompletion(
       true,
     );
   } catch (error) {
-    logger.error(
-      "main",
-      "Could not restore the onboarding completion marker.",
-      error,
-    );
+    logger.error("main", "Could not restore the onboarding completion marker.", error);
   }
 }
 
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
-  if (
-    lifecycleCheckInFlight ||
-    shutdownStarted ||
-    installUpdateOnQuit ||
-    window.isDestroyed()
-  ) {
+  if (lifecycleCheckInFlight || shutdownStarted || installUpdateOnQuit || window.isDestroyed()) {
     return false;
   }
   lifecycleCheckInFlight = true;
@@ -684,8 +651,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(window, {
           type: "error",
           title: "Aiden couldn't save Computer Use",
-          message:
-            "Onboarding was not reset because Computer Use could not be safely turned off.",
+          message: "Onboarding was not reset because Computer Use could not be safely turned off.",
           detail: "Check that the app can write its settings, then try again.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
@@ -695,8 +661,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       return false;
     }
 
-    const onboardingWasComplete =
-      await clearRendererOnboardingCompletion(window);
+    const onboardingWasComplete = await clearRendererOnboardingCompletion(window);
     await persistMainWindowState(window);
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
@@ -712,11 +677,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       computerUseSettings.resumeAfterCancelledShutdown();
       settingsPrepared = false;
       protectedAction = null;
-      logger.error(
-        "main",
-        "Onboarding reset was incomplete after the renderer closed.",
-        error,
-      );
+      logger.error("main", "Onboarding reset was incomplete after the renderer closed.", error);
       try {
         await createMainWindow();
       } catch (recoveryError) {
@@ -730,10 +691,8 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
         dialog.showMessageBoxSync(mainWindow, {
           type: "error",
           title: "Aiden couldn't finish the reset",
-          message:
-            "Some setup data could not be cleared. Retry Reset onboarding.",
-          detail:
-            "Aiden reopened without deleting your chats, projects, schedules, or skills.",
+          message: "Some setup data could not be cleared. Retry Reset onboarding.",
+          detail: "Aiden reopened without deleting your chats, projects, schedules, or skills.",
           buttons: ["Keep Aiden Open"],
           defaultId: 0,
           noLink: true,
@@ -759,22 +718,16 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
 }
 
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  const input = (
-    typeof value === "object" && value !== null ? value : {}
-  ) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   closeGuard = {
     dirty: input.dirty === true,
     gitBusy: input.gitBusy === true,
-    path:
-      typeof input.path === "string" && input.path.length <= 4_096
-        ? input.path
-        : undefined,
+    path: typeof input.path === "string" && input.path.length <= 4_096 ? input.path : undefined,
     saving: input.saving === true,
   };
   return true;
@@ -782,21 +735,12 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 
 ipcMain.handle("app:resetOnboarding", async (event) => {
   const window = mainWindow;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id
-  )
-    return false;
+  if (!window || window.isDestroyed() || event.sender.id !== window.webContents.id) return false;
   return requestOnboardingReset(window);
 });
 
 ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     throw new Error("Onboarding state is unavailable outside the active application window.");
   }
   const owner = rendererDocumentOwner(
@@ -809,11 +753,7 @@ ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) 
 ipcMain.handle(
   "app:setOnboardingOutcome",
   async (event, outcome: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
@@ -838,11 +778,7 @@ ipcMain.handle(
 ipcMain.handle(
   "app:setOnboardingProgress",
   async (event, step: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (step !== "profile" && step !== "provider") {
@@ -865,11 +801,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:getUpdateState", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       status: "idle",
       version: null,
@@ -881,11 +813,7 @@ ipcMain.handle("app:getUpdateState", (event) => {
 ipcMain.handle(
   "app:checkForUpdates",
   async (event): Promise<AppUpdateCheckResult> => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
       return { outcome: "unavailable" };
     }
     return appUpdateService.checkNow(false);
@@ -893,11 +821,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
       accepted: false,
       reason: "unavailable",
@@ -925,19 +849,13 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
   rendererReadiness.markReady();
   return true;
 });
 
-async function applyDockIconPreference(
-  preference: DockIconPreference,
-): Promise<boolean> {
+async function applyDockIconPreference(preference: DockIconPreference): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
   const iconPath =
     preference === "monochrome"
@@ -948,16 +866,13 @@ async function applyDockIconPreference(
         ? path.join(process.resourcesPath, "app-icon.png")
         : path.join(app.getAppPath(), "resources", "app-icon.png");
   const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty())
-    throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
+  if (icon.isEmpty()) throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
   app.dock.setIcon(icon);
   await app.dock.show();
   return true;
 }
 
-async function restoreDockIconPreference(
-  preference: DockIconPreference,
-): Promise<void> {
+async function restoreDockIconPreference(preference: DockIconPreference): Promise<void> {
   try {
     await applyDockIconPreference(preference);
   } catch (error) {
@@ -966,35 +881,22 @@ async function restoreDockIconPreference(
     try {
       await applyDockIconPreference("aiden");
     } catch (fallbackError) {
-      logger.warn(
-        "main",
-        "Could not restore the default Dock icon",
-        fallbackError,
-      );
+      logger.warn("main", "Could not restore the default Dock icon", fallbackError);
     }
   }
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  if (value !== "aiden" && value !== "monochrome")
-    throw new Error("Invalid Dock icon preference.");
+  if (value !== "aiden" && value !== "monochrome") throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
 });
 
 function openExternalUrl(value: string): void {
   try {
     const url = new URL(value);
-    if (
-      url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-    ) {
+    if (url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:") {
       void shell.openExternal(url.toString());
     }
   } catch {
@@ -1072,7 +974,9 @@ async function createMainWindow(): Promise<void> {
     browserService.closeForWebContents(createdWebContentsId);
   });
   createdWindow.webContents.on("render-process-gone", (_event, details) => {
-    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(
+      () => undefined,
+    );
     writeDiagnosticEvent({
       level: "error",
       area: "renderer",
@@ -1121,7 +1025,8 @@ async function createMainWindow(): Promise<void> {
           shutdownStarted ||
           createdWindow.isDestroyed() ||
           mainWindow !== createdWindow
-        ) return;
+        )
+          return;
         await createdWindow.loadURL(mainWindowUrl);
       }),
     );
@@ -1142,7 +1047,8 @@ async function createMainWindow(): Promise<void> {
         shutdownStarted ||
         createdWindow.isDestroyed() ||
         mainWindow !== createdWindow
-      ) return;
+      )
+        return;
       writeDiagnosticEvent({
         level: "info",
         area: "renderer",
@@ -1159,13 +1065,12 @@ async function createMainWindow(): Promise<void> {
         event: "renderer-recovery",
         outcome: "failed",
         code: projected.code,
-        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+        fields: {
+          errorType: projected.errorType,
+          fingerprint: projected.fingerprint ?? null,
+        },
       });
-      logger.error(
-        "main",
-        "Could not recover the main renderer after it exited.",
-        error,
-      );
+      logger.error("main", "Could not recover the main renderer after it exited.", error);
       if (!createdWindow.isDestroyed()) createdWindow.destroy();
     });
   });
@@ -1213,26 +1118,26 @@ async function createMainWindow(): Promise<void> {
       });
     },
   );
-  createdWindow.webContents.on(
-    "preload-error",
-    (_event, preloadPath, error) => {
-      const projected = projectDiagnosticError(error);
-      writeDiagnosticEvent({
-        level: "error",
-        area: "renderer",
-        event: "renderer-preload-failed",
-        outcome: "failed",
-        code: projected.code,
-        fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
-      });
-      logger.error(
-        "renderer-lifecycle",
-        "Renderer preload failed",
-        { webContentsId: createdWebContentsId, preloadPath },
-        error,
-      );
-    },
-  );
+  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEvent({
+      level: "error",
+      area: "renderer",
+      event: "renderer-preload-failed",
+      outcome: "failed",
+      code: projected.code,
+      fields: {
+        errorType: projected.errorType,
+        fingerprint: projected.fingerprint ?? null,
+      },
+    });
+    logger.error(
+      "renderer-lifecycle",
+      "Renderer preload failed",
+      { webContentsId: createdWebContentsId, preloadPath },
+      error,
+    );
+  });
   createdWindow.once("ready-to-show", () => {
     writeDiagnosticEvent({
       level: "info",
@@ -1313,6 +1218,34 @@ async function createMainWindow(): Promise<void> {
     event.preventDefault();
     openExternalUrl(url);
   });
+  createdWindow.webContents.on("will-frame-navigate", (event) => {
+    let trustedRendererInitiator = false;
+    try {
+      const rendererUrl = new URL(mainWindowUrl);
+      const initiatorUrl = event.initiator?.url ? new URL(event.initiator.url) : undefined;
+      trustedRendererInitiator =
+        initiatorUrl !== undefined &&
+        (rendererUrl.origin !== "null"
+          ? initiatorUrl.origin === rendererUrl.origin
+          : rendererUrl.protocol === "file:" &&
+            initiatorUrl.protocol === "file:" &&
+            path.dirname(initiatorUrl.pathname) === path.dirname(rendererUrl.pathname));
+    } catch {
+      trustedRendererInitiator = false;
+    }
+    if (
+      shouldBlockGenerativeUiGuestNavigation({
+        isMainFrame: event.isMainFrame,
+        frameUrl: event.frame?.url,
+        initiatorUrl: event.initiator?.url,
+        targetUrl: event.url,
+        trustedRendererInitiator,
+        sourcePreviewFrames: sourceDesignPreviewService.frameNavigationAuthorities(),
+      })
+    ) {
+      event.preventDefault();
+    }
+  });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });
   mainWindowLoads.replace(createdWindow.loadURL(mainWindowUrl));
@@ -1352,15 +1285,9 @@ function deliverMainWindowNotificationSafely(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
 ): void {
-  void deliverMainWindowNotification(channel, payload).catch(
-    (error: unknown) => {
-      logger.warn(
-        "main",
-        `Could not deliver renderer command "${channel}".`,
-        error,
-      );
-    },
-  );
+  void deliverMainWindowNotification(channel, payload).catch((error: unknown) => {
+    logger.warn("main", `Could not deliver renderer command "${channel}".`, error);
+  });
 }
 
 function showMainWindow(): void {
@@ -1370,9 +1297,7 @@ function showMainWindow(): void {
 }
 
 function pauseForPackagedSubagentSoak(): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS),
-  );
+  return new Promise((resolve) => setTimeout(resolve, SUBAGENT_PACKAGED_SOAK_POLL_MS));
 }
 
 async function waitForPackagedSubagentSoak(
@@ -1387,9 +1312,7 @@ async function waitForPackagedSubagentSoak(
   throw new Error(`Packaged subagent soak did not reach ${step}.`);
 }
 
-async function runPackagedSubagentSoakRendererScript(
-  script: string,
-): Promise<boolean> {
+async function runPackagedSubagentSoakRendererScript(script: string): Promise<boolean> {
   const window = mainWindow;
   if (!window || window.isDestroyed()) {
     throw new Error("Packaged subagent soak lost its main window.");
@@ -1409,18 +1332,13 @@ async function packagedSubagentSoakGenerationError(): Promise<string | null> {
   return typeof result === "string" && result ? result : null;
 }
 
-async function settlePackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   if (!(await llmClient.waitForChatIdle(SUBAGENT_PACKAGED_SOAK_CHAT_ID))) {
-    throw new Error(
-      "Packaged subagent soak did not settle its parent generation.",
-    );
+    throw new Error("Packaged subagent soak did not settle its parent generation.");
   }
   await waitForPackagedSubagentSoak(
     "child settlement",
-    () =>
-      !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
+    () => !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await subagentHealthMetrics.flush();
   await writeSubagentPackagedSoakReceipt(
@@ -1435,9 +1353,7 @@ async function settlePackagedSubagentSoak(
  * main-only and fixed-function: normal users have no new IPC, renderer API, or
  * automation endpoint.
  */
-async function runPackagedSubagentSoak(
-  session: SubagentPackagedSoakSession,
-): Promise<void> {
+async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
   await deliverMainWindowNotification("app:navigate", {
     path: SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
   });
@@ -1447,35 +1363,26 @@ async function runPackagedSubagentSoak(
   await waitForPackagedSubagentSoak("child start", async () => {
     const generationError = await packagedSubagentSoakGenerationError();
     if (generationError) {
-      throw new Error(
-        `Packaged subagent soak parent generation failed: ${generationError}`,
-      );
+      throw new Error(`Packaged subagent soak parent generation failed: ${generationError}`);
     }
-    return subagentRuntimeRegistry.hasChatChildren(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    );
+    return subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID);
   });
   // Ownership alone is intentionally insufficient: a child is registered
   // before it acquires a slot and dispatches provider work. Wait for Pi's
   // response callback so the loopback child request is actually in flight.
   await waitForPackagedSubagentSoak("child provider response", () =>
-    subagentRuntimeRegistry.hasChatProviderResponse(
-      SUBAGENT_PACKAGED_SOAK_CHAT_ID,
-    ),
+    subagentRuntimeRegistry.hasChatProviderResponse(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await waitForPackagedSubagentSoak(
     "aggregate child start",
-    async () =>
-      (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
+    async () => (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
   );
 
   const action = subagentPackagedSoakAction(session.control.mode);
   switch (action.kind) {
     case "renderer_stop":
       await waitForPackagedSubagentSoak("user stop", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -1484,9 +1391,7 @@ async function runPackagedSubagentSoak(
         path: action.path,
       });
       await waitForPackagedSubagentSoak("Settings navigation", () =>
-        runPackagedSubagentSoakRendererScript(
-          SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT,
-        ),
+        runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT),
       );
       await settlePackagedSubagentSoak(session);
       return;
@@ -1501,19 +1406,13 @@ registerAppPathOpener(async (path) => {
   await deliverMainWindowNotification("app:navigate", { path });
 });
 
-function setupApplicationMenu(
-  settings: AppSettings,
-  acceleratorsEnabled = true,
-): void {
+function setupApplicationMenu(settings: AppSettings, acceleratorsEnabled = true): void {
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
   }
-  const bindings = effectiveBindings(
-    migrateLegacyKeybindings(settings.keybindings, settings),
-  );
-  const command = (commandId: keyof typeof bindings) =>
-    bindings[commandId] ?? undefined;
+  const bindings = effectiveBindings(migrateLegacyKeybindings(settings.keybindings, settings));
+  const command = (commandId: keyof typeof bindings) => bindings[commandId] ?? undefined;
   const menu = Menu.buildFromTemplate([
     {
       label: app.getName(),
@@ -1581,8 +1480,7 @@ function setupApplicationMenu(
           label: "Reload",
           accelerator: "Command+R",
           click: () => {
-            if (mainWindow && !mainWindow.isDestroyed())
-              void requestWindowReload(mainWindow);
+            if (mainWindow && !mainWindow.isDestroyed()) void requestWindowReload(mainWindow);
           },
         },
         {
@@ -1617,20 +1515,22 @@ if (!ownsSingleInstanceLock) {
   terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
 
   app.on("child-process-gone", (_event, details) => {
-    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(() => undefined);
+    void pruneExpiredDiagnosticCrashDumps(currentRuntimeProfile().crashDumpsPath).catch(
+      () => undefined,
+    );
     writeDiagnosticEvent({
       level: "error",
       area: "electron",
       event: "child-process-gone",
       outcome: "failed",
       code: "internal-error",
-      fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
+      fields: {
+        processType: details.type,
+        reason: details.reason,
+        exitCode: details.exitCode,
+      },
     });
-    logger.error(
-      "electron-lifecycle",
-      "Electron child process exited unexpectedly",
-      details,
-    );
+    logger.error("electron-lifecycle", "Electron child process exited unexpectedly", details);
   });
 
   app.on("second-instance", () => showMainWindow());
@@ -1686,21 +1586,14 @@ if (!ownsSingleInstanceLock) {
     reloadPortableConfig,
     async (previous, next) => {
       await Promise.all([
-        reconcileExternalProviderCredentialChanges(
-          previous.providers,
-          next.providers,
-        ),
-        reconcileExternalMcpCredentialChanges(
-          previous.mcpServers,
-          next.mcpServers,
-          (serverId) => mcpManager.disconnect(serverId),
+        reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
+        reconcileExternalMcpCredentialChanges(previous.mcpServers, next.mcpServers, (serverId) =>
+          mcpManager.disconnect(serverId),
         ),
       ]);
     },
   );
-  setPortableCredentialSnapshotListener(() =>
-    reloadAndReconcilePortableConfig.syncCurrent(),
-  );
+  setPortableCredentialSnapshotListener(() => reloadAndReconcilePortableConfig.syncCurrent());
   const portableConfigWatcher = createPortableConfigWatcher(
     reloadAndReconcilePortableConfig,
     () => {
@@ -1708,11 +1601,7 @@ if (!ownsSingleInstanceLock) {
       ipcMain.broadcast("app:config-externally-changed", {});
     },
     (error: unknown) =>
-      logger.warn(
-        "portable-config",
-        "Failed to re-read the portable config",
-        error,
-      ),
+      logger.warn("portable-config", "Failed to re-read the portable config", error),
   );
 
   app
@@ -1730,25 +1619,17 @@ if (!ownsSingleInstanceLock) {
           electronVersion: process.versions.electron,
         },
       });
-      if (
-        runtimeProfile.id === "development" &&
-        process.platform === "darwin"
-      ) {
+      if (runtimeProfile.id === "development" && process.platform === "darwin") {
         app.dock?.setBadge("DEV");
       }
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
       if (packagedSubagentSoak && !subagentsEnabled()) {
-        throw new Error(
-          "Packaged subagent soak requires the internal subagent opt-in.",
-        );
+        throw new Error("Packaged subagent soak requires the internal subagent opt-in.");
       }
       if (!isPackagedRuntime()) {
-        logger.info(
-          "dev-log",
-          `Writing dev log to ${devLogPath() ?? "unknown"}`,
-        );
+        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
         logger.info("electron-lifecycle", "Electron application ready", {
           appName: app.getName(),
           appVersion: app.getVersion(),
@@ -1760,9 +1641,7 @@ if (!ownsSingleInstanceLock) {
         });
       }
       try {
-        terminalService.installHistoryStore(
-          await TerminalHistoryStore.create(),
-        );
+        terminalService.installHistoryStore(await TerminalHistoryStore.create());
       } catch (error) {
         logger.warn(
           "terminal",
@@ -1784,6 +1663,45 @@ if (!ownsSingleInstanceLock) {
       await piRuntimeEffectStore.initialize();
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
+      await designReferenceAssetStore.initialize();
+      await designProjectStore.initialize();
+      await designProjectExportHistoryStore.initialize();
+      await designCommentStore.initialize();
+      await designSystemSnapshotStore.initialize();
+      await designHandoffApplicationService.initialize();
+      // Design recovery can cascade into chat deletion, whose application
+      // service must tombstone private subagent history first.
+      await subagentRunStore.initialize();
+      await designProjectLifecycle.recover();
+      if (designReferenceAssetStore.availability().available) {
+        try {
+          const recovered = await pruneUnreferencedDesignAssetsAtStartup({
+            assets: designReferenceAssetStore,
+            projects: designProjectStore,
+          });
+          if (recovered.status === "completed" && recovered.removed > 0) {
+            logger.info(
+              "design-project",
+              `Removed ${recovered.removed} unowned Design reference image${recovered.removed === 1 ? "" : "s"}.`,
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            "design-project",
+            "Could not confirm unowned Design reference image cleanup; recovery will retry next launch.",
+            error,
+          );
+        }
+      }
+      await recoverSourceDesignerMultifileActions(designProjectStore);
+      const handoffRecovery = await designHandoffApplicationService.reconcileAtStartup();
+      if (handoffRecovery.failures.length > 0) {
+        logger.warn(
+          "design-handoff",
+          "Some Design handoffs need recovery review.",
+          new Error(`${handoffRecovery.failures.length} handoff operations need attention.`),
+        );
+      }
       registerGenerativeUiProtocol();
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
@@ -1808,7 +1726,35 @@ if (!ownsSingleInstanceLock) {
           new Error(generativeUiArtifactAvailability.reason),
         );
       }
-      await subagentRunStore.initialize();
+      const designReferenceAssetAvailability = designReferenceAssetStore.availability();
+      if (!designReferenceAssetAvailability.available) {
+        logger.warn(
+          "design",
+          "Design reference images are unavailable; projects will remain available for repair.",
+          new Error(designReferenceAssetAvailability.reason),
+        );
+      }
+      const designProjectAvailability = designProjectStore.availability();
+      if (!designProjectAvailability.available) {
+        logger.warn(
+          "design-project",
+          `Design Project storage unavailable: ${designProjectAvailability.reason}`,
+        );
+      }
+      const designExportHistoryAvailability = designProjectExportHistoryStore.availability();
+      if (!designExportHistoryAvailability.available) {
+        logger.warn(
+          "design-project",
+          `Design export history unavailable: ${designExportHistoryAvailability.reason}`,
+        );
+      }
+      const designCommentAvailability = designCommentStore.availability();
+      if (!designCommentAvailability.available) {
+        logger.warn(
+          "design-project",
+          `Design comments unavailable: ${designCommentAvailability.reason}`,
+        );
+      }
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         if (displayImageArtifactAvailability.available) {
           await displayImageArtifactStore.deleteChat(chatId);
@@ -1820,13 +1766,28 @@ if (!ownsSingleInstanceLock) {
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      if (designProjectAvailability.available) {
+        await designProjectLifecycle.runProjectMutation(async () => {
+          for (const project of await designProjectStore.list()) {
+            try {
+              await reconcileDesignGenerationAppend({
+                projectId: project.id,
+                readChat: () => chatStore.get(project.chatId),
+                reconcile: (input) => designProjectStore.reconcileGenerationIntents(input),
+              });
+            } catch (error) {
+              logger.warn("design-project", "Could not reconcile Design generation intents; preserving uncertain turns.", error);
+            }
+          }
+        });
+      }
       if (displayImageArtifactAvailability.available) {
         try {
           const startupChats = (
             await Promise.all(
-              (await displayImageArtifactStore.pendingChatIds()).map((chatId) =>
-                chatStore.get(chatId),
-              ),
+              (
+                await displayImageArtifactStore.pendingChatIds()
+              ).map((chatId) => chatStore.get(chatId)),
             )
           ).filter((chat): chat is Chat => chat !== null);
           await displayImageArtifactStore.recover(
@@ -1857,11 +1818,42 @@ if (!ownsSingleInstanceLock) {
       }
       if (generativeUiArtifactAvailability.available) {
         try {
-          const startupHtmlChats = (
+          const eligibleDesignRecords =
+            await generativeUiArtifactStore.designPublicationRecords(["eligible"]);
+          const eligibleDesignChats = (
             await Promise.all(
-              (await generativeUiArtifactStore.pendingChatIds()).map((chatId) =>
+              [...new Set(eligibleDesignRecords.map((record) => record.chatId))].map((chatId) =>
                 chatStore.get(chatId),
               ),
+            )
+          ).filter((chat): chat is Chat => chat !== null);
+          await designGeneratedRevisionService.reconcileAtStartup(eligibleDesignChats);
+          for (const record of await generativeUiArtifactStore.pending()) {
+            if (
+              !record.generationId.startsWith("direct-edit:") &&
+              !record.generationId.startsWith("direct-edit-revert:")
+            ) {
+              continue;
+            }
+            const project = await designProjectStore.getByChatId(record.chatId);
+            const linked = project?.canvas.nodes.some(
+              (node) =>
+                node.kind === "artboard" &&
+                node.artifactMediaIds?.includes(record.artifact.mediaId),
+            );
+            if (!linked) {
+              await generativeUiArtifactStore.discardPending({
+                chatId: record.chatId,
+                generationId: record.generationId,
+                mediaId: record.artifact.mediaId,
+              });
+            }
+          }
+          const startupHtmlChats = (
+            await Promise.all(
+              (
+                await generativeUiArtifactStore.pendingChatIds()
+              ).map((chatId) => chatStore.get(chatId)),
             )
           ).filter((chat): chat is Chat => chat !== null);
           await generativeUiArtifactStore.recover(
@@ -1920,16 +1912,14 @@ if (!ownsSingleInstanceLock) {
         listWorkspaces: () => configStore.listWorkspaces(),
         deletionPending: (workspace) => {
           const managed = workspace.managedWorktree;
-          if (!managed?.worktreeGitDir || !managed.ownershipToken)
-            return Promise.resolve(false);
+          if (!managed?.worktreeGitDir || !managed.ownershipToken) return Promise.resolve(false);
           return gitManagedWorktreeDeletionPending(
             managed.worktreePath,
             managed.worktreeGitDir,
             managed.ownershipToken,
           );
         },
-        blockWorkspace: (workspaceId) =>
-          scheduleService.cancelWorkspace(workspaceId),
+        blockWorkspace: (workspaceId) => scheduleService.cancelWorkspace(workspaceId),
         deleteWorktree: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitDeleteManagedWorktree(
@@ -1944,8 +1934,7 @@ if (!ownsSingleInstanceLock) {
             managed.worktreeInode,
           );
         },
-        removeWorkspaceRecord: (workspaceId) =>
-          configStore.removeWorkspace(workspaceId),
+        removeWorkspaceRecord: (workspaceId) => configStore.removeWorkspace(workspaceId),
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitFinalizeManagedWorktreeDeletion(
@@ -1988,11 +1977,7 @@ if (!ownsSingleInstanceLock) {
       try {
         await reconcilePendingMcpCredentialCleanup();
       } catch (error) {
-        logger.error(
-          "mcp",
-          "Could not reconcile an interrupted MCP credential cleanup.",
-          error,
-        );
+        logger.error("mcp", "Could not reconcile an interrupted MCP credential cleanup.", error);
       }
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
@@ -2004,11 +1989,7 @@ if (!ownsSingleInstanceLock) {
         void deliverMainWindowNotification("app:command", {
           commandId: "composer.focus",
         }).catch((error: unknown) => {
-          logger.warn(
-            "shortcut",
-            "Could not focus the composer from the global shortcut",
-            error,
-          );
+          logger.warn("shortcut", "Could not focus the composer from the global shortcut", error);
         });
       });
       initDictationShortcut(() => {
@@ -2018,11 +1999,7 @@ if (!ownsSingleInstanceLock) {
         void deliverMainWindowNotification("app:command", {
           commandId: "assistant.open",
         }).catch((error: unknown) => {
-          logger.warn(
-            "assistant",
-            "Could not open Aiden from the global shortcut",
-            error,
-          );
+          logger.warn("assistant", "Could not open Aiden from the global shortcut", error);
         });
       });
       try {
@@ -2041,10 +2018,7 @@ if (!ownsSingleInstanceLock) {
       // The active profile's portable config is user-editable, so pick
       // hand-edits up without a restart. Registered after whenReady because
       // powerMonitor is only usable once the app is ready.
-      app.on(
-        "browser-window-focus",
-        () => void portableConfigWatcher.refresh(),
-      );
+      app.on("browser-window-focus", () => void portableConfigWatcher.refresh());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {

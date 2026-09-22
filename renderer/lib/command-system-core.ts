@@ -30,11 +30,7 @@ export function commandExecutionAllowed(
 ): boolean {
   if (context.applicationModal) return false;
   if (!context.dialogOpen) return true;
-  return (
-    commandId === "commandPalette.toggle" &&
-    context.paletteOpen &&
-    !context.foreignDialog
-  );
+  return commandId === "commandPalette.toggle" && context.paletteOpen && !context.foreignDialog;
 }
 
 export function workspaceCommandVisibility(pathname: string): {
@@ -42,7 +38,7 @@ export function workspaceCommandVisibility(pathname: string): {
   terminal: boolean;
 } {
   return {
-    environment: pathname !== "/settings",
+    environment: pathname !== "/settings" && !pathname.startsWith("/design"),
     terminal:
       pathname === "/" ||
       pathname.startsWith("/chat/") ||
@@ -61,10 +57,7 @@ export function resolveCommandForKeyEvent(
     const binding = bindings[definition.id];
     if (!binding || !matchesAccelerator(event, binding)) continue;
     if (context.repeat && !definition.allowRepeat) continue;
-    if (
-      context.modal &&
-      (definition.id !== "commandPalette.toggle" || !context.paletteOpen)
-    )
+    if (context.modal && (definition.id !== "commandPalette.toggle" || !context.paletteOpen))
       continue;
     if (context.terminal && definition.id !== "terminal.toggle") continue;
     if (definition.scope === "fileEditor" && !context.fileEditor) continue;

@@ -85,7 +85,7 @@ test("floating preview uses the live browser portal independently of sidebar vis
   assert.ok(controls.includes("setPointerCapture"));
   assert.ok(controls.includes("ResizeObserver"));
   const composer = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
-  assert.ok(composer.includes('data-browser-composer-inset="true"'));
+  assert.ok(composer.includes('data-browser-composer-inset={placement === "chat" ? "true" : undefined}'));
   assert.ok(!composer.includes('data-browser-composer-inset={hasMessages'));
 });
 

@@ -1,5 +1,6 @@
 import type { ChatMessage } from "./types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import { isDesignHtmlArtifact } from "../shared/design-workspace";
 
 export interface HtmlArtifactTranscriptEntry {
   key: string;
@@ -13,6 +14,7 @@ export function htmlArtifactTranscriptPlan(
   messages: readonly ChatMessage[],
   liveArtifacts: readonly ChatHtmlArtifactV1[],
   streamingRowVisible: boolean,
+  persistedDesignMediaIds?: ReadonlySet<string>,
 ): HtmlArtifactTranscriptEntry[] {
   const liveMediaIds = new Set(liveArtifacts.map((artifact) => artifact.mediaId));
   const entries: HtmlArtifactTranscriptEntry[] = [];
@@ -20,6 +22,13 @@ export function htmlArtifactTranscriptPlan(
     if (message.role !== "assistant") continue;
     for (const artifact of message.htmlArtifacts ?? []) {
       if (streamingRowVisible && liveMediaIds.has(artifact.mediaId)) continue;
+      if (
+        persistedDesignMediaIds &&
+        isDesignHtmlArtifact(artifact) &&
+        !persistedDesignMediaIds.has(artifact.mediaId)
+      ) {
+        continue;
+      }
       entries.push({
         key: `html:${artifact.mediaId}`,
         anchor: `message:${message.id}`,

@@ -43,7 +43,7 @@ test("visible chrome and scroll offset share the complete snapshot state matrix"
   assert.equal(todoPanelHasVisibleChrome(ready("in_progress")), true);
   assert.match(
     chatPaneSource,
-    /scrollToBottomButtonOffset=\{todoPanelHasVisibleChrome\(todoSnapshot\) \? 44 : 0\}/u,
+    /scrollToBottomButtonOffset=\{\s*presentation === "chat" &&\s*todoPanelHasVisibleChrome\(todoSnapshot\)\s*\? 44\s*: 0\s*\}/u,
   );
 });
 
@@ -103,6 +103,27 @@ test("bounds the polite progress announcement even for maximum-length task copy"
   const announcement = html.match(/role="status"[^>]*>([^<]+)</u)?.[1] ?? "";
   assert.equal(Array.from(announcement).length, 360);
   assert.match(announcement, /…$/u);
+});
+
+test("renders Design progress inside the conversation footer instead of behind the rail", () => {
+  const html = renderToStaticMarkup(
+    <TodoPanel
+      placement="design-conversation"
+      snapshot={{
+        version: 1,
+        chatId: "chat-1",
+        availability: "ready",
+        tasks: [{ id: 1, subject: "Review", status: "in_progress" }],
+      }}
+    />,
+  );
+
+  assert.match(html, /relative z-20/u);
+  assert.doesNotMatch(html, /bottom-full/u);
+  assert.match(
+    chatPaneSource,
+    /<TodoPanel[\s\S]{0,180}placement=\{presentation === "design" \? "design-conversation" : "chat"\}/u,
+  );
 });
 
 test("hides empty and fully completed plans while preserving completion announcement", () => {

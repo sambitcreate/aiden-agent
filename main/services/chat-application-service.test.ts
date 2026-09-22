@@ -7,6 +7,7 @@ import {
   type ChatApplicationOwner,
 } from "./chat-application-service.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { DESIGN_PROJECT_CHAT_WORKSPACE_ID } from "../../renderer/shared/design-projects.js";
 
 function chat(id = "chat-1", workspaceId = "workspace-1"): Chat {
   return {
@@ -122,6 +123,35 @@ test("shared chat creation preserves workspace and renderer-owner commit gates",
     ),
     /selected workspace is no longer available/u,
   );
+});
+
+test("Design conversations use a private storage namespace without workspace authority", async () => {
+  let configReads = 0;
+  let workspaceAdmissions = 0;
+  const application = fixture({
+    configStore: {
+      getWorkspace: async () => {
+        configReads += 1;
+        throw new Error("Design storage must not resolve a user workspace");
+      },
+    },
+    workspaceMutationGate: {
+      admit: () => {
+        workspaceAdmissions += 1;
+        throw new Error("Design storage must not acquire workspace authority");
+      },
+    },
+  });
+  const requestOwner = owner();
+  const created = await application.service.createDesignConversation(
+    { title: "Prototype" },
+    requestOwner,
+  );
+  assert.equal(created?.workspaceId, DESIGN_PROJECT_CHAT_WORKSPACE_ID);
+  assert.equal(configReads, 0);
+  assert.equal(workspaceAdmissions, 0);
+  requestOwner.invalidate();
+  assert.throws(application.assertCreateCurrent, /renderer document is no longer active/u);
 });
 
 test("shared chat reads retain inactive-renderer reconciliation semantics", async () => {

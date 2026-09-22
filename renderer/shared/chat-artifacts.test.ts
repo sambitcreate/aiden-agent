@@ -41,6 +41,32 @@ test("html parser rejects extra keys, paths, and oversized payloads", () => {
   assert.equal(parseChatArtifactV1({ ...HTML, mimeType: "text/plain" }), undefined);
 });
 
+test("html parser preserves only an exact Design revision anchor", () => {
+  assert.deepEqual(
+    parseChatArtifactV1({
+      ...HTML,
+      mediaId: "design:one",
+      revisionOfMediaId: "design:parent",
+    }),
+    { ...HTML, mediaId: "design:one", revisionOfMediaId: "design:parent" },
+  );
+  assert.equal(
+    parseChatArtifactV1({
+      ...HTML,
+      revisionOfMediaId: "design:parent",
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseChatArtifactV1({
+      ...HTML,
+      mediaId: "design:one",
+      revisionOfMediaId: "design:one",
+    }),
+    undefined,
+  );
+});
+
 test("mutated image payloads still fail closed after the html kind exists", () => {
   assert.equal(parseChatArtifactV1({ ...IMAGE, extra: true }), undefined);
   assert.equal(

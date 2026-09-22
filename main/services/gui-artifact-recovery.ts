@@ -1,4 +1,6 @@
+import { DesignPreviewCache } from "./design-preview-cache.js";
 import { BrowserWindow, dialog } from "../platform.js";
+import { createHash, randomUUID } from "node:crypto";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import {
@@ -9,6 +11,55 @@ import {
 import { loadGenerativeUiHostLibraries } from "./generative-ui-host-libraries.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-protocol.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
+import {
+  DESIGN_ARTIFACT_MEDIA_ID_PREFIX,
+  isDesignHtmlArtifact,
+} from "../../renderer/shared/design-workspace.js";
+import { designGeneratedRevisionService } from "./design-generated-revision-service-main.js";
+import { isValidDesignArtifactSource } from "./design-project-health.js";
+import { designProjectStore } from "./design-project-store-main.js";
+import { projectOwnsPublishedDesignSource } from "./design-generation-context.js";
+import { isUsableLiveDesignCandidateSource } from "./design-artifact-source-authority.js";
+
+const designPreviewCache = new DesignPreviewCache();
+
+async function storedHtmlSource(chatId: string, mediaId: string) {
+  if (mediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX)) {
+    const source = await generativeUiArtifactStore.committedRecoverySourceFor(chatId, mediaId);
+    if (!source) return undefined;
+    const project = await designProjectStore.getByChatId(chatId);
+    if (
+      !isDesignHtmlArtifact(source.artifact) ||
+      !isValidDesignArtifactSource(source) ||
+      !projectOwnsPublishedDesignSource(project, source)
+    ) {
+      throw new Error("That Design revision is damaged. Repair it before viewing or exporting.");
+    }
+    return source;
+  }
+  const html = await generativeUiArtifactStore.htmlFor(chatId, mediaId);
+  const artifact = await generativeUiArtifactStore.artifactFor(chatId, mediaId);
+  return html === undefined || !artifact ? undefined : { artifact, html };
+}
+
+async function liveDesignCandidateSource(
+  chatId: string,
+  mediaId: string,
+  generationId: string,
+) {
+  if (!mediaId.startsWith(DESIGN_ARTIFACT_MEDIA_ID_PREFIX)) return undefined;
+  const source = await generativeUiArtifactStore.liveDesignCandidateSourceFor({
+    chatId,
+    mediaId,
+    generationId,
+  });
+  if (!source) return undefined;
+  const project = await designProjectStore.getByChatId(chatId);
+  if (!isDesignHtmlArtifact(source.artifact) || !isUsableLiveDesignCandidateSource(project, source)) {
+    throw new Error("That live Design revision is damaged and cannot be previewed.");
+  }
+  return source;
+}
 
 export async function unresolvedGuiArtifactMessage(chatId: string): Promise<string | undefined> {
   const image = displayImageArtifactStore.availability();
@@ -23,6 +74,7 @@ export async function unresolvedGuiArtifactMessage(chatId: string): Promise<stri
   const chat = await chatStore.get(chatId);
   if (chat) {
     await generativeUiArtifactStore.reconcilePersisted(chat);
+    await designGeneratedRevisionService.reconcilePersistedChat(chat);
   }
   if (
     (await displayImageArtifactStore.hasPending(chatId)) ||
@@ -37,16 +89,51 @@ export async function wrapStoredHtmlArtifact(input: {
   chatId: string;
   mediaId: string;
   theme?: unknown;
-}): Promise<{ title: string; src: string } | undefined> {
+  designStudio?: boolean;
+  /** Main-resolved document identity; never supplied by the renderer. */
+  ownerDocumentId?: string;
+  /** Main-authorized active generation; never accepted by export or persisted reads. */
+  liveDesignCandidateGenerationId?: string;
+}): Promise<{ title: string; src: string; contentHash?: string; designCapability?: string } | undefined> {
   if (!isHtmlArtifactMediaId(input.mediaId)) return undefined;
-  const html = await generativeUiArtifactStore.htmlFor(input.chatId, input.mediaId);
-  const artifact = await generativeUiArtifactStore.artifactFor(input.chatId, input.mediaId);
-  if (html === undefined || !artifact) return undefined;
-  const srcdoc = wrapGenerativeUiHtml(html, artifact.title, parseGenerativeUiTheme(input.theme));
-  return {
+  const liveSource = input.designStudio === true && input.liveDesignCandidateGenerationId
+    ? await liveDesignCandidateSource(
+        input.chatId,
+        input.mediaId,
+        input.liveDesignCandidateGenerationId,
+      )
+    : undefined;
+  const source = liveSource ?? (await storedHtmlSource(input.chatId, input.mediaId));
+  if (!source) return undefined;
+  const { artifact, html } = source;
+  const designCapability =
+    input.designStudio === true && isDesignHtmlArtifact(artifact) ? randomUUID() : undefined;
+  const theme = parseGenerativeUiTheme(input.theme);
+  const contentHash = designCapability
+    ? createHash("sha256").update(JSON.stringify([html, artifact.title, theme])).digest("hex")
+    : undefined;
+  // Source validation above must run even when the document bytes are unchanged.
+  if (contentHash && input.ownerDocumentId) {
+    const cached = designPreviewCache.get(input.ownerDocumentId, input.chatId, contentHash);
+    if (cached) return cached;
+  }
+  const srcdoc = wrapGenerativeUiHtml(
+    html,
+    artifact.title,
+    theme,
+    designCapability ? { designCapability } : undefined,
+  );
+  const document = {
     title: artifact.title,
-    src: registerGenerativeUiPreviewDocument(srcdoc),
+    src: registerGenerativeUiPreviewDocument(srcdoc, {
+      designStudio: designCapability !== undefined,
+    }),
+    ...(designCapability ? { designCapability, contentHash } : {}),
   };
+  if (contentHash && designCapability && input.ownerDocumentId) {
+    designPreviewCache.set(input.ownerDocumentId, input.chatId, { ...document, contentHash, designCapability });
+  }
+  return document;
 }
 
 export async function exportStoredHtmlArtifact(input: {
@@ -65,14 +152,11 @@ export async function exportStoredHtmlArtifact(input: {
   if (!input.parent || input.parent.isDestroyed()) {
     throw new Error("The export window is unavailable.");
   }
-  const artifact = await generativeUiArtifactStore.artifactFor(input.chatId, input.mediaId);
-  const html = await generativeUiArtifactStore.htmlFor(input.chatId, input.mediaId);
-  if (!artifact || html === undefined) throw new Error("That artifact is no longer available.");
-  const libraries = await loadGenerativeUiHostLibraries();
-  const document = generativeUiExportDocument(html, artifact.title, libraries);
+  const source = await storedHtmlSource(input.chatId, input.mediaId);
+  if (!source) throw new Error("That artifact is no longer available.");
   const result = await dialog.showSaveDialog(input.parent, {
     title: "Export artifact",
-    defaultPath: `${artifact.title.replace(/[^\w.-]+/gu, "-") || "artifact"}.html`,
+    defaultPath: `${source.artifact.title.replace(/[^\w.-]+/gu, "-") || "artifact"}.html`,
     filters: [{ name: "HTML", extensions: ["html"] }],
     properties: ["createDirectory", "showOverwriteConfirmation"],
   });
@@ -85,6 +169,14 @@ export async function exportStoredHtmlArtifact(input: {
         : unresolvedAfterDialog,
     );
   }
+  const finalSource = await storedHtmlSource(input.chatId, input.mediaId);
+  if (!finalSource) throw new Error("That artifact is no longer available.");
+  const libraries = await loadGenerativeUiHostLibraries();
+  const document = generativeUiExportDocument(
+    finalSource.html,
+    finalSource.artifact.title,
+    libraries,
+  );
   const { writeFile } = await import("node:fs/promises");
   await writeFile(result.filePath, document, { encoding: "utf8", mode: 0o600 });
   return { saved: true, canceled: false };

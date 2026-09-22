@@ -4,7 +4,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createChatStore } from "./chat-store-core.js";
-import { isEmptyChatMigrationState, isLegacyEmptyWorkspaceChat, migrateEmptyWorkspaceChats, type EmptyChatMigrationState } from "./empty-chat-migration.js";
+import { isEmptyChatMigrationState, isLegacyEmptyWorkspaceChat, readEmptyChatMigrationDesignReservations, migrateEmptyWorkspaceChats, type EmptyChatMigrationState } from "./empty-chat-migration.js";
+import { DesignProjectStore } from "./design-project-store.js";
 import type { Chat } from "./types.js";
 
 const empty = (id: string, overrides: Partial<Chat> = {}): Chat => ({
@@ -172,4 +173,56 @@ test("cross-store final assertion does not reopen already-deleted private stores
   };
   assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
   assert.equal(eligibilityReads, 1);
+});
+
+
+test("Design ownership preserves connected and prototype backing chats during empty cleanup", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-empty-design-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new DesignProjectStore({ root: () => root });
+  await store.initialize();
+  await store.create({ chatId: "connected", title: "Connected", connectionState: "connected", workspaceId: "default" });
+  await store.create({ chatId: "prototype", title: "Prototype", connectionState: "prototype-only" });
+  // Include a legacy default-workspace prototype backing chat: ownership,
+  // rather than workspace naming, must prevent cleanup from removing it.
+  const h = harness([empty("connected"), empty("prototype"), empty("ordinary")]);
+  h.deps.eligible = async (chat) => isLegacyEmptyWorkspaceChat(
+    chat, new Set(["default"]), await readEmptyChatMigrationDesignReservations(store),
+  );
+  assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
+  assert.deepEqual(h.removed, ["ordinary"]);
+  assert.ok(h.records.has("connected"));
+  assert.ok(h.records.has("prototype"));
+});
+
+test("unreadable Design ownership preserves candidates permanently after freezing the snapshot", async (t) => {
+  for (const contents of ["{broken", JSON.stringify({ version: 99, projects: [] })]) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-empty-design-corrupt-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.writeFile(path.join(root, "design-projects.json"), contents);
+    const store = new DesignProjectStore({ root: () => root });
+    await store.initialize();
+    assert.equal(store.availability().available, false);
+    const h = harness([empty("potential-design")]);
+    const warnings: unknown[] = [];
+    h.deps.eligible = async (chat) => {
+      assert.notEqual(h.state().pending, null);
+      return isLegacyEmptyWorkspaceChat(chat, new Set(["default"]), await readEmptyChatMigrationDesignReservations(store));
+    };
+    assert.equal(await migrateEmptyWorkspaceChats({ ...h.deps, onPreserved: (error) => warnings.push(error) }), 0);
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(h.removed, []);
+    assert.ok(h.records.has("potential-design"));
+    assert.equal(h.state().complete, true);
+    h.deps.eligible = eligible;
+    assert.equal(await migrateEmptyWorkspaceChats(h.deps), 0);
+    assert.ok(h.records.has("potential-design"));
+  }
+});
+
+test("Design ownership enumeration failures cannot be treated as unowned chats", async () => {
+  await assert.rejects(readEmptyChatMigrationDesignReservations({
+    availability: () => ({ available: true }),
+    list: async () => { throw new Error("ownership read failed"); },
+  }), /ownership read failed/u);
 });

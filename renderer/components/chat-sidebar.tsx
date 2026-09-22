@@ -37,6 +37,7 @@ import {
   SplitView,
   Text,
   toast,
+  useSplitViewSidebar,
 } from "./ui";
 import {
   AlertCircle,
@@ -84,11 +85,14 @@ import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
+import type { DesignProjectDeletePlanV1 } from "../shared/design-projects";
 import {
   parseSidebarPreferences,
   projectSidebarWorkspaces,
   type SidebarOrganization,
 } from "../lib/sidebar-workspace-groups";
+import type { ShellMode } from "../lib/shell-mode";
+import { WorkspaceModeSwitcher } from "./workspace-mode-switcher";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const SIDEBAR_PREFERENCES_KEY = "aiden-agent.sidebar.v1";
@@ -98,6 +102,8 @@ const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
+  mode: ShellMode;
+  onModeChange: (mode: ShellMode) => boolean;
   titleReveal?: ChatTitleRevealEvent | null;
 }
 
@@ -710,9 +716,10 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
   return groups;
 }
 
-export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
+export function ChatSidebar({ activeChatId, mode, onModeChange, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
+  const { closeIfCompact } = useSplitViewSidebar();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -742,6 +749,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [renameValue, setRenameValue] = React.useState("");
   const [renamingWithAppleId, setRenamingWithAppleId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
+  const [designDeletePlan, setDesignDeletePlan] = React.useState<DesignProjectDeletePlanV1>();
+  const [deletingChatBusy, setDeletingChatBusy] = React.useState(false);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
@@ -822,6 +831,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       }
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+        closeIfCompact();
       } catch (error) {
         if (previousWorkspaceId && targetWorkspaceId !== previousWorkspaceId) {
           select(previousWorkspaceId);
@@ -833,6 +843,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       activeId,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
+      closeIfCompact,
       navigate,
       select,
       settingsBlockedReason,
@@ -844,7 +855,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       return;
     }
     void navigate({ to: "/settings", search: { section: "remoteAccess" } });
-  }, [navigate, settingsBlockedReason]);
+    closeIfCompact();
+  }, [closeIfCompact, navigate, settingsBlockedReason]);
 
   React.useEffect(() => {
     if (!activeId || initializedExpansionRef.current) return;
@@ -996,6 +1008,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       select(id);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
+        closeIfCompact();
       } catch (error) {
         if (!list.length) discardChatDraft(target.id);
         if (previousWorkspaceId) select(previousWorkspaceId);
@@ -1011,6 +1024,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
+      closeIfCompact,
       navigate,
       qc,
       select,
@@ -1131,15 +1145,35 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   };
 
   const commitDelete = async () => {
-    if (!deleting) return;
+    if (!deleting || deletingChatBusy) return;
     if (deleting.id === activeChatId && environmentPanel.agentBusy) {
       environmentPanel.cancelAgent?.();
     }
-    await chatsApi.remove(deleting.id);
-    await removeDeletedChatFromCache(qc, deleting.id);
-    await qc.invalidateQueries({ queryKey: queryKeys.chats });
-    if (deleting.id === activeChatId) void navigate({ to: "/" });
-    setDeleting(null);
+    setDeletingChatBusy(true);
+    try {
+      const result = await chatsApi.remove(
+        deleting.id,
+        designDeletePlan
+          ? {
+              projectId: designDeletePlan.projectId,
+              expectedRevision: designDeletePlan.expectedRevision,
+            }
+          : undefined,
+      );
+      if (result.status === "confirmation-required") {
+        setDesignDeletePlan(result.plan);
+        return;
+      }
+      await removeDeletedChatFromCache(qc, deleting.id);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      if (deleting.id === activeChatId) void navigate({ to: "/" });
+      setDesignDeletePlan(undefined);
+      setDeleting(null);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "The chat could not be deleted.");
+    } finally {
+      setDeletingChatBusy(false);
+    }
   };
 
   // Warm the transcript before the click lands so opening a chat does not blank
@@ -1173,6 +1207,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
           discardChatDraft(created.id);
           throw error;
         }
+        closeIfCompact();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
       }
@@ -1182,6 +1217,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       appendReconciliationRequired,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
+      closeIfCompact,
       navigate,
       qc,
       select,
@@ -1302,7 +1338,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             icon="trash"
             color="red"
             disabled={renamingWithAppleId === chat.id}
-            onSelect={() => setDeleting(chat)}
+            onSelect={() => {
+              setDesignDeletePlan(undefined);
+              setDeleting(chat);
+            }}
           >
             Delete
           </ContextMenuItem>
@@ -1370,6 +1409,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   return (
     <>
       <Sidebar
+        header={<WorkspaceModeSwitcher mode={mode} onModeChange={onModeChange} />}
         searchable
         searchPlaceholder="Search chats…"
         searchValue={search}
@@ -1384,7 +1424,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 title="Profile"
                 selected={pathname === "/profile"}
                 disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/profile" })}
+                onClick={() => {
+                  closeIfCompact();
+                  void navigate({ to: "/profile" });
+                }}
               />
               <div className="flex min-w-0 items-center gap-0.5">
                 <SidebarListItem
@@ -1393,7 +1436,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   selected={pathname === "/settings"}
                   disabled={Boolean(settingsBlockedReason)}
                   className="min-w-0 flex-1"
-                  onClick={() => navigate({ to: "/settings" })}
+                  onClick={() => {
+                    closeIfCompact();
+                    void navigate({ to: "/settings" });
+                  }}
                 />
                 <RemoteConnectionPopover
                   settingsBlockedReason={settingsBlockedReason}
@@ -1415,13 +1461,19 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             icon={<Clock3 />}
             title="Scheduled"
             selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
+            onClick={() => {
+              closeIfCompact();
+              void navigate({ to: "/scheduled" });
+            }}
           />
           <SidebarListItem
             icon={<BotSidebarIcon />}
             title="Bots"
             selected={pathname.startsWith("/bots")}
-            onClick={() => navigate({ to: "/bots" })}
+            onClick={() => {
+              closeIfCompact();
+              void navigate({ to: "/bots" });
+            }}
           />
         </div>
 
@@ -1693,17 +1745,34 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
 
       <AlertDialog
         open={deleting !== null}
-        onOpenChange={(open) => !open && setDeleting(null)}
-        title="Delete this chat?"
+        onOpenChange={(open) => {
+          if (!open && !deletingChatBusy) {
+            setDesignDeletePlan(undefined);
+            setDeleting(null);
+          }
+        }}
+        title={designDeletePlan ? "Delete this Design Project?" : "Delete this chat?"}
         description={
           deleting ? (
-            <Text variant="small" color="secondary">
-              “{deleting.title}” and its messages will be permanently removed.
-            </Text>
+            <div className="grid gap-2 text-small text-secondary">
+              <Text variant="small" color="secondary">
+                “{deleting.title}” and its messages will be permanently removed.
+              </Text>
+              {designDeletePlan ? (
+                <div className="grid gap-1 rounded-control bg-control p-3">
+                  <span>{designDeletePlan.artifactMediaIds.length} generated revisions</span>
+                  <span>{designDeletePlan.detachedReferenceAssetIds.length} reference links</span>
+                  <span>{designDeletePlan.commentIds.length} comments</span>
+                  <span>{designDeletePlan.designerActionIds.length} source actions</span>
+                </div>
+              ) : null}
+            </div>
           ) : null
         }
-        confirmLabel="Delete"
+        confirmLabel={designDeletePlan ? "Delete project" : "Delete"}
         confirmVariant="destructive"
+        busy={deletingChatBusy}
+        keepOpenOnConfirm
         onConfirm={commitDelete}
       />
 

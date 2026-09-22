@@ -5,7 +5,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { RootView } from "./root-view";
-import { ChatLayout, ChatIndex } from "./chat-layout";
+import { ChatLayout, ChatIndex, DesignIndex, DesignProjectRoute } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
@@ -15,6 +15,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
 import { parseSettingsSearch } from "../lib/settings-section";
+import { parseDesignArtifactRouteSearch } from "../lib/design-artifact-navigation";
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -56,6 +57,31 @@ const chatRoute = createRoute({
     return <ChatPane chatId={chatId} />;
   },
   staticData: { title: "Chat" },
+});
+
+const designIndexRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design",
+  component: DesignIndex,
+  staticData: { title: "Design" },
+});
+
+const designRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design/$chatId",
+  validateSearch: parseDesignArtifactRouteSearch,
+  component: function DesignRoute() {
+    const { chatId } = designRoute.useParams();
+    const { artifact, artifactId } = designRoute.useSearch();
+    return (
+      <DesignProjectRoute
+        projectOrLegacyChatId={chatId}
+        initialMediaId={artifact}
+        initialArtifactId={artifactId}
+      />
+    );
+  },
+  staticData: { title: "Design" },
 });
 
 const profileRoute = createRoute({
@@ -112,6 +138,8 @@ const routeTree = rootRoute.addChildren([
   chatLayoutRoute.addChildren([
     indexRoute,
     chatRoute,
+    designIndexRoute,
+    designRoute,
     profileRoute,
     scheduledRoute,
     botsRoute,
