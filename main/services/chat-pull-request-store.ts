@@ -311,8 +311,28 @@ export class ChatPullRequestStore {
         )
         .catch(() => undefined);
     }
+    const root = this.root();
+    const recoveryPrefix = `.${chatId}.json.`;
+    let names: string[];
+    try {
+      names = await fs.readdir(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      names = [];
+    }
+    // A failed load can leave recoverable artifacts behind. Consume only
+    // this chat's exact DataStore recovery names before removing the source;
+    // deletion must fail if any artifact cannot be removed.
+    for (const name of names) {
+      if (
+        name.startsWith(recoveryPrefix) &&
+        (name.endsWith(".held") || name.endsWith(".previous"))
+      ) {
+        await fs.rm(path.join(root, name), { force: true, recursive: true });
+      }
+    }
+    await fs.rm(path.join(root, `${chatId}.json`), { force: true });
     this.stores.delete(chatId);
-    await fs.rm(path.join(this.root(), `${chatId}.json`), { force: true });
   }
 
   private update<R>(

@@ -397,3 +397,56 @@ test("deletion waits for a read that is recovering a held PR file", async (t) =>
   });
   assert.deepEqual(await fs.readdir(directory), []);
 });
+
+test("deletion consumes failed recovery artifacts before restart without touching another chat", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const payload = JSON.stringify({
+    schemaVersion: 1,
+    chatId: "chat-1",
+    links: [link(12)],
+    pendingCreates: [],
+  });
+  await fs.writeFile(path.join(directory, ".chat-1.json.failed.held"), payload);
+  await fs.writeFile(
+    path.join(directory, ".chat-1.json.failed.previous"),
+    payload,
+  );
+  await fs.writeFile(
+    path.join(directory, ".chat-10.json.other.held"),
+    "other chat",
+  );
+  const prototype = DataStore.prototype as unknown as {
+    recoverHeldFiles(destination: string): Promise<void>;
+  };
+  const mocked = t.mock.method(prototype, "recoverHeldFiles", async () => {
+    throw new Error("unreadable recovery candidate");
+  });
+  const store = new ChatPullRequestStore(() => directory);
+  assert.deepEqual(await store.list("chat-1"), []);
+  await store.deleteChat("chat-1");
+  mocked.mock.restore();
+  const restarted = new ChatPullRequestStore(() => directory);
+  assert.deepEqual(await restarted.list("chat-1"), []);
+  assert.deepEqual(await fs.readdir(directory), [".chat-10.json.other.held"]);
+});
+
+test("deletion consumes recovery artifacts even when no store was loaded", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(
+    path.join(directory, ".chat-1.json.unread.held"),
+    JSON.stringify({
+      schemaVersion: 1,
+      chatId: "chat-1",
+      links: [link(12)],
+      pendingCreates: [],
+    }),
+  );
+  await new ChatPullRequestStore(() => directory).deleteChat("chat-1");
+  assert.deepEqual(
+    await new ChatPullRequestStore(() => directory).list("chat-1"),
+    [],
+  );
+  assert.deepEqual(await fs.readdir(directory), []);
+});

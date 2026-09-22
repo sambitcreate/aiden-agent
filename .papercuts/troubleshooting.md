@@ -860,3 +860,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - 2026-09-22 PR #184 automated follow-up: evicting a per-chat DataStore does not revoke delayed provider callbacks or admitted writes. Mark deletion before queue drain, fence publication, and remove the file only after the barrier. Notify pending-create cache consumers after the create outcome, not while the remote request is still active.
 
 - 2026-09-22 PR #184 recovery follow-up: draining DataStore updates does not await initial load recovery. Join existing.load() after revoking admission, then drain writes and remove the file.
+
+- 2026-09-22 PR #184 recovery cleanup: DataStore.load can settle while leaving an unreadable held candidate eligible for a later recovery. Chat deletion must consume exact chat .held/.previous artifacts, including when no store was loaded, and fail if cleanup cannot finish.
