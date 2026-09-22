@@ -881,7 +881,9 @@ test("capacity admission reports a typed insufficient_disk_space error", async (
     (error: unknown) =>
       error instanceof InsufficientDiskSpaceError &&
       error.code === "insufficient_disk_space" &&
-      error.availableBytes === available &&
+      // The filesystem can change between the earlier observation and admission.
+      Number.isSafeInteger(error.availableBytes) && error.availableBytes >= 0 &&
+      error.requiredBytes > error.availableBytes &&
       error.requiredBytes > error.reserveBytes &&
       error.reserveBytes > 0 &&
       error.estimatedBytes === Number.MAX_SAFE_INTEGER,
