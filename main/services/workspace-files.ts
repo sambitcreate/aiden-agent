@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { listConfinedWorkspaceDirectory } from "./managed-worktree-file-io.js";
 import { readRegularFile } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
@@ -191,50 +192,19 @@ export async function listWorkspaceDirectory(
   signal?: AbortSignal,
 ): Promise<WorkspaceFileIndex> {
   const realRoot = await canonicalRoot(root);
-  const resolved = directory ? await resolveExistingPath(realRoot, directory) : { fullPath: realRoot };
+  if (directory) await resolveExistingPath(realRoot, directory);
   if (directory.split("/").filter(Boolean).length > MAX_INDEX_DEPTH) {
     return { entries: [], truncated: true, skippedDirectories: 0 };
   }
-  const entries: WorkspaceFileEntry[] = [];
-  let truncated = false;
-  let scanned = 0;
-  let skippedDirectories = 0;
-  const identity = await fs.lstat(resolved.fullPath);
-  if (!identity.isDirectory()) throw new Error("The workspace directory changed.");
-  const verifyDirectory = async (): Promise<void> => {
-    const currentRoot = await canonicalRoot(root);
-    const currentPath = directory ? (await resolveExistingPath(currentRoot, directory)).fullPath : currentRoot;
-    const current = await fs.lstat(resolved.fullPath);
-    if (currentRoot !== realRoot || currentPath !== resolved.fullPath || !current.isDirectory() ||
-        current.dev !== identity.dev || current.ino !== identity.ino) {
-      throw new Error("The workspace directory changed.");
-    }
-  };
-  const handle = await fs.opendir(resolved.fullPath);
-  try { await verifyDirectory(); } catch (error) { await handle.close(); throw error; }
-  for await (const child of handle) {
-    throwIfAborted(signal);
-    if (++scanned > 8_000 || entries.length >= MAX_INDEX_ENTRIES) {
-      truncated = true;
-      break;
-    }
-    if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
-      skippedDirectories += 1;
-      continue;
-    }
-    // Symlinks stay inert in the lazy tree. File reads retain their existing policy.
-    if (!child.isDirectory() && !child.isFile()) continue;
-    entries.push({
-      path: toPortablePath(path.join(directory, child.name)),
-      name: child.name,
-      parentPath: directory,
-      depth: directory.split("/").filter(Boolean).length,
-      kind: child.isDirectory() ? "directory" : "file",
-    });
-  }
-  await verifyDirectory();
+  // The native helper opens each component with openat(O_NOFOLLOW), then
+  // enumerates the held descriptor. Path swaps cannot redirect enumeration.
+  const result = await listConfinedWorkspaceDirectory(realRoot, directory, signal);
+  const entries: WorkspaceFileEntry[] = result.entries.map(child => ({
+    path: toPortablePath(path.join(directory, child.name)), name: child.name,
+    parentPath: directory, depth: directory.split("/").filter(Boolean).length, kind: child.kind,
+  }));
   sortWorkspaceEntries(entries);
-  return { entries, truncated, skippedDirectories };
+  return { entries, truncated: result.truncated, skippedDirectories: 0 };
 }
 
 export async function listWorkspaceFiles(

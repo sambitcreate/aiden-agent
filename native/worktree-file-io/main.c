@@ -2,6 +2,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -175,7 +176,81 @@ static int file_digest(int descriptor, uint64_t length,
   return 1;
 }
 
+static int skip_directory(const char *name) {
+  const char *skipped[] = { ".git", ".cache", ".build", ".next", ".turbo",
+    "build", "coverage", "dist", "node_modules", "release" };
+  for (size_t i = 0; i < sizeof(skipped) / sizeof(skipped[0]); i++) {
+    if (strcmp(name, skipped[i]) == 0) return 1;
+  }
+  return 0;
+}
+
+/* Read-only, descriptor-relative enumeration. No pathname is reopened after
+ * the root/each component is held, including while readdir advances. */
+static int list_directory(int argc, char **argv) {
+  uint64_t root_device, root_inode, directory_device, directory_inode;
+  if (argc != 8 || strlen(argv[5]) > 4096 ||
+      !decimal(argv[3], &root_device) || !decimal(argv[4], &root_inode) ||
+      !decimal(argv[6], &directory_device) || !decimal(argv[7], &directory_inode)) return fail("invalid_input");
+  int current = open_root(argv[2], root_device, root_inode);
+  if (current < 0) return fail("unsafe_source");
+  char *parts = strdup(argv[5]);
+  if (parts == NULL) { close(current); return fail("io_failed"); }
+  char *part = parts;
+  while (*part != '\0') {
+    char *slash = strchr(part, '/');
+    if (slash != NULL) *slash = '\0';
+    if (*part == '\0' || strcmp(part, ".") == 0 || strcmp(part, "..") == 0 ||
+        strchr(part, '\\') != NULL || (slash != NULL && slash[1] == '\0')) {
+      free(parts); close(current); return fail("invalid_input");
+    }
+    int next = openat(current, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    close(current);
+    if (next < 0) { free(parts); return fail("unsafe_source"); }
+    current = next;
+    if (slash == NULL) break;
+    part = slash + 1;
+  }
+  free(parts);
+  struct stat metadata;
+  if (fstat(current, &metadata) != 0 || !S_ISDIR(metadata.st_mode) ||
+      (uint64_t)metadata.st_dev != directory_device || (uint64_t)metadata.st_ino != directory_inode) {
+    close(current); return fail("source_changed");
+  }
+  if (test_checkpoint('L') != 0) { close(current); return fail("io_failed"); }
+  DIR *directory = fdopendir(current);
+  if (directory == NULL) { close(current); return fail("io_failed"); }
+  size_t scanned = 0, emitted = 0;
+  int truncated = 0;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(directory);
+    if (entry == NULL) {
+      if (errno != 0) { closedir(directory); return fail("io_failed"); }
+      break;
+    }
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    if (++scanned > 8000 || emitted >= 4000) { truncated = 1; break; }
+    struct stat child;
+    if (fstatat(current, entry->d_name, &child, AT_SYMLINK_NOFOLLOW) != 0) { truncated = 1; continue; }
+    if (!S_ISDIR(child.st_mode) && !S_ISREG(child.st_mode)) continue;
+    if (S_ISDIR(child.st_mode) && skip_directory(entry->d_name)) continue;
+    size_t length = strlen(entry->d_name);
+    if (length == 0 || length > 255) { truncated = 1; continue; }
+    fputc(S_ISDIR(child.st_mode) ? 'd' : 'f', stdout);
+    fputc(' ', stdout);
+    for (size_t i = 0; i < length; i++) fprintf(stdout, "%02x", (unsigned char)entry->d_name[i]);
+    fputc('\n', stdout);
+    emitted++;
+  }
+  closedir(directory);
+  if (test_checkpoint('E') != 0) return fail("io_failed");
+  fprintf(stdout, "%c\n", truncated ? 't' : 'c');
+  return ferror(stdout) ? fail("io_failed") : 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 2 && strcmp(argv[1], "list") == 0) return list_directory(argc, argv);
   if (argc != 13 ||
       (strcmp(argv[1], "copy") != 0 && strcmp(argv[1], "restore") != 0) ||
       !valid_relative(argv[5]) || !valid_relative(argv[9])) return fail("invalid_input");

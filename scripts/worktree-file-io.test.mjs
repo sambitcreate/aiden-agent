@@ -89,3 +89,40 @@ test("restore writes through its opened parent when the pathname becomes an outs
   assert.equal(await readFile(path.join(destination, "moved", "file.txt"), "utf8"), "captured\n");
   assert.equal(await readFile(path.join(outside, "file.txt"), "utf8"), "outside\n");
 });
+
+test("directory listing stays on its held descriptor through a swap and swap-back", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const outside = await directory(t);
+  const inside = path.join(source, "inside");
+  await mkdir(inside);
+  await writeFile(path.join(inside, "allowed.txt"), "allowed");
+  await writeFile(path.join(outside, "secret-one.txt"), "outside");
+  await writeFile(path.join(outside, "secret-two.txt"), "outside");
+  const insideIdentity = await identity(inside);
+  const result = await runWithCheckpoints(["list", ...await identity(source), "inside", ...insideIdentity.slice(1)], async (marker) => {
+    if (marker === "L") {
+      await rename(inside, path.join(source, "moved"));
+      await symlink(outside, inside);
+    } else {
+      assert.equal(marker, "E");
+      await rm(inside);
+      await rename(path.join(source, "moved"), inside);
+    }
+  });
+  assert.equal(result, `f ${Buffer.from("allowed.txt").toString("hex")}\nc\n`);
+});
+
+test("directory listing never follows a directory symlink", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const outside = await directory(t);
+  await symlink(outside, path.join(source, "linked"));
+  const outsideIdentity = await identity(outside);
+  const child = spawn(binary, ["list", ...await identity(source), "linked", ...outsideIdentity.slice(1)]);
+  let output = "";
+  child.stdout.on("data", chunk => { output += chunk; });
+  const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  assert.notEqual(code, 0);
+  assert.equal(output, "");
+});

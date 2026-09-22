@@ -46,6 +46,7 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
   });
 
   try {
+    if (process.platform === "darwin") {
     // Lazy pages do not read descendants, and directory handles remain device-bound.
     const rootPage = await service.children("device-1", workspace.id);
     assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
@@ -81,6 +82,7 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     assert.equal((await service.children("device-1", workspace.id)).directoryPath, "");
     await fs.rm(path.join(root, "Many"), { recursive: true });
 
+    }
     const index = await service.list("device-1", workspace.id);
     assert.equal(index.maxEntries, 4_000);
     assert.equal(index.maxDepth, 20);

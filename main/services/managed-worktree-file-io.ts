@@ -115,3 +115,32 @@ export async function transferManagedWorktreeFile(options: {
   }
   return { size: Number(match[1]), mode: Number(match[2]), sourceMode: Number(match[3]), digest: match[4] };
 }
+
+/** Enumerate only through the root-bound native directory descriptor. */
+export async function listConfinedWorkspaceDirectory(
+  root: string,
+  relativePath: string,
+  signal?: AbortSignal,
+): Promise<{ entries: Array<{ name: string; kind: "file" | "directory" }>; truncated: boolean }> {
+  const rootIdentity = await captureManagedWorktreeRootIdentity(root);
+  const directory = await captureManagedWorktreeRootIdentity(path.join(rootIdentity.path, relativePath));
+  const { stdout } = await executeFile(resolveManagedWorktreeFileIoBinary(), [
+    "list", rootIdentity.path, rootIdentity.device, rootIdentity.inode,
+    relativePath, directory.device, directory.inode,
+  ], { encoding: "utf8", maxBuffer: 4 * 1_048_576, timeout: 30_000, signal });
+  const lines = stdout.trimEnd().split("\n");
+  const status = lines.pop();
+  if ((status !== "c" && status !== "t") || lines.length > 4_000) throw new ManagedWorktreeFileIoError("io_failed");
+  let truncated = status === "t";
+  const entries: Array<{ name: string; kind: "file" | "directory" }> = [];
+  for (const line of lines) {
+    const match = /^([df]) ((?:[0-9a-f]{2}){1,255})$/u.exec(line);
+    if (!match) throw new ManagedWorktreeFileIoError("io_failed");
+    try {
+      const name = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(match[2], "hex"));
+      if (!name || name.includes("/") || name === "." || name === "..") throw new Error("Invalid name");
+      entries.push({ name, kind: match[1] === "d" ? "directory" : "file" });
+    } catch { truncated = true; }
+  }
+  return { entries, truncated };
+}

@@ -255,6 +255,7 @@ export class AidenRemoteFileService {
     directoryId?: string,
     cursor?: string,
   ): Promise<AidenRemoteFileIndex> {
+    if (process.platform !== "darwin") throw new AidenRemoteServiceError("not_found", "Lazy workspace files require the Mac directory helper.", 404);
     try {
       return await this.options.application.run(
         this.options.owners.owner(deviceId), workspaceId,
