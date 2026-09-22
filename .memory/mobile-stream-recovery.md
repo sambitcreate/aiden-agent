@@ -20,10 +20,22 @@ Aiden already retries transport/status failures and ignores incomplete SSE frame
 
 - New Android transport regression uses production ViewModel/client and MockWebServer: old cached cursor 27 → cold request zero → warm request one, full prefix restored, late frame after done ignored while transcript fetch fails, retained identity unchanged, no turn POST replay, Send blocked through settlement.
 - Three existing failed-send cases now force reload while POST is held and verify optimistic survival. Original main ViewModel fails all four enhanced regressions (three lost optimistic messages, cold replay timeout); fixed focused suite passes.
-- Full Android JVM suite: 176 passed, zero failed/skipped. `lintDebug` and `compileDebugAndroidTestKotlin` also pass.
-- Three XCTest additions in the existing registered AidenChatTests.swift exercise cold/warm replay and unchanged persistence, terminal send gating and cleanup, optimistic reload survival, and Stop against a live recovered stream.
+- Full Android JVM suite: 177 passed, zero failed/skipped. `lintDebug` and `compileDebugAndroidTestKotlin` also pass.
+- Six XCTest additions in the existing registered AidenChatTests.swift exercise cold/warm replay and unchanged persistence, terminal send gating and cleanup, optimistic reload survival, and Stop against a live recovered stream.
 - Xcode 27 beta generic iOS build-for-testing passes with signing disabled; this compiles XCTest, does not execute it. `npm run test:ios-release` passes (31 Node tests, 20 Ruby tests / 42 assertions).
 - Physical XCTest blocked: coordinator's immediately prior device run reported `com.apple.dt.deviceprep Code=-3: Unlock Sambit’s iPhone to Continue` for iPhone 13 Pro `00008110-00063CD91E98801E`. No repeated blocked run, simulator, or unlock bypass attempted. Device acceptance remains pending.
 - Separate GPT-5.6 Sol medium blast-radius and adversarial reviews were performed after implementation. Fixed findings: accidentally broadened Stop guard (restored), stale error publication, title retry loss, warning ownership, and Send during terminal replay. Both final reviews report no remaining actionable findings.
 
 Local logs: `/tmp/aiden-mobile-recovery-baseline.log`, `/tmp/aiden-mobile-recovery-android.log`, `/tmp/aiden-mobile-recovery-build.log`, `/tmp/aiden-mobile-recovery-ios-release.log`. Hosted checks/review status must be checked independently after publication; no merge/release/deploy authorized.
+
+## PR #217 held-I/O follow-up
+
+The initial head `0ad94f43` passed every hosted check, but Pullfrog correctly found three ownership windows. All are fixed before resolving review:
+
+1. iOS load reserves observable recovery admission before any cache/draft/status await, restores local draft text immediately, then runs the status recovery probe alongside transcript/catalog reads. Send cannot replace a cached stream while its status is pending.
+2. iOS cache writes may yield; `acceptRemoteChat` captures and rechecks transcript generation/current context after persistence before `onChatUpdated`, and returns whether acceptance remained owned. An authoritative reconciliation invalidates earlier reads before its own cache-write await. The cache actor serializes its synchronous atomic writes; the subsequent accepted-send save remains authoritative.
+3. Native transcript generations advance at terminal reconciliation entry, retry, and settlement, rejecting old HTTP reads that return after the final transcript was installed. These guards gate only transcript acceptance/error publication, so drafts/catalog/progress still initialize during fast terminal recovery.
+
+Deterministic barriers cover a held status probe with visible saved draft and disabled Send, an iOS cache write crossing a held turn POST with no stale parent callback, and an old transcript GET held through terminal settlement in both clients. The iOS fixture explicitly prevents terminal frames until the intended stale GET is held. Its test also asserts saved draft/catalog/progress setup. Android's new held-load test fails against `0ad94f43` (old empty transcript overwrites final), then all 177 JVM tests plus lint/instrumentation compilation pass with the fix. Generic iOS XCTest compilation passes again. Both independent Sol medium reviewers re-reviewed the follow-up clear.
+
+A supported read-only `devicectl device info lockState` confirms the physical iPhone still reports `passcodeRequired: true` (already unlocked since boot). Physical XCTest remains unexecuted. Greptile review is externally unavailable because the account reached its 50-credit trial limit. New-head hosted CI/review follow-through remains required.

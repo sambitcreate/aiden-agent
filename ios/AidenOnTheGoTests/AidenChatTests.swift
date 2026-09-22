@@ -225,7 +225,8 @@ final class AidenChatTests: XCTestCase {
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
-        draftStore: AidenChatDraftStore = .shared
+        draftStore: AidenChatDraftStore = .shared,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
         let keychain = AidenChatProgressMemoryKeychain()
@@ -270,7 +271,130 @@ final class AidenChatTests: XCTestCase {
                 """.utf8
             )
         )
-        return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore)
+        return AidenChatViewModel(coordinator: coordinator, chat: chat, cache: cache, draftStore: draftStore, onChatUpdated: onChatUpdated)
+    }
+
+    @MainActor
+    func testHeldRecoveryStatusOwnsSendBeforeStreamConsumerStarts() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-held-status-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let drafts = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        let session = await drafts.beginSession(instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        _ = try await drafts.save("Visible while offline", session: session)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, draftStore: drafts)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        fixture.allowReconciliation = true
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-recovery", turnId: "turn-recovery", lastSequence: 27),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id
+        )
+        let arrived = expectation(description: "recovery status held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/streams/stream-recovery") { arrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        let load = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [arrived], timeout: 5)
+        XCTAssertEqual(model.draft, "Visible while offline")
+        model.draft = "Must wait for recovery"
+        XCTAssertFalse(model.canSend)
+        await model.send()
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 0)
+        let retained = await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(retained?.streamId, "stream-recovery")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await load.value
+        for _ in 0..<200 {
+            if await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) == nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(fixture.eventCursors.isEmpty)
+    }
+
+    @MainActor
+    func testCacheWriteCannotPublishPreSendSnapshotAfterSendStarts() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-held-cache-write-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = AidenHeldChatCacheFileManager()
+        let cache = AidenChatCache(root: root, fileManager: files)
+        var publications: [AidenChat] = []
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache) { publications.append($0) }
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        let writing = expectation(description: "chat cache write held")
+        files.holdNextChatWrite { writing.fulfill() }
+        defer { files.releaseWrite() }
+        let reading = expectation(description: "old GET held while empty recovery probe settles")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { reading.fulfill() }
+        let load = Task { await model.load(observeProgress: false) }
+        await fulfillment(of: [reading], timeout: 5)
+        model.draft = "New optimistic message"
+        for _ in 0..<100 {
+            if model.canSend { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(model.canSend)
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await fulfillment(of: [writing], timeout: 5)
+        let sending = expectation(description: "send held across old publication")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { sending.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        model.draft = "New optimistic message"
+        XCTAssertTrue(model.canSend)
+        let send = Task { await model.send() }
+        await fulfillment(of: [sending], timeout: 5)
+        files.releaseWrite()
+        await load.value
+        XCTAssertTrue(publications.isEmpty)
+        XCTAssertEqual(model.chat.messages.last?.text, "New optimistic message")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await send.value
+        XCTAssertFalse(files.didTimeOut)
+    }
+
+    @MainActor
+    func testHeldLoadCannotOverwriteTerminalTranscriptOrCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-held-terminal-load-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let drafts = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        let session = await drafts.beginSession(instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        _ = try await drafts.save("Saved composer", session: session)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, draftStore: drafts)
+        var final = model.chat
+        final.messages.append(AidenChatMessage(id: "final-reply", role: .assistant, text: "Authoritative final", createdAt: Date()))
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat, finalChat: final)
+        fixture.allowReconciliation = true
+        fixture.allowTerminal = false
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-recovery", turnId: "turn-recovery", lastSequence: 27),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id
+        )
+        let arrived = expectation(description: "old transcript GET held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { arrived.fulfill() }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+        let load = Task { await model.load() }
+        await fulfillment(of: [arrived], timeout: 5)
+        fixture.allowTerminal = true
+        for _ in 0..<200 {
+            if await cache.loadActiveStream(instanceId: "instance-progress-lifecycle", chatId: model.chat.id) == nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.chat.messages.last?.id, "final-reply")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await load.value
+        XCTAssertEqual(model.chat.messages.last?.id, "final-reply")
+        let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(persisted?.messages.last?.id, "final-reply")
+        XCTAssertEqual(model.draft, "Saved composer")
+        XCTAssertNotNil(model.catalog)
+        for _ in 0..<100 {
+            if AidenChatProgressLifecycleURLProtocol.progressRequestCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThan(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 0)
+        model.stopProgressObservation()
     }
 
     @MainActor
@@ -4308,8 +4432,14 @@ final class AidenAppearanceTests: XCTestCase {
 private final class AidenStreamRecoveryFixture: @unchecked Sendable {
     private let lock = NSLock()
     private let chat: AidenChat
+    private let finalChat: AidenChat?
     private var reads = 0
     private var permitsReconciliation = false
+    private var permitsTerminal = true
+    var allowTerminal: Bool {
+        get { lock.withLock { permitsTerminal } }
+        set { lock.withLock { permitsTerminal = newValue } }
+    }
     var allowReconciliation: Bool {
         get { lock.withLock { permitsReconciliation } }
         set { lock.withLock { permitsReconciliation = newValue } }
@@ -4319,7 +4449,7 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
     var cancelReads: Int { lock.withLock { cancellations } }
     var chatReads: Int { lock.withLock { reads } }
     var eventCursors: [Int] { lock.withLock { cursors } }
-    init(chat: AidenChat) { self.chat = chat }
+    init(chat: AidenChat, finalChat: AidenChat? = nil) { self.chat = chat; self.finalChat = finalChat }
 
     func response(_ request: URLRequest) -> (Int, String, Data)? {
         lock.withLock {
@@ -4333,7 +4463,7 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
                 if reads > 1, !permitsReconciliation { return (503, "application/json", error) }
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
-                return (200, "application/json", try! encoder.encode(chat))
+                return (200, "application/json", try! encoder.encode(reads > 1 ? (finalChat ?? chat) : chat))
             }
             if path.hasSuffix("/streams/stream-recovery/cancel") {
                 cancellations += 1
@@ -4349,6 +4479,7 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
             if path.hasSuffix("/streams/stream-recovery/events") {
                 let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "after" }?.value
                 cursors.append(Int(after ?? "0") ?? -1)
+                if cursors.count > 1, !permitsTerminal { return (200, "text/event-stream", Data()) }
                 let body = cursors.count == 1
                     ? event(1, "text_delta", #"{"text":"prefix "}"#)
                     : event(2, "text_delta", #"{"text":"suffix"}"#) + event(3, "done", #"{"messageId":"reply"}"#, terminal: true) + event(4, "text_delta", #"{"text":"LATE"}"#)
@@ -4361,5 +4492,28 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+private final class AidenHeldChatCacheFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private let release = DispatchSemaphore(value: 0)
+    private var onWrite: (@Sendable () -> Void)?
+    private var timedOut = false
+    var didTimeOut: Bool { lock.withLock { timedOut } }
+    func holdNextChatWrite(_ callback: @escaping @Sendable () -> Void) { lock.withLock { onWrite = callback } }
+    func releaseWrite() { release.signal() }
+    override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool, attributes: [FileAttributeKey: Any]? = nil) throws {
+        let callback = lock.withLock { () -> (@Sendable () -> Void)? in
+            guard url.lastPathComponent == "chats" else { return nil }
+            let result = onWrite
+            onWrite = nil
+            return result
+        }
+        if let callback {
+            callback()
+            if release.wait(timeout: .now() + 10) == .timedOut { lock.withLock { timedOut = true } }
+        }
+        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
     }
 }

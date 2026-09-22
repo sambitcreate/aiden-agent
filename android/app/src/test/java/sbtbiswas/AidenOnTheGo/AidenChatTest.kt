@@ -44,8 +44,13 @@ class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun coldReplayRebuildsPrefixWarmReconnectUsesMemoryAndTerminalRejectsLateEvents() = assertStreamRecovery()
+
+    @Test
+    fun heldInitialLoadCannotOverwriteSettledTranscriptOrCache() = assertStreamRecovery(holdInitialLoad = true)
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    fun coldReplayRebuildsPrefixWarmReconnectUsesMemoryAndTerminalRejectsLateEvents() {
+    private fun assertStreamRecovery(holdInitialLoad: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-stream-recovery-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
@@ -53,10 +58,14 @@ class AidenChatTest {
         val requests = java.util.Collections.synchronizedList(mutableListOf<String>())
         val chatReads = java.util.concurrent.atomic.AtomicInteger()
         val eventReads = java.util.concurrent.atomic.AtomicInteger()
+        val releaseInitialLoad = CountDownLatch(1)
         val initial = AidenChat(
             id = "chat-recovery", workspaceId = "workspace-recovery", title = "Recovery",
             messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
         )
+        val final = initial.copy(messages = listOf(AidenChatMessage(
+            id = "final-reply", role = AidenChatRole.ASSISTANT, text = "Authoritative final", createdAt = Instant.EPOCH
+        )))
         fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
             "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":$sequence,\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
         server.dispatcher = object : Dispatcher() {
@@ -77,8 +86,12 @@ class AidenChatTest {
                     path.endsWith("/streams/stream-recovery") -> MockResponse().setBody(
                         """{"streamId":"stream-recovery","chatId":"chat-recovery","turnId":"turn-recovery","state":"running","lastSequence":1}"""
                     )
-                    path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 ->
+                    path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
+                        if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
                         MockResponse().setBody(json.encodeToString(initial))
+                    }
+                    path.endsWith("/chats/chat-recovery") && holdInitialLoad ->
+                        MockResponse().setBody(json.encodeToString(final))
                     else -> MockResponse().setResponseCode(503).setBody(
                         """{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"""
                     )
@@ -105,21 +118,32 @@ class AidenChatTest {
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
                 viewModels.put("chat", model)
                 withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
-                // Let the terminal reconciliation attempt and any illegally queued late frame run.
-                withTimeout(5_000) { model.presentedError.first { it == "Offline transcript" } }
-                kotlinx.coroutines.delay(100)
-                assertEquals("prefix suffix", model.liveText.value)
+                if (holdInitialLoad) {
+                    withTimeout(5_000) { model.hasActiveStream.first { !it } }
+                    assertEquals("final-reply", model.chat.value!!.messages.last().id)
+                    releaseInitialLoad.countDown()
+                    withTimeout(5_000) { model.isLoading.first { !it } }
+                    assertEquals("final-reply", model.chat.value!!.messages.last().id)
+                    assertEquals("final-reply", cache.loadChat("instance-recovery", initial.id)!!.messages.last().id)
+                    assertEquals("", model.liveText.value)
+                } else {
+                    // Let the terminal reconciliation attempt and any illegally queued late frame run.
+                    withTimeout(5_000) { model.presentedError.first { it == "Offline transcript" } }
+                    kotlinx.coroutines.delay(100)
+                    assertEquals("prefix suffix", model.liveText.value)
+                }
                 val eventPaths = synchronized(requests) { requests.filter { it.contains("/events") } }
                 assertEquals(2, eventPaths.size)
                 assertFalse(eventPaths[0].contains("after="))
                 assertTrue(eventPaths[1].endsWith("after=1"))
-                assertEquals(27, AidenChatCache(directory).loadActiveStream("instance-recovery", initial.id)?.lastSequence)
+                assertEquals(if (holdInitialLoad) null else 27, AidenChatCache(directory).loadActiveStream("instance-recovery", initial.id)?.lastSequence)
                 assertEquals(AidenStreamState.DONE, model.streamState.value)
                 model.updateDraft("Next turn")
-                assertFalse(model.canSend)
+                assertEquals(holdInitialLoad, model.canSend)
                 assertTrue(requests.none { it.endsWith("/turns") })
             }
         } finally {
+            releaseInitialLoad.countDown()
             runBlocking(dispatcher) { viewModels.clear() }
             Dispatchers.resetMain()
             dispatcher.close()

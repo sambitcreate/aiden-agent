@@ -128,7 +128,7 @@ class AidenChatViewModel(
             field = value
             _hasActiveStream.value = value != null
         }
-    private var sendGeneration = 0L
+    private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
     private var streamJob: Job? = null
     private var titleRefreshJob: Job? = null
@@ -654,16 +654,16 @@ class AidenChatViewModel(
 
     fun loadChat() {
         if (_isStarting.value) return
-        val generation = sendGeneration
+        val generation = transcriptGeneration
         val client = activeClient() ?: return
         viewModelScope.launch {
             _isLoading.value = true
             try {
                 val remote = client.chat(chatId)
-                if (generation != sendGeneration || _isStarting.value || activeClient() !== client) return@launch
+                if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
                 acceptRemoteChat(remote)
             } catch (e: Exception) {
-                if (e !is CancellationException && generation == sendGeneration && !_isStarting.value && activeClient() === client) {
+                if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
                 }
             } finally {
@@ -751,7 +751,7 @@ class AidenChatViewModel(
             createdAt = now
         )
 
-        sendGeneration++
+        transcriptGeneration++
         titleRefreshJob?.cancel()
         titleRefreshJob = null
         _isStarting.value = true
@@ -808,7 +808,7 @@ class AidenChatViewModel(
                 }
             } finally {
                 _isStarting.value = false
-                sendGeneration++
+                transcriptGeneration++
                 if (activeClient() === client && _chat.value?.isTitlePending == true) schedulePendingTitleRefresh()
             }
         }
@@ -1192,16 +1192,16 @@ class AidenChatViewModel(
 
     private suspend fun reconcileChat(): Boolean {
         if (_isStarting.value) return false
-        val generation = sendGeneration
+        val generation = transcriptGeneration
         val client = activeClient() ?: return false
         return try {
             val remote = client.chat(chatId)
-            if (generation != sendGeneration || _isStarting.value || activeClient() !== client) return false
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return false
             acceptRemoteChat(remote)
             clearRecoveryWarning()
             true
         } catch (e: Exception) {
-            if (e !is CancellationException && generation == sendGeneration && !_isStarting.value && activeClient() === client) {
+            if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                 showRecoveryWarning(e.localizedMessage)
             }
             false
@@ -1228,9 +1228,9 @@ class AidenChatViewModel(
                 try {
                     delay(delayMs)
                     if (_isStarting.value) continue
-                    val generation = sendGeneration
+                    val generation = transcriptGeneration
                     val remote = client.chat(chatId)
-                    if (generation != sendGeneration || _isStarting.value || activeClient() !== client) continue
+                    if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) continue
                     acceptRemoteChat(remote, scheduleTitleRefresh = false)
                     if (!remote.isTitlePending) return@launch
                 } catch (e: Exception) {
@@ -1242,6 +1242,7 @@ class AidenChatViewModel(
 
     private suspend fun finishStream(expectedStreamId: String) {
         if (activeStreamId != expectedStreamId) return
+        transcriptGeneration++
         if (!reconcileChat()) {
             scheduleTerminalReconciliation(expectedStreamId)
             return
@@ -1251,6 +1252,7 @@ class AidenChatViewModel(
 
     private fun clearFinishedStream(expectedStreamId: String) {
         if (activeStreamId == expectedStreamId) {
+            transcriptGeneration++
             activeStreamId = null
             _liveText.value = ""
             _reasoning.value = ""
@@ -1265,6 +1267,7 @@ class AidenChatViewModel(
 
     private suspend fun reconcileMissingStream(stream: AidenChatCache.ActiveStream): Boolean {
         if (activeStreamId != stream.streamId) return false
+        transcriptGeneration++
         if (!reconcileChat()) return false
         if (activeStreamId != stream.streamId) return false
         val currentChat = _chat.value ?: return false
@@ -1287,6 +1290,7 @@ class AidenChatViewModel(
                     val delayMs = AidenTerminalReconciliation.retryDelayMilliseconds(attempt)
                     delay(delayMs)
                     if (activeStreamId != expectedStreamId) return@launch
+                    transcriptGeneration++
                     if (reconcileChat()) {
                         clearFinishedStream(expectedStreamId)
                         return@launch
