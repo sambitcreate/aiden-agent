@@ -23,3 +23,10 @@ windows. All findings were fixed with targeted regressions. Telegram 227/227, on
 and live Telegram acceptance remain pending. Upstream source pinned to
 836b5f8253d27fee79b4f833bc43624f06a890b3 (gateway/run.py SHA256
 acb8e4ed5b675ce49c12ebd1014aa034f746068a4fde23275c29e6e77b29e69c).
+
+PR #216 Pullfrog follow-up: `/continue` carries its Telegram source message ID
+and treats post-admission acknowledgment failure as handled. Explicit `/queue`
+and `/continue` suppress the generic busy notice so each command produces one
+confirmation. Six regressions cover preparing/running and unknown acknowledgment
+outcomes with redelivery. Telegram suite: 233 passed; scoped lint passes. This
+fix is carried into stacked PR #220 without changing the native input contract.

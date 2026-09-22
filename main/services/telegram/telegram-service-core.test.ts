@@ -2094,3 +2094,48 @@ test("a cancelled dispatch rejection does not send a late error reply", async ()
   assert.equal(h.turnMock.startCalls(), 0);
   h.service.stop();
 });
+
+
+for (const command of ["/queue follow-up", "/continue follow-up"]) {
+  for (const preparing of [false, true]) {
+    test(`${command} sends one confirmation while ${preparing ? "preparing" : "running"}`, async () => {
+      let release!: () => void;
+      const preparation = new Promise<{ kind: "assistant" }>((resolve) => { release = () => resolve({ kind: "assistant" }); });
+      const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+        batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), command))]],
+      });
+      if (preparing) h.turnMock.turn.resolveWorkspace = async () => preparation;
+      await h.service.start();
+      await waitFor(() => h.config.persistOffsetCalls() === 2);
+      const confirmations = h.api.sentMessages.filter(({ text }) => /Queued for the next turn|Follow-up accepted|Continuation queued/u.test(text));
+      assert.equal(confirmations.length, 1);
+      assert.equal(h.service.queueSize, 1);
+      h.service.stop(); release(); h.turnMock.completePendingTurn();
+    });
+  }
+
+  test(`${command} acknowledgment failure cannot replay admission`, async () => {
+    const update = makeUpdate(2, makeMessage(2, person(42), command));
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [update], [update]],
+    });
+    const send = h.api.sendMessage;
+    let confirmations = 0;
+    h.api.sendMessage = async (params) => {
+      if (/Follow-up accepted|Continuation queued/u.test(params.text)) {
+        confirmations++;
+        throw new Error("Telegram acknowledgment outcome unknown");
+      }
+      return send(params);
+    };
+    await h.service.start();
+    await waitFor(() => h.api.getUpdatesCalls() >= 3);
+    assert.equal(confirmations, 1);
+    assert.equal(h.config.persistOffsetCalls(), 2, "accepted command advances offset despite acknowledgment failure");
+    assert.equal(h.service.queueSize, 1);
+    h.turnMock.completePendingTurn();
+    await waitFor(() => h.turnMock.startCalls() === 2);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "follow-up"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}
