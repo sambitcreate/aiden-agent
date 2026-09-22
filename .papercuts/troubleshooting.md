@@ -852,3 +852,10 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-22 — Native workspace browser validation
+
+- The isolated worktree retained workspace-write restrictions despite the global full-access preference. Git common-directory writes, gh network, tsx IPC, and native tool services needed tool-level escalation. Routine work remained authorized; no policy overrides were written.
+- An initially borrowed node_modules directory had thinking-orbs 0.1.1 while this branch locks 0.3.1, causing unrelated aiden-live-orb type failures. Removed only the symlink and ran local `npm ci --ignore-scripts`; do not modify the coordinator's dependencies.
+- Missed nested `ios/AGENTS.md` before initially using a simulator destination. One simulator XCTest run completed before coordinator flagged the prohibition. Its results are explicitly excluded from permitted acceptance. Read the nested agreement, stopped further simulator work, switched to generic physical-platform compile, and joined the coordinated physical-device queue. Check nested AGENTS before any next native command.
+- Canonical Remote fixture changes require copying to `android/app/src/test/resources/contract.json`; the byte-for-byte guard caught the initially stale copy.

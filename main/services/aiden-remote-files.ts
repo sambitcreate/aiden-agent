@@ -12,6 +12,7 @@ import type { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace
 import type { WorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
 import {
   listWorkspaceFiles,
+  listWorkspaceDirectory,
   readWorkspaceFile,
   WorkspaceFileError,
   writeWorkspaceFile,
@@ -38,6 +39,8 @@ export interface AidenRemoteFileIndex {
   truncated: boolean;
   maxEntries: 4_000;
   maxDepth: 20;
+  directoryPath?: string;
+  nextCursor?: string;
 }
 
 export interface AidenRemoteFileDocument {
@@ -140,6 +143,11 @@ function projectedDocument(
 }
 
 export class AidenRemoteFileService {
+  private readonly pages = new Map<string, {
+    claims: AidenOpaqueHandleClaims;
+    entries: WorkspaceFileEntry[];
+    truncated: boolean;
+  }>();
   private handleStore: AidenOpaqueHandleStore | undefined;
   private readonly now = (): number => this.options.now?.() ?? Date.now();
 
@@ -239,6 +247,86 @@ export class AidenRemoteFileService {
         409,
       );
     });
+  }
+
+  async children(
+    deviceId: string,
+    workspaceId: string,
+    directoryId?: string,
+    cursor?: string,
+  ): Promise<AidenRemoteFileIndex> {
+    try {
+      return await this.options.application.run(
+        this.options.owners.owner(deviceId), workspaceId,
+        async ({ folderPath, workspace }, signal) => {
+          const revision = projectAidenRemoteWorkspace(workspace).revision;
+          let directoryPath = "";
+          if (directoryId) {
+            const stored = this.handles.claimsFor(directoryId, "file");
+            if (stored.workspaceId !== workspaceId || stored.kind !== "directory" || !stored.displayPath) {
+              throw new AidenOpaqueHandleError("handle_invalid");
+            }
+            const current = await this.claims(deviceId, workspaceId, folderPath, revision, stored.displayPath, stored.snapshotId ?? "");
+            this.handles.resolve(directoryId, "file", current);
+            directoryPath = stored.displayPath;
+          }
+          let snapshotId: string;
+          let offset = 0;
+          let snapshot: { claims: AidenOpaqueHandleClaims; entries: WorkspaceFileEntry[]; truncated: boolean };
+          if (cursor) {
+            const stored = this.handles.claimsFor(cursor, "cur");
+            if (stored.workspaceId !== workspaceId || stored.displayPath !== directoryPath) {
+              throw new AidenOpaqueHandleError("handle_invalid");
+            }
+            const current = await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, stored.snapshotId ?? "");
+            current.cursorOffset = stored.cursorOffset;
+            this.handles.resolve(cursor, "cur", current);
+            snapshotId = stored.snapshotId!;
+            const cached = this.pages.get(snapshotId);
+            if (!cached || cached.claims.expiresAt <= this.now()) throw new AidenOpaqueHandleError("handle_expired");
+            snapshot = cached;
+            offset = stored.cursorOffset!;
+          } else {
+            for (const [key, value] of this.pages) {
+              if (value.claims.expiresAt <= this.now()) this.pages.delete(key);
+            }
+            // Evict the oldest abandoned inventory; its cursor fails closed as expired.
+            if (this.pages.size >= 16) this.pages.delete(this.pages.keys().next().value!);
+            snapshotId = `files_${randomBytes(24).toString("base64url")}`;
+            const claims = await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, snapshotId);
+            const index = await listWorkspaceDirectory(folderPath, directoryPath, signal);
+            snapshot = { claims, entries: index.entries, truncated: index.truncated };
+            this.pages.set(snapshotId, snapshot);
+          }
+          const entries: AidenRemoteFileEntry[] = [];
+          let omitted = false;
+          for (const entry of snapshot.entries.slice(offset, offset + 200)) {
+            if (signal.aborted) throw new Error("Cancelled");
+            try {
+              const displayPath = safeDisplayPath(entry.path);
+              const claims = await this.claims(deviceId, workspaceId, folderPath, revision, displayPath, snapshotId);
+              claims.expiresAt = snapshot.claims.expiresAt;
+              entries.push({ id: this.handles.issue("file", claims), displayPath, name: entry.name, kind: entry.kind,
+                ...(languageFor(entry) ? { language: languageFor(entry) } : {}) });
+            } catch (error) {
+              if (error instanceof AidenOpaqueHandleError && error.code === "handle_capacity") throw error;
+              omitted = true;
+            }
+          }
+          const nextOffset = offset + 200;
+          const nextCursor = nextOffset < snapshot.entries.length
+            ? this.handles.issue("cur", { ...snapshot.claims, cursorOffset: nextOffset }) : undefined;
+          // Completed pages do not retain directory inventories in server memory.
+          if (!nextCursor) this.pages.delete(snapshotId);
+          return { snapshotId, entries, truncated: snapshot.truncated || omitted,
+            maxEntries: 4_000, maxDepth: 20, directoryPath, ...(nextCursor ? { nextCursor } : {}) };
+        },
+      );
+    } catch (error) {
+      if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
+      if (error instanceof AidenRemoteServiceError) throw error;
+      throw new AidenRemoteServiceError("workspace_unavailable", "This folder cannot currently be listed. Refresh Files and try again.", 409);
+    }
   }
 
   private async withResolvedFile<T>(

@@ -9,6 +9,47 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
+    @Test fun lazyTreeSearchAndPreviewStayBounded() {
+        val entries = listOf(
+            AidenWorkspaceFileEntry("dir", "src", "src", AidenWorkspaceFileKind.DIRECTORY),
+            AidenWorkspaceFileEntry("file", "src/main.kt", "main.kt", AidenWorkspaceFileKind.FILE))
+        assertEquals(listOf("dir"), AidenWorkspaceFileTree.visible(entries, emptySet(), "").map { it.id })
+        assertEquals(2, AidenWorkspaceFileTree.visible(entries, setOf("src"), "").size)
+        assertEquals(2, AidenWorkspaceFileTree.visible(entries, emptySet(), "main").size)
+        assertTrue(AidenWorkspaceFileTree.visible(entries, emptySet(), "missing").isEmpty())
+        assertEquals(2_001, AidenWorkspaceSourcePreview.lines("line\n".repeat(10_000)).size)
+        assertTrue(AidenWorkspaceSourcePreview.lines("x".repeat(10_000))[0].endsWith("[line clipped]"))
+    }
+
+    @Test fun workspaceLinksRejectEscapesAndSchemes() {
+        assertEquals("src/hello world.kt", AidenWorkspaceFileLink.path("./src/hello%20world.kt"))
+        listOf("../secret", "./../secret", "./%2e%2e/secret", "./%2Fsecret", "file:///secret", "/secret", "~/secret", "https://example.com", "./a%00b", "./a\\b", "./a#L2", "./a?x=y", "./a//b").forEach {
+            assertNull(it, AidenWorkspaceFileLink.path(it))
+        }
+    }
+
+    @Test fun workspaceMarkdownLinksHaveClickableAnnotations() {
+        val palette = sbtbiswas.AidenOnTheGo.config.AidenPalette("000000", "000000", "000000", "ffffff", "ffffff", "ffffff", "ffffff", "ffffff", "ffffff")
+        val value = sbtbiswas.AidenOnTheGo.features.chat.buildAidenFormattedMessage("Open [source](./src/App.kt) and [blocked](./../secret)", palette, false)
+        val links = value.getStringAnnotations("LINK", 0, value.length)
+        assertEquals(listOf("./src/App.kt"), links.map { it.item })
+        assertTrue(value.text.contains("Open source"))
+    }
+
+    @Test fun lazyPageContractRejectsMalformedScope() {
+        val page = AidenWorkspaceFileIndex("page", emptyList(), false, 4_000, 20, directoryPath = "")
+        assertEquals(page, AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) { AidenWorkspaceEnvironmentValidation.validatedPage(page.copy(nextCursor = "../secret")) }
+        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) { AidenWorkspaceEnvironmentValidation.validatedPage(page.copy(directoryPath = "../secret")) }
+    }
+
+    @Test fun sharedLazyPageFixtureDecodes() {
+        val fixture = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(fixture) as kotlinx.serialization.json.JsonObject
+        val page = kotlinx.serialization.json.Json.decodeFromString<AidenWorkspaceFileIndex>(root.getValue("filePage").toString())
+        assertEquals(AidenWorkspaceFileKind.DIRECTORY, AidenWorkspaceEnvironmentValidation.validatedPage(page).entries.first().kind)
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 

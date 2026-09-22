@@ -21,6 +21,8 @@ struct AidenWorkspaceFileIndex: Codable, Equatable, Sendable {
     let truncated: Bool
     let maxEntries: Int
     let maxDepth: Int
+    var directoryPath: String? = nil
+    var nextCursor: String? = nil
 }
 
 struct AidenWorkspaceFileDocument: Codable, Equatable, Sendable {
@@ -201,6 +203,17 @@ enum AidenWorkspaceEnvironmentValidation {
         return index
     }
 
+    static func validatedPage(_ index: AidenWorkspaceFileIndex) throws -> AidenWorkspaceFileIndex {
+        guard let directory = index.directoryPath,
+              directory.isEmpty || safeDisplayPath(directory), index.entries.count <= 200,
+              index.nextCursor == nil || index.nextCursor!.range(of: "^cur_[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+              Set(index.entries.map(\.displayPath)).count == index.entries.count,
+              index.entries.allSatisfy({ $0.displayPath.split(separator: "/").dropLast().joined(separator: "/") == directory }) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return try validated(index)
+    }
+
     static func validated(_ document: AidenWorkspaceFileDocument, expectedID: String) throws -> AidenWorkspaceFileDocument {
         guard document.id == expectedID,
               opaqueFileID(document.id),
@@ -246,5 +259,60 @@ enum AidenWorkspaceEnvironmentValidation {
             break
         }
         return git
+    }
+}
+
+/// Tree visibility depends only on downloaded entries; search never initiates I/O.
+enum AidenWorkspaceFileTree {
+    static func visible(_ entries: [AidenWorkspaceFileEntry], expanded: Set<String>, search: String) -> [AidenWorkspaceFileEntry] {
+        let groups = Dictionary(grouping: entries) { entry in
+            entry.displayPath.split(separator: "/").dropLast().joined(separator: "/")
+        }
+        var matchingPaths = Set<String>()
+        if !search.isEmpty {
+            for entry in entries where entry.displayPath.localizedCaseInsensitiveContains(search) {
+                let parts = entry.displayPath.split(separator: "/")
+                for count in 1...parts.count { matchingPaths.insert(parts.prefix(count).joined(separator: "/")) }
+            }
+        }
+        var result: [AidenWorkspaceFileEntry] = []
+        func visit(_ parent: String, depth: Int) {
+            guard depth <= 20 else { return }
+            let children = (groups[parent] ?? []).sorted {
+                if ($0.kind == .directory) != ($1.kind == .directory) { return $0.kind == .directory }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+            for entry in children {
+                guard search.isEmpty || matchingPaths.contains(entry.displayPath) else { continue }
+                result.append(entry)
+                if expanded.contains(entry.displayPath) || !search.isEmpty { visit(entry.displayPath, depth: depth + 1) }
+            }
+        }
+        visit("", depth: 0)
+        return result
+    }
+}
+
+enum AidenWorkspaceSourcePreview {
+    static func lines(_ content: String) -> [String] {
+        let rows = content.components(separatedBy: "\n")
+        var result = rows.prefix(2_000).map { String($0.prefix(2_000)) + ($0.count > 2_000 ? " … [line clipped]" : "") }
+        if rows.count > 2_000 { result.append("Preview limited to 2,000 lines. Choose Edit to view the full document.") }
+        return result
+    }
+}
+
+/// Only explicit workspace-relative references are eligible. Absolute/home paths
+/// are never sent to the Mac or handed to another application.
+enum AidenWorkspaceFileLink {
+    static func path(_ raw: String) -> String? {
+        guard raw.hasPrefix("./"), let decoded = raw.removingPercentEncoding,
+              !decoded.contains("\\"), !decoded.contains("?"), !decoded.contains("#"),
+              !decoded.contains(":"), decoded.utf8.count <= 4_096,
+              !decoded.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { return nil }
+        let path = String(decoded.dropFirst(2))
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.count <= 21, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+        return path
     }
 }

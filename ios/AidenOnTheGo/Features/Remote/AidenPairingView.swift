@@ -202,7 +202,7 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .build:
-            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. When Bots are available on your paired Mac, use them as reusable helpers and tap the Aiden logo to switch.")
+            return String(localized: "Use Workspaces for project-focused work with files, commands, review, and Git. Expand folders as needed and preview source before editing. When Bots are available on your paired Mac, use them as reusable helpers and tap the Aiden logo to switch.")
         case .extend:
             return String(localized: "Choose models and thinking levels, attach images, use web search, and extend Aiden with skills and MCP connectors.")
         case .control:

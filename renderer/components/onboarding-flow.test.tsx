@@ -429,3 +429,7 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
 });
+
+test("feature tour introduces native folder browsing and source previews", () => {
+  assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
+});

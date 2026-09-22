@@ -117,6 +117,7 @@ fun AidenChatDetailScreen(
     )
 
     val chat by viewModel.chat.collectAsState()
+    var workspaceFileReference by remember(chatId) { mutableStateOf<String?>(null) }
     val streamState by viewModel.streamState.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val liveText by viewModel.liveText.collectAsState()
@@ -285,6 +286,17 @@ fun AidenChatDetailScreen(
     val isScrolledUp by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+        }
+    }
+
+    workspaceFileReference?.let { reference ->
+        val workspaceId = chat?.workspaceId
+        if (workspaceId != null && chat?.isBotChat != true) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { workspaceFileReference = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+                sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen(
+                    workspaceId, coordinator, onNavigateBack = { workspaceFileReference = null }, initialReference = reference)
+            }
         }
     }
 
@@ -606,7 +618,12 @@ fun AidenChatDetailScreen(
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
-                            onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+                            onOpenUrl = { url ->
+                                if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
+                                else if (android.net.Uri.parse(url).scheme?.lowercase() in listOf("https", "http", "mailto")) {
+                                    try { uriHandler.openUri(url) } catch (_: Exception) {}
+                                }
+                            }
                         )
                     }
                 }

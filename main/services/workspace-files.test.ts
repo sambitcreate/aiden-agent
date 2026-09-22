@@ -7,6 +7,7 @@ import * as path from "node:path";
 import test from "node:test";
 import {
   listWorkspaceFiles,
+  listWorkspaceDirectory,
   readWorkspaceFile,
   WorkspaceFileError,
   writeWorkspaceFile,
@@ -285,4 +286,29 @@ test("workspace editor still follows a stable symlink to a file inside the works
   const document = await readWorkspaceFile(root, "linked.txt");
   assert.equal(document.path, "linked.txt");
   assert.equal(document.content, "linked content\n");
+});
+
+test("lazy directory scan rejects a symlink swap before returning metadata", async (t) => {
+  const root = await workspace(t);
+  const outside = await workspace(t);
+  const child = path.join(root, "child");
+  await fs.mkdir(child);
+  await fs.writeFile(path.join(outside, "secret"), "private");
+  const originalOpen = fsPromises.opendir;
+  t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof originalOpen>) => {
+    await fs.rename(child, path.join(root, "old-child"));
+    await fs.symlink(outside, child);
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(listWorkspaceDirectory(root, "child"));
+});
+
+test("lazy directory scan includes files at the legacy depth boundary", async (t) => {
+  const root = await workspace(t);
+  const directory = Array.from({ length: 20 }, () => "a").join("/");
+  await fs.mkdir(path.join(root, directory), { recursive: true });
+  await fs.writeFile(path.join(root, directory, "last.txt"), "last");
+  assert.equal((await listWorkspaceDirectory(root, directory)).entries[0]?.name, "last.txt");
 });

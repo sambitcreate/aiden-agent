@@ -4,6 +4,45 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    func testLazyTreeVisibilitySearchAndBoundedPreview() {
+        let entries: [AidenWorkspaceFileEntry] = [
+            .init(id: "dir", displayPath: "src", name: "src", kind: .directory, size: nil, language: nil),
+            .init(id: "file", displayPath: "src/main.swift", name: "main.swift", kind: .file, size: nil, language: nil)
+        ]
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "").map(\.id), ["dir"])
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: ["src"], search: "").count, 2)
+        XCTAssertEqual(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "main").count, 2)
+        XCTAssertTrue(AidenWorkspaceFileTree.visible(entries, expanded: [], search: "missing").isEmpty)
+        XCTAssertEqual(AidenWorkspaceSourcePreview.lines(String(repeating: "line\n", count: 10_000)).count, 2_001)
+        XCTAssertTrue(AidenWorkspaceSourcePreview.lines(String(repeating: "x", count: 10_000))[0].hasSuffix("[line clipped]"))
+    }
+
+    func testWorkspaceLinksNeverAcceptOutsidePathsOrSchemes() {
+        XCTAssertEqual(AidenWorkspaceFileLink.path("./src/hello%20world.swift"), "src/hello world.swift")
+        for value in ["../secret", "./../secret", "./%2e%2e/secret", "./%2Fsecret", "file:///secret", "/secret", "~/secret", "https://example.com", "./a%00b", "./a\\b", "./a#L2", "./a?x=y", "./a//b"] {
+            XCTAssertNil(AidenWorkspaceFileLink.path(value), value)
+        }
+    }
+
+    func testLazyPageContractRejectsForeignChildrenAndBadCursors() throws {
+        var page = AidenWorkspaceFileIndex(snapshotId: "page", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20, directoryPath: "")
+        XCTAssertNoThrow(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        page.nextCursor = "../secret"
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        page.nextCursor = nil
+        page.directoryPath = "../secret"
+        XCTAssertThrowsError(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+    }
+
+    func testSharedLazyPageFixtureDecodes() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["filePage"]))
+        let page = try AidenRemoteJSONDecoder.decode(AidenWorkspaceFileIndex.self, from: data)
+        XCTAssertNoThrow(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
+        XCTAssertEqual(page.entries.first?.kind, .directory)
+    }
+
     override func tearDown() {
         EnvironmentMockURLProtocol.handler = nil
         super.tearDown()

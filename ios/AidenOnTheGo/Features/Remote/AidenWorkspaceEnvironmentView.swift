@@ -128,6 +128,12 @@ final class AidenWorkspaceFilesModel {
     var index: AidenWorkspaceFileIndex?
     var document: AidenWorkspaceFileDocument?
     var draft = ""
+    var expanded: Set<String> = []
+    var cursors: [String: String] = [:]
+    var loadingFolders: Set<String> = []
+    var loadedFolders: Set<String> = []
+    private var revision = UUID()
+    private var openRevision = UUID()
     var isLoading = false
     var isSaving = false
     var isOfflineSnapshot = false
@@ -154,13 +160,25 @@ final class AidenWorkspaceFilesModel {
         guard !isLoading, let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
         isLoading = true
+        revision = UUID()
+        let requestRevision = revision
         errorMessage = nil
         defer { isLoading = false }
         if coordinator.connectionState == .connected {
             do {
-                let value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
+                let value: AidenWorkspaceFileIndex
+                do {
+                    value = try await coordinator.remoteClient(for: context).workspaceFilePage(workspaceId: workspace.id)
+                } catch AidenRemoteClientError.server(let status, _) where status == 400 || status == 404 {
+                    value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
+                }
                 guard coordinator.isCurrent(context) else { return }
+                guard revision == requestRevision else { return }
                 index = value
+                expanded = []
+                cursors = value.nextCursor.map { ["": $0] } ?? [:]
+                loadedFolders = [""]
+                loadingFolders = []
                 isOfflineSnapshot = false
                 try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
@@ -178,9 +196,69 @@ final class AidenWorkspaceFilesModel {
         }
     }
 
+    func toggle(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async {
+        let path = entry.displayPath
+        if expanded.contains(path) { expanded.remove(path); return }
+        expanded.insert(path)
+        if !loadedFolders.contains(path), index?.directoryPath != nil, !isOfflineSnapshot {
+            await loadPage(directory: entry, coordinator: coordinator)
+        }
+    }
+
+    func loadPage(directory: AidenWorkspaceFileEntry?, coordinator: AidenRemoteCoordinator) async {
+        let path = directory?.displayPath ?? ""
+        guard !isLoading, !loadingFolders.contains(path), !isOfflineSnapshot,
+              let context = try? coordinator.requestContext(), coordinator.connectionState == .connected else { return }
+        let requestRevision = revision
+        loadingFolders.insert(path)
+        defer { if revision == requestRevision { loadingFolders.remove(path) } }
+        do {
+            let page = try await coordinator.remoteClient(for: context).workspaceFilePage(
+                workspaceId: workspace.id, directoryId: directory?.id, cursor: cursors[path]
+            )
+            guard coordinator.isCurrent(context), revision == requestRevision, let previous = index else { return }
+            let existingPaths = Set(previous.entries.map(\.displayPath))
+            let additions = page.entries.filter { !existingPaths.contains($0.displayPath) }
+            guard previous.entries.count + additions.count <= 4_000 else {
+                errorMessage = "The loaded tree reached 4,000 entries. Refresh Files to browse another folder."
+                return
+            }
+            index = AidenWorkspaceFileIndex(snapshotId: previous.snapshotId, entries: previous.entries + additions,
+                truncated: previous.truncated || page.truncated, maxEntries: 4_000, maxDepth: 20, directoryPath: "")
+            cursors[path] = page.nextCursor
+            loadedFolders.insert(path)
+            if let index { try? await cache.store(index: index, instanceId: context.instanceId, workspaceId: workspace.id) }
+        } catch {
+            guard coordinator.isCurrent(context), revision == requestRevision, !aidenIsCancellation(error) else { return }
+            expanded.remove(path)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func openLink(_ reference: String, coordinator: AidenRemoteCoordinator) async -> Bool {
+        guard let context = try? coordinator.requestContext() else { return false }
+        openRevision = UUID()
+        let requestRevision = openRevision
+        do {
+            let value = try await coordinator.remoteClient(for: context).workspaceLinkedFile(workspaceId: workspace.id, reference: reference)
+            guard coordinator.isCurrent(context), openRevision == requestRevision else { return false }
+            document = value
+            draft = value.content
+            isOfflineSnapshot = false
+            return true
+        } catch {
+            guard coordinator.isCurrent(context), openRevision == requestRevision, !aidenIsCancellation(error) else { return false }
+            errorMessage = "This workspace file could not be opened. Browse Files to locate it."
+            return false
+        }
+    }
+
     func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async {
         guard entry.kind == .file, let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
+        openRevision = UUID()
+        let requestRevision = openRevision
+        document = nil
         errorMessage = nil
         if coordinator.connectionState == .connected {
             do {
@@ -188,20 +266,20 @@ final class AidenWorkspaceFilesModel {
                     workspaceId: workspace.id,
                     fileId: entry.id
                 )
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
                 document = value
                 draft = value.content
                 isOfflineSnapshot = false
                 try? await cache.store(document: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id),
            let value = cached.documents[entry.id] {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
             document = value
             draft = value.content
             isOfflineSnapshot = true
@@ -263,17 +341,17 @@ struct AidenWorkspaceFilesView: View {
     @State private var model: AidenWorkspaceFilesModel
     @State private var search = ""
     @State private var isShowingDocument = false
+    let initialReference: String?
 
-    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
+    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace, initialReference: String? = nil) {
+        self.initialReference = initialReference
         self.coordinator = coordinator
         self.workspace = workspace
         _model = State(initialValue: AidenWorkspaceFilesModel(workspace: workspace))
     }
 
     private var entries: [AidenWorkspaceFileEntry] {
-        let values = model.index?.entries ?? []
-        guard !search.isEmpty else { return values }
-        return values.filter { $0.displayPath.localizedCaseInsensitiveContains(search) }
+        AidenWorkspaceFileTree.visible(model.index?.entries ?? [], expanded: model.expanded, search: search)
     }
 
     var body: some View {
@@ -292,10 +370,13 @@ struct AidenWorkspaceFilesView: View {
             Section("Files") {
                 ForEach(entries) { entry in
                     Button {
-                        guard entry.kind == .file else { return }
                         Task {
-                            await model.open(entry, coordinator: coordinator)
-                            isShowingDocument = model.document != nil
+                            if entry.kind == .directory {
+                                await model.toggle(entry, coordinator: coordinator)
+                            } else {
+                                await model.open(entry, coordinator: coordinator)
+                                isShowingDocument = model.document != nil
+                            }
                         }
                     } label: {
                         Label {
@@ -308,10 +389,20 @@ struct AidenWorkspaceFilesView: View {
                                     .lineLimit(1)
                             }
                         } icon: {
-                            Image(systemName: entry.kind == .directory ? "folder" : entry.kind == .symlink ? "link" : "doc.text")
+                            Image(systemName: entry.kind == .directory ? (model.expanded.contains(entry.displayPath) ? "folder.fill" : "folder") : entry.kind == .symlink ? "link" : "doc.text")
                         }
                     }
-                    .disabled(entry.kind != .file)
+                    .padding(.leading, CGFloat(min(12, entry.displayPath.split(separator: "/").count - 1)) * 12)
+                    .disabled(entry.kind == .symlink || model.loadingFolders.contains(entry.displayPath))
+                    .accessibilityValue(entry.kind == .directory ? (model.expanded.contains(entry.displayPath) ? "Expanded" : "Collapsed") : "")
+                    if model.expanded.contains(entry.displayPath), model.cursors[entry.displayPath] != nil {
+                        Button("Load more in \(entry.name)") { Task { await model.loadPage(directory: entry, coordinator: coordinator) } }
+                            .disabled(model.loadingFolders.contains(entry.displayPath))
+                    }
+                }
+                if model.cursors[""] != nil {
+                    Button("Load more files") { Task { await model.loadPage(directory: nil, coordinator: coordinator) } }
+                        .disabled(model.loadingFolders.contains(""))
                 }
             }
         }
@@ -319,9 +410,14 @@ struct AidenWorkspaceFilesView: View {
             if model.isLoading && model.index == nil { ProgressView("Loading files…") }
         }
         .navigationTitle("Files")
-        .searchable(text: $search, prompt: "Find a file")
+        .searchable(text: $search, prompt: "Search loaded files")
         .refreshable { await model.load(coordinator: coordinator) }
-        .task { await model.load(coordinator: coordinator) }
+        .task {
+            await model.load(coordinator: coordinator)
+            if let initialReference {
+                if await model.openLink(initialReference, coordinator: coordinator) { isShowingDocument = true }
+            }
+        }
         .onAppear { model.setHapticsActive(true, coordinator: coordinator) }
         .onDisappear { model.setHapticsActive(false, coordinator: coordinator) }
         .sheet(isPresented: $isShowingDocument) {
@@ -343,12 +439,29 @@ private struct AidenWorkspaceFileEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var model: AidenWorkspaceFilesModel
     @State private var isConfirmingDiscard = false
+    @State private var isEditing = false
 
     private var isDirty: Bool { model.document.map { $0.content != model.draft } ?? false }
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: $model.draft)
+            Group {
+                if isEditing {
+                    TextEditor(text: $model.draft)
+                        .disabled(model.isOfflineSnapshot || coordinator.connectionState != .connected)
+                } else {
+                    ScrollView([.vertical, .horizontal]) {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(AidenWorkspaceSourcePreview.lines(model.draft).enumerated()), id: \.offset) { line in
+                                HStack(alignment: .top, spacing: 12) {
+                                    Text(String(line.offset + 1)).foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
+                                    Text(line.element).textSelection(.enabled)
+                                }
+                            }
+                        }.padding()
+                    }
+                }
+            }
                 .font(.system(.body, design: .monospaced))
                 .padding(.horizontal, 8)
                 .navigationTitle(model.document?.displayPath ?? "File")
@@ -379,11 +492,16 @@ private struct AidenWorkspaceFileEditorView: View {
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
+                        if !isEditing {
+                            Button("Edit") { isEditing = true }
+                                .disabled(model.isOfflineSnapshot || coordinator.connectionState != .connected)
+                        } else {
                         Button("Save") { Task { _ = await model.save(coordinator: coordinator) } }
                             .disabled(
                                 !isDirty || model.isSaving || model.isOfflineSnapshot ||
                                 coordinator.connectionState != .connected || model.document?.truncated == true
                             )
+                        }
                     }
                 }
         }

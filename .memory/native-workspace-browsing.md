@@ -1,0 +1,18 @@
+# Native workspace browsing — 2026-09-22
+
+Baseline `c8c09e0d2` (fresh origin/main); branch `feature/native-workspace-browsing`. No existing PR covered this scope. Notion Hermex research was dated 2026-09-20; verified GitHub #401 (`6c63839705e6`), #400 (`f7841fa74570`), #402 (`34d176414b17`) and read pinned FileTree.swift. Original Aiden implementation; no upstream source copied. Bot controls, streaming, produced-file tools, Git viewers, image loading, and write authority expansion are excluded.
+
+## Implementation
+
+- `files?tree=1` adds optional 200-entry direct-child pages with opaque directory handles and snapshot cursors; no client Mac paths. Legacy no-query recursive snapshot stays compatible. Scan: 8,000 records/4,000 entries/depth 20; no recursive indexing. 16 unfinished inventories with oldest eviction, ten-minute cursor lifetime, device/workspace/revision/identity fencing, fixed memory bounds. Generated folders remain excluded. Directory symlinks are not offered by lazy browsing.
+- Both native clients expand/collapse downloaded folders, search loaded entries with ancestor context, load continuation pages explicitly, and cap accumulated entries at 4,000. Cached snapshots stay read-only. Native source preview is numbered plain text, capped to 2,000 lines and 2,000 characters/line with clipping notice; explicit Edit retains bounded existing reads and expected-version saves.
+- Explicit `./` Markdown references resolve at most 40 directory pages through opaque handles before reading. Traversal, absolute/home paths and unsafe encodings are rejected; no automatic image networking. Android formatter now makes those links tappable. iOS preserves system URL actions including app-settings.
+- Normative API, OpenAPI, shared/Android fixture, native fixture decoding tests, existing onboarding file tile, and iOS onboarding copy updated. Existing artwork is reused because this refines the shipped Files capability.
+
+## Reviews and evidence
+
+Separate user-requested GPT-5.6 Sol medium reviews covered blast radius and adversarial cases. Fixed discovered stale linked-file selection writes, Android stale root failures, missing Android page byte cap, non-clickable Android Markdown links, global snapshot-capacity denial, depth-boundary mismatch, offline fallback state, and inherited iOS Settings URL suppression. Persistent directory symlink swaps are rejected before scan and before metadata return. A precise same-user swap-back race remains inherent to Node path-based opendir; reviewers did not classify it as release blocking. Strict descriptor-bound enumeration is a separate native-helper hardening opportunity, not claimed here.
+
+Validation: 94 focused server/contract/Bot/onboarding tests passed; 180 Android unit tests and Android lint passed, including fixture and clickable link tests. Final generic iOS device-platform app/test compilation, TypeScript, scoped ESLint and whitespace checks passed. Both Sol reviewers confirmed no remaining must-fix finding after remediation. Hosted checks and coordinated physical XCTest remain pending. React Doctor 91/100: only serial-await warning in bounded file identity issuance; intentionally sequential for cancellation and bounded descriptor pressure.
+
+One simulator test was mistakenly executed before reading nested ios/AGENTS.md. It is excluded from acceptance; see papercut. No simulator work will be repeated. No merge/release/deploy authorized or performed.

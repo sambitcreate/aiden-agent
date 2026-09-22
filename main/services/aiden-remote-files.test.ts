@@ -46,6 +46,41 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
   });
 
   try {
+    // Lazy pages do not read descendants, and directory handles remain device-bound.
+    const rootPage = await service.children("device-1", workspace.id);
+    assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
+    assert.equal(rootPage.directoryPath, "");
+    const sources = rootPage.entries[0]!;
+    const children = await service.children("device-1", workspace.id, sources.id);
+    assert.deepEqual(children.entries.map(entry => entry.displayPath), ["Sources/App.swift"]);
+    await assert.rejects(() => service.children("device-2", workspace.id, sources.id));
+    await assert.rejects(() => service.children("device-1", workspace.id, children.entries[0]!.id));
+    await fs.mkdir(path.join(root, "Many"));
+    for (let number = 0; number < 205; number++) await fs.writeFile(path.join(root, "Many", `file${number}.txt`), "ok");
+    const many = (await service.children("device-1", workspace.id)).entries.find(entry => entry.name === "Many")!;
+    const firstPage = await service.children("device-1", workspace.id, many.id);
+    assert.equal(firstPage.entries.length, 200);
+    assert.ok(firstPage.nextCursor);
+    assert.equal(firstPage.entries[2]!.name, "file2.txt");
+    await assert.rejects(() => service.children("device-2", workspace.id, many.id, firstPage.nextCursor));
+    await assert.rejects(() => service.children("device-1", workspace.id, sources.id, firstPage.nextCursor));
+    await assert.rejects(() => service.children("device-1", workspace.id, undefined, firstPage.nextCursor));
+    // Mutation between pages cannot shuffle offsets in the server-held snapshot.
+    await fs.writeFile(path.join(root, "Many", "file-new.txt"), "new");
+    const lastPage = await service.children("device-1", workspace.id, many.id, firstPage.nextCursor);
+    assert.equal(lastPage.entries.length, 5);
+    assert.equal(lastPage.nextCursor, undefined);
+    assert.equal(new Set([...firstPage.entries, ...lastPage.entries].map(entry => entry.displayPath)).size, 205);
+    await fs.symlink(temporary, path.join(root, "escape"));
+    assert.equal((await service.children("device-1", workspace.id)).entries.some(entry => entry.name === "escape"), false);
+    await fs.rm(path.join(root, "escape"));
+    // Abandoned inventories evict oldest pages instead of blocking unrelated browsing.
+    for (let request = 0; request < 17; request++) {
+      assert.ok((await service.children("device-1", workspace.id, many.id)).nextCursor);
+    }
+    assert.equal((await service.children("device-1", workspace.id)).directoryPath, "");
+    await fs.rm(path.join(root, "Many"), { recursive: true });
+
     const index = await service.list("device-1", workspace.id);
     assert.equal(index.maxEntries, 4_000);
     assert.equal(index.maxDepth, 20);
