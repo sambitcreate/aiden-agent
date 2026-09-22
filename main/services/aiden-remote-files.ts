@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { lstat, stat } from "node:fs/promises";
+import type { Workspace } from "./types.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenOpaqueHandleError,
@@ -143,6 +145,7 @@ function projectedDocument(
 }
 
 export class AidenRemoteFileService {
+  private readonly roots = new Map<string, { configuredPath: string; canonicalPath: string; device: string; inode: string }>();
   private readonly pages = new Map<string, {
     claims: AidenOpaqueHandleClaims;
     entries: WorkspaceFileEntry[];
@@ -164,6 +167,26 @@ export class AidenRemoteFileService {
   private get handles(): AidenOpaqueHandleStore {
     this.handleStore ??= this.options.handles ?? new AidenOpaqueHandleStore({ now: this.now });
     return this.handleStore;
+  }
+
+  private async assertRoot(workspace: Workspace, folderPath: string): Promise<{ path: string; device: string; inode: string }> {
+    if (!workspace.folderPath) throw new AidenOpaqueHandleError("root_policy_changed");
+    const configured = await lstat(workspace.folderPath, { bigint: true });
+    const current = await stat(folderPath, { bigint: true });
+    if (!configured.isDirectory() || configured.isSymbolicLink() ||
+        configured.dev !== current.dev || configured.ino !== current.ino) {
+      throw new AidenOpaqueHandleError("filesystem_identity_changed");
+    }
+    const identity = { configuredPath: workspace.folderPath, canonicalPath: folderPath,
+      device: current.dev.toString(), inode: current.ino.toString() };
+    const previous = this.roots.get(workspace.id);
+    if (previous && previous.configuredPath === identity.configuredPath &&
+        (previous.canonicalPath !== identity.canonicalPath || previous.device !== identity.device || previous.inode !== identity.inode)) {
+      throw new AidenOpaqueHandleError("filesystem_identity_changed");
+    }
+    if (!previous && this.roots.size >= 1_024) throw new AidenOpaqueHandleError("handle_capacity");
+    this.roots.set(workspace.id, identity);
+    return { path: identity.canonicalPath, device: identity.device, inode: identity.inode };
   }
 
   private async claims(
@@ -260,8 +283,10 @@ export class AidenRemoteFileService {
       return await this.options.application.run(
         this.options.owners.owner(deviceId), workspaceId,
         async ({ folderPath, workspace }, signal) => {
+          const rootIdentity = await this.assertRoot(workspace, folderPath);
           const revision = projectAidenRemoteWorkspace(workspace).revision;
           let directoryPath = "";
+          let directoryClaims: AidenOpaqueHandleClaims | undefined;
           if (directoryId) {
             const stored = this.handles.claimsFor(directoryId, "file");
             if (stored.workspaceId !== workspaceId || stored.kind !== "directory" || !stored.displayPath) {
@@ -270,6 +295,7 @@ export class AidenRemoteFileService {
             const current = await this.claims(deviceId, workspaceId, folderPath, revision, stored.displayPath, stored.snapshotId ?? "");
             this.handles.resolve(directoryId, "file", current);
             directoryPath = stored.displayPath;
+            directoryClaims = stored;
           }
           let snapshotId: string;
           let offset = 0;
@@ -294,8 +320,17 @@ export class AidenRemoteFileService {
             // Evict the oldest abandoned inventory; its cursor fails closed as expired.
             if (this.pages.size >= 16) this.pages.delete(this.pages.keys().next().value!);
             snapshotId = `files_${randomBytes(24).toString("base64url")}`;
-            const claims = await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, snapshotId);
-            const index = await listWorkspaceDirectory(folderPath, directoryPath, signal);
+            const claims = directoryClaims
+              ? { ...directoryClaims, snapshotId, expiresAt: this.now() + FILE_HANDLE_TTL_MS }
+              : { ...await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, snapshotId),
+                  canonicalRootPath: rootIdentity.path, canonicalPath: rootIdentity.path,
+                  filesystemDevice: rootIdentity.device, filesystemInode: rootIdentity.inode };
+            const index = await listWorkspaceDirectory(folderPath, directoryPath, signal, {
+              root: rootIdentity,
+              directory: directoryClaims
+                ? { device: directoryClaims.filesystemDevice, inode: directoryClaims.filesystemInode }
+                : rootIdentity,
+            });
             snapshot = { claims, entries: index.entries, truncated: index.truncated };
             this.pages.set(snapshotId, snapshot);
           }
@@ -319,6 +354,7 @@ export class AidenRemoteFileService {
             ? this.handles.issue("cur", { ...snapshot.claims, cursorOffset: nextOffset }) : undefined;
           // Completed pages do not retain directory inventories in server memory.
           if (!nextCursor) this.pages.delete(snapshotId);
+          await this.assertRoot(workspace, folderPath);
           return { snapshotId, entries, truncated: snapshot.truncated || omitted,
             maxEntries: 4_000, maxDepth: 20, directoryPath, ...(nextCursor ? { nextCursor } : {}) };
         },

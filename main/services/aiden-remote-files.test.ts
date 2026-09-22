@@ -48,9 +48,23 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
   try {
     if (process.platform === "darwin") {
     // Lazy pages do not read descendants, and directory handles remain device-bound.
+    const originalRoot = path.join(temporary, "original-root");
+    await fs.rename(root, originalRoot);
+    await fs.symlink(temporary, root);
+    await assert.rejects(() => service.children("device-1", workspace.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
+    await fs.rm(root);
+    await fs.rename(originalRoot, root);
     const rootPage = await service.children("device-1", workspace.id);
     assert.deepEqual(rootPage.entries.map(entry => entry.displayPath), ["Sources"]);
     assert.equal(rootPage.directoryPath, "");
+    await fs.rename(root, originalRoot);
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "replacement.txt"), "outside replacement");
+    await assert.rejects(() => service.children("device-1", workspace.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
+    await fs.rm(root, { recursive: true });
+    await fs.rename(originalRoot, root);
     const sources = rootPage.entries[0]!;
     const children = await service.children("device-1", workspace.id, sources.id);
     assert.deepEqual(children.entries.map(entry => entry.displayPath), ["Sources/App.swift"]);

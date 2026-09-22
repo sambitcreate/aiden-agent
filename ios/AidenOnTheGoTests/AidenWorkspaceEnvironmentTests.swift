@@ -4,6 +4,23 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenWorkspaceEnvironmentTests: XCTestCase {
+    @MainActor
+    func testCachedDocumentDoesNotDisableLiveTreePaging() {
+        let model = AidenWorkspaceFilesModel(workspace: AidenWorkspace(
+            id: "workspace", name: "Workspace", permission: .ask, hasFolder: true,
+            isManagedWorktree: false, branchName: nil, repositoryName: nil, git: nil,
+            createdAt: .now, updatedAt: .now, revision: "r1"
+        ))
+        model.isOfflineIndex = false
+        model.isOfflineDocument = true
+        XCTAssertTrue(model.canLoadPage)
+        XCTAssertFalse(model.canEditDocument)
+        model.isOfflineIndex = true
+        model.isOfflineDocument = false
+        XCTAssertFalse(model.canLoadPage)
+        XCTAssertTrue(model.canEditDocument)
+    }
+
     func testLazyTreeVisibilitySearchAndBoundedPreview() {
         let entries: [AidenWorkspaceFileEntry] = [
             .init(id: "dir", displayPath: "src", name: "src", kind: .directory, size: nil, language: nil),
@@ -41,6 +58,21 @@ final class AidenWorkspaceEnvironmentTests: XCTestCase {
         let page = try AidenRemoteJSONDecoder.decode(AidenWorkspaceFileIndex.self, from: data)
         XCTAssertNoThrow(try AidenWorkspaceEnvironmentValidation.validatedPage(page))
         XCTAssertEqual(page.entries.first?.kind, .directory)
+    }
+
+    func testRelativeLinksCacheWithoutIndexAndSurvivePartialRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = AidenWorkspaceEnvironmentCache(directory: directory)
+        let document = AidenWorkspaceFileDocument(id: "file_" + String(repeating: "a", count: 43), displayPath: "src/App.swift", content: "cached", version: "v1", truncated: false, warning: nil)
+        try await cache.store(document: document, instanceId: "mac", workspaceId: "workspace")
+        try await cache.store(index: AidenWorkspaceFileIndex(snapshotId: "fresh", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20, directoryPath: ""), instanceId: "mac", workspaceId: "workspace")
+        let cached = await cache.document(reference: "./src/App.swift", instanceId: "mac", workspaceId: "workspace")
+        XCTAssertEqual(cached, document)
+        let other = await cache.document(reference: "./src/App.swift", instanceId: "other", workspaceId: "workspace")
+        XCTAssertNil(other)
+        let escape = await cache.document(reference: "./../src/App.swift", instanceId: "mac", workspaceId: "workspace")
+        XCTAssertNil(escape)
     }
 
     override func tearDown() {

@@ -117,13 +117,19 @@ export async function transferManagedWorktreeFile(options: {
 }
 
 /** Enumerate only through the root-bound native directory descriptor. */
+export interface WorkspaceDirectoryIdentities {
+  root: ManagedWorktreeRootIdentity;
+  directory: Pick<ManagedWorktreeRootIdentity, "device" | "inode">;
+}
+
 export async function listConfinedWorkspaceDirectory(
   root: string,
   relativePath: string,
   signal?: AbortSignal,
+  identities?: WorkspaceDirectoryIdentities,
 ): Promise<{ entries: Array<{ name: string; kind: "file" | "directory" }>; truncated: boolean }> {
-  const rootIdentity = await captureManagedWorktreeRootIdentity(root);
-  const directory = await captureManagedWorktreeRootIdentity(path.join(rootIdentity.path, relativePath));
+  const rootIdentity = identities?.root ?? await captureManagedWorktreeRootIdentity(root);
+  const directory = identities?.directory ?? await captureManagedWorktreeRootIdentity(path.join(rootIdentity.path, relativePath));
   const { stdout } = await executeFile(resolveManagedWorktreeFileIoBinary(), [
     "list", rootIdentity.path, rootIdentity.device, rootIdentity.inode,
     relativePath, directory.device, directory.inode,

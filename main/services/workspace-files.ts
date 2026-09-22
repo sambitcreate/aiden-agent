@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { listConfinedWorkspaceDirectory } from "./managed-worktree-file-io.js";
+import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
 import { readRegularFile } from "./regular-file-read.js";
 
 const MAX_INDEX_ENTRIES = 4_000;
@@ -190,6 +190,7 @@ export async function listWorkspaceDirectory(
   root: string,
   directory: string,
   signal?: AbortSignal,
+  identities?: WorkspaceDirectoryIdentities,
 ): Promise<WorkspaceFileIndex> {
   const realRoot = await canonicalRoot(root);
   if (directory) await resolveExistingPath(realRoot, directory);
@@ -198,7 +199,7 @@ export async function listWorkspaceDirectory(
   }
   // The native helper opens each component with openat(O_NOFOLLOW), then
   // enumerates the held descriptor. Path swaps cannot redirect enumeration.
-  const result = await listConfinedWorkspaceDirectory(realRoot, directory, signal);
+  const result = await listConfinedWorkspaceDirectory(realRoot, directory, signal, identities);
   const entries: WorkspaceFileEntry[] = result.entries.map(child => ({
     path: toPortablePath(path.join(directory, child.name)), name: child.name,
     parentPath: directory, depth: directory.split("/").filter(Boolean).length, kind: child.kind,

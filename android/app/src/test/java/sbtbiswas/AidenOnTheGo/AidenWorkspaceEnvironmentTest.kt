@@ -9,6 +9,15 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
+    @Test fun cachedDocumentDoesNotDisableLiveTreePaging() {
+        val cachedDocument = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = true)
+        assertTrue(cachedDocument.canLoadPage)
+        assertFalse(cachedDocument.canEditDocument)
+        val cachedIndex = AidenWorkspaceFileAvailability(indexOffline = true, documentOffline = false)
+        assertFalse(cachedIndex.canLoadPage)
+        assertTrue(cachedIndex.canEditDocument)
+    }
+
     @Test fun lazyTreeSearchAndPreviewStayBounded() {
         val entries = listOf(
             AidenWorkspaceFileEntry("dir", "src", "src", AidenWorkspaceFileKind.DIRECTORY),
@@ -48,6 +57,16 @@ class AidenWorkspaceEnvironmentTest {
         val root = kotlinx.serialization.json.Json.parseToJsonElement(fixture) as kotlinx.serialization.json.JsonObject
         val page = kotlinx.serialization.json.Json.decodeFromString<AidenWorkspaceFileIndex>(root.getValue("filePage").toString())
         assertEquals(AidenWorkspaceFileKind.DIRECTORY, AidenWorkspaceEnvironmentValidation.validatedPage(page).entries.first().kind)
+    }
+
+    @Test fun relativeLinksCacheWithoutIndexAndSurvivePartialRefresh() {
+        val cache = sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache(tempFolder.newFolder())
+        val document = AidenWorkspaceFileDocument(validFileId, "src/App.kt", "cached", "v1", false)
+        cache.store(document, "mac", "workspace")
+        cache.store(AidenWorkspaceFileIndex("fresh", emptyList(), false, 4_000, 20, directoryPath = ""), "mac", "workspace")
+        assertEquals(document, cache.document("./src/App.kt", "mac", "workspace"))
+        assertNull(cache.document("./src/App.kt", "other", "workspace"))
+        assertNull(cache.document("./../src/App.kt", "mac", "workspace"))
     }
 
     @get:Rule

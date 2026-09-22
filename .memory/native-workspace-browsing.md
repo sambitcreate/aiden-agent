@@ -16,3 +16,15 @@ Separate user-requested GPT-5.6 Sol medium reviews covered blast radius and adve
 Validation: 94 focused server/contract/Bot/onboarding tests passed; 180 Android unit tests and Android lint passed, including fixture and clickable link tests. Final generic iOS device-platform app/test compilation, TypeScript, scoped ESLint and whitespace checks passed. Both Sol reviewers confirmed no remaining must-fix finding after remediation. Hosted checks and coordinated physical XCTest remain pending. React Doctor 91/100: only serial-await warning in bounded file identity issuance; intentionally sequential for cancellation and bounded descriptor pressure.
 
 One simulator test was mistakenly executed before reading nested ios/AGENTS.md. It is excluded from acceptance; see papercut. No simulator work will be repeated. No merge/release/deploy authorized or performed.
+
+## Pullfrog follow-up — 2026-09-22
+
+Four actionable review threads addressed: lazy root substitution, overlapping Android initial refresh, stale offline edit authority, and relative links bypassing the offline document cache. Lazy admission rejects a symlink at the configured root and pins the first admitted canonical root/device/inode. The authenticated directory and pinned root identities pass unchanged into the native helper; replacement tests cover both boundaries. This is first-use pinning, not registration-time pinning (the persisted workspace has no inode); legacy list/read/write retains existing behavior. The API documents this scope. Adversarial Sol review cleared the final lazy path.
+
+Both native clients persist link downloads, find cached relative references by safe path within the paired instance/workspace, retain documents across partial lazy index refreshes, and keep document edit authority separate from folder paging availability. Android initial refresh is serialized. Focused cache and authority regressions added in both native suites.
+
+Server follow-up: 22 focused tests passed; full test:aiden-remote passed 458 tests with one skip; TypeScript and scoped ESLint passed. Latest-head hosted checks must be rechecked after push; predecessor head 12bcee75 had green Android/release-contract checks and running macOS verify/Electron E2E.
+
+Physical acceptance external blocker confirmed by coordinator: shared iPhone reports passcodeRequired:true, unlockedSinceBoot:true, without subsequent user unlock confirmation. Browser slot is queued behind recovery, Bots, produced-file, worktree and form-fill; no handoff received. No physical or simulator tests launched in this follow-up. Greptile remains externally blocked by its 50-credit trial limit. Heartbeat stays active while newest-head CI/review gates remain pending.
+
+Final follow-up native evidence: 182 Android unit tests pass; generic unsigned iOS device-platform app/test compilation passes (not physical runtime acceptance). Native authority split reviewed by Sol; no further scoped issue found.

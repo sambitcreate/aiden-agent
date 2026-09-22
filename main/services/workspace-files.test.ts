@@ -303,3 +303,27 @@ test("lazy directory scan includes files at the legacy depth boundary", { skip: 
   await fs.writeFile(path.join(root, directory, "last.txt"), "last");
   assert.equal((await listWorkspaceDirectory(root, directory)).entries[0]?.name, "last.txt");
 });
+
+
+test("lazy listing preserves supplied root and directory identities across replacement", { skip: process.platform !== "darwin" }, async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "inside"));
+  const rootStat = await fs.stat(root, { bigint: true });
+  const directoryStat = await fs.stat(path.join(root, "inside"), { bigint: true });
+  const identities = {
+    root: { path: await fs.realpath(root), device: rootStat.dev.toString(), inode: rootStat.ino.toString() },
+    directory: { device: directoryStat.dev.toString(), inode: directoryStat.ino.toString() },
+  };
+  await fs.rename(path.join(root, "inside"), path.join(root, "original"));
+  await fs.mkdir(path.join(root, "inside"));
+  await fs.writeFile(path.join(root, "inside", "private.txt"), "private");
+  await assert.rejects(listWorkspaceDirectory(root, "inside", undefined, identities));
+  await fs.rm(path.join(root, "inside"), { recursive: true });
+  await fs.rename(path.join(root, "original"), path.join(root, "inside"));
+  const moved = root + "-original";
+  await fs.rename(root, moved);
+  t.after(() => fs.rm(moved, { recursive: true, force: true }));
+  await fs.mkdir(root);
+  await fs.writeFile(path.join(root, "private.txt"), "private");
+  await assert.rejects(listWorkspaceDirectory(root, "", undefined, { root: identities.root, directory: identities.root }));
+});

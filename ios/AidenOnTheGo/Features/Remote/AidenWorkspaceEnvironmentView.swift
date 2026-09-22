@@ -48,7 +48,7 @@ actor AidenWorkspaceEnvironmentCache {
         try persist(
             Snapshot(
                 index: index,
-                documents: retained.filter { validIDs.contains($0.key) },
+                documents: index.directoryPath != nil ? retained : retained.filter { validIDs.contains($0.key) },
                 updatedAt: Date()
             ),
             instanceId: instanceId,
@@ -77,10 +77,18 @@ actor AidenWorkspaceEnvironmentCache {
         instanceId: String,
         workspaceId: String
     ) throws {
-        guard var snapshot = load(instanceId: instanceId, workspaceId: workspaceId) else { return }
+        var snapshot = load(instanceId: instanceId, workspaceId: workspaceId) ?? Snapshot(
+            index: AidenWorkspaceFileIndex(snapshotId: "cached-files", entries: [], truncated: false, maxEntries: 4_000, maxDepth: 20, directoryPath: ""),
+            documents: [:], updatedAt: Date())
+        snapshot.documents = snapshot.documents.filter { $0.value.displayPath != document.displayPath }
         snapshot.documents[document.id] = document
         snapshot.updatedAt = Date()
         try persist(snapshot, instanceId: instanceId, workspaceId: workspaceId)
+    }
+
+    func document(reference: String, instanceId: String, workspaceId: String) -> AidenWorkspaceFileDocument? {
+        guard let path = AidenWorkspaceFileLink.path(reference) else { return nil }
+        return load(instanceId: instanceId, workspaceId: workspaceId)?.documents.values.first { $0.displayPath == path }
     }
 
     private func persist(_ snapshot: Snapshot, instanceId: String, workspaceId: String) throws {
@@ -136,7 +144,10 @@ final class AidenWorkspaceFilesModel {
     private var openRevision = UUID()
     var isLoading = false
     var isSaving = false
-    var isOfflineSnapshot = false
+    var isOfflineIndex = false
+    var isOfflineDocument = false
+    var canLoadPage: Bool { !isOfflineIndex }
+    var canEditDocument: Bool { !isOfflineDocument }
     var errorMessage: String?
 
     private let workspace: AidenWorkspace
@@ -179,7 +190,7 @@ final class AidenWorkspaceFilesModel {
                 cursors = value.nextCursor.map { ["": $0] } ?? [:]
                 loadedFolders = [""]
                 loadingFolders = []
-                isOfflineSnapshot = false
+                isOfflineIndex = false
                 try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
@@ -190,7 +201,7 @@ final class AidenWorkspaceFilesModel {
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id) {
             guard coordinator.isCurrent(context) else { return }
             index = cached.index
-            isOfflineSnapshot = true
+            isOfflineIndex = true
         } else if coordinator.isCurrent(context), errorMessage == nil {
             errorMessage = "Connect to Aiden Agent to load workspace files."
         }
@@ -200,14 +211,14 @@ final class AidenWorkspaceFilesModel {
         let path = entry.displayPath
         if expanded.contains(path) { expanded.remove(path); return }
         expanded.insert(path)
-        if !loadedFolders.contains(path), index?.directoryPath != nil, !isOfflineSnapshot {
+        if !loadedFolders.contains(path), index?.directoryPath != nil, canLoadPage {
             await loadPage(directory: entry, coordinator: coordinator)
         }
     }
 
     func loadPage(directory: AidenWorkspaceFileEntry?, coordinator: AidenRemoteCoordinator) async {
         let path = directory?.displayPath ?? ""
-        guard !isLoading, !loadingFolders.contains(path), !isOfflineSnapshot,
+        guard !isLoading, !loadingFolders.contains(path), canLoadPage,
               let context = try? coordinator.requestContext(), coordinator.connectionState == .connected else { return }
         let requestRevision = revision
         loadingFolders.insert(path)
@@ -244,10 +255,18 @@ final class AidenWorkspaceFilesModel {
             guard coordinator.isCurrent(context), openRevision == requestRevision else { return false }
             document = value
             draft = value.content
-            isOfflineSnapshot = false
+            isOfflineDocument = false
+            try? await cache.store(document: value, instanceId: context.instanceId, workspaceId: workspace.id)
             return true
         } catch {
             guard coordinator.isCurrent(context), openRevision == requestRevision, !aidenIsCancellation(error) else { return false }
+            if let value = await cache.document(reference: reference, instanceId: context.instanceId, workspaceId: workspace.id) {
+                guard coordinator.isCurrent(context), openRevision == requestRevision else { return false }
+                document = value
+                draft = value.content
+                isOfflineDocument = true
+                return true
+            }
             errorMessage = "This workspace file could not be opened. Browse Files to locate it."
             return false
         }
@@ -269,7 +288,7 @@ final class AidenWorkspaceFilesModel {
                 guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
                 document = value
                 draft = value.content
-                isOfflineSnapshot = false
+                isOfflineDocument = false
                 try? await cache.store(document: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
@@ -282,12 +301,13 @@ final class AidenWorkspaceFilesModel {
             guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
             document = value
             draft = value.content
-            isOfflineSnapshot = true
+            isOfflineDocument = true
         }
     }
 
     func save(coordinator: AidenRemoteCoordinator) async -> Bool {
         guard coordinator.connectionState == .connected,
+              canEditDocument,
               !isSaving,
               let document,
               let context = try? coordinator.requestContext() else { return false }
@@ -356,7 +376,7 @@ struct AidenWorkspaceFilesView: View {
 
     var body: some View {
         List {
-            if model.isOfflineSnapshot {
+            if model.isOfflineIndex {
                 Section {
                     Label("Showing the last downloaded snapshot. Editing is disabled.", systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
@@ -448,7 +468,7 @@ private struct AidenWorkspaceFileEditorView: View {
             Group {
                 if isEditing {
                     TextEditor(text: $model.draft)
-                        .disabled(model.isOfflineSnapshot || coordinator.connectionState != .connected)
+                        .disabled(!model.canEditDocument || coordinator.connectionState != .connected)
                 } else {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -484,7 +504,7 @@ private struct AidenWorkspaceFileEditorView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Done") {
-                            if isDirty && !model.isOfflineSnapshot {
+                            if isDirty && model.canEditDocument {
                                 isConfirmingDiscard = true
                             } else {
                                 dismiss()
@@ -494,18 +514,18 @@ private struct AidenWorkspaceFileEditorView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         if !isEditing {
                             Button("Edit") { isEditing = true }
-                                .disabled(model.isOfflineSnapshot || coordinator.connectionState != .connected)
+                                .disabled(!model.canEditDocument || coordinator.connectionState != .connected)
                         } else {
                         Button("Save") { Task { _ = await model.save(coordinator: coordinator) } }
                             .disabled(
-                                !isDirty || model.isSaving || model.isOfflineSnapshot ||
+                                !isDirty || model.isSaving || !model.canEditDocument ||
                                 coordinator.connectionState != .connected || model.document?.truncated == true
                             )
                         }
                     }
                 }
         }
-        .interactiveDismissDisabled(isDirty && !model.isOfflineSnapshot)
+        .interactiveDismissDisabled(isDirty && model.canEditDocument)
         .confirmationDialog("Discard unsaved changes?", isPresented: $isConfirmingDiscard) {
             Button("Discard Changes", role: .destructive) { dismiss() }
             Button("Keep Editing", role: .cancel) {}

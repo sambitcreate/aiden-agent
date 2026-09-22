@@ -377,6 +377,11 @@ object AidenWorkspaceEnvironmentValidation {
     }
 }
 
+data class AidenWorkspaceFileAvailability(val indexOffline: Boolean, val documentOffline: Boolean) {
+    val canLoadPage: Boolean get() = !indexOffline
+    val canEditDocument: Boolean get() = !documentOffline
+}
+
 object AidenWorkspaceFileTree {
     fun visible(entries: List<AidenWorkspaceFileEntry>, expanded: Set<String>, search: String): List<AidenWorkspaceFileEntry> {
         val groups = entries.groupBy { it.displayPath.substringBeforeLast('/', "") }
