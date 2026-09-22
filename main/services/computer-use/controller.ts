@@ -14,13 +14,8 @@ import {
   parseComputerUseKeyChord,
   summarizeComputerUseApproval,
 } from "./safety.js";
-import {
-  FORM_FILL_BATCH_VERSION,
-  reacquirePlannedElement,
-  type FormFillBatchPlan,
-  type FormFillBatchResult,
-  type FormFillRowResult,
-} from "../form-fill/batch-core.js";
+import type { FormFillBatchPlan, FormFillBatchResult, FormFillRowResult } from "../form-fill/batch-core.js";
+import { FORM_FILL_UNAVAILABLE_MESSAGE } from "../../../renderer/shared/form-fill-availability.js";
 
 const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
@@ -497,6 +492,8 @@ export class ComputerUseController {
   private session: CuaDriverSessionLike | null = null;
   private startup: Promise<CuaDriverSessionLike> | null = null;
   private closePromise: Promise<void> | null = null;
+  private closeFailed = false;
+  private readonly driverCalls = new Set<Promise<unknown>>();
   private readonly lifecycle = new AbortController();
   private target: ActiveTarget | null = null;
   private revision = 0;
@@ -598,6 +595,11 @@ export class ComputerUseController {
     return this.closePromise;
   }
 
+  async closeAndSettle(): Promise<void> {
+    await this.close();
+    if (this.closeFailed) throw new Error("Computer Use teardown failed.");
+  }
+
   private assertUsable(): void {
     if (this.state === "closed")
       throw new ComputerUseSafetyError("controller_closed", "Computer Use has closed.");
@@ -646,7 +648,14 @@ export class ComputerUseController {
   ): Promise<ParsedDriverResult> {
     try {
       const session = await this.getSession(signal);
-      return parseDriverResult(await session.callTool(name, args, { signal, timeoutMs }));
+      signal.throwIfAborted();
+      const call = session.callTool(name, args, { signal, timeoutMs });
+      this.driverCalls.add(call);
+      try {
+        return parseDriverResult(await call);
+      } finally {
+        this.driverCalls.delete(call);
+      }
     } catch (error) {
       if (error instanceof ComputerUseDriverActionError) {
         if (error.poisonsSession) this.poison();
@@ -1385,326 +1394,30 @@ export class ComputerUseController {
   }
 
   /**
-   * Exact-window AX observation for the Form Fill Specialist — no screenshot,
-   * full element tree. Mutates the active target like every capture does.
-   */
-  private async observeFormFillWindow(
-    window: WindowRecord,
-    maximumElements: number,
-    signal: AbortSignal,
-  ): Promise<ActiveTarget> {
-    this.setTarget(window, []);
-    const result = await this.callDriver(
-      "get_window_state",
-      {
-        pid: window.pid,
-        window_id: window.windowId,
-        include_screenshot: false,
-        max_elements: maximumElements,
-      },
-      signal,
-      CAPTURE_TIMEOUT_MS,
-    );
-    if ((safeInteger(result.structured?.element_count, 0) ?? 0) > maximumElements) {
-      this.clearTarget();
-      throw new ComputerUseSafetyError("form_fill_drift", "The form capture was truncated.");
-    }
-    const capturePid = safeInteger(result.structured?.pid, 1);
-    const captureWindow = safeInteger(result.structured?.window_id, 1);
-    if ((capturePid !== undefined && capturePid !== window.pid) ||
-        (captureWindow !== undefined && captureWindow !== window.windowId)) {
-      this.clearTarget();
-      throw new ComputerUseSafetyError("form_fill_drift", "The capture belongs to a different window.");
-    }
-    const elements = normalizeElements(result, maximumElements);
-    return this.setTarget(window, elements);
-  }
-
-  /**
-   * Capture an exact window for form-fill planning. Returns the element list
-   * and the controller revision at the moment of capture — the plan binds
-   * both so any mutation between approval and execution invalidates it.
+   * No capture may mint approval until the pinned driver supplies document
+   * lifetime identity AND atomically checks it when applying each write.
+   * Window metadata, AX structure and snapshot tokens are not such authority.
    */
   async formFillCapture(
-    input: { pid: number; windowId: number },
-    signal?: AbortSignal,
+    _input: { pid: number; windowId: number },
+    _signal?: AbortSignal,
   ): Promise<{
     window: { pid: number; windowId: number; appName: string; title: string };
     elements: readonly ElementRecord[];
     revision: number;
   }> {
-    this.assertUsable();
-    const boundSignal = this.signalFor(signal);
-    const window = await this.resolveTarget(
-      { pid: input.pid, window_id: input.windowId },
-      boundSignal,
-    );
-    const target = await this.observeFormFillWindow(window, 500, boundSignal);
-    return {
-      window: {
-        pid: window.pid,
-        windowId: window.windowId,
-        appName: window.appName,
-        title: window.title,
-      },
-      elements: [...target.elements.values()],
-      revision: this.revision,
-    };
+    throw new ComputerUseSafetyError("form_fill_unavailable", FORM_FILL_UNAVAILABLE_MESSAGE);
   }
 
-  /**
-   * Execute an authorized form-fill batch. The caller (the form-fill service)
-   * owns plan validation; this method enforces that the controller state has
-   * not drifted since the plan was minted, re-observes the exact window before
-   * every mutation, reacquires each element by token/index + semantics, and
-   * stops the whole batch on the first failure, drift, or cancellation.
-   */
+  /** Reject stale/direct approvals too; tool omission alone is not a safety boundary. */
   async executeFormFillBatch(
-    plan: FormFillBatchPlan,
-    options: {
+    _plan: FormFillBatchPlan,
+    _options: {
       signal?: AbortSignal;
       onRow?: (row: FormFillRowResult, completed: number, total: number) => void;
     } = {},
   ): Promise<FormFillBatchResult> {
-    this.assertUsable();
-    if (plan.version !== FORM_FILL_BATCH_VERSION || plan.submit !== false) {
-      throw new ComputerUseSafetyError(
-        "form_fill_plan_invalid",
-        "The form-fill plan is not valid for execution.",
-      );
-    }
-    if (plan.generationId !== this.generationId) {
-      throw new ComputerUseSafetyError(
-        "form_fill_plan_invalid",
-        "The form-fill plan belongs to a different response.",
-      );
-    }
-    const excluded = new Set(plan.excludedOrders ?? []);
-    if ([...excluded].some((order) => !plan.actions.some((action) => action.order === order))) {
-      throw new ComputerUseSafetyError(
-        "form_fill_plan_invalid",
-        "The form-fill plan excludes a row that is not part of it.",
-      );
-    }
-    if (plan.actions.length === 0 || plan.actions.length > plan.maxActions) {
-      throw new ComputerUseSafetyError(
-        "form_fill_plan_invalid",
-        "The form-fill plan has an invalid action count.",
-      );
-    }
-    if (plan.expiresAt <= Date.now()) {
-      throw new ComputerUseSafetyError(
-        "form_fill_plan_expired",
-        "The form-fill plan expired before it could run.",
-      );
-    }
-    // No mutation may have touched the controller since the plan was minted.
-    if (plan.controllerEpoch !== this.revision) {
-      throw new ComputerUseSafetyError(
-        "form_fill_drift",
-        "The target changed after the fill plan was approved.",
-      );
-    }
-    const signal = this.signalFor(options.signal);
-    const session = await this.getSession(signal);
-    if (!session.ready) {
-      throw new ComputerUseSafetyError(
-        "form_fill_not_ready",
-        "Computer Use is not ready for form filling.",
-      );
-    }
-
-    const rows: FormFillRowResult[] = [];
-    let stoppedEarly = false;
-    let stopReason: string | undefined;
-
-    const record = (
-      order: number,
-      elementIndex: number,
-      label: string,
-      status: FormFillRowResult["status"],
-      detail?: string,
-    ): void => {
-      const row: FormFillRowResult = { order, elementIndex, label, status, detail };
-      rows.push(row);
-      options.onRow?.(row, rows.length, plan.actions.length);
-    };
-
-    for (const action of plan.actions) {
-      if (signal.aborted) {
-        stoppedEarly = true;
-        stopReason = "cancelled";
-        break;
-      }
-      if (excluded.has(action.order)) {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "untouched",
-          "Deselected on the review card.",
-        );
-        continue;
-      }
-      let target: ActiveTarget;
-      try {
-        const window = await this.resolveTarget(
-          { pid: plan.window.pid, window_id: plan.window.windowId },
-          signal,
-        );
-        if (window.appName !== plan.window.appName || window.title !== plan.window.title) {
-          throw new ComputerUseSafetyError("form_fill_drift", "The reviewed window changed.");
-        }
-        target = await this.observeFormFillWindow(window, 500, signal);
-      } catch (error) {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "failed",
-          error instanceof Error ? "The window could not be re-observed." : "Observation failed.",
-        );
-        stoppedEarly = true;
-        stopReason = "observation_failed";
-        break;
-      }
-
-      const element = reacquirePlannedElement(action, [...target.elements.values()], plan.structureHash);
-      if (!element) {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "failed",
-          "The field could not be reidentified in a fresh capture.",
-        );
-        stoppedEarly = true;
-        stopReason = "element_drift";
-        break;
-      }
-
-      const existing = (element.value ?? "").trim();
-      if (existing === action.value.trim()) {
-        record(action.order, action.elementIndex, action.label, "already_satisfied");
-        continue;
-      }
-
-      if (existing !== "") {
-        record(action.order, action.elementIndex, action.label, "failed", "The field changed after review.");
-        stoppedEarly = true;
-        stopReason = "element_drift";
-        break;
-      }
-
-      let verdict: DriverVerdict;
-      try {
-        this.assertUsable();
-        signal.throwIfAborted();
-        this.clearTarget();
-        const result = await this.callDriver(
-          "set_value",
-          {
-            pid: target.pid,
-            window_id: target.windowId,
-            element_index: element.index,
-            ...(element.token && session.supports?.("set_value", "accessibility.element_tokens")
-              ? { element_token: element.token }
-              : {}),
-            value: action.value,
-          },
-          signal,
-        );
-        verdict = parseDriverVerdict(result.structured);
-      } catch {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "failed",
-          "The driver rejected the fill.",
-        );
-        stoppedEarly = true;
-        stopReason = "mutation_failed";
-        break;
-      }
-      if (verdict.effect !== "confirmed") {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "failed",
-          "The driver could not confirm the fill took effect.",
-        );
-        stoppedEarly = true;
-        stopReason = "effect_unconfirmed";
-        break;
-      }
-
-      // Postcondition: re-observe the exact window and require the control to
-      // hold the planned value.
-      try {
-        const window = await this.resolveTarget(
-          { pid: plan.window.pid, window_id: plan.window.windowId },
-          signal,
-        );
-        if (window.appName !== plan.window.appName || window.title !== plan.window.title) {
-          throw new ComputerUseSafetyError("form_fill_drift", "The reviewed window changed.");
-        }
-        const post = await this.observeFormFillWindow(window, 500, signal);
-        const after = reacquirePlannedElement(action, [...post.elements.values()], plan.structureHash);
-        if (!after || (after.value ?? "").trim() !== action.value.trim()) {
-          record(
-            action.order,
-            action.elementIndex,
-            action.label,
-            "failed",
-            "The field did not retain the planned value.",
-          );
-          stoppedEarly = true;
-          stopReason = "postcondition_failed";
-          break;
-        }
-      } catch {
-        record(
-          action.order,
-          action.elementIndex,
-          action.label,
-          "failed",
-          "The window could not be re-observed after the fill.",
-        );
-        stoppedEarly = true;
-        stopReason = "postcondition_failed";
-        break;
-      }
-      record(action.order, action.elementIndex, action.label, "filled");
-    }
-
-    // Every row not reached becomes not_attempted.
-    const seen = new Set(rows.map((row) => row.order));
-    for (const action of plan.actions) {
-      if (!seen.has(action.order)) {
-        rows.push({
-          order: action.order,
-          elementIndex: action.elementIndex,
-          label: action.label,
-          status: "not_attempted",
-        });
-      }
-    }
-    rows.sort((a, b) => a.order - b.order);
-
-    return {
-      planId: plan.planId,
-      rows,
-      filled: rows.filter((r) => r.status === "filled").length,
-      alreadySatisfied: rows.filter((r) => r.status === "already_satisfied").length,
-      untouched: rows.filter((r) => r.status === "untouched").length,
-      needsReview: rows.filter((r) => r.status === "needs_review").length,
-      failed: rows.filter((r) => r.status === "failed").length,
-      notAttempted: rows.filter((r) => r.status === "not_attempted").length,
-      stoppedEarly,
-      stopReason,
-    };
+    throw new ComputerUseSafetyError("form_fill_unavailable", FORM_FILL_UNAVAILABLE_MESSAGE);
   }
 
   private async closeInternal(): Promise<void> {
@@ -1714,8 +1427,9 @@ export class ComputerUseController {
     this.grants.clear();
     this.clearTarget();
     await this.startup?.catch(() => {});
-    await this.session?.close().catch(() => {});
-    await this.host?.shutdown().catch(() => {});
+    await this.session?.close().catch(() => { this.closeFailed = true; });
+    await this.host?.shutdown().catch(() => { this.closeFailed = true; });
+    await Promise.allSettled([...this.driverCalls]);
     this.session = null;
     this.host = null;
   }

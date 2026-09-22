@@ -46,6 +46,7 @@ export type FormFillExtractionFailure =
   | "unsupported_type"
   | "empty"
   | "binary"
+  | "unsafe_text"
   | "truncated"
   | "too_large"
   | "too_many_entities"
@@ -124,8 +125,14 @@ export function extractFormFillEntities(input: {
     const trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//"))
       continue;
-    const match = LABEL_VALUE.exec(trimmed);
+    const match = LABEL_VALUE.exec(raw);
     if (!match) continue;
+    if (/\p{Cf}/u.test(raw)) {
+      throw new FormFillExtractionError(
+        "unsafe_text",
+        `Line ${index + 1} contains invisible format characters and cannot be approved.`,
+      );
+    }
     const label = match[1].trim();
     const value = match[2].trim();
     if (!label.length || !value.length) continue;

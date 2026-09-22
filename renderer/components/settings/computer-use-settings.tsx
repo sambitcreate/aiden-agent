@@ -12,7 +12,6 @@ import { queryKeys, useComputerUseStatus, useFormFillStatus, useSettings } from 
 import type {
   AppSettings,
   ComputerUseStatus,
-  FormFillArtifactStatus,
   FormFillSettingsView,
 } from "../../lib/types";
 
@@ -40,193 +39,33 @@ function statusPresentation(status: ComputerUseStatus | undefined, failed: boole
   return { label: "Unavailable", color: "red", icon: TriangleAlert, iconClass: "text-red" };
 }
 
-function formFillStateLabel(status: FormFillArtifactStatus | undefined): string {
-  switch (status?.state) {
-    case "downloading":
-      return "Downloading…";
-    case "preparing":
-      return "Preparing…";
-    case "ready":
-      return "Ready";
-    case "update-required":
-      return "Update required";
-    case "unsupported":
-      return "Unsupported on this Mac";
-    case "error":
-      return "Error";
-    default:
-      return "Not downloaded";
-  }
-}
-
 function FormFillSpecialistField() {
   const queryClient = useQueryClient();
-  const settingsQuery = useSettings();
   const formFillQuery = useFormFillStatus();
-  const [saving, setSaving] = React.useState(false);
-  const [busy, setBusy] = React.useState<"download" | "remove" | null>(null);
-
-  React.useEffect(
-    () =>
-      formFillApi.onProgress((status) => {
-        queryClient.setQueryData<FormFillSettingsView | undefined>(
-          queryKeys.formFillStatus,
-          (current) => (current ? { ...current, status } : { enabled: false, status }),
-        );
-      }),
-    [queryClient],
-  );
-
-  const enabled =
-    formFillQuery.data?.enabled ?? settingsQuery.data?.formFillSpecialistEnabled === true;
+  const [removing, setRemoving] = React.useState(false);
   const status = formFillQuery.data?.status;
-  const unsupported = status?.state === "unsupported";
-  const downloading = status?.state === "downloading";
-  const percent = Math.round((status?.progress ?? 0) * 100);
-
-  const commit = React.useCallback(
-    (view: FormFillSettingsView) => {
-      queryClient.setQueryData(queryKeys.formFillStatus, view);
-      queryClient.setQueryData<AppSettings | undefined>(queryKeys.settings, (current) =>
-        current ? { ...current, formFillSpecialistEnabled: view.enabled } : current,
-      );
-    },
-    [queryClient],
-  );
-
-  const toggle = async (next: boolean) => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      commit(await formFillApi.setEnabled(next));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't update Form fill.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const download = async () => {
-    setBusy("download");
-    try {
-      const status = await formFillApi.download();
-      queryClient.setQueryData<FormFillSettingsView | undefined>(
-        queryKeys.formFillStatus,
-        (current) => (current ? { ...current, status } : current),
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't download the model.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const cancel = async () => {
-    try {
-      const status = await formFillApi.cancel();
-      queryClient.setQueryData<FormFillSettingsView | undefined>(
-        queryKeys.formFillStatus,
-        (current) => (current ? { ...current, status } : current),
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't cancel the download.");
-    }
-  };
-
   const remove = async () => {
-    setBusy("remove");
+    setRemoving(true);
     try {
       const status = await formFillApi.remove();
-      queryClient.setQueryData<FormFillSettingsView | undefined>(
-        queryKeys.formFillStatus,
-        (current) => (current ? { ...current, status } : current),
-      );
+      queryClient.setQueryData<FormFillSettingsView>(queryKeys.formFillStatus, { enabled: false, status });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't remove the model.");
     } finally {
-      setBusy(null);
+      setRemoving(false);
     }
   };
-
   return (
-    <>
-      <Field
-        label="Form fill specialist"
-        description="Matches fields to values from a document using an on-device model. Matching runs on this Mac."
-      >
-        <div className="flex justify-end">
-          <Switch
-            checked={enabled}
-            onCheckedChange={(checked) => void toggle(checked)}
-            disabled={saving || unsupported || formFillQuery.isLoading}
-            aria-label="Form fill specialist"
-          />
-        </div>
-      </Field>
-      {enabled ? (
-        <Field label="Model" description="Aiden downloads the pinned form-matching model once.">
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Text variant="small" color="secondary">
-                {formFillStateLabel(status)}
-                {status?.state === "error" && status.error ? ` — ${status.error}` : ""}
-              </Text>
-              {downloading ? (
-                <Button size="small" variant="transparent" onClick={() => void cancel()}>
-                  Cancel
-                </Button>
-              ) : status?.state === "ready" ? (
-                <Button
-                  size="small"
-                  variant="transparent"
-                  onClick={() => void remove()}
-                  disabled={busy !== null}
-                >
-                  {busy === "remove" ? "Removing…" : "Remove model"}
-                </Button>
-              ) : status?.state === "error" || status?.state === "update-required" ? (
-                <Button
-                  size="small"
-                  onClick={() => void download()}
-                  disabled={busy !== null || unsupported}
-                >
-                  {busy === "download" ? <Loader2 className="animate-spin" /> : null}
-                  {status?.state === "update-required" ? "Download update" : "Retry"}
-                </Button>
-              ) : (
-                <Button
-                  size="small"
-                  onClick={() => void download()}
-                  disabled={busy !== null || unsupported}
-                >
-                  {busy === "download" ? <Loader2 className="animate-spin" /> : null}
-                  Download
-                </Button>
-              )}
-            </div>
-            {downloading ? (
-              <div className="w-full max-w-56">
-                <div
-                  className="h-1.5 w-full overflow-hidden rounded-pill bg-well"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={percent}
-                >
-                  <div
-                    className="h-full rounded-pill bg-accent transition-[width] duration-150 motion-reduce:transition-none"
-                    style={{ width: `${percent}%` }}
-                  />
-                </div>
-                <Text variant="small" color="tertiary" className="mt-1 tabular-nums">
-                  Downloading… {percent}%
-                </Text>
-              </div>
-            ) : null}
-          </div>
-        </Field>
-      ) : null}
-    </>
+    <Field
+      label="Form fill specialist"
+      description="Unavailable until Computer Use can keep each fill bound to the document you approved. Existing downloaded model files can be removed."
+    >
+      {status && status.state !== "not-downloaded" ? (
+        <Button size="small" variant="transparent" onClick={() => void remove()} disabled={removing}>
+          {removing ? "Removing…" : "Remove model"}
+        </Button>
+      ) : <Text variant="small" color="secondary">Unavailable</Text>}
+    </Field>
   );
 }
 

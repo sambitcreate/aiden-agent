@@ -1,3 +1,4 @@
+import { FORM_FILL_MUTATION_AVAILABLE, FORM_FILL_UNAVAILABLE_MESSAGE } from "../../renderer/shared/form-fill-availability.js";
 import { llmClient } from "../services/llm-client.js";
 import { ipcMain } from "../platform.js";
 import {
@@ -51,6 +52,7 @@ export function registerFormFillHandlers(): void {
 
   ipcMain.handle("formFill:download", async (event) => {
     const owner = requestOwner(event);
+    if (!FORM_FILL_MUTATION_AVAILABLE) throw new Error(FORM_FILL_UNAVAILABLE_MESSAGE);
     const unsubscribe = owner.onInvalidated(() => formFillArtifacts.cancel());
     try {
       if (owner.isDestroyed())
@@ -70,8 +72,13 @@ export function registerFormFillHandlers(): void {
 
   ipcMain.handle("formFill:remove", async (event) => {
     requestOwner(event);
-    llmClient.cancelComputerUseGenerations();
-    await formFillArtifacts.remove(() => formFillRuntime.shutdown());
+    const settled = llmClient.cancelComputerUseGenerationsAndSettle();
+    // Observe a rejection immediately even while an in-flight download drains.
+    void settled.catch(() => {});
+    await formFillArtifacts.remove(async () => {
+      await settled;
+      await formFillRuntime.shutdown();
+    });
     return formFillArtifacts.status();
   });
 }

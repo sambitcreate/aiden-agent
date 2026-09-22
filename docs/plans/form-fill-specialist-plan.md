@@ -1,6 +1,18 @@
 # Form Fill Specialist (CUA-S1-FORMS + Core ML)
 
-Status: Implemented — PR #195 remediation and automated macOS model verification complete; CI review, physical iOS parity, and signed live-window acceptance remain pending.
+> **Current status: blocked, not a shipped form-filling capability.** The pinned signed cua-driver 0.8.3 only supplies capture-scoped element tokens. Matching app/window/title and identical AX structure cannot distinguish a replacement page or document. Production tool admission (desktop and Bot), enabling/download actions, planning capture, and direct/stale batch execution are disabled. Settings retains model removal; onboarding no longer advertises this feature. The design below describes groundwork and intended behavior, not current availability.
+
+Pinned source evidence: cua commit `0612c26b2c7b8556f6de7f6b4f3927ecac914e4f`, `libs/cua-driver/rust/crates/cua-driver-core/src/element_token.rs` and `libs/cua-driver/rust/crates/platform-macos/src/tools/{get_window_state,set_value}.rs`. The write schema accepts process/window, snapshot token/index and value; it has no reviewed document-identity precondition.
+
+### Required upstream contract before enablement
+
+A trusted driver must produce a bounded opaque document-lifetime identity for the exact window; it must change on browser navigation/reload and native document replacement, even when URL/title/tree stay identical. Each mutation must accept the reviewed identity and atomically reject a mismatch before any field effect, including navigation after observation but before writing. Missing identity and unsupported targets must fail closed. This is a requirement, **not a capability currently claimed by any shipped driver**. Preserve broker signature/version pins; review and extend the broker/schema contract before upgrading. Add positive supported-driver tests plus same-title/same-structure replacement, reload, and observe-to-write race rejection tests before restoring UI or tool admission. Signed live-window acceptance remains required.
+
+### Follow-up remediation
+
+Unicode format characters (`Cf`) are rejected in source labels/values and approval values before any approval. Model removal hides readiness, revokes generation authority, then awaits strict driver shutdown, in-flight calls, generation completion, and owner-map settlement before runtime teardown/deletion. A timeout or shutdown failure rejects removal and retains model files.
+
+Status: Blocked — safe document-bound mutation is unavailable in the pinned driver. Scorer groundwork is verified; production form filling is disabled.
 
 ## Goal
 
@@ -302,11 +314,17 @@ Recorded per slice; the final report lists files, revisions, hashes, tests,
 and remaining manual acceptance on macOS.
 
 
-## 2026-09-22 remediation evidence
+## 2026-09-22 initial remediation evidence (superseded for mutation safety)
 
 - Read the Notion CUA-S1-FORMS research and verified the pinned publisher model card, checksums, license, Swift source and driver revision. MIT applies to model artifacts; FluidAudio's ported Swift reference is Apache-2.0 (not the earlier claimed MIT). Publisher benchmark numbers are not Aiden acceptance results.
 - Fixed product-version gating, `.mlpackage` source URLs, fully awaited bounded downloads, cancellation/removal publication ordering, renderer-owner invalidation and a separate compiled cache. Concurrent preparation shares one lifecycle-bound promise; one cancelled caller cannot cancel another generation's initialization.
 - Exact latest-user-turn source references are exposed in the tool description; stale prior attachments cannot seed a plan. Rehash before execution; reject unsupported source types, zero-action plans and forms above 64 actionable controls before scoring.
-- Approval digest includes full capture structure. Pinned driver snapshot-token rollover requires unchanged structural hash, exact unique role/label, index, frame, depth and parent; arbitrary lost tokens, window/app/title changes and user edits stop input. Mutations use fresh driver tokens, never submit, and report interrupted batches as incomplete. Layout changes after a fill intentionally stop the remaining batch.
+- **Superseded and removed:** Approval digest included full capture structure. Pinned driver snapshot-token rollover requires unchanged structural hash, exact unique role/label, index, frame, depth and parent; arbitrary lost tokens, window/app/title changes and user edits stop input. Mutations use fresh driver tokens, never submit, and report interrupted batches as incomplete. Layout changes after a fill intentionally stop the remaining batch.
 - Bot admission uses the existing Computer Use grant, unchanged tool exclusions and live revocation wrapper. Mobile approvals remain host-only; both native clients decode count-only results through existing generic tool activity.
 - Automated evidence: 375 scoped JavaScript checks and 41 native broker checks; 17 Swift/Core ML tests with the downloaded SHA-verified FP16 model (zero skips); focused Android count-only activity test passed. Type-check/lint and integration suites are tracked in the PR closeout. Physical iOS is queued behind the coordinator's device lock/ownership gate; signed live-window and packaged TCC acceptance remain unverified.
+
+## Follow-up validation
+
+374 Computer Use/form-fill JavaScript tests and 41 Rust broker tests passed; 50 focused approval/IPC/Bot/onboarding tests passed. TypeScript and scoped ESLint passed. Both native activity consumers were inspected; this patch adds no mobile wire payload or mobile mutation authority. Earlier native scorer and physical-iOS compile evidence remains valid for unchanged code; physical-iOS execution and signed live-window acceptance remain unperformed. React Doctor scanned the repository (60/100, existing broad diagnostics); no new changed-line UI error was identified. Two independent Sol re-reviews and current-head CI are tracked on the PR.
+
+Additional parity verification: 70 remote-stream/timeline tests and focused Android activity parity pass.

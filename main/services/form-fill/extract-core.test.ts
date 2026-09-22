@@ -184,3 +184,12 @@ test("normalizeLabel is only for de-duplication", () => {
   assert.equal(normalizeLabel("  First   Name "), "first name");
   assert.equal(normalizeLabel("E-MAIL"), "e-mail");
 });
+
+for (const invisible of ["\u200b", "\u200c", "\u200d", "\u2060", "\u00ad", "\ufeff", "\u{e0001}"]) {
+  test(`rejects invisible format character U+${invisible.codePointAt(0)!.toString(16)} before value trimming`, () => {
+    for (const text of [`Name: Ada${invisible}Lovelace`, `Name: Ada${invisible}`]) {
+      assert.throws(() => extract(text), (error: unknown) =>
+        error instanceof FormFillExtractionError && error.failure === "unsafe_text");
+    }
+  });
+}

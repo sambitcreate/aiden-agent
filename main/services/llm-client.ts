@@ -145,6 +145,7 @@ import {
   FormFillService,
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
+import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -200,6 +201,7 @@ import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
+  cancelComputerUseAndSettle,
   ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
@@ -805,7 +807,7 @@ async function prepareGeneration(
   // and the verified model package is already on disk (status is offline).
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
-  if (computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
+  if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
     const artifact = await formFillArtifacts.refresh();
     if (artifact.state === "ready") {
       formFill = new FormFillService({
@@ -3692,6 +3694,16 @@ export const llmClient = {
     for (const streamId of activated) {
       this.cancel(streamId, "computer_use_disabled");
     }
+  },
+
+  async cancelComputerUseGenerationsAndSettle(): Promise<void> {
+    await cancelComputerUseAndSettle({
+      gate: computerUseGenerationGate,
+      initializations: () => initializing,
+      active: () => active,
+      cancel: (streamId) => { this.cancel(streamId, "computer_use_disabled"); },
+      timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
+    });
   },
 
   /** Stop and drain generations before a workspace authority boundary changes. */

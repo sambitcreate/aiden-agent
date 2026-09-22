@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
   Command,
   Eye,
   FileDiff,
@@ -83,7 +82,6 @@ const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).hr
 const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
-  formFill: new URL("../assets/onboarding/features/form-fill.png", import.meta.url).href,
   browser: new URL("../assets/onboarding/features/browser.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
   filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
@@ -358,16 +356,6 @@ const featureBentos: FeatureBento[] = [
       "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
-    size: "standard",
-  },
-  {
-    id: "formFill",
-    group: "control",
-    title: "Form Fill Specialist",
-    description:
-      "Match fields to values from a document you pick with an on-device model. Review every fill, then approve once — never submission.",
-    icon: ClipboardList,
-    imageUrl: FEATURE_ILLUSTRATIONS.formFill,
     size: "standard",
   },
   {

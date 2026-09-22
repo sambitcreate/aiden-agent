@@ -397,3 +397,13 @@ test("a completed publish cannot advertise readiness after removal starts", asyn
     assert.equal(store.status().state, "not-downloaded");
   } finally { release(); rmSync(parent, { recursive: true, force: true }); }
 });
+
+test("removal preserves model files when the execution drain fails", async () => {
+  const root = makeTemp();
+  writeTestTree(root);
+  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
+  try {
+    await assert.rejects(store.remove(async () => { throw new Error("execution still running"); }), /execution still running/);
+    assert.equal(await verifyFormFillPackage(root, TEST_FILES), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

@@ -5,8 +5,6 @@ import {
   FormFillBatchLedger,
   FORM_FILL_BATCH_VERSION,
   formFillPlanDigest,
-  reacquirePlannedElement,
-  formFillStructureHash,
   type FormFillBatchPlan,
 } from "./batch-core.js";
 
@@ -239,85 +237,4 @@ test("deselection of a row outside the plan is rejected", () => {
     (error: unknown) =>
       error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
-});
-
-test("reacquirePlannedElement prefers token and verifies role+label", () => {
-  const action = {
-    elementIndex: 5,
-    elementToken: "tok-5",
-    role: "AXTextField",
-    label: "First name",
-  };
-  const elements = [
-    { index: 2, token: "tok-5", role: "AXTextField", label: "First name" },
-    { index: 5, role: "AXTextField", label: "First name" },
-  ];
-  assert.equal(reacquirePlannedElement(action, elements)?.index, 2);
-  assert.equal(
-    reacquirePlannedElement(action, [
-      { index: 5, role: "AXTextField", label: "First name" },
-    ])?.index,
-    undefined,
-  );
-  // Drift: same token but a different label must not match.
-  assert.equal(
-    reacquirePlannedElement(action, [
-      { index: 9, token: "tok-5", role: "AXTextField", label: "Last name" },
-    ]),
-    undefined,
-  );
-  // Drift: same index but a different role must not match.
-  assert.equal(
-    reacquirePlannedElement(action, [
-      { index: 5, role: "AXButton", label: "First name" },
-    ]),
-    undefined,
-  );
-});
-
-test("reacquisition preserves Unicode identity and rejects duplicate/empty labels", () => {
-  const action = { elementIndex: 0, elementToken: "stable", role: "AXTextField", label: "名前" };
-  assert.equal(
-    reacquirePlannedElement(action, [
-      { index: 0, role: "AXTextField", label: "住所" },
-    ]),
-    undefined,
-  );
-  assert.ok(
-    reacquirePlannedElement(action, [
-      { index: 0, token: "stable", role: "AXTextField", label: "名前" },
-    ]),
-  );
-  assert.equal(
-    reacquirePlannedElement(action, [
-      { index: 0, token: "stable", role: "AXTextField", label: "名前" },
-      { index: 1, token: "stable", role: "AXTextField", label: "名前" },
-    ]),
-    undefined,
-  );
-  assert.equal(
-    reacquirePlannedElement({ ...action, label: "" }, [
-      { index: 0, role: "AXTextField", label: "" },
-    ]),
-    undefined,
-  );
-});
-
-test("pinned snapshot token rollover needs unchanged complete structure and unique semantics", () => {
-  const base = { index: 0, token: "s0001:0", role: "AXTextField", label: "Name", depth: 2, parentIndex: 1, frame: { x: 10, y: 20, width: 200, height: 30 } };
-  const action = { elementIndex: 0, elementToken: base.token, role: base.role, label: base.label };
-  const hash = formFillStructureHash([base]);
-  const fresh = { ...base, token: "s0002:0" };
-  assert.equal(reacquirePlannedElement(action, [fresh], hash)?.token, "s0002:0");
-  for (const changed of [
-    { ...fresh, token: "replacement" },
-    { ...fresh, token: "s0002:1" },
-    { ...fresh, depth: 3 },
-    { ...fresh, parentIndex: 2 },
-    { ...fresh, frame: { ...base.frame, x: 11 } },
-  ]) assert.equal(reacquirePlannedElement(action, [changed], hash), undefined);
-  assert.equal(reacquirePlannedElement(action, [fresh]), undefined);
-  assert.equal(reacquirePlannedElement(action, [{ ...base, depth: 3 }], hash), undefined);
-  assert.equal(reacquirePlannedElement(action, [{ ...fresh, parentIndex: undefined }], hash), undefined);
-  assert.equal(reacquirePlannedElement(action, [fresh, { ...fresh, index: 1, token: "s0002:1" }], hash), undefined);
 });

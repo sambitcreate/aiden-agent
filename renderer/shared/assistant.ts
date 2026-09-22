@@ -718,6 +718,7 @@ export function isFormFillBatchApprovalDetails(
       (record.elementIndex as number) >= 0 &&
       safeApprovalText(record.label, 256) &&
       safeApprovalText(record.value, 2048, true) &&
+      !/\p{Cf}/u.test(record.value) &&
       safeApprovalText(record.sourceLabel, 256) &&
       Number.isSafeInteger(record.sourceLine) &&
       (record.sourceLine as number) >= 1

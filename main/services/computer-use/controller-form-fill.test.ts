@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { FORM_FILL_MUTATION_AVAILABLE } from "../../../renderer/shared/form-fill-availability.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ComputerUseController } from "./controller.js";
@@ -76,10 +78,7 @@ function makeController(script: Record<string, Record<string, unknown>[]>) {
   return { controller, session };
 }
 
-async function planFor(
-  controller: ComputerUseController,
-): Promise<FormFillBatchPlan> {
-  const capture = await controller.formFillCapture({ pid: 42, windowId: 7 });
+function stalePlan(): FormFillBatchPlan {
   return {
     version: FORM_FILL_BATCH_VERSION,
     planId: "ffp-1",
@@ -89,8 +88,8 @@ async function planFor(
     attachmentId: "att-1",
     attachmentHash: "a".repeat(64),
     attachmentName: "patient.txt",
-    window: capture.window,
-    controllerEpoch: capture.revision,
+    window: { pid: 42, windowId: 7, appName: "Safari", title: "Registration" },
+    controllerEpoch: 1,
     actions: [
       {
         order: 0,
@@ -126,278 +125,30 @@ const FILL_ELEMENTS_PRE = () => [
   element(1, "Last name", "", "tok-1"),
 ];
 
-test("batch fills each field via fresh observation, token+semantic reacquire, verify", async () => {
-  const { controller, session } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()), // plan capture
-      windowState(FILL_ELEMENTS_PRE()), // pre-mutation observe (action 0)
-      // post-verify: value present
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "Lovelace", "tok-1"),
-      ]),
-    ],
-    set_value: [{ effect: "confirmed" }],
-  });
-  const plan = await planFor(controller);
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.filled, 2);
-  assert.equal(result.failed, 0);
-  assert.equal(result.stoppedEarly, false);
-  const writes = session.calls.filter((call) => call.name === "set_value");
-  assert.equal(writes.length, 2);
-  assert.deepEqual(
-    writes.map((call) => [call.args.element_index, call.args.value]),
-    [
-      [0, "Ada"],
-      [1, "Lovelace"],
-    ],
-  );
-  // Fresh observation ran before and after every mutation.
-  const observations = session.calls.filter(
-    (call) => call.name === "get_window_state",
-  );
-  assert.equal(observations.length, 5);
-});
 
-test("batch stops on the first element drift — later actions never run", async () => {
-  const { controller, session } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()),
-      // Re-observation finds the control renamed — drift.
-      windowState([
-        element(0, "Surname", "", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-    ],
-    set_value: [{ effect: "confirmed" }],
-  });
-  const plan = await planFor(controller);
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.stoppedEarly, true);
-  assert.equal(result.rows[0].status, "failed");
-  assert.equal(result.rows[1].status, "not_attempted");
-  assert.equal(
-    session.calls.filter((call) => call.name === "set_value").length,
-    0,
-  );
-});
-
-test("an unconfirmed driver effect stops the batch without later actions", async () => {
-  const { controller } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [windowState(FILL_ELEMENTS_PRE())],
-    set_value: [{ effect: "applied" }],
-  });
-  const plan = await planFor(controller);
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.rows[0].status, "failed");
-  assert.equal(result.rows[1].status, "not_attempted");
-  assert.equal(result.stopReason, "effect_unconfirmed");
-});
-
-test("a postcondition mismatch stops the batch", async () => {
-  const { controller } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()),
-      windowState(FILL_ELEMENTS_PRE()),
-      // Post-verify shows the field did not retain the value.
-      windowState([
-        element(0, "First name", "Other", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-    ],
-    set_value: [{ effect: "confirmed" }],
-  });
-  const plan = await planFor(controller);
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.rows[0].status, "failed");
-  assert.equal(result.stopReason, "postcondition_failed");
-  assert.equal(result.stoppedEarly, true);
-});
-
-test("a target drift between approval and execution rejects the plan", async () => {
-  const { controller } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [windowState(FILL_ELEMENTS_PRE())],
-  });
-  const plan = await planFor(controller);
-  // Another capture bumps the controller epoch — the plan must not run.
-  await controller.formFillCapture({ pid: 42, windowId: 7 });
-  await assert.rejects(
-    () => controller.executeFormFillBatch(plan),
-    (error: unknown) =>
-      error instanceof ComputerUseSafetyError &&
-      error.code === "form_fill_drift",
-  );
-});
-
-test("wrong generation, expired, or submit-bearing plans are refused", async () => {
-  const { controller } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [windowState(FILL_ELEMENTS_PRE())],
-  });
-  const plan = await planFor(controller);
-  await assert.rejects(
-    () => controller.executeFormFillBatch({ ...plan, generationId: "gen-9" }),
-    (error: unknown) =>
-      error instanceof ComputerUseSafetyError &&
-      error.code === "form_fill_plan_invalid",
-  );
-  await assert.rejects(
-    () =>
-      controller.executeFormFillBatch({ ...plan, expiresAt: Date.now() - 1 }),
-    (error: unknown) =>
-      error instanceof ComputerUseSafetyError &&
-      error.code === "form_fill_plan_expired",
-  );
-  await assert.rejects(
-    () => controller.executeFormFillBatch({ ...plan, submit: true as never }),
-    (error: unknown) =>
-      error instanceof ComputerUseSafetyError &&
-      error.code === "form_fill_plan_invalid",
-  );
-});
-
-test("deselected rows are untouched without being executed", async () => {
-  const { controller, session } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()),
-      windowState(FILL_ELEMENTS_PRE()),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-    ],
-    set_value: [{ effect: "confirmed" }],
-  });
-  const plan = { ...(await planFor(controller)), excludedOrders: [1] };
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.filled, 1);
-  assert.equal(result.untouched, 1);
-  assert.equal(
-    session.calls.filter((call) => call.name === "set_value").length,
-    1,
-  );
-});
-
-test("an already-populated matching field counts as already_satisfied", async () => {
-  const { controller, session } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()),
-      // Re-observation: the field already holds the source value.
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "Lovelace", "tok-1"),
-      ]),
-    ],
-    set_value: [{ effect: "confirmed" }],
-  });
-  const plan = await planFor(controller);
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.rows[0].status, "already_satisfied");
-  assert.equal(result.rows[1].status, "filled");
-  assert.equal(
-    session.calls.filter((call) => call.name === "set_value").length,
-    1,
-  );
-});
-
-test("cancellation between actions marks the rest not_attempted", async () => {
-  const abort = new AbortController();
-  const { controller, session } = makeController({
-    list_windows: [WINDOWS],
-    get_window_state: [
-      windowState(FILL_ELEMENTS_PRE()),
-      windowState(FILL_ELEMENTS_PRE()),
-      windowState([
-        element(0, "First name", "Ada", "tok-0"),
-        element(1, "Last name", "", "tok-1"),
-      ]),
-      // Second action's pre-observation sees the abort.
-    ],
-    set_value: [
-      {
-        effect: "confirmed",
-      },
-    ],
-  });
-  const plan = await planFor(controller);
-  const resultPromise = controller.executeFormFillBatch(plan, {
-    signal: abort.signal,
-    onRow: () => abort.abort(),
-  });
-  const result = await resultPromise;
-  assert.equal(result.stoppedEarly, true);
-  assert.equal(result.rows[1].status, "not_attempted");
-  assert.equal(
-    session.calls.filter((call) => call.name === "set_value").length,
-    1,
-  );
-});
-
-for (const drift of ["title", "app", "token", "value"] as const) {
-  test(`batch stops before input on ${drift} drift`, async () => {
-    const changedWindow = structuredClone(WINDOWS);
-    if (drift === "title")
-      changedWindow.windows[0].title = "Different registration";
-    if (drift === "app") changedWindow.windows[0].app_name = "Different app";
-    const changedElements = FILL_ELEMENTS_PRE();
-    if (drift === "token") changedElements[0].element_token = "replacement";
-    if (drift === "value") changedElements[0].value = "User edited";
-    const { controller, session } = makeController({
-      list_windows: [WINDOWS, changedWindow],
-      get_window_state: [
-        windowState(FILL_ELEMENTS_PRE()),
-        windowState(changedElements),
-      ],
+for (const nextDocument of ["same-url-reload", "same-title-new-origin", "native-document-switch"]) {
+  test(`fails closed before capture or writes for ${nextDocument} with identical window and form`, async () => {
+    const { controller, session } = makeController({ list_windows: [WINDOWS],
+      get_window_state: [windowState(FILL_ELEMENTS_PRE()), windowState(FILL_ELEMENTS_PRE())],
+      set_value: [{ effect: "confirmed" }],
     });
-    const plan = await planFor(controller);
-    const result = await controller.executeFormFillBatch(plan);
-    assert.equal(result.stoppedEarly, true);
-    assert.equal(result.failed, 1);
-    assert.equal(result.notAttempted, 1);
-    assert.equal(
-      session.calls.filter((call) => call.name === "set_value").length,
-      0,
-    );
+    const unavailable = (error: unknown) => error instanceof ComputerUseSafetyError && error.code === "form_fill_unavailable";
+    await assert.rejects(controller.formFillCapture({ pid: 42, windowId: 7 }), unavailable);
+    await assert.rejects(controller.executeFormFillBatch(stalePlan()), unavailable);
+    assert.deepEqual(session.calls, [], "no driver capability or structure can substitute for document authority");
+    await controller.close();
   });
 }
 
-test("real driver snapshot tokens roll over only against the reviewed structure", async () => {
-  const { formFillStructureHash } = await import("../form-fill/batch-core.js");
-  const states = (snapshot: number, first = "", last = "") => [
-    { ...element(0, "First name", first, `s000${snapshot}:0`), depth: 2, parent_index: 9, frame: { x: 10, y: 20, w: 200, h: 30 } },
-    { ...element(1, "Last name", last, `s000${snapshot}:1`), depth: 2, parent_index: 9, frame: { x: 10, y: 60, w: 200, h: 30 } },
-  ];
-  const { controller, session } = makeController({ list_windows: [WINDOWS], get_window_state: [windowState(states(1)), windowState(states(2)), windowState(states(3, "Ada")), windowState(states(4, "Ada")), windowState(states(5, "Ada", "Lovelace"))], set_value: [{ effect: "confirmed" }] });
-  session.supports = () => true;
-  const plan = await planFor(controller);
-  plan.actions[0].elementToken = "s0001:0";
-  plan.actions[1].elementToken = "s0001:1";
-  plan.structureHash = formFillStructureHash(states(1).map((item) => ({ index: item.element_index, token: item.element_token, role: item.role, label: item.label, frame: { x: item.frame.x, y: item.frame.y, width: item.frame.w, height: item.frame.h }, depth: item.depth, parentIndex: item.parent_index })));
-  const result = await controller.executeFormFillBatch(plan);
-  assert.equal(result.filled, 2);
-  assert.deepEqual(session.calls.filter((call) => call.name === "set_value").map((call) => call.args.element_token), ["s0002:0", "s0004:1"]);
+test("desktop and Bot share disabled specialist admission, with no enable/download or tour affordance", () => {
+  assert.equal(FORM_FILL_MUTATION_AVAILABLE, false);
+  const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
+  assert.match(read("../llm-client.ts"), /if \(FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled/u);
+  assert.match(read("../form-fill/settings.ts"), /if \(enabled && !FORM_FILL_MUTATION_AVAILABLE\) throw/u);
+  assert.match(read("../../handlers/form-fill.ts"), /if \(!FORM_FILL_MUTATION_AVAILABLE\) throw/u);
+  const settings = read("../../../renderer/components/settings/computer-use-settings.tsx");
+  const field = settings.slice(settings.indexOf("function FormFillSpecialistField"), settings.indexOf("export function ComputerUseSettings"));
+  assert.doesNotMatch(field, /formFillApi\.(download|setEnabled)|<Switch/u);
+  assert.match(field, /Unavailable until Computer Use/u);
+  assert.match(field, /formFillApi\.remove/u);
 });

@@ -358,3 +358,11 @@ test("form-fill batch details require exact provenance, safe text, and no submit
     assert.equal(isFormFillBatchApprovalDetails(invalid), false);
   }
 });
+
+test("form-fill values reject every tested Unicode format character", () => {
+  for (const invisible of ["\u200b", "\u200c", "\u200d", "\u2060", "\u00ad", "\ufeff", "\u{e0001}"]) {
+    assert.equal(isFormFillBatchApprovalDetails({ ...formFillBatch,
+      rows: [{ ...formFillBatch.rows[0], value: `Ada${invisible}Lovelace` }],
+    }), false);
+  }
+});

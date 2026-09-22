@@ -23,6 +23,8 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 
 ## Status
 
+**Blocked, not delivered:** pinned cua-driver 0.8.3 has no document-lifetime identity or atomic conditional write. Production specialist tool admission, enabling/downloading, approval capture and batch execution now fail closed. Settings offers cleanup only; the shipped-feature tour tile is removed. Pure extraction/scoring/ledger code remains groundwork, not a usable filling feature.
+
 - All TS suites green (test:form-fill = 76+eval tests; test:computer-use incl. ipc-contract; type-check; eslint).
 - **Verified on macOS**: Swift helper compilation and 17 native tests with real SHA-verified FP16 model (zero skips). Still unverified: helper signing/notarization in a real package and end-to-end acceptance against a live form window.
 - Notion research reviewed in remediation; pinned source code, model card and licenses independently verified.
@@ -33,3 +35,11 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 PR #195 updated against main c8c09e0d2 in isolated worktree 6510. All 12 original inline findings addressed with regression coverage. Further Sol reviews found/fixed value drift, malformed scorer output, Unicode identity, 64-control approval bounds, concurrent compilation/cancellation and native fixture loading. Pinned driver tokens roll per snapshot: structural digest plus exact unique semantics/geometry/hierarchy fences their refresh; full layout changes stop the batch. Source Swift is Apache-2.0; model files are MIT. Both license texts are in packaged THIRD_PARTY_NOTICES.md.
 
 Native local model verification: 17/17 tests, no skips, six downloaded files verified against pinned hashes. Computer Use: 375 JS + 41 Rust passing before final closeout; focused Android parity passed. iOS physical test is queued with the coordinator (last known device locked); signed app/TCC/live form acceptance still not performed. Do not call this released or merged. Existing Improve compute RUSE task owns general capture improvements; its uncommitted work was not copied.
+
+## Follow-up P1 review, 2026-09-22
+
+Same-title/same-tree navigation defeats snapshot token rebinding. Removed the unsafe controller batch mutation/reacquisition path; direct/stale controller calls return `form_fill_unavailable` without driver calls. Do not re-enable by changing a flag: upstream must supply document lifetime identity that changes on reload/navigation/native document replacement and atomically compare that identity during each write (with old-document rejection before any effect). URL/tree/title and AX snapshot IDs are insufficient. Future enablement requires broker/schema support, positive supported-driver tests, same-title/same-structure navigation and observe-to-write race regressions, plus signed live-window acceptance.
+
+Source extraction and renderer approval validation reject Unicode Cf; removal now cancels and awaits controller strict shutdown, outstanding driver calls, generation completion and ownership-map settlement. Timeout/teardown failure preserves model files and rejects removal. Ordinary cleanup remains non-throwing, while strict cleanup retains driver shutdown errors. New review and CI evidence pending.
+
+Follow-up local verification: 374 scoped JS + 41 Rust broker tests; 50 approval/IPC/Bot/onboarding tests; 70 remote-stream/timeline tests; focused Android parity (up to date), TypeScript and scoped lint pass. Blast-radius Sol re-review clear; adversarial final review pending.

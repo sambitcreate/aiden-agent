@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { normalizedControlLabel, normalizeRole } from "./planner-core.js";
 import type { FormFillElement } from "./planner-core.js";
 
 /**
@@ -293,48 +292,12 @@ export class FormFillBatchLedger {
   }
 }
 
-/**
- * Reacquire the intended control on a fresh snapshot: prefer the plan-time
- * token, fall back to index, then verify conservative semantics (normalized
- * role + normalized label both match). Returns undefined on drift.
- */
+/** Descriptive plan structure only; never proof of document continuity. */
 export function formFillStructureHash(elements: readonly FormFillElement[]): string {
   return createHash("sha256").update(canonicalize(elements.map((element) => ({
     index: element.index, role: element.role, label: element.label,
     frame: element.frame, depth: element.depth, parentIndex: element.parentIndex,
   })))).digest("hex");
-}
-
-export function reacquirePlannedElement(
-  action: Pick<FormFillBatchAction, "elementIndex" | "elementToken" | "role" | "label">,
-  elements: readonly FormFillElement[],
-  structureHash?: string,
-): FormFillElement | undefined {
-  const matches = (element: FormFillElement) =>
-    normalizeRole(element.role ?? "") === normalizeRole(action.role) &&
-    element.label === action.label;
-  if (!normalizedControlLabel(action.label)) return undefined;
-  const tokens = action.elementToken ? elements.filter((element) => element.token === action.elementToken) : [];
-  const snapshotToken = /^s[0-9a-f]{4}:\d+$/u.test(action.elementToken ?? "");
-  if (!snapshotToken) {
-    if (tokens.length === 1 && matches(tokens[0]!)) return tokens[0];
-    return undefined;
-  }
-
-  // Pinned cua-driver 0.8.3 tokens identify snapshots, not stable AX objects.
-  // Permit their expected rollover only against the complete reviewed tree,
-  // unique exact semantics, and an unchanged positioned target. Never replace
-  // an arbitrary vanished token with a bare snapshot index.
-  const oldToken = /^s[0-9a-f]{4}:(\d+)$/u.exec(action.elementToken ?? "");
-  if (!oldToken || Number(oldToken[1]) !== action.elementIndex || !structureHash ||
-      formFillStructureHash(elements) !== structureHash) return undefined;
-  const semantic = elements.filter(matches);
-  if (semantic.length !== 1) return undefined;
-  const candidate = semantic[0]!;
-  const newToken = /^s[0-9a-f]{4}:(\d+)$/u.exec(candidate.token ?? "");
-  if (!newToken || Number(newToken[1]) !== action.elementIndex || candidate.index !== action.elementIndex ||
-      !candidate.frame || !Number.isSafeInteger(candidate.depth) || !Number.isSafeInteger(candidate.parentIndex)) return undefined;
-  return candidate;
 }
 
 export type FormFillRowResultStatus =
