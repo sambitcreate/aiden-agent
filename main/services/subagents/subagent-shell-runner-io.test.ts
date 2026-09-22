@@ -210,7 +210,8 @@ test("workspace identity drift is rejected before shell execution", async (t) =>
   assert.equal((await stat(rootPath)).isDirectory(), true);
 });
 
-test("a deliberate setsid double-fork proves the documented containment limit and self-cleans", async (t) => {
+for (const delay of [false, true]) {
+test(`a deliberate setsid double-fork proves the documented containment limit and self-cleans${delay ? " after delayed detachment" : ""}`, async (t) => {
   if (process.platform !== "darwin") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
@@ -244,7 +245,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   };
   t.after(cleanup);
   try {
-    const result = await run(t, `${fixture} ${marker}`);
+    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`);
+    assert.equal(result.exitCode, 0);
     assert.equal(result.outcome, "exited");
     const markerDeadline = Date.now() + 20_000;
     while (Date.now() < markerDeadline) {
@@ -264,4 +266,17 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   } finally {
     await cleanup();
   }
+});
+
+}
+
+test("a stalled setsid handshake fails within the existing shell deadline", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const marker = path.join(rootPath, "detached.pid");
+  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  const result = await run(t, `${fixture} ${marker} --stall-detach`);
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 75);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
 });
