@@ -866,3 +866,57 @@ test("failed shared startup stays closed and can retry recovery", async () => {
     assert.equal(calls, 2);
   });
 });
+
+for (const invalidSnapshot of ["{not-json", '{"version":999}']) {
+  test(`startup quarantine requires a fresh store after repairing ${invalidSnapshot}`, async () => {
+    await withTempDirectory(async (directory) => {
+      const filename = path.join(directory, STORE_NAME);
+      await writeFile(filename, invalidSnapshot, { mode: 0o600 });
+      const store = makeStore(directory);
+      await assert.rejects(store.initialize(), /unreadable|unsupported/u);
+      const repaired = `${JSON.stringify(emptyPiRuntimeEffectDatabase())}\n`;
+      await writeFile(filename, repaired, { mode: 0o600 });
+      // A cached unsafe read is never converted to authority by resetting only
+      // the single-flight promise. An explicit new owner must reread the file.
+      await assert.rejects(store.initialize(), /unreadable|unsupported/u);
+      await assert.rejects(store.startOperation(operation()), /not initialized/u);
+      assert.equal(await readFile(filename, "utf8"), repaired);
+      const fresh = makeStore(directory);
+      await fresh.initialize();
+      await fresh.startOperation(operation());
+      assert.equal((await fresh.listOperationsByChat("chat-1"))[0]?.state, "running");
+    });
+  });
+}
+
+test("a failed durable recovery write can retry without repeating external effects", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory);
+    await first.initialize();
+    const owner = operation();
+    await first.startOperation(owner);
+    const sent = effect(owner, "sent", { replay: "never", toolName: "write_file" });
+    await first.prepareEffect(sent);
+    await first.markEffectDispatchStarted(effectOwner(sent));
+    const filename = path.join(directory, STORE_NAME);
+    const before = await readFile(filename, "utf8");
+    let failRecovery = true;
+    const dataStore = new DataStore(STORE_NAME, emptyPiRuntimeEffectDatabase(), () => directory, {
+      beforeWritePublish: () => {
+        if (failRecovery) throw new Error("recovery write unavailable");
+      },
+    });
+    const restarted = new PiRuntimeEffectStore({ dataStore });
+    const results = await Promise.allSettled([restarted.initialize(), restarted.initialize()]);
+    assert.deepEqual(results.map((result) => result.status), ["rejected", "rejected"]);
+    assert.equal(await readFile(filename, "utf8"), before);
+    await assert.rejects(restarted.startOperation(operation("new")), /not initialized/u);
+    failRecovery = false;
+    await restarted.initialize();
+    assert.equal((await restarted.getEffect(effectOwner(sent)))?.state, "unknown");
+    const reopened = makeStore(directory);
+    await reopened.initialize();
+    assert.equal((await reopened.getEffect(effectOwner(sent)))?.state, "unknown");
+    assert.equal((await reopened.getEffect(effectOwner(sent)))?.arguments, undefined);
+  });
+});

@@ -14,7 +14,7 @@ Codex PR #45820 (merged `f2b5b81f39fba7d1172e4a5e65a427f029a39479`) continues wo
 
 - Compaction pressure and prior-turn repair use content estimates when the assistant or fallback usage anchor belongs to another provider/model. Reopened checkpoints cannot suppress pressure measurement merely because the foreign assistant predates the checkpoint. Same-model thresholds, no-anchor compatibility, retained-tail selection and summaries remain upstream-owned.
 - Keep transient provider retry and its reset rules independent of usage ownership; response aliases must not suppress retries.
-- Effect-store initialization is single-flight. Concurrent callers cannot run a second restart sweep after the first caller admits a new operation. Failed initialization remains closed and retryable. Existing dispatched never-replay effects remain unknown, safe effects remain interrupted, and prepared effects cancel without dispatch.
+- Effect-store initialization is single-flight. Concurrent callers cannot run a second restart sweep after the first caller admits a new operation. Transient recovery-write failures remain closed and retryable. Corrupt/unsupported snapshots remain quarantined in the current DataStore cache; operator repair requires a fresh store (normally restart), not resetting its flight promise. Existing dispatched never-replay effects remain unknown, safe effects remain interrupted, and prepared effects cancel without dispatch.
 
 ## Verification and review
 
@@ -25,3 +25,7 @@ Both independent reviewers re-reviewed the retry fix and reported no remaining a
 No shared DTO, transcript/activity shape or UI changes. Inspected native compaction consumers in iOS `AidenChat.swift` and Android `AidenChat.kt`; both continue consuming unchanged `compact_context` activity. No onboarding feature is advertised. Existing test scripts register both modified test files. Native UI suites are not required for this host-only runtime patch.
 
 Final local/hosted verification and review status are recorded in the PR; do not infer merge, release, or installed acceptance from this note.
+
+## Hosted review follow-up
+
+Pullfrog correctly distinguished transient startup retry from cached corruption. Clarified the contract and added corrupt/unsupported file repair tests proving same-instance quarantine plus fresh-instance recovery, and a real durable recovery-write failure/retry/reopen test. No automatic cache reload or side-effect replay is introduced. Greptile could not review because the account reached its 50-credit trial limit.

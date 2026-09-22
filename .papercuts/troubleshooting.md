@@ -858,3 +858,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Worktree Git metadata lives outside its writable root; fetch/branch operations needed ordinary sandbox escalation. The `tsx` CLI also needs its temporary IPC socket, so `npm run test:compaction` needed escalation after EPERM. Locked `npm ci --ignore-scripts` and direct `node --import tsx` focused tests worked in the sandbox.
 - A startup race fixture initially intercepted `DataStore.load`, which is also called internally during normal store operations and deadlocked the fixture. Intercept the startup-only corruption check instead to hold a second recovery sweep deterministically.
 - Model ownership must gate usage counters, not transient retry/reset handling. Independent review caught that coupling; preserve provider retries even when a response reports a model alias.
+
+- PR #215 hosted review: resetting an initialization promise does not clear DataStore corruption/unsupported-shape quarantine. Keep that authority fence, explicitly limit retry to transient recovery failures, and test operator repair with a fresh owner as well as actual durable-write failure.

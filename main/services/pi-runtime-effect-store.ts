@@ -151,6 +151,8 @@ export class PiRuntimeEffectStore {
     // Every caller must cross the same startup boundary. A second recovery
     // sweep must never interrupt work admitted by the first caller.
     this.initialization ??= this.initializeOnce().catch((error) => {
+      // Transient recovery-write failures may retry. Corrupt/unsafe snapshots
+      // stay quarantined in DataStore's cache; repair requires a fresh store.
       this.initialization = undefined;
       throw error;
     });
