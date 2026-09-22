@@ -814,7 +814,8 @@ final class AidenWorkspaceChatsModel {
     }
 
     private func persist(chat: AidenChat, instanceId: String) async throws {
-        try await cache.saveChat(chat, instanceId: instanceId)
+        let writeToken = cache.reserveChatWrite()
+        guard try await cache.saveChat(chat, instanceId: instanceId, writeToken: writeToken) else { return }
         try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
         try await cache.reconcileChatSummary(chat, instanceId: instanceId)
     }
@@ -1670,8 +1671,9 @@ final class AidenChatViewModel {
             // A normal installation switch retains an accepted turn for later
             // resume. Forgetting, revoking, or re-pairing the captured device
             // invalidates the context before any private cache/activity write.
+            let writeToken = cache.reserveChatWrite()
             let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await cache.saveChat(acceptedChat, instanceId: instanceId)
+                try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)
                 try? await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
                 if let draftSession,
                    draftGeneration == clearedDraftGeneration,
@@ -2473,7 +2475,8 @@ final class AidenChatViewModel {
         let generation = transcriptGeneration
         chat = remote
         resolveModelSelection()
-        try? await cache.saveChat(remote, instanceId: instanceId)
+        let writeToken = cache.reserveChatWrite()
+        try? await cache.saveChat(remote, instanceId: instanceId, writeToken: writeToken)
         guard coordinator.isCurrent(context), !isStarting, generation == transcriptGeneration else { return false }
         onChatUpdated(remote)
         if scheduleTitleRefresh, remote.isTitlePending {

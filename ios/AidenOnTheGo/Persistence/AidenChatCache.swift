@@ -90,6 +90,28 @@ actor AidenChatCache {
     private let maxSummaryCacheFileBytes: Int
     private let maxSummaryCacheItems = 10_000
     private let maxAttachmentImageCacheBytes = 96 * 1_024 * 1_024
+    // Reserve at transcript acceptance, before crossing an actor boundary. A
+    // cache-wide clock avoids collisions when a new view model opens a chat.
+    private final class ChatWriteClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UInt64 = 0
+
+        func next() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            return value
+        }
+    }
+
+    private nonisolated let chatWriteClock = ChatWriteClock()
+    private var chatWriteGenerations: [String: [String: UInt64]] = [:]
+    private var chatPurgeGenerations: [String: UInt64] = [:]
+
+    nonisolated func reserveChatWrite() -> UInt64 {
+        chatWriteClock.next()
+    }
+
     private var summaryWriteGenerations: [String: UInt64] = [:]
 
     init(
@@ -148,11 +170,18 @@ actor AidenChatCache {
         return envelope.chat
     }
 
-    func saveChat(_ chat: AidenChat, instanceId: String) throws {
+    @discardableResult
+    func saveChat(_ chat: AidenChat, instanceId: String, writeToken: UInt64) throws -> Bool {
+        guard writeToken > (chatPurgeGenerations[instanceId] ?? 0),
+              writeToken > (chatWriteGenerations[instanceId]?[chat.id] ?? 0) else { return false }
+        // Advance even if persistence fails: an older queued snapshot must not
+        // become authoritative merely because the newest disk write failed.
+        chatWriteGenerations[instanceId, default: [:]][chat.id] = writeToken
         try save(
             ChatEnvelope(instanceId: instanceId, chat: chat),
             to: fileURL(kind: "chats", instanceId, chat.id)
         )
+        return true
     }
 
     func loadChatSummaries(instanceId: String) -> SummarySnapshot? {
@@ -253,6 +282,7 @@ actor AidenChatCache {
     }
 
     func removeChat(instanceId: String, chatId: String) {
+        chatWriteGenerations[instanceId, default: [:]][chatId] = reserveChatWrite()
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
         try? removeChatSummary(instanceId: instanceId, chatId: chatId)
         removeActiveStream(instanceId: instanceId, chatId: chatId)
@@ -260,6 +290,8 @@ actor AidenChatCache {
     }
 
     func purge(instanceId: String) {
+        chatPurgeGenerations[instanceId] = reserveChatWrite()
+        chatWriteGenerations.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {

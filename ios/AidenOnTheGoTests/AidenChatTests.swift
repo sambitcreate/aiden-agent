@@ -363,6 +363,8 @@ final class AidenChatTests: XCTestCase {
         let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, draftStore: drafts)
         var final = model.chat
         final.messages.append(AidenChatMessage(id: "final-reply", role: .assistant, text: "Authoritative final", createdAt: Date()))
+        let staleSnapshot = model.chat
+        let staleWriteToken = cache.reserveChatWrite()
         let fixture = AidenStreamRecoveryFixture(chat: model.chat, finalChat: final)
         fixture.allowReconciliation = true
         fixture.allowTerminal = false
@@ -385,7 +387,11 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await load.value
         XCTAssertEqual(model.chat.messages.last?.id, "final-reply")
-        let persisted = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        // Deliver an already-admitted old write after the terminal write. This
+        // deterministically models actor mailbox reordering, not a held GET.
+        try await cache.saveChat(staleSnapshot, instanceId: "instance-progress-lifecycle", writeToken: staleWriteToken)
+        let reopenedCache = AidenChatCache(root: root)
+        let persisted = await reopenedCache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
         XCTAssertEqual(persisted?.messages.last?.id, "final-reply")
         XCTAssertEqual(model.draft, "Saved composer")
         XCTAssertNotNil(model.catalog)
@@ -1685,6 +1691,38 @@ final class AidenChatTests: XCTestCase {
         }
     }
 
+    func testChatWriteFencesSurviveRemovalAndPurgeWithoutCrossingInstances() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-write-fence-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        let beforeRemoval = cache.reserveChatWrite()
+        let independent = cache.reserveChatWrite()
+        await cache.removeChat(instanceId: "instance-a", chatId: chat.id)
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: beforeRemoval)
+        let removed = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+        XCTAssertNil(removed)
+        var recreated = chat
+        recreated.title = "Recreated chat"
+        try await cache.saveChat(recreated, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: beforeRemoval)
+        let latest = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+        XCTAssertEqual(latest?.title, "Recreated chat")
+        try await cache.saveChat(chat, instanceId: "instance-b", writeToken: independent)
+        let other = await cache.loadChat(instanceId: "instance-b", chatId: chat.id)
+        XCTAssertEqual(other?.id, chat.id)
+
+        let beforePurge = cache.reserveChatWrite()
+        await cache.purge(instanceId: "instance-a")
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: beforePurge)
+        let purged = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+        XCTAssertNil(purged)
+        // A later view model uses the cache's clock, not a counter reset to zero.
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
+        let restored = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+        XCTAssertEqual(restored?.id, chat.id)
+    }
+
     func testChatCacheIsScopedByInstallationAndRestoresStreamCursor() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-chat-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -1693,7 +1731,7 @@ final class AidenChatTests: XCTestCase {
         let chat = sampleChat()
 
         try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: "workspace-1")
-        try await cache.saveChat(chat, instanceId: "instance-a")
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
         try await cache.saveActiveStream(
             .init(deviceId: "device-a", streamId: "stream-1", turnId: "turn-1", lastSequence: 14),
             instanceId: "instance-a",
@@ -1769,7 +1807,7 @@ final class AidenChatTests: XCTestCase {
 
         for cache in [legacyCache, currentCache] {
             try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId)
-            try await cache.saveChat(chat, instanceId: "instance-a")
+            try await cache.saveChat(chat, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
             try await cache.saveActiveStream(
                 .init(deviceId: "device-a", streamId: "stream-a", turnId: "turn-a", lastSequence: 1),
                 instanceId: "instance-a",
@@ -1784,7 +1822,7 @@ final class AidenChatTests: XCTestCase {
             )
 
             try await cache.saveChats([chat], instanceId: "instance-b", workspaceId: chat.workspaceId)
-            try await cache.saveChat(chat, instanceId: "instance-b")
+            try await cache.saveChat(chat, instanceId: "instance-b", writeToken: cache.reserveChatWrite())
             try await cache.saveActiveStream(
                 .init(deviceId: "device-b", streamId: "stream-b", turnId: "turn-b", lastSequence: 2),
                 instanceId: "instance-b",

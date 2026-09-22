@@ -840,8 +840,9 @@ private struct AidenBotShellView: View {
                   chat.botId == item.botId, presentationScope == scope,
                   path.last == item.chatId else { return }
             if cached == nil {
+                let writeToken = AidenChatCache.shared.reserveChatWrite()
                 let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
                 }
                 guard retained, coordinator.isCurrent(context), presentationScope == scope,
                       path.last == item.chatId else { return }
@@ -916,8 +917,9 @@ private struct AidenBotShellView: View {
             guard coordinator.isCurrent(context), chat.botId == bot.id,
                   retainedCreateAttempt == attempt else { return }
             retainedCreateAttempt = nil
+            let writeToken = AidenChatCache.shared.reserveChatWrite()
             let retained = await coordinator.withRetainedInstallationData(for: context) {
-                try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
             }
             guard retained, coordinator.isCurrent(context) else { return }
             let scope = PresentationScope(instanceID: context.instanceId, deviceID: context.deviceId)
@@ -1028,8 +1030,9 @@ private struct AidenBotShellView: View {
                 return
             }
             if cached == nil {
+                let writeToken = AidenChatCache.shared.reserveChatWrite()
                 let retained = await coordinator.withRetainedInstallationData(for: context) {
-                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId)
+                    try? await AidenChatCache.shared.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
                 }
                 guard retained, coordinator.isCurrent(context), presentationScope == scope,
                       path.last == chatID else { return }
