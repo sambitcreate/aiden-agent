@@ -1343,7 +1343,9 @@ class AidenChatViewModel(
             for (delayMs in AidenChatTitleReconciliation.retryMilliseconds) {
                 try {
                     delay(delayMs)
+                    if (activeClient() !== client || installationForProgress() == null) return@launch
                     val remote = client.chat(chatId)
+                    if (activeClient() !== client || installationForProgress() == null) return@launch
                     acceptRemoteChat(remote, scheduleTitleRefresh = false)
                     if (!remote.isTitlePending) return@launch
                 } catch (e: Exception) {

@@ -231,6 +231,9 @@ class AidenChatTest {
     fun runInputRequiresAdvertisedFeature() = exerciseRunControl("input-unsupported")
 
     @Test
+    fun acceptedInputTitleRefreshCannotPublishAfterPairingSwitch() = exerciseRunControl("input-title-switch")
+
+    @Test
     fun acceptedInputRefreshCannotPublishAfterPairingSwitch() = exerciseRunControl("input-switch")
 
     @Test
@@ -252,6 +255,7 @@ class AidenChatTest {
         val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
         val refreshArrived = CountDownLatch(1)
         val releaseRefresh = CountDownLatch(1)
+        val admittedReads = java.util.concurrent.atomic.AtomicInteger()
         val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
         val writes = java.util.concurrent.atomic.AtomicInteger()
         val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
@@ -274,13 +278,14 @@ class AidenChatTest {
                 request.path == "/api/aiden/v1/chats/chat-control" -> {
                     if (terminal.get()) check(finishRead.await(10, TimeUnit.SECONDS))
                     if (admitted.get() && scenario == "input-accepted-refresh-failed-terminal") return MockResponse().setResponseCode(503)
-                    if (admitted.get() && scenario == "input-switch") {
+                    val titleRetry = admitted.get() && scenario == "input-title-switch" && admittedReads.incrementAndGet() > 1
+                    if (admitted.get() && (scenario == "input-switch" || titleRetry)) {
                         refreshArrived.countDown()
                         check(releaseRefresh.await(10, TimeUnit.SECONDS))
                     }
                     val snapshot = if (admitted.get()) chat.copy(messages = listOf(AidenChatMessage(
-                        id = "message-input", role = AidenChatRole.USER, text = "Original instruction", createdAt = Instant.EPOCH
-                    ))) else chat
+                        id = if (titleRetry) "stale-title" else "message-input", role = AidenChatRole.USER, text = "Original instruction", createdAt = Instant.EPOCH
+                    )), titlePending = if (scenario == "input-title-switch" && !titleRetry) true else null) else chat
                     MockResponse().setBody(json.encodeToString(snapshot))
                 }
                 request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
@@ -378,7 +383,7 @@ class AidenChatTest {
                         assertFalse(model.canSend)
                     }
                     release.countDown()
-                    if (scenario == "input-switch") {
+                    if (scenario == "input-switch" || scenario == "input-title-switch") {
                         withContext(Dispatchers.IO) { assertTrue(refreshArrived.await(5, TimeUnit.SECONDS)) }
                         installations.addInstallation(AidenPairingExchange(
                             instanceId = "instance-other", deviceId = "device-other", endpoint = server.url("/api/aiden/v1").toString(),
@@ -386,8 +391,14 @@ class AidenChatTest {
                         coordinator.refreshClient()
                         releaseRefresh.countDown()
                         withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
-                        assertTrue(model.chat.value!!.messages.isEmpty())
-                        assertTrue(cache.loadChat("instance-control", chat.id)?.messages.orEmpty().isEmpty())
+                        if (scenario == "input-title-switch") {
+                            kotlinx.coroutines.delay(200)
+                            assertEquals("message-input", model.chat.value!!.messages.last().id)
+                            assertEquals("message-input", cache.loadChat("instance-control", chat.id)!!.messages.last().id)
+                        } else {
+                            assertTrue(model.chat.value!!.messages.isEmpty())
+                            assertTrue(cache.loadChat("instance-control", chat.id)?.messages.orEmpty().isEmpty())
+                        }
                         return@runBlocking
                     }
                     withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
