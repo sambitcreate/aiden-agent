@@ -76,8 +76,8 @@ export async function createAgentsInstructionRefresher(options: AgentsInstructio
           if (absent(error)) { await assertRoot(root); continue; }
           throw error;
         }
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > AGENTS_INSTRUCTION_BYTES) {
-          throw new Error("AGENTS.md must be a bounded regular file, not a symbolic link.");
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > AGENTS_INSTRUCTION_BYTES) {
+          throw new Error("AGENTS.md must be a bounded regular file with exactly one link, not a symbolic link.");
         }
         const instructions = stat.size === 0 ? "" : await (options.read ?? readAnchored)(root, signal);
         if (Buffer.byteLength(instructions) > AGENTS_INSTRUCTION_BYTES) throw new Error("AGENTS.md exceeds the instruction limit.");

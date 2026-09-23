@@ -47,11 +47,12 @@ test("missing, blank and unselected workspace instructions never disclose bodies
 });
 
 test("root replacement and symlinked, oversized or nonregular instruction files fail closed", async (t) => {
-  for (const attack of ["symlink", "directory", "oversize", "root-replace"] as const) {
+  for (const attack of ["symlink", "hardlink", "directory", "oversize", "root-replace"] as const) {
     const f = await fixture(t);
     const refresher = await createAgentsInstructionRefresher(f);
     const file = path.join(f.workspaceRoot, "AGENTS.md");
     if (attack === "symlink") { await fs.writeFile(path.join(f.root, "secret"), "SECRET"); await fs.symlink(path.join(f.root, "secret"), file); }
+    if (attack === "hardlink") { await fs.writeFile(path.join(f.root, "secret"), "SECRET"); await fs.link(path.join(f.root, "secret"), file); }
     if (attack === "directory") await fs.mkdir(file);
     if (attack === "oversize") await fs.writeFile(file, "é".repeat(AGENTS_INSTRUCTION_BYTES));
     if (attack === "root-replace") { await fs.rename(f.workspaceRoot, f.workspaceRoot + "-old"); await fs.mkdir(f.workspaceRoot); }

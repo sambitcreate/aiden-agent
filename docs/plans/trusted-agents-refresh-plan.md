@@ -13,3 +13,7 @@ Tests: additions/edits/deletion, blank/missing files, global/workspace precedenc
 Separate from MCP PRs214/226/229/230; llm-client integration must preserve final MCP guidance plus this refresh appendix. No dependency or in-flight tool-schema updates.
 
 Validation: loader7 (including native UTF-8 and provider-scope fence), Pi runtime/generation context81, Bots447, scheduled151, onboarding56 pass. Type-check, ESLint and whitespace checks pass. Independent Sol medium blast-radius/adversarial reviewers clear. No native suite rerun: iOS/Android tool labels/transcript DTOs are unchanged and this is main-owned prompt assembly only. Physical iOS not relaunched.
+
+Review hardening: root AGENTS files must have exactly one link. The shared native reader enforces this at the descriptor boundary before and after reading, with linked-file and link-race regressions.
+
+Hard-link correction validation: AGENTS7, native file-mutator27, shared reader IO14, generative UI42 plus artifact2 and browser containment5 pass; type-check and lint pass. No mobile DTO or transcript changes; physical iOS remains untouched.
