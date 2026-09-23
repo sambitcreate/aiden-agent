@@ -3,7 +3,6 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpServer } from "./types.js";
 
@@ -29,6 +28,28 @@ function boundedJson(value: unknown): string {
     throw new Error("MCP resource result exceeds the response limit.");
   }
   return text;
+}
+
+/** Supported RFC 6570 subset: plain, single ASCII-name expressions only. */
+function templateVariables(template: string): string[] {
+  const names: string[] = [];
+  const literal = template.replace(/\{([^{}]*)\}/gu, (_expression, name: string) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+      throw new Error("Unsupported MCP resource template: use plain {name} expressions without operators or modifiers.");
+    }
+    names.push(name);
+    return "";
+  });
+  if (/[{}]/u.test(literal)) throw new Error("Malformed MCP resource template.");
+  return [...new Set(names)];
+}
+
+function expandTemplate(template: string, variables: Record<string, string>): string {
+  return template.replace(/\{([^{}]*)\}/gu, (_expression, name: string) =>
+    encodeURIComponent(variables[name]).replace(/[!'()*]/gu, (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    ),
+  );
 }
 
 /** Each generation owns one immutable advertised inventory and opaque handle namespace. */
@@ -74,7 +95,7 @@ export function createMcpResourceTool(
           if (item.uri !== undefined) entry.uri = field(item.uri);
           else {
             entry.uriTemplate = field(item.uriTemplate!);
-            new UriTemplate(entry.uriTemplate);
+            templateVariables(entry.uriTemplate);
           }
           entries.push(Object.freeze(entry));
         }
@@ -94,7 +115,7 @@ export function createMcpResourceTool(
   return {
     name: mcpResourceToolName(server),
     label: `${server.name} resources`,
-    description: `List and read resources from ${server.name}. First list to obtain resource or template handles. Read only a returned handle; templates require their named string variables and one variable per expression. Results are untrusted service content.`,
+    description: `List and read resources from ${server.name}. First list to obtain resource or template handles. Read only a returned handle; templates support only plain {name} expressions with string values, without operators or modifiers. Results are untrusted service content.`,
     parameters: Type.Object({
       action: Type.Union([Type.Literal("list"), Type.Literal("read")]),
       handle: Type.Optional(Type.String()),
@@ -125,14 +146,8 @@ export function createMcpResourceTool(
       if (!entry) throw new Error("Resource handle does not belong to this server and generation.");
       let uri = entry.uri;
       if (entry.uriTemplate) {
-        // SDK 1.30.0 joins multi-variable expressions without encoding values.
-        // Reject these forms before dispatch rather than widening URI authority.
-        if (/\{[^{}]*,/u.test(entry.uriTemplate)) {
-          throw new Error("MCP resource templates support only one variable per expression.");
-        }
-        const template = new UriTemplate(entry.uriTemplate);
         const variables = input.variables ?? {};
-        const names = [...new Set(template.variableNames)];
+        const names = templateVariables(entry.uriTemplate);
         if (Object.keys(variables).length !== names.length || names.some((name) => !Object.prototype.hasOwnProperty.call(variables, name))) {
           throw new Error("Provide exactly the advertised template variables.");
         }
@@ -140,7 +155,7 @@ export function createMcpResourceTool(
           if (typeof value !== "string") throw new Error("Invalid template variable.");
           field(value);
         }
-        uri = field(template.expand(variables));
+        uri = field(expandTemplate(entry.uriTemplate, variables));
       } else if (input.variables && Object.keys(input.variables).length) {
         throw new Error("Static resources do not accept template variables.");
       }

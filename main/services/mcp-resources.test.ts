@@ -195,11 +195,11 @@ test("multi-variable templates fail closed before SDK expansion can escape URI a
       listResourceTemplates: async () => ({ resourceTemplates: [{ name: "Tenant", uriTemplate: `https://{${operator}tenant,version}.example.com/data` }] }),
       readResource: async () => { reads++; return { contents: [] }; },
     }));
-    const { resources } = await invoke(tool, { action: "list" });
+    await assert.rejects(invoke(tool, { action: "list" }), /Unsupported MCP resource template/);
     await assert.rejects(invoke(tool, {
-      action: "read", handle: resources[1].handle,
+      action: "read", handle: "unpublished",
       variables: { tenant: "x@attacker.example#/?&=%", version: "v1" },
-    }), /one variable per expression/);
+    }), /List this server/);
     assert.equal(reads, 0);
   }
 });
@@ -218,4 +218,25 @@ test("single-variable expressions encode reserved input and retain exact variabl
     await assert.rejects(invoke(tool, { action: "read", handle, variables }));
   }
   assert.equal(requested.length, 1);
+});
+
+test("discovery rejects unsupported single-variable operators and modifiers before publishing any handles", async () => {
+  for (const expression of [";id", "?id", "&id", "+id", "#id", ".id", "/id", "id:3", "id*", "id,other", "id.other", "%69d", "", "{id"]) {
+    let reads = 0;
+    const { tool } = fixture(port({
+      listResourceTemplates: async () => ({ resourceTemplates: [{ name: "Unsupported", uriTemplate: `memo://root/{${expression}}` }] }),
+      readResource: async () => { reads++; return { contents: [] }; },
+    }));
+    await assert.rejects(invoke(tool, { action: "list" }), /Unsupported|Malformed/);
+    await assert.rejects(invoke(tool, { action: "read", handle: "unpublished", variables: { id: "x" } }), /List this server/);
+    assert.equal(reads, 0);
+  }
+});
+
+test("accepted plain expansions encode every reserved character and Unicode without double encoding literals", async () => {
+  const { tool } = fixture(port({ listResourceTemplates: async () => ({ resourceTemplates: [{ name: "Plain", uriTemplate: "memo://root/%20/{id}/{id}" }] }) }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const result = await invoke(tool, { action: "read", handle: resources[1].handle, variables: { id: "!'()*:/?#[]@%é" } });
+  const encoded = "%21%27%28%29%2A%3A%2F%3F%23%5B%5D%40%25%C3%A9";
+  assert.equal(result.requestedUri, `memo://root/%20/${encoded}/${encoded}`);
 });
