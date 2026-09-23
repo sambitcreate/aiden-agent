@@ -777,6 +777,73 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspacePurgeRejectsStaleDiskFallbackAndAllowsFreshList() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-workspace-purge-disk-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root, fileManager: AidenFailedRemovalFileManager())
+        let chat = sampleChat()
+        try await cache.saveChats([chat], instanceId: "instance-list", workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+        await cache.purge(instanceId: "instance-list")
+        let stale = await AidenChatCache(root: root).loadChats(instanceId: "instance-list", workspaceId: chat.workspaceId)
+        XCTAssertEqual(stale?.map(\.id), [chat.id], "The injected failed delete must leave disk evidence.")
+        let rejected = await cache.admittedWorkspaceChats(instanceId: "instance-list", workspaceId: chat.workspaceId)
+        XCTAssertNil(rejected)
+        var fresh = chat
+        fresh.title = "Fresh post-purge list"
+        try await cache.saveChats([fresh], instanceId: "instance-list", workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+        let admitted = await cache.admittedWorkspaceChats(instanceId: "instance-list", workspaceId: chat.workspaceId)
+        XCTAssertEqual(admitted?.map(\.title), [fresh.title])
+    }
+
+    @MainActor
+    func testWorkspaceHeldListAdoptsNewerDetailAndDeletionOwners() async throws {
+        for mode in ["detail", "omitted", "disk", "remove", "purge", "new-list"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-workspace-list-owner-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var workspace: AidenWorkspaceChatsModel!
+            let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "workspace-1", cache: cache)
+            })
+            let instance = "instance-progress-lifecycle"
+            let old = detail.chat
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(["chats": mode == "omitted" ? [] : [old]])
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                request.url?.path.hasSuffix("/chats") == true ? (200, "application/json", data) : nil
+            }
+            let arrived = expectation(description: "workspace list held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats") { arrived.fulfill() }
+            let loading = Task { await workspace.load() }
+            await fulfillment(of: [arrived], timeout: 2)
+            var winner = old
+            winner.title = "Settled title"
+            winner.messages.append(AidenChatMessage(id: "settled-list", role: .assistant, text: "Settled transcript", createdAt: Date()))
+            try await cache.saveChat(winner, instanceId: instance, writeToken: cache.reserveChatWrite())
+            if mode == "remove" { await cache.removeChat(instanceId: instance, chatId: old.id) }
+            if mode == "purge" { await cache.purge(instanceId: instance) }
+            if mode == "new-list" {
+                try await cache.saveChats([], instanceId: instance, workspaceId: old.workspaceId, writeToken: cache.reserveChatWrite())
+            }
+            if mode == "disk" {
+                let lists = root.appending(path: "lists")
+                try? FileManager.default.removeItem(at: lists)
+                try Data("blocked directory".utf8).write(to: lists)
+            }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await loading.value
+            let removed = ["remove", "purge", "new-list"].contains(mode)
+            XCTAssertEqual(workspace.chats.map(\.title), removed ? [] : [winner.title])
+            XCTAssertEqual(workspace.chats.first?.messages.last?.text, removed ? nil : "Settled transcript")
+            if mode != "disk" {
+                let reopened = await AidenChatCache(root: root).loadChats(instanceId: instance, workspaceId: old.workspaceId)
+                XCTAssertEqual(reopened?.map(\.title) ?? [], removed ? [] : [winner.title])
+            }
+        }
+    }
+
+    @MainActor
     func testBotRequestOriginRejectsHeldGETAfterNewerOwnerIncludingDiskFailure() async throws {
         for mode in ["newer", "disk", "remove", "purge"] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-bot-get-owner-\(UUID())")
@@ -5917,4 +5984,8 @@ private actor AidenChatWriteTestGate {
         continuation?.resume()
         continuation = nil
     }
+}
+
+private final class AidenFailedRemovalFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws { throw CocoaError(.fileWriteNoPermission) }
 }

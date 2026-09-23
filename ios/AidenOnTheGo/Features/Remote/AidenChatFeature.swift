@@ -703,7 +703,7 @@ final class AidenWorkspaceChatsModel {
         guard let context = try? coordinator.requestContext() else { return }
         let instanceId = context.instanceId
         let metadataWriteToken = cache.reserveChatWrite()
-        if chats.isEmpty, let cached = await cache.loadChats(instanceId: instanceId, workspaceId: workspaceId) {
+        if chats.isEmpty, let cached = await cache.admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId) {
             guard coordinator.isCurrent(context) else { return }
             chats = Self.sorted(AidenChat.regularWorkspaceChats(from: cached))
         }
@@ -713,8 +713,16 @@ final class AidenWorkspaceChatsModel {
         do {
             let remote = try await coordinator.remoteClient(for: context).chats(workspaceId: workspaceId)
             guard coordinator.isCurrent(context) else { return }
-            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: remote))
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken)
+            // Commit before publishing: a held list response may have lost to a
+            // detail owner, another list, or removal while HTTP was in flight.
+            do {
+                try await cache.saveChats(AidenChat.regularWorkspaceChats(from: remote), instanceId: instanceId, workspaceId: workspaceId, writeToken: metadataWriteToken)
+            } catch {
+                // Admission precedes IO; preserve the in-memory winner on disk failure.
+            }
+            let admitted = await cache.admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId)
+            guard coordinator.isCurrent(context) else { return }
+            chats = Self.sorted(AidenChat.regularWorkspaceChats(from: admitted ?? []))
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }

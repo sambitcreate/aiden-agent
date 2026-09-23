@@ -232,6 +232,7 @@ actor AidenChatCache {
 
     private nonisolated let chatWriteClock = ChatWriteClock()
     private var chatWriteGenerations: [String: [String: UInt64]] = [:]
+    private var admittedWorkspaceLists: [String: [String: [AidenChat]]] = [:]
     private var admittedChats: [String: [String: AidenChat]] = [:]
     private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
@@ -297,20 +298,55 @@ actor AidenChatCache {
         return envelope.chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }
     }
 
-    func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String, writeToken: UInt64) async throws {
+    // Read the admitted list, including newer detail owners, even when disk IO failed.
+    func admittedWorkspaceChats(instanceId: String, workspaceId: String) -> [AidenChat]? {
+        guard !chatWriteClock.isPending(instanceId: instanceId, chatId: "") else { return nil }
+        let rows: [AidenChat]?
+        if let admitted = admittedWorkspaceLists[instanceId]?[workspaceId] {
+            rows = admitted
+        } else {
+            guard chatPurgeGenerations[instanceId] == nil else { return nil }
+            rows = loadChats(instanceId: instanceId, workspaceId: workspaceId)
+        }
+        guard let rows else { return nil }
+        return mergingWorkspaceDetails(rows, instanceId: instanceId, workspaceId: workspaceId,
+                                       writeToken: workspaceWriteTokens[instanceId]?[workspaceId] ?? 0)
+    }
+
+    private func mergingWorkspaceDetails(_ rows: [AidenChat], instanceId: String, workspaceId: String, writeToken: UInt64) -> [AidenChat] {
+        var byID = Dictionary(rows.filter {
+            !isChatHidden(instanceId: instanceId, chatId: $0.id)
+        }.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        for (id, chat) in admittedChats[instanceId] ?? [:] {
+            guard chat.workspaceId == workspaceId, !chat.isBotChat,
+                  (chatWriteGenerations[instanceId]?[id] ?? 0) > writeToken,
+                  !isChatHidden(instanceId: instanceId, chatId: id),
+                  let current = admittedChat(instanceId: instanceId, chatId: id) else { continue }
+            byID[id] = current
+        }
+        return byID.values.sorted {
+            $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt
+        }
+    }
+
+    @discardableResult
+    func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String, writeToken: UInt64) async throws -> Bool {
         await beforeMetadataWrite?()
         guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
-              writeToken >= (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0) else { return }
-        workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
+              writeToken >= (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0) else { return false }
         var retained = chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id) }
         if metadataWriteIsPartial(writeToken, instanceId: instanceId) {
             let ids = Set(retained.map(\.id))
-            retained += (loadChats(instanceId: instanceId, workspaceId: workspaceId) ?? []).filter { !ids.contains($0.id) }
+            retained += (admittedWorkspaceChats(instanceId: instanceId, workspaceId: workspaceId) ?? []).filter { !ids.contains($0.id) }
         }
+        retained = mergingWorkspaceDetails(retained, instanceId: instanceId, workspaceId: workspaceId, writeToken: writeToken)
+        workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
+        admittedWorkspaceLists[instanceId, default: [:]][workspaceId] = retained
         try save(
             ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: retained),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
+        return true
     }
 
     private func metadataWriteIsRetained(_ token: UInt64, instanceId: String) -> Bool {
@@ -510,6 +546,9 @@ actor AidenChatCache {
         chatWriteGenerations[instanceId, default: [:]][chatId] = max(token, chatWriteGenerations[instanceId]?[chatId] ?? 0)
         removedChatIDs[instanceId, default: []].insert(chatId)
         admittedChats[instanceId]?.removeValue(forKey: chatId)
+        for workspace in Array(admittedWorkspaceLists[instanceId]?.keys ?? Dictionary<String, [AidenChat]>().keys) {
+            admittedWorkspaceLists[instanceId]?[workspace]?.removeAll { $0.id == chatId }
+        }
         let directory = root.appending(path: "lists", directoryHint: .isDirectory)
         for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
             guard let envelope = load(ChatListEnvelope.self, from: url), envelope.instanceId == instanceId,
@@ -543,6 +582,7 @@ actor AidenChatCache {
         chatPurgeGenerations[instanceId] = max(token, chatPurgeGenerations[instanceId] ?? 0)
         removedChatIDs.removeValue(forKey: instanceId)
         workspaceWriteTokens.removeValue(forKey: instanceId)
+        admittedWorkspaceLists.removeValue(forKey: instanceId)
         summaryWriteTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
         admittedChats.removeValue(forKey: instanceId)
