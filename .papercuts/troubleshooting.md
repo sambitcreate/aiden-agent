@@ -853,6 +853,11 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
 
+## 2026-09-23 — shell helper early-exit stdin error
+
+- Workspace identity validation may exit before reading the control frame. A child-process error listener does not catch stdin EPIPE: install a stdin listener before writing, record transport failure, close control, and still await close/watchdog before rejecting. Keep write inside try/finally so synchronous failure also cleans timers/abort listeners/streams. Retain an error listener through stream destruction for late events.
+
+- Child `close` is not stdin write settlement. Await the write callback alongside helper close before decoding a valid frame; retain the independent error listener and bound a missing callback with the existing watchdog. Test close-first with valid response bytes and late callback/stream failure.
 ## 2026-09-23 — Git cancellation fixture handshakes
 
 - A three-second marker poll can expire before the intended cancellation window begins. Wait for the actual marker with the existing bounded helper, and abort/drain the outstanding operation before removing its temporary repository.
