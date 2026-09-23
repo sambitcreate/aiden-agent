@@ -1522,6 +1522,14 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     gitBinary: wrapper,
     pushTimeoutMs: 5_000,
   });
+  const run = service["run"].bind(service);
+  let upstreamMutationAttempts = 0;
+  service["run"] = (...args) => {
+    if (args[1][0] === "branch" && args[1].some((arg) => arg.startsWith("--set-upstream-to="))) {
+      upstreamMutationAttempts += 1;
+    }
+    return run(...args);
+  };
   const capability = await service.pushCapability(repository);
   const controller = new AbortController();
   const operation = service.push(
@@ -1545,6 +1553,7 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     const result = await operation;
     assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
     assert.equal(result.upstreamSet, false);
+    assert.equal(upstreamMutationAttempts, 0, "post-read cancellation must skip the upstream mutation");
     assert.equal(
       await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
       "",
