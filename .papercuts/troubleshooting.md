@@ -869,3 +869,12 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Build native test helpers before standalone shell tests; otherwise ENOENT is only a missing prerequisite, not a valid reproduction.
 
 - Fixture timeout cleanup cannot rely on group/direct signal ordering across setsid+fork. A parent-owned grant pipe makes persistence conditional on success, and EOF closes the late-fork race. Test absent-readiness-marker cleanup using a separate PID witness; mark ESRCH cleanup complete so an after-hook cannot signal a reused PID.
+## 2026-09-22 Telegram run-control audit
+
+- Task began on stale release 0.42.0 checkout; fetched main c8c09e0d2 before work.
+- Initial workspace sandbox blocked shared Git metadata and tsx IPC socket. Used
+  required approval path; later task permissions changed to full access/never.
+- Plain bridge stop() intentionally lets already admitted work settle; shutdown
+  stopAndSettle() and user Stop cancel dispatch preparation. Keep tests distinct.
+- Pi harness queueSteer is not a public foreground input API: host transcript
+  projection and exact-run admission must be implemented before native controls.
