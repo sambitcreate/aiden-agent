@@ -1487,6 +1487,7 @@ test("GitService rechecks cancellation after post-push branch reads before setti
   const remote = path.join(root, "remote.git");
   const pushMarker = path.join(root, "push-finished-before-upstream");
   const readMarker = path.join(root, "post-push-read-started");
+  const releaseMarker = path.join(root, "post-push-read-release");
   const wrapper = path.join(root, "git-post-push-read-delay.mjs");
   await fs.mkdir(remote);
   await git(remote, ["init", "--bare", "--initial-branch=main"]);
@@ -1499,13 +1500,18 @@ test("GitService rechecks cancellation after post-push branch reads before setti
       "import { spawnSync } from 'node:child_process';",
       `const pushMarker = ${JSON.stringify(pushMarker)};`,
       `const readMarker = ${JSON.stringify(readMarker)};`,
+      `const releaseMarker = ${JSON.stringify(releaseMarker)};`,
       "const args = process.argv.slice(2);",
       "const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
       "if (result.error) throw result.error;",
       "if (args[0] === 'push' && result.status === 0) writeFileSync(pushMarker, 'pushed\\n');",
       "if (existsSync(pushMarker) && args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'HEAD') {",
       "  writeFileSync(readMarker, 'reading\\n');",
-      "  setTimeout(() => process.exit(result.status ?? 1), 1200);",
+      "  const deadline = Date.now() + 10000;",
+      "  const timer = setInterval(() => {",
+      "    if (existsSync(releaseMarker)) { clearInterval(timer); process.exit(result.status ?? 1); }",
+      "    if (Date.now() >= deadline) { clearInterval(timer); process.exit(124); }",
+      "  }, 10);",
       "} else process.exit(result.status ?? 1);",
       "",
     ].join("\n"),
@@ -1531,25 +1537,26 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     controller.signal,
   );
 
-  let reading = false;
-  for (let attempt = 0; attempt < 150; attempt += 1) {
+  void operation.catch(() => {});
+  try {
+    await waitForFile(readMarker, 15_000);
+    controller.abort();
+    await fs.writeFile(releaseMarker, "released\n");
+    const result = await operation;
+    assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
+    assert.equal(result.upstreamSet, false);
+    assert.equal(
+      await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
+      "",
+    );
+  } finally {
+    controller.abort();
     try {
-      await fs.access(readMarker);
-      reading = true;
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await fs.writeFile(releaseMarker, "released\n");
+    } finally {
+      await operation.catch(() => {});
     }
   }
-  assert.equal(reading, true);
-  controller.abort();
-  const result = await operation;
-  assert.match(result.warning ?? "", /cancelled request did not change the local upstream/);
-  assert.equal(result.upstreamSet, false);
-  assert.equal(
-    await git(repository, ["for-each-ref", "--format=%(upstream:short)", "refs/heads/main"]),
-    "",
-  );
 });
 
 test("GitService preserves an unknown push outcome when remote verification fails", async (t) => {
