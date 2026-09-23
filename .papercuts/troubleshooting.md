@@ -878,3 +878,8 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
   stopAndSettle() and user Stop cancel dispatch preparation. Keep tests distinct.
 - Pi harness queueSteer is not a public foreground input API: host transcript
   projection and exact-run admission must be implemented before native controls.
+## 2026-09-22 — attachment lifecycle worktree validation
+
+- Reusing the coordinator checkout's node_modules produced unrelated Live orb type errors because thinking-orbs was 0.1.1 while fresh main locks 0.3.1. Install this worktree's lockfile before claiming type-check results.
+- The local Codex and T3 source clones predate the cited September research. Verify upstream PR/files directly before concluding the research applies to Aiden's current implementation.
+- Full hosted verification also runs the subagent deletion source-contract test; expanding its one-line admission-release statement requires updating the literal matcher to preserve both release-order assertions.

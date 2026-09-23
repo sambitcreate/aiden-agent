@@ -1,4 +1,5 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
@@ -69,6 +70,7 @@ export interface ChatApplicationDependencies {
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
+  attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -231,14 +233,17 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       options: ChatApplicationMutationOptions = {},
     ): Promise<void> {
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
+      let finishAttachmentDeletion: (() => void) | undefined;
       let releaseAdmission = false;
       let rollForwardPublished = false;
       const publishRollForward = () => {
         if (rollForwardPublished) return;
         rollForwardPublished = true;
+        deps.attachments?.revokeChat(chatId);
         options.onDeletionRollForward?.();
       };
       try {
+        finishAttachmentDeletion = deps.attachments?.beginChatDeletion(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         await options.assertCurrent?.(current);
@@ -312,7 +317,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
-        if (releaseAdmission) finishDeletion();
+        if (releaseAdmission) {
+          finishAttachmentDeletion?.();
+          finishDeletion();
+        }
       }
     },
   };
