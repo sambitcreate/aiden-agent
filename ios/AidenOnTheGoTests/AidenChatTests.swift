@@ -555,7 +555,7 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testAcceptedRenameSurvivesUnrelatedRowAndEmptyListUpdates() async throws {
+    func testAcceptedRenameSurvivesUnrelatedRowButHonorsNewerListOmission() async throws {
         for refresh in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-interleaving-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
@@ -581,11 +581,11 @@ final class AidenChatTests: XCTestCase {
             if refresh { await workspace.load() } else { workspace.accept(sampleChat()) }
             await gate.release()
             await creating.value
-            XCTAssertEqual(workspace.chats.first { $0.id == detail.chat.id }?.title, "Renamed successfully")
-            XCTAssertTrue(workspace.chats.contains { $0.id == detail.chat.id })
-            XCTAssertEqual(publications.map(\.id), [detail.chat.id])
+            XCTAssertEqual(workspace.chats.first { $0.id == detail.chat.id }?.displayTitle, refresh ? nil : "Renamed successfully")
+            XCTAssertEqual(workspace.chats.contains { $0.id == detail.chat.id }, !refresh)
+            XCTAssertEqual(publications.map(\.id), refresh ? [] : [detail.chat.id])
             let list = await cache.loadChats(instanceId: "instance-progress-lifecycle", workspaceId: "workspace-1")
-            XCTAssertTrue(list?.contains { $0.id == detail.chat.id } == true)
+            XCTAssertEqual(list?.contains { $0.id == detail.chat.id }, !refresh)
         }
     }
 
@@ -606,7 +606,11 @@ final class AidenChatTests: XCTestCase {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(remote)
+            let detailID = detail.chat.id
             AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                if request.httpMethod == "GET", request.url?.path.hasSuffix("/chats/" + detailID) == true {
+                    return (503, "application/json", Data("{}".utf8))
+                }
                 guard request.httpMethod == "POST" || request.httpMethod == "PATCH" else { return nil }
                 return (request.httpMethod == "POST" ? 201 : 200, "application/json", data)
             }
@@ -773,6 +777,339 @@ final class AidenChatTests: XCTestCase {
             XCTAssertEqual(admitted?.title, removed ? nil : "Newer owner")
             let persisted = await cache.loadChat(instanceId: context.instanceId, chatId: remote.id)
             XCTAssertEqual(persisted?.title, removed ? nil : "Newer owner")
+        }
+    }
+
+    @MainActor
+    func testRenamePublishesNewerListRowInsteadOfOlderDetailReceipt() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-list-row-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeChatWrite: { await gate.waitIfArmed() })
+        var workspace: AidenWorkspaceChatsModel!
+        var publications: [AidenChat] = []
+        let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
+            workspace = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
+        })
+        var receipt = detail.chat
+        receipt.title = "PATCH title"
+        var newer = receipt
+        newer.title = "Later list title"
+        newer.revision = "newer-list-revision"
+        newer.messages.append(AidenChatMessage(id: "newer-list-reply", role: .assistant, text: "Keep list winner", createdAt: Date()))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let receiptData = try encoder.encode(receipt)
+        let listData = try encoder.encode(["chats": [newer]])
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "PATCH" { return (200, "application/json", receiptData) }
+            if request.url?.path.hasSuffix("/chats") == true { return (200, "application/json", listData) }
+            return (503, "application/json", Data("{}".utf8))
+        }
+        await gate.arm()
+        let renaming = Task { await workspace.rename(receipt, to: receipt.title) }
+        await waitForChatWrite(gate)
+        await workspace.load()
+        await gate.release()
+        await renaming.value
+        XCTAssertEqual(workspace.chats.first?.revision, newer.revision)
+        XCTAssertEqual(workspace.chats.first?.messages, newer.messages)
+        XCTAssertEqual(publications.last?.displayTitle, newer.title)
+        XCTAssertEqual(publications.last?.revision, newer.revision)
+        let reopened = AidenChatCache(root: root)
+        let restored = await reopened.presentedWorkspaceChat(instanceId: "instance-progress-lifecycle", workspaceId: newer.workspaceId, chatId: newer.id)
+        XCTAssertEqual(restored?.displayTitle, newer.title)
+        XCTAssertEqual(restored?.messages, newer.messages)
+        let summaries = await reopened.loadChatSummaries(instanceId: "instance-progress-lifecycle")
+        XCTAssertEqual(summaries?.summaries.first?.title, newer.title)
+        XCTAssertEqual(summaries?.summaries.first?.revision, newer.revision)
+    }
+
+    @MainActor
+    func testHeldRenamePreservesCanonicalWinnerAndDurableTitleOnRefreshFailure() async throws {
+        for mode in ["settled", "unrelated", "remove", "purge"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-response-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var workspace: AidenWorkspaceChatsModel!
+            let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "workspace-1", cache: cache)
+            })
+            let instance = "instance-progress-lifecycle"
+            let old = detail.chat
+            var receipt = old
+            receipt.title = "Accepted rename"
+            receipt.revision = "opaque-rename"
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let receiptData = try encoder.encode(receipt)
+            let requests = AidenRenameRequestLog()
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                requests.record(request)
+                guard request.url?.path.hasSuffix("/chats/" + old.id) == true else { return nil }
+                return request.httpMethod == "PATCH" ? (200, "application/json", receiptData) : (503, "application/json", Data("{}".utf8))
+            }
+            let arrived = expectation(description: "PATCH held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + old.id) { arrived.fulfill() }
+            let renaming = Task { await workspace.rename(old, to: receipt.title) }
+            await fulfillment(of: [arrived], timeout: 2)
+            var settled = old
+            settled.title = "Canonical settled title"
+            settled.revision = "opaque-settled"
+            settled.messages.append(AidenChatMessage(id: "rename-final", role: .assistant, text: "Retain settled transcript", createdAt: Date()))
+            try await cache.saveFetchedChat(settled, instanceId: instance, writeToken: cache.reserveChatWrite())
+            if mode == "unrelated" { await cache.removeChat(instanceId: instance, chatId: "unrelated-deleted-chat") }
+            if mode == "remove" { await cache.removeChat(instanceId: instance, chatId: old.id) }
+            if mode == "purge" { await cache.purge(instanceId: instance) }
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            await renaming.value
+            let canonical = await cache.admittedChat(instanceId: instance, chatId: old.id)
+            if ["settled", "unrelated"].contains(mode) {
+                XCTAssertEqual(canonical?.title, settled.title)
+                XCTAssertEqual(canonical?.revision, settled.revision)
+                XCTAssertEqual(canonical?.messages, settled.messages)
+                XCTAssertEqual(workspace.chats.first?.displayTitle, receipt.title)
+                XCTAssertEqual(workspace.chats.first?.revision, settled.revision)
+                XCTAssertEqual(AidenChatSummary(chat: try XCTUnwrap(workspace.chats.first)).title, receipt.title)
+                let reopened = AidenChatCache(root: root)
+                let stored = await reopened.loadChat(instanceId: instance, chatId: old.id)
+                let disk = try XCTUnwrap(stored)
+                let presented = await reopened.presenting(disk, instanceId: instance)
+                XCTAssertEqual(presented.displayTitle, receipt.title)
+                XCTAssertEqual(presented.title, settled.title)
+                let wire = try JSONSerialization.jsonObject(with: encoder.encode(presented)) as? [String: Any]
+                XCTAssertEqual(wire?["title"] as? String, settled.title)
+                XCTAssertNil(wire?["localTitleOverride"])
+                // Offline next mutation must fail its read prerequisite, not submit another PATCH.
+                await workspace.rename(presented, to: "Must wait for refresh")
+                XCTAssertEqual(workspace.chats.first?.displayTitle, receipt.title)
+                XCTAssertEqual(requests.count("PATCH"), 1)
+                await workspace.remove(presented)
+                XCTAssertEqual(requests.count("DELETE"), 0)
+                var coherent = settled
+                coherent.title = receipt.title
+                coherent.revision = "fresh-prerequisite"
+                let coherentData = try encoder.encode(coherent)
+                var secondReceipt = coherent
+                secondReceipt.title = "Second accepted title"
+                secondReceipt.revision = "second-receipt"
+                let secondData = try encoder.encode(secondReceipt)
+                AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                    requests.record(request)
+                    guard request.url?.path.hasSuffix("/chats/" + old.id) == true else { return nil }
+                    if request.httpMethod == "PATCH" { return (200, "application/json", secondData) }
+                    return (200, "application/json", requests.count("PATCH") >= 2 ? secondData : coherentData)
+                }
+                await workspace.rename(presented, to: secondReceipt.title)
+                XCTAssertEqual(requests.count("PATCH"), 2)
+                XCTAssertEqual(requests.lastRevision(), coherent.revision)
+                XCTAssertEqual(workspace.chats.first?.displayTitle, secondReceipt.title)
+                let afterSuccess = AidenChatCache(root: root)
+                let list = await afterSuccess.loadChats(instanceId: instance, workspaceId: old.workspaceId)
+                let summaries = await afterSuccess.loadChatSummaries(instanceId: instance)
+                XCTAssertEqual(list?.first?.title, secondReceipt.title)
+                XCTAssertEqual(summaries?.summaries.first?.title, secondReceipt.title)
+            } else {
+                XCTAssertNil(canonical)
+                XCTAssertTrue(workspace.chats.isEmpty)
+                let pending = await cache.needsRenameRefresh(instanceId: instance, chatId: old.id)
+                XCTAssertFalse(pending)
+            }
+        }
+    }
+
+    func testRenameRetirementSurvivesFailedUnlinkAndFreshFetchDiskFailure() async throws {
+        for failDetailWrite in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-retire-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root, fileManager: AidenFailedRemovalFileManager())
+            var chat = sampleChat()
+            _ = await cache.acceptRename(chat, instanceId: "retirement", origin: cache.reserveChatWrite(), cutoff: cache.reserveChatWrite())
+            if failDetailWrite {
+                let directory = root.appending(path: "chats")
+                try FileManager.default.removeItem(at: directory)
+                try Data("blocked".utf8).write(to: directory)
+            }
+            chat.title = "Later coherent title"
+            do {
+                try await cache.saveFetchedChat(chat, instanceId: "retirement", writeToken: cache.reserveChatWrite())
+                XCTAssertFalse(failDetailWrite)
+            } catch { XCTAssertTrue(failDetailWrite) }
+            let pending = await cache.needsRenameRefresh(instanceId: "retirement", chatId: chat.id)
+            XCTAssertFalse(pending)
+            let memory = await cache.presenting(chat, instanceId: "retirement")
+            XCTAssertNil(memory.localTitleOverride)
+            let reopened = AidenChatCache(root: root)
+            let restored = await reopened.presenting(chat, instanceId: "retirement")
+            XCTAssertEqual(restored.displayTitle, chat.title)
+            if !failDetailWrite { XCTAssertNil(restored.localTitleOverride) }
+        }
+    }
+
+    @MainActor
+    func testFreshFetchRetiresRenameWhileReceiptPersistenceIsHeld() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-cache-await-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeChatWrite: { await gate.waitIfArmed() })
+        var receipt = sampleChat()
+        receipt.title = "Older accepted rename"
+        let origin = cache.reserveChatWrite()
+        await gate.arm()
+        let accepting = Task { await cache.acceptRename(receipt, instanceId: "rename-await", origin: origin, cutoff: cache.reserveChatWrite()) }
+        await waitForChatWrite(gate)
+        var fresh = receipt
+        fresh.title = "Later coherent title"
+        fresh.revision = "later-fetch"
+        try await cache.saveFetchedChat(fresh, instanceId: "rename-await", writeToken: cache.reserveChatWrite())
+        await gate.release()
+        let presented = await accepting.value
+        XCTAssertEqual(presented?.displayTitle, fresh.title)
+        XCTAssertNil(presented?.localTitleOverride)
+        let pending = await cache.needsRenameRefresh(instanceId: "rename-await", chatId: receipt.id)
+        XCTAssertFalse(pending)
+    }
+
+    @MainActor
+    func testRenameCompanionReadsCanonicalAfterMetadataSuspension() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-companion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeMetadataWrite: { await gate.waitIfArmed() })
+        let receipt = sampleChat()
+        let origin = cache.reserveChatWrite()
+        let heldGet = cache.reserveChatWrite()
+        let cutoff = cache.reserveChatWrite()
+        let presented = await cache.acceptRename(receipt, instanceId: "companion", origin: origin, cutoff: cutoff)
+        await gate.arm()
+        let writing = Task { await cache.reconcileWorkspaceChat(presented ?? receipt, instanceId: "companion", authority: origin, cutoff: cutoff) }
+        await waitForChatWrite(gate)
+        var final = receipt
+        final.revision = "settled-during-metadata-await"
+        final.messages.append(AidenChatMessage(id: "metadata-final", role: .assistant, text: "Retain this final reply", createdAt: Date()))
+        try await cache.saveFetchedChat(final, instanceId: "companion", writeToken: heldGet)
+        await gate.release()
+        await writing.value
+        let disk = await AidenChatCache(root: root).loadChats(instanceId: "companion", workspaceId: final.workspaceId)
+        XCTAssertEqual(disk?.first?.revision, final.revision)
+        XCTAssertEqual(disk?.first?.messages, final.messages)
+    }
+
+    @MainActor
+    func testRenameSummaryCarriesWinningListAuthorityPastHeldOlderSummary() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-summary-order-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeMetadataWrite: { await gate.waitIfArmed() })
+        let receipt = sampleChat()
+        let origin = cache.reserveChatWrite()
+        let cutoff = cache.reserveChatWrite()
+        _ = await cache.acceptRename(receipt, instanceId: "summary-order", origin: origin, cutoff: cutoff)
+        let staleToken = cache.reserveChatWrite()
+        await gate.arm()
+        let stale = Task { try await cache.saveChatSummaries(.init(summaries: [], nextCursor: nil), instanceId: "summary-order", writeToken: staleToken) }
+        await waitForChatWrite(gate)
+        var winner = receipt
+        winner.title = "Authoritative list title"
+        winner.revision = "list-winner"
+        try await cache.saveChats([winner], instanceId: "summary-order", workspaceId: winner.workspaceId, writeToken: cache.reserveChatWrite(), isAuthoritativeFetch: true)
+        _ = await cache.reconcileWorkspaceChat(receipt, instanceId: "summary-order", authority: origin, cutoff: cutoff)
+        await gate.release()
+        try await stale.value
+        let summary = await AidenChatCache(root: root).loadChatSummaries(instanceId: "summary-order")
+        XCTAssertEqual(summary?.summaries.first?.title, winner.title)
+        XCTAssertEqual(summary?.summaries.first?.revision, winner.revision)
+    }
+
+    @MainActor
+    func testRenameCompanionCannotRevivePostReceiptListOrSummaryOmission() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-new-list-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeMetadataWrite: { await gate.waitIfArmed() })
+        let receipt = sampleChat()
+        let origin = cache.reserveChatWrite()
+        let cutoff = cache.reserveChatWrite()
+        _ = await cache.acceptRename(receipt, instanceId: "omission", origin: origin, cutoff: cutoff)
+        await gate.arm()
+        let writing = Task { await cache.reconcileWorkspaceChat(receipt, instanceId: "omission", authority: origin, cutoff: cutoff) }
+        await waitForChatWrite(gate)
+        let listToken = cache.reserveChatWrite()
+        try await cache.saveChats([], instanceId: "omission", workspaceId: receipt.workspaceId, writeToken: listToken)
+        try await cache.saveChatSummaries(.init(summaries: [], nextCursor: nil), instanceId: "omission", writeToken: listToken)
+        await gate.release()
+        let published = await writing.value
+        XCTAssertFalse(published)
+        let reopened = AidenChatCache(root: root)
+        let list = await reopened.loadChats(instanceId: "omission", workspaceId: receipt.workspaceId)
+        let summary = await reopened.loadChatSummaries(instanceId: "omission")
+        XCTAssertEqual(list?.count, 0)
+        XCTAssertEqual(summary?.summaries.count, 0)
+    }
+
+    func testOlderRenameCannotOverlayNewerReceiptSupersededByFetch() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-two-receipts-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let older = sampleChat()
+        let firstOrigin = cache.reserveChatWrite()
+        let secondOrigin = cache.reserveChatWrite()
+        let secondCutoff = cache.reserveChatWrite()
+        var newer = older
+        newer.title = "Latest coherent title"
+        try await cache.saveFetchedChat(newer, instanceId: "two-renames", writeToken: cache.reserveChatWrite())
+        _ = await cache.acceptRename(newer, instanceId: "two-renames", origin: secondOrigin, cutoff: secondCutoff)
+        let result = await cache.acceptRename(older, instanceId: "two-renames", origin: firstOrigin, cutoff: cache.reserveChatWrite())
+        XCTAssertEqual(result?.displayTitle, newer.title)
+        XCTAssertNil(result?.localTitleOverride)
+    }
+
+    func testPostReceiptFetchWinsBeforeRenameActorAdmission() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-mailbox-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let receipt = sampleChat()
+        let origin = cache.reserveChatWrite()
+        let cutoff = cache.reserveChatWrite()
+        var fresh = receipt
+        fresh.title = "Post-receipt GET"
+        let fetchToken = cache.reserveChatWrite()
+        try await cache.saveFetchedChat(fresh, instanceId: "mailbox", writeToken: fetchToken)
+        let presented = await cache.acceptRename(receipt, instanceId: "mailbox", origin: origin, cutoff: cutoff)
+        XCTAssertEqual(presented?.title, fresh.title)
+        XCTAssertNil(presented?.localTitleOverride)
+    }
+
+    func testRenameOverlaySurvivesPreReceiptFetchAndRetiresOnLaterFetch() async throws {
+        for receiptFirst in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-orders-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            var chat = sampleChat()
+            let origin = cache.reserveChatWrite()
+            let olderFetch = cache.reserveChatWrite()
+            var receipt = chat
+            receipt.title = "Successful title"
+            receipt.revision = "opaque-receipt"
+            chat.messages.append(AidenChatMessage(id: "rename-orders-final", role: .assistant, text: "Newer messages", createdAt: Date()))
+            chat.revision = "opaque-get"
+            if receiptFirst { _ = await cache.acceptRename(receipt, instanceId: "orders", origin: origin, cutoff: cache.reserveChatWrite()) }
+            try await cache.saveFetchedChat(chat, instanceId: "orders", writeToken: olderFetch)
+            if !receiptFirst { _ = await cache.acceptRename(receipt, instanceId: "orders", origin: origin, cutoff: cache.reserveChatWrite()) }
+            let canonical = await cache.admittedChat(instanceId: "orders", chatId: chat.id)
+            XCTAssertEqual(canonical?.revision, chat.revision)
+            XCTAssertEqual(canonical?.messages, chat.messages)
+            let pending = await cache.presenting(chat, instanceId: "orders")
+            XCTAssertEqual(pending.displayTitle, receipt.title)
+            var fresh = chat
+            fresh.title = receipt.title
+            fresh.revision = "coherent-refresh"
+            try await cache.saveFetchedChat(fresh, instanceId: "orders", writeToken: cache.reserveChatWrite())
+            let retired = await cache.needsRenameRefresh(instanceId: "orders", chatId: chat.id)
+            XCTAssertFalse(retired)
+            let reopened = AidenChatCache(root: root)
+            let restored = await reopened.presenting(fresh, instanceId: "orders")
+            XCTAssertNil(restored.localTitleOverride)
         }
     }
 
@@ -5988,4 +6325,12 @@ private actor AidenChatWriteTestGate {
 
 private final class AidenFailedRemovalFileManager: FileManager, @unchecked Sendable {
     override func removeItem(at URL: URL) throws { throw CocoaError(.fileWriteNoPermission) }
+}
+
+private final class AidenRenameRequestLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+    func record(_ request: URLRequest) { lock.lock(); defer { lock.unlock() }; requests.append(request) }
+    func count(_ method: String) -> Int { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.httpMethod == method }.count }
+    func lastRevision() -> String? { lock.lock(); defer { lock.unlock() }; return requests.last { $0.httpMethod == "PATCH" }?.value(forHTTPHeaderField: "If-Match") }
 }
