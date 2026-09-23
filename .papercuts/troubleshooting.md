@@ -931,3 +931,9 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - Re-running the focused iOS simulator suite on the already booted iPad became unreliable after a parallel clone launch; Xcode reported `Application failed preflight checks: Busy`. The first focused run passed before the final test refinement; use a clean simulator or hosted iOS CI for the final gate.
 - PR #224 Android CI passed its unit gate but one unrelated scheduled-task Compose test saw no hierarchy on its emulator. Rerun the exact commit before changing scoped code.
 - PR #224 verify retained a source-contract assertion for the removed 700 ms Visualizing hold; update it to assert the chronological activity owner and rerun.
+## 2026-09-22 — Mobile Bot controls verification
+
+- Isolated worktree Git metadata and Gradle's shared cache remain outside the effective writable sandbox; use the configured execution approval mechanism after actual `index.lock`/Gradle lock failures. Xcode package resolution likewise needed network-enabled execution.
+- This host's default developer directory lacks `devicectl`; use `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` with isolated `/tmp/aiden-bot-ios-derived`.
+- Coordinator's physical-device run reports `com.apple.dt.deviceprep Code=-3`, `Unlock Sambit’s iPhone to Continue` for `00008110-00063CD91E98801E`. Do not count unsigned test compilation as XCTest execution or repeatedly launch a locked-device run.
+- A held MockWebServer disconnect exposed OkHttp's default connection retry replaying approval POSTs. Disable transport retries specifically for approval/Stop; keep unknown-outcome UI and authoritative reads instead of restoring captured cards.

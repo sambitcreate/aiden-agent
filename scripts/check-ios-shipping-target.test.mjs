@@ -416,7 +416,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
   );
   assert.doesNotMatch(botAvatar, /\.onDisappear \{ canonicalImage = nil \}/u);
-  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
+  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(!model\.isConnected \|\| model\.isReadOnlyPresentation \|\| model\.isRespondingToApproval \|\| model\.isStopping\)/u);
   assert.match(botSwift, /--bot-first-prototype-theme/u);
   assert.match(botSwift, /--bot-first-prototype-state/u);
   assert.match(botSwift, /--bot-first-prototype-screen/u);
