@@ -1,5 +1,7 @@
 # Troubleshooting
 
+- 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
+
 - 2026-09-21 PR #207 follow-up: fully redacting after the ninth settled report preserved secrecy but erased useful long-task findings. Keep all settled text under the existing output budget, sanitize cross-report boundary fragments before final truncation, and bound comparisons with a fail-closed ceiling.
 - 2026-09-21 PR #207 follow-up: a sliding window of assistant partials can discard a credential-key prefix while retaining its value. Mark any eviction and fail closed on turn-limit findings, rather than classifying only the retained suffix.
 - 2026-09-21 PR #207 follow-up: line-wise credential filtering misses assignment keys split across settled messages. Check bounded adjacent spans with line breaks removed and fail closed on the compact whole report; keep unaffected path lines where possible.
@@ -942,3 +944,12 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - Fresh main already merged #185 while #189–193 remain open with incompatible duplicate contracts. A trial main→#189 merge conflicted in Git journals, provisioning metadata and package scripts; aborted it without discarding any PR work. Audit current architecture before transplanting dated research/stack fixes.
 - This task retained workspace-write despite global full-access configuration. Ordinary Git metadata writes, clang temporary output and tsx local IPC were blocked; required tool escalation was used without changing permission settings.
 - `st_dev` inequality does not prove independent APFS free-space pools. A read-only `diskutil info -plist` probe stalled and was stopped; keep admission conservative for unknown relationships instead of introducing a platform-discovery dependency. Git also collapses disabled filter/encoding attributes into literal sentinel values, and worktree-only `includeIf` makes source-config inspection unsafe.
+- 2026-09-22 PR #184: a branch-list lookup is not authoritative negative evidence after an unknown GitHub create. Preserve pending intent on empty/retargeted/advanced-head results, and publish a link plus intent settlement atomically so a crash cannot later undo an unlink. Post-push PR operations must carry the frozen push endpoint's repository; gh's workspace inference can select another remote.
+
+- 2026-09-22 PR #184 automated follow-up: evicting a per-chat DataStore does not revoke delayed provider callbacks or admitted writes. Mark deletion before queue drain, fence publication, and remove the file only after the barrier. Notify pending-create cache consumers after the create outcome, not while the remote request is still active.
+
+- 2026-09-22 PR #184 recovery follow-up: draining DataStore updates does not await initial load recovery. Join existing.load() after revoking admission, then drain writes and remove the file.
+
+- 2026-09-22 PR #184 recovery cleanup: DataStore.load can settle while leaving an unreadable held candidate eligible for a later recovery. Chat deletion must consume exact chat .held/.previous artifacts, including when no store was loaded, and fail if cleanup cannot finish.
+
+- PR #184: Recovery filename prefixes are ambiguous for valid dotted chat IDs. Match the full basename plus fixed recovery fields in both load and deletion; test dotted siblings in both directions.

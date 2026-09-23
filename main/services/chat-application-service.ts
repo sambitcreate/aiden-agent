@@ -4,6 +4,7 @@ import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-m
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
 import type { chatStore } from "./chat-store.js";
+import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
@@ -71,6 +72,7 @@ export interface ChatApplicationDependencies {
   >;
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
+  chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   logError(area: string, message: string, error: unknown): void;
@@ -301,6 +303,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         } catch (error) {
           deps.logError("memory", "Could not delete facts sourced from this chat.", error);
           throw new Error("Aiden could not delete this chat's sourced memory.");
+        }
+        try {
+          await deps.chatPullRequestStore?.deleteChat(chatId);
+        } catch (error) {
+          deps.logError("git", "Could not delete the chat's pull request links.", error);
+          throw new Error("Aiden could not delete this chat's pull request links.");
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);

@@ -9,6 +9,7 @@ import { registerProviderHandlers } from "./providers.js";
 import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
+import { registerPullRequestHandlers } from "./pull-requests.js";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
@@ -50,6 +51,7 @@ export function registerHandlers(): void {
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
+  registerPullRequestHandlers();
   registerAttachmentHandlers();
   registerPhase2Handlers();
   registerLocalVoiceHandlers();

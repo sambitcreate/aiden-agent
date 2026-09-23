@@ -2,6 +2,7 @@
 // use argv execution (never a shell), run in an isolated process group with
 // bounded output/time, and serialize mutations by Git's canonical common dir.
 
+import { pullRequestRepositoryFromPushEndpoint } from "../../renderer/shared/chat-pull-requests.js";
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, type Stats } from "fs";
@@ -473,6 +474,8 @@ export interface GitPushInput {
 }
 
 export interface GitPushResult {
+  /** Credential-free repository captured from the reviewed push endpoint. */
+  pullRequestRepository?: string;
   branch: string;
   commit: string;
   destinationBranch: string;
@@ -3016,6 +3019,7 @@ export class GitService {
         commit: input.expectedHead,
         destinationBranch: input.destinationBranch,
         remote: input.remote,
+        pullRequestRepository: pullRequestRepositoryFromPushEndpoint(frozenRemote.endpoint),
         upstreamSet,
         ...(warning ? { warning } : {}),
       };

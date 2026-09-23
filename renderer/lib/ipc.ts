@@ -157,6 +157,16 @@ import {
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import type {
+  ChatPullRequestCandidatesResult,
+  ChatPullRequestCreateResult,
+  ChatPullRequestDetectResult,
+  ChatPullRequestLinkResult,
+  ChatPullRequestListResult,
+  ChatPullRequestPendingCreate,
+  ChatPullRequestRef,
+  ChatPullRequestView,
+} from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
@@ -760,6 +770,51 @@ export const gitApi = {
     invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
   restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
     invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
+};
+
+// ── Chat ↔ pull requests ──────────────────────────────────────────────
+// A chat durably links many PRs; the relationship is keyed by the canonical
+// (host, repository, number) — never by the workspace's current branch.
+export const pullRequestsApi = {
+  list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
+  current: (chatId: string) =>
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+      "pullRequests:current",
+      chatId,
+    ),
+  candidates: (chatId: string, workspaceId?: string) =>
+    invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
+  link: (chatId: string, input: { url: string }) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:link", chatId, input),
+  linkRef: (chatId: string, ref: ChatPullRequestRef, source?: "manual" | "branch-discovered") =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, { ...ref, source }),
+  unlink: (chatId: string, ref: ChatPullRequestRef) =>
+    invoke<{ ok: boolean }>("pullRequests:unlink", chatId, ref),
+  refresh: (chatId: string, ref?: ChatPullRequestRef) =>
+    invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
+  detectAfterPush: (
+    chatId: string,
+    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
+  ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
+  create: (
+    chatId: string,
+    input: {
+      workspaceId: string;
+      title: string;
+      body?: string;
+      baseBranch: string;
+      headBranch: string;
+      expectedHeadSha?: string;
+      repository?: string;
+      draft?: boolean;
+    },
+  ) => invoke<ChatPullRequestCreateResult>("pullRequests:create", chatId, input),
+  dismissPending: (chatId: string, operationId: string) =>
+    invoke<void>("pullRequests:dismissPending", chatId, operationId),
+  pending: (chatId: string) =>
+    invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
+  adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────

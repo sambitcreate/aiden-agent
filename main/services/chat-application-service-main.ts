@@ -13,6 +13,7 @@ import { createChatApplicationService } from "./chat-application-service.js";
 import { memoryStore } from "./memory-store-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
+import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -25,6 +26,7 @@ export const chatApplicationService = createChatApplicationService({
   subagentRunStore,
   piRuntimeEffectStore,
   piCompactionSessionStore,
+  chatPullRequestStore,
   memoryStore,
   attachments: remoteAttachmentStore,
   toolOutputStore,

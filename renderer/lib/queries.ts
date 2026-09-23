@@ -21,6 +21,7 @@ import {
   modelsApi,
   profileApi,
   providersApi,
+  pullRequestsApi,
   scheduleApi,
   settingsApi,
   shortcutApi,
@@ -87,6 +88,14 @@ export const queryKeys = {
   gitComparison: (workspaceId: string | undefined, targetRef: string | undefined) =>
     [...queryKeys.gitComparisons(workspaceId), targetRef ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
+  chatPullRequests: (chatId: string | undefined) =>
+    ["chat-pull-requests", chatId ?? "none"] as const,
+  chatCurrentPullRequest: (chatId: string | undefined) =>
+    ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatPullRequestCandidates: (chatId: string | undefined) =>
+    ["chat-pull-request-candidates", chatId ?? "none"] as const,
+  chatPullRequestPending: (chatId: string | undefined) =>
+    ["chat-pull-request-pending", chatId ?? "none"] as const,
   gitWorktrees: (workspaceId: string | undefined) =>
     ["gitWorktrees", workspaceId ?? "none"] as const,
   skillCatalog: (workspaceId: string | undefined) =>
@@ -440,6 +449,45 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
     queryFn: () => gitApi.branches(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
     staleTime: 1_000,
+  });
+}
+
+// Chat ↔ pull requests: snapshots are cached display state; GitHub is the
+// authority. Refreshes happen on rail open, after push/create/link, and on the
+// shared `chats:pull-requests-changed` notification — no per-PR polling.
+export function useChatPullRequests(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequests(chatId),
+    queryFn: () => pullRequestsApi.list(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useChatCurrentPullRequest(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatCurrentPullRequest(chatId),
+    queryFn: () => pullRequestsApi.current(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useChatPullRequestCandidates(chatId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestCandidates(chatId),
+    queryFn: () => pullRequestsApi.candidates(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useChatPullRequestPending(chatId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestPending(chatId),
+    queryFn: () => pullRequestsApi.pending(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 15_000,
   });
 }
 

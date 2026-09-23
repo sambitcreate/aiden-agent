@@ -166,6 +166,8 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
+export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
+
 export interface GitHubPullRequestSummary {
   number: number;
   title: string;
@@ -174,6 +176,11 @@ export interface GitHubPullRequestSummary {
   isDraft?: boolean;
   headBranch: string;
   baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
   checksState?: GitHubPullRequestChecksState | null;
   checks: GitHubPullRequestCheck[];
 }
@@ -183,6 +190,45 @@ export interface GitHubPullRequestStatus {
   message?: string;
   pullRequest?: GitHubPullRequestSummary;
 }
+
+export interface GitHubPullRequestListStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequests?: GitHubPullRequestSummary[];
+}
+
+export interface GitHubRepositoryRef {
+  host: string;
+  /** Canonical `owner/repo` (lowercase, no `.git`). */
+  nameWithOwner: string;
+}
+
+export interface GitHubRepositoryStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  repository?: GitHubRepositoryRef;
+}
+
+export interface GitHubPullRequestCreateInput {
+  repository?: string;
+  title: string;
+  body?: string;
+  baseBranch?: string;
+  headBranch?: string;
+  draft?: boolean;
+}
+
+/**
+ * `gh pr create` triage. "failed" means the CLI demonstrably never reached a
+ * successful mutation (missing tool, auth, input rejected before the request).
+ * Anything where GitHub may have created the PR — timeouts, kills, network
+ * errors, even an exit code whose message is ambiguous — is "unknown" and must
+ * go through reconciliation before being retried or reported.
+ */
+export type GitHubPullRequestCreateResult =
+  | { kind: "created"; pullRequest: GitHubPullRequestSummary }
+  | { kind: "failed"; availability: GitHubPullRequestAvailability; message: string }
+  | { kind: "unknown"; message: string };
 
 /** Result of inspecting a folder for git status. */
 export interface GitInfo {

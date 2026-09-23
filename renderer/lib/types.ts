@@ -278,6 +278,11 @@ export interface GitHubPullRequestCheck {
   url?: string;
 }
 
+export type GitHubPullRequestReviewDecision =
+  | "approved"
+  | "changes-requested"
+  | "review-required";
+
 export interface GitHubPullRequestSummary {
   number: number;
   title: string;
@@ -286,6 +291,11 @@ export interface GitHubPullRequestSummary {
   isDraft?: boolean;
   headBranch: string;
   baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
   checksState?: GitHubPullRequestChecksState | null;
   checks: GitHubPullRequestCheck[];
 }
@@ -428,6 +438,8 @@ export interface GitPushInput {
 }
 
 export interface GitPushResult {
+  /** Credential-free repository captured from the reviewed push endpoint. */
+  pullRequestRepository?: string;
   branch: string;
   commit: string;
   destinationBranch: string;

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startGeneration, stopDetachedGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
+import {
+  startGeneration,
+  stopDetachedGeneration,
+  subagentsApi,
+  pullRequestsApi,
+  type StreamCallbacks,
+} from "./ipc.js";
 import {
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
@@ -45,7 +51,10 @@ function installFakeBridge(
               }
             : undefined;
         },
-        onNotification: (channel: string, handler: (payload: unknown) => void) => {
+        onNotification: (
+          channel: string,
+          handler: (payload: unknown) => void,
+        ) => {
           const handlers = bridge.listeners.get(channel) ?? new Set();
           handlers.add(handler);
           bridge.listeners.set(channel, handlers);
@@ -89,7 +98,10 @@ function callbacks(): StreamCallbacks {
 }
 
 function listenerCount(bridge: FakeBridge): number {
-  return [...bridge.listeners.values()].reduce((total, listeners) => total + listeners.size, 0);
+  return [...bridge.listeners.values()].reduce(
+    (total, listeners) => total + listeners.size,
+    0,
+  );
 }
 
 test("lifecycle detachment releases subscriptions and notifies main exactly once", async () => {
@@ -108,7 +120,10 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
     assert.equal(listenerCount(bridge), 9);
     assert.equal(bridge.listeners.has("chat:subagents"), false);
     for (const listener of bridge.listeners.get("chat:delta") ?? []) {
-      listener({ streamId: handle.streamId, delta: "Visible before navigation" });
+      listener({
+        streamId: handle.streamId,
+        delta: "Visible before navigation",
+      });
     }
 
     handle.cancel("lifecycle");
@@ -119,14 +134,17 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
       "Visible before navigation",
     );
     assert.equal(
-      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")?.lastTextDeltaAt,
+      typeof detachedLifecycleChatProjection("chat-1", "workspace-1")
+        ?.lastTextDeltaAt,
       "number",
     );
     await Promise.resolve();
     assert.equal(
       bridge.invokes.filter(
         ({ channel, args }) =>
-          channel === "chat:cancel" && args[0] === handle.streamId && args[1] === "lifecycle",
+          channel === "chat:cancel" &&
+          args[0] === handle.streamId &&
+          args[1] === "lifecycle",
       ).length,
       1,
     );
@@ -209,12 +227,17 @@ test("subagent management sends no renderer-constructed authority tuple", async 
       subagentsApi.stop("chat-1", "run-1"),
       /invalid subagent control response/u,
     );
-    const request = bridge.invokes.find(({ channel }) => channel === "subagents:manage");
+    const request = bridge.invokes.find(
+      ({ channel }) => channel === "subagents:manage",
+    );
     assert.deepEqual(request, {
       channel: "subagents:manage",
       args: ["chat-1", { version: 2, action: "stop", runId: "run-1" }],
     });
-    assert.doesNotMatch(JSON.stringify(request), /authorityRevision|ownerDocumentId|workspaceId/u);
+    assert.doesNotMatch(
+      JSON.stringify(request),
+      /authorityRevision|ownerDocumentId|workspaceId/u,
+    );
   } finally {
     restore();
   }
@@ -355,7 +378,10 @@ test("todo notifications are validated and scoped to their owning stream and cha
     };
     for (const handler of bridge.listeners.get("chat:todo") ?? []) {
       handler({ streamId: "other-stream", snapshot });
-      handler({ streamId: enabled.streamId, snapshot: { ...snapshot, version: 2 } });
+      handler({
+        streamId: enabled.streamId,
+        snapshot: { ...snapshot, version: 2 },
+      });
       handler({
         streamId: enabled.streamId,
         snapshot: { ...snapshot, chatId: "another-chat" },
@@ -455,7 +481,10 @@ test("HTML GUI artifact present events are accepted without inline HTML bytes", 
     const rejected = {
       version: 1,
       operation: "present",
-      artifact: { ...artifact, html: "<script>fetch('https://evil.test')</script>" },
+      artifact: {
+        ...artifact,
+        html: "<script>fetch('https://evil.test')</script>",
+      },
     };
     for (const handler of bridge.listeners.get("chat:artifact") ?? []) {
       handler({ streamId: enabled.streamId, event: rejected });
@@ -566,15 +595,48 @@ test("a lifecycle-detached start rejection clears through authoritative fallback
       "turn-rejected",
     );
     handle.cancel("lifecycle");
-    assert.equal(isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"), true);
+    assert.equal(
+      isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"),
+      true,
+    );
 
     await Promise.resolve();
     await Promise.resolve();
     assert.deepEqual(fallbacks, [handle.streamId]);
-    assert.equal(isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"), false);
+    assert.equal(
+      isDetachedLifecycleChatDraining("chat-rejected", "workspace-1"),
+      false,
+    );
     assert.equal(visibleErrors, 0);
   } finally {
     unsubscribe();
+    restore();
+  }
+});
+
+test("PR linking sends source in the handler input object", async () => {
+  const { bridge, restore } = installFakeBridge();
+  try {
+    await pullRequestsApi.linkRef(
+      "chat-1",
+      { host: "github.com", repository: "owner/repo", number: 12 },
+      "branch-discovered",
+    );
+    assert.deepEqual(bridge.invokes, [
+      {
+        channel: "pullRequests:linkRef",
+        args: [
+          "chat-1",
+          {
+            host: "github.com",
+            repository: "owner/repo",
+            number: 12,
+            source: "branch-discovered",
+          },
+        ],
+      },
+    ]);
+  } finally {
     restore();
   }
 });
