@@ -314,7 +314,8 @@ actor AidenChatCache {
             let ownsRow = isOlderList
                 ? commit.token > latestListToken || (commit.token == writeToken && commit.listToken == latestListToken)
                 : commit.token >= writeToken
-            guard ownsRow else { continue }
+            guard ownsRow,
+                  isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chatId) else { continue }
             retained.removeAll { $0.id == chatId }
             if let current = loadChat(instanceId: instanceId, chatId: chatId),
                current.workspaceId == workspaceId, !current.isBotChat {

@@ -1002,3 +1002,4 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - The preserved worktree had no Node dependencies; install its lockfile dependencies before running the integrated worktree test.
 - Android held-load recovery timeout concealed a fixture contract error: default JSON serialization emitted forbidden `reasoning: null`; omit null optional fields to match the public host projection, then the full chat class passes.
 - Direct worktree test execution needs `build:worktree-remover` and `build:worktree-file-io` first; missing native helpers caused ENOENT before the prerequisite builds and rerun.
+- First authorized simulator run caught the detail overlay admitting a re-created chat for metadata reserved during its deletion cleanup. Apply the existing per-chat deletion floor to overlay rows too; preserve the pending-era regression's expected exclusion.

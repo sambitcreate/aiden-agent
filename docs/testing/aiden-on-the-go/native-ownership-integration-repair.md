@@ -7,14 +7,19 @@ The prior executed iOS chat run reported ten failed test cases. The repair addre
 ## Verification
 
 - Generic iOS `build-for-testing`, Xcode 26.6, signing disabled: passes (app and XCTest compile).
+- iPhone 17 simulator, iOS 26.4.1, Xcode 26.6: full XCTest bundle passes, 453 passed / 6 opt-in physical-device tests skipped / 0 failures (459 total). All 160 AidenChatTests pass. Result bundle: `/tmp/aiden-242-full-repair.xcresult`.
 - iOS release policy suite: passes.
 - Android chat tests: 40 pass after correcting invalid fixture JSON.
 - Full Android JVM suite: 193 passed, zero failures/errors/skips; lint and instrumentation compilation pass.
 - Integrated managed-worktree lifecycle tests: 29 passed after building the required native helpers.
 - Independent iOS source/test review: no remaining actionable findings after final re-review.
 
-## Runtime gate
+## Simulator execution and remaining acceptance
 
-The prior iOS execution was on a simulator. No physical iPhone is currently connected; devices enumerated as offline. `ios/AGENTS.md` explicitly prohibits simulator use, so a simulator exception was requested and remains unanswered. The repaired iOS tests have not been executed in this session. Do not claim 153/153 or physical acceptance from compilation. No merge/release has been performed.
+The owner explicitly authorized simulators and requested the policy update in this PR. `ios/AGENTS.md` now allows simulator development/regression verification and distinguishes it from hardware-dependent physical acceptance.
 
-Local logs: `/tmp/aiden-217-repair-build-final.log`, `/tmp/aiden-217-repair-policy.log`, `/tmp/aiden-217-repair-android-final.log`, `/tmp/aiden-217-repair-worktree-final.log`.
+The first simulator run resolved all ten originally failing cases, but exposed four assertions in the existing pending-era metadata test: the detail overlay could admit a recreated chat using a list token invalidated during deletion cleanup. The overlay now enforces the same per-chat deletion floor as incoming rows. Independent re-review found no additional actionable issue, and the full simulator bundle then passed.
+
+The six skips require opt-in physical-device configuration: Image Playground unavailability, paired streaming, workspace CRUD, server restart, pinned URLSession, and signed Keychain isolation. No physical-device or release acceptance is claimed; no merge/release performed.
+
+Local logs: `/tmp/aiden-242-full-repair.log`, `/tmp/aiden-217-repair-build-final.log`, `/tmp/aiden-217-repair-policy.log`, `/tmp/aiden-217-repair-android-final.log`, `/tmp/aiden-217-repair-worktree-final.log`.
