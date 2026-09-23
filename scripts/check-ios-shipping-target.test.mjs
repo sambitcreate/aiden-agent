@@ -993,7 +993,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     chat,
-    /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if !visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
+    /AidenBotReplyProjection\.resolve\([\s\S]*?isActive: model\.isStreaming[\s\S]*?if (?:chronologicalRows == nil && )?!visibleText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = visibleText/u,
   );
   assert.match(
     chat,

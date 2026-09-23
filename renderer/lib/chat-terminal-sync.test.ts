@@ -121,6 +121,14 @@ test("a revisited chat retains and advances its detached answer and subagent pro
     detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.state,
     "completed",
   );
+  for (const handler of listeners.get("chat:reasoning-delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: " more" });
+  }
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning, "Initial reasoning more");
+  for (const handler of listeners.get("chat:delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: "", reset: true });
+  }
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning, "");
 
   for (const handler of listeners.get("chat:done") ?? []) {
     handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });

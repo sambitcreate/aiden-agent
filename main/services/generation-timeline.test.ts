@@ -5,6 +5,7 @@ import {
   safeToolDescriptor,
   safeToolIssueDetails,
 } from "./generation-timeline.js";
+import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -336,6 +337,69 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   assert.equal(typeof trailing?.finishedAt, "number");
 });
 
+test("readable reasoning spans remain ordered across tools and reconcile to terminal content", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => snapshots.push(value));
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.toolStarted("call-a", "read_file", {});
+  projector.toolFinished("call-a", "completed");
+  projector.thinkingStarted();
+  projector.reasoningDelta(7, 13);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(firstStep, [
+    { start: 0, end: 5 },
+    { start: 7, end: 14 },
+  ], 14);
+  const final = projector.finish("completed");
+  const thoughts = final.steps.filter((step) => step.kind === "thinking");
+  assert.deepEqual(thoughts.map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]), [
+    [0, 5], [7, 14],
+  ]);
+  assert.deepEqual(parseGenerationTimeline(final, 0, 14), final);
+  assert.equal(parseGenerationTimeline(final, 0, 13), undefined);
+  assert.ok(snapshots.some((snapshot) => snapshot.steps[2]?.kind === "thinking" &&
+    snapshot.steps[2].reasoningEndOffset === 14));
+});
+
+test("redacted Pi thinking between readable blocks keeps one chronological span", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 13);
+  projector.thinkingEnded();
+  projector.thinkingStarted();
+  projector.reasoningDelta(15, 29);
+  projector.thinkingEnded();
+  const segments = terminalAssistantThinkingSegments({ role: "assistant", content: [
+    { type: "thinking", thinking: "visible first" },
+    { type: "thinking", thinking: "private", redacted: true },
+    { type: "thinking", thinking: "visible second" },
+  ] });
+  assert.ok(segments);
+  projector.reconcileReasoningSegments(firstStep, segments, 29);
+  const thought = projector.finish("completed").steps[0];
+  assert.equal(thought?.kind === "thinking" && thought.reasoningStartOffset, 0);
+  assert.equal(thought?.kind === "thinking" && thought.reasoningEndOffset, 29);
+});
+
+test("ambiguous terminal thinking and retry remove stale public spans", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(0, [], 0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 3);
+  projector.rewindReasoningOffset(0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+});
+
 test("a reopened merged thinking step reads open again on the live timeline", () => {
   let now = 1_000;
   const snapshots: GenerationTimeline[] = [];
@@ -456,7 +520,7 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
   projector.setContentOffset(20);
   projector.thinkingStarted();
   projector.thinkingEnded();
-  projector.reconcileContentOffset(10, 15);
+  projector.reconcileContentOffset(10, "0123456789", "01234");
   projector.toolStarted("after-terminal", "read_file", {});
   projector.setContentOffset(30);
   projector.toolStarted("failed-attempt", "grep", {});
@@ -468,6 +532,21 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
     [15, 15, 15, 15],
   );
   assert.ok(snapshots.length > 0);
+});
+
+test("terminal Pi block order reanchors tools after rewritten text", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.setContentOffset(3);
+  projector.toolStarted("call-a", "read_file", {});
+  projector.setContentOffset(6);
+  projector.thinkingStarted();
+  projector.reconcileContentOffset(0, "abcXYZ", "aXYZ", {
+    stepStart: 0,
+    textStart: 0,
+    thinkingOffsets: [4],
+    toolOffsets: new Map([["call-a", 1]]),
+  });
+  assert.deepEqual(projector.snapshot().steps.map((step) => step.contentOffset), [1, 4]);
 });
 
 test("version 1 timelines replay without pretending to have presentation offsets", () => {
@@ -522,6 +601,10 @@ test("version 2 reasoning timelines replay without presentation offsets", () => 
   const parsed = parseGenerationTimeline(legacy);
   assert.equal(parsed?.version, 2);
   assert.equal(parsed?.steps[0]?.contentOffset, undefined);
+  assert.equal(parseGenerationTimeline({
+    ...legacy,
+    steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
+  }), undefined);
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {

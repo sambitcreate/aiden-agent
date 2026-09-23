@@ -5004,6 +5004,14 @@
           "durationMs": {
             "type": "number",
             "minimum": 0
+          },
+          "reasoningStartOffset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reasoningEndOffset": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -5119,6 +5127,10 @@
           "text": {
             "type": "string",
             "maxLength": 200000
+          },
+          "reasoning": {
+            "type": "string",
+            "maxLength": 100000
           },
           "attachments": {
             "type": "array",

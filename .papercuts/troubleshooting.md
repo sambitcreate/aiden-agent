@@ -917,3 +917,17 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - Gradle requires the existing user cache and ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk; default Xcode selection points to CLT, so use DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer.
 - Physical iPhone tests are queued through the coordinator: device is locked; do not retry or use prohibited simulators. Unsigned generic iOS build succeeds but is not device execution evidence.
 - Canonical /private/var vs lexical /var paths caused valid new-file provenance to be discarded. Resolve the parent directory before forming the relative path; normalize Windows separators.
+## 2026-09-22 — chat state wireframe review
+- Browser automation blocked the local Downloads `file://` preview (request-header error, then explicit URL-policy block). Do not retry through another browser surface; validate syntax and leave visual review to the user.
+- OpenCode lists `opencode-go/deepseek-v4-flash` but no exact `v4.1-flash` model; label the available V4 Flash substitution.
+- OpenCode Workers launched two isolated worktrees but failed on unsupported `opencode run --dir` in v2.0.3. Direct CLI review from each worktree worked; use the absolute NVM v2 binary because a worktree shell resolves Homebrew OpenCode v1.18.5 first.
+
+## 2026-09-22 — chronological chat motion
+- Fresh Aiden worktrees need `npm ci` before `npm run type-check`; the dependency install completed locally.
+- Android Gradle needed both Android Studio's JBR as `JAVA_HOME` and `~/Library/Android/sdk` as `ANDROID_HOME` in this shell.
+- `npm run build` reached the Bot inbox native helper, where plain `/usr/bin/xcrun clang` selected the malformed CLT macOS 27 SDK (`arm64e.x1`). Setting `SDKROOT` alone did not change that selection; validate Vite/Electron separately and use hosted CI for the full build gate.
+- The full `npm run test` pretest initially stopped at an iOS source-contract regex that assumed the old activity-first branch. Update this contract when the chronological branch changes, while preserving whole-reply Copy actions.
+- Local Electron Playwright smoke tests closed before the first window on this host, before any chat assertion ran; use hosted CI for that gate.
+- Re-running the focused iOS simulator suite on the already booted iPad became unreliable after a parallel clone launch; Xcode reported `Application failed preflight checks: Busy`. The first focused run passed before the final test refinement; use a clean simulator or hosted iOS CI for the final gate.
+- PR #224 Android CI passed its unit gate but one unrelated scheduled-task Compose test saw no hierarchy on its emulator. Rerun the exact commit before changing scoped code.
+- PR #224 verify retained a source-contract assertion for the removed 700 ms Visualizing hold; update it to assert the chronological activity owner and rerun.

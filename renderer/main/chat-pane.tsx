@@ -87,14 +87,16 @@ import {
   type ToolActivity,
 } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
+import { assistantPresentationRows } from "../lib/assistant-message-presentation";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
+  hasActiveThinkingStep,
   hasActiveToolStep,
   latestActiveAgentStep,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
+import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -1856,16 +1858,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingApproval: Boolean(pending),
     toolActivity,
   });
-  // The reasoning disclosure owns exposed reasoning for the whole turn, even
-  // after its timeline step settles. Visualizing owns only the live artifact
-  // render window; detached projections hide that block and keep narration.
-  const visualizingBlockVisible =
+  const visualizingLive =
     hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
-    !streamComplete &&
-    !visibleDetachedProjection;
-  const visibleAgentActivity = resolveVisibleAgentActivity(agentActivity, {
-    reasoningVisible: Boolean(displayedStreamingReasoning),
-    visualizingVisible: visualizingBlockVisible,
+    !streamComplete && !visibleDetachedProjection;
+  const timelineActivity = visualizingLive &&
+    agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
+      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      : agentActivity;
+  const chronologicalLiveRows = assistantPresentationRows(
+    displayedStreamingText ?? "",
+    displayedGenerationTimeline,
+    displayedStreamingReasoning ?? "",
+  );
+  const visibleAgentActivity = resolveVisibleAgentActivity(timelineActivity, {
+    reasoningVisible:
+      hasActiveThinkingStep(displayedGenerationTimeline) &&
+      chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
+    visualizingVisible:
+      visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
+        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+    toolVisible:
+      chronologicalLiveRows?.some((row) => row.kind === "activity" &&
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.status === "pending" || step.status === "running"))) === true,
   });
 
   React.useEffect(() => {

@@ -58,6 +58,44 @@ class AidenChatTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun chronologicalReasoningKeepsToolsAndProseInOrder() {
+        val timeline = AidenGenerationTimeline(
+            version = 3, generationId = "stream-1", status = AidenGenerationTimelineStatus.COMPLETED,
+            startedAt = 1000.0, finishedAt = 2000.0,
+            steps = listOf(
+                AidenAgentStep("think-1", 0, AidenAgentStep.Kind.THINKING,
+                    startedAt = 1000.0, updatedAt = 1100.0, finishedAt = 1100.0,
+                    contentOffset = 0, reasoningStartOffset = 0, reasoningEndOffset = 5),
+                AidenAgentStep("tool-1", 1, AidenAgentStep.Kind.TOOL,
+                    toolCallId = "call-1", toolName = "read_file", label = "Read file",
+                    status = AidenAgentStepStatus.COMPLETED, startedAt = 1100.0,
+                    updatedAt = 1200.0, finishedAt = 1200.0, contentOffset = 0),
+                AidenAgentStep("think-2", 2, AidenAgentStep.Kind.THINKING,
+                    startedAt = 1200.0, updatedAt = 1300.0, finishedAt = 1300.0,
+                    contentOffset = 7, reasoningStartOffset = 7, reasoningEndOffset = 13)
+            )
+        )
+        val message = AidenChatMessage("message-1", AidenChatRole.ASSISTANT,
+            "Before.After.", reasoning = "First\n\nSecond", timeline = timeline, createdAt = Instant.EPOCH)
+        assertTrue(message.isWireSafe)
+        assertEquals(
+            listOf("REASONING:First", "TOOL:", "TEXT:Before.", "REASONING:Second", "TEXT:After."),
+            AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline)
+                ?.map { "${it.kind}:${it.text}" }
+        )
+        assertNull(AidenChronologicalProjection.rows(message.text, "First", timeline))
+        val hiddenTimeline = timeline.copy(steps = timeline.steps.map { step ->
+            step.copy(reasoningStartOffset = null, reasoningEndOffset = null)
+        })
+        assertEquals(
+            listOf(AidenChronologicalRow.Kind.REASONING, AidenChronologicalRow.Kind.TOOL,
+                AidenChronologicalRow.Kind.TEXT, AidenChronologicalRow.Kind.REASONING,
+                AidenChronologicalRow.Kind.TEXT),
+            AidenChronologicalProjection.rows(message.text, "", hiddenTimeline)?.map { it.kind }
+        )
+    }
+
+    @Test
     fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
 
     @Test

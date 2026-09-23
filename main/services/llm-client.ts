@@ -92,6 +92,10 @@ import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
   reconcileTerminalAssistantProjection,
+  terminalAssistantActivityAnchors,
+  terminalAssistantReasoning,
+  terminalAssistantThinkingSegments,
+  terminalAssistantText,
   resolveGenerationThinkingLevel,
   runtimeSupportsImages,
   settleGenerationCleanup,
@@ -1820,7 +1824,7 @@ export const llmClient = {
     let lastAssistantMessage: AssistantMessage | undefined;
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
-    let currentAssistantTurnStart = { full: 0, reasoning: 0 };
+    let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
@@ -2643,6 +2647,7 @@ export const llmClient = {
               currentAssistantTurnStart = {
                 full: full.length,
                 reasoning: reasoning.length,
+                steps: timeline.beginAssistantMessage(),
               };
             }
             break;
@@ -2691,6 +2696,7 @@ export const llmClient = {
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
+              timeline.reasoningDelta(reasoning.length - e.delta.length, reasoning.length);
               currentAssistantTurnHadReasoningDelta = true;
               noteModelBecameReady();
               sendGeneration(streamId, "chat:reasoning-delta", {
@@ -2721,6 +2727,7 @@ export const llmClient = {
                 );
               }
             }
+            const streamedTurn = full.slice(currentAssistantTurnStart.full);
             const projection = reconcileTerminalAssistantProjection(
               { full, reasoning },
               currentAssistantTurnStart,
@@ -2750,7 +2757,30 @@ export const llmClient = {
                 });
               }
             }
-            timeline.reconcileContentOffset(currentAssistantTurnStart.full, full.length);
+            const canonicalTurn = full.slice(currentAssistantTurnStart.full);
+            const anchors = terminalAssistantActivityAnchors(event.message);
+            timeline.reconcileContentOffset(
+              currentAssistantTurnStart.full,
+              streamedTurn,
+              canonicalTurn,
+              anchors ? {
+                stepStart: currentAssistantTurnStart.steps,
+                textStart: canonicalTurn.length - terminalAssistantText(event.message).length,
+                ...anchors,
+              } : undefined,
+            );
+            if (exposeReasoning) {
+              const segments = terminalAssistantThinkingSegments(event.message);
+              if (segments !== null) {
+                const terminalReasoning = terminalAssistantReasoning(event.message);
+                const base = reasoning.length - terminalReasoning.length;
+                timeline.reconcileReasoningSegments(
+                  currentAssistantTurnStart.steps,
+                  segments.map((span) => ({ start: base + span.start, end: base + span.end })),
+                  reasoning.length,
+                );
+              }
+            }
             break;
           }
           case "tool_execution_start":
@@ -3093,6 +3123,7 @@ export const llmClient = {
               full = full.slice(0, fullLengthBeforeAttempt);
               reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
               timeline.rewindContentOffset(full.length);
+              timeline.rewindReasoningOffset(reasoning.length);
               sendGeneration(streamId, "chat:delta", {
                 streamId,
                 delta: "",

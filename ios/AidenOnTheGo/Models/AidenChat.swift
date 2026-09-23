@@ -19,6 +19,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let role: AidenChatRole
     let text: String
+    let reasoning: String?
     let attachments: [AidenMessageAttachment]?
     let htmlArtifacts: [AidenHtmlArtifact]?
     let outcome: AidenMessageOutcome?
@@ -29,6 +30,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         id: String,
         role: AidenChatRole,
         text: String,
+        reasoning: String? = nil,
         attachments: [AidenMessageAttachment]? = nil,
         htmlArtifacts: [AidenHtmlArtifact]? = nil,
         outcome: AidenMessageOutcome? = nil,
@@ -38,6 +40,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.id = id
         self.role = role
         self.text = text
+        self.reasoning = reasoning
         self.attachments = attachments
         self.htmlArtifacts = htmlArtifacts
         self.outcome = outcome
@@ -50,6 +53,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         id = try values.decode(String.self, forKey: .id)
         role = try values.decode(AidenChatRole.self, forKey: .role)
         text = try values.decode(String.self, forKey: .text)
+        reasoning = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .reasoning)
         attachments = try aidenDecodeOptionalNonNull(
             [AidenMessageAttachment].self,
             from: values,
@@ -77,6 +81,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         !id.isEmpty
             && id.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
             && text.unicodeScalars.count <= AidenRemoteProtocol.maxTextLength
+            && (reasoning == nil || (role == .assistant && !reasoning!.isEmpty && reasoning!.utf16.count <= 100_000))
             && (attachments?.count ?? 0) <= 20
             && (attachments?.allSatisfy(\.isWireSafe) ?? true)
             && (htmlArtifacts?.count ?? 0) <= 40
@@ -85,11 +90,11 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             // Generation timelines originate in JavaScript, where String.length
             // measures UTF-16 code units. Keep that wire offset convention while
             // retaining Unicode-scalar counting for the independent text bound.
-            && (timeline?.isRendererSafe(contentLength: text.utf16.count) ?? true)
+            && (timeline?.isRendererSafe(contentLength: text.utf16.count, reasoningLength: reasoning?.utf16.count) ?? true)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, attachments, htmlArtifacts, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, outcome, timeline, createdAt
     }
 }
 
@@ -187,6 +192,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let updatedAt: Double
     let finishedAt: Double?
     let contentOffset: Int?
+    let reasoningStartOffset: Int?
+    let reasoningEndOffset: Int?
     let durationMs: Double?
     let target: String?
     let detail: String?
@@ -205,6 +212,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Double,
         finishedAt: Double?,
         contentOffset: Int?,
+        reasoningStartOffset: Int? = nil,
+        reasoningEndOffset: Int? = nil,
         durationMs: Double?,
         target: String?,
         detail: String?,
@@ -222,6 +231,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.finishedAt = finishedAt
         self.contentOffset = contentOffset
+        self.reasoningStartOffset = reasoningStartOffset
+        self.reasoningEndOffset = reasoningEndOffset
         self.durationMs = durationMs
         self.target = target
         self.detail = detail
@@ -250,6 +261,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         updatedAt = try values.decode(Double.self, forKey: .updatedAt)
         finishedAt = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .finishedAt)
         contentOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .contentOffset)
+        reasoningStartOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .reasoningStartOffset)
+        reasoningEndOffset = try aidenDecodeOptionalNonNull(Int.self, from: values, forKey: .reasoningEndOffset)
         durationMs = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .durationMs)
         target = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .target)
         detail = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .detail)
@@ -263,11 +276,81 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
-        case finishedAt, contentOffset, durationMs, target, detail, lineChanges, producedFile
+        case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
+        case durationMs, target, detail, lineChanges, producedFile
     }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
+    }
+}
+
+struct AidenChronologicalRow: Identifiable, Equatable {
+    enum Kind: Equatable { case text, reasoning, tool }
+    let id: String
+    let kind: Kind
+    let text: String
+    let steps: [AidenAgentStep]
+}
+
+enum AidenChronologicalProjection {
+    static func rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?) -> [AidenChronologicalRow]? {
+        guard let timeline, timeline.version == 3,
+              timeline.steps.allSatisfy({ $0.contentOffset != nil }),
+              timeline.isRendererSafe(contentLength: text.utf16.count, reasoningLength: reasoning.utf16.count)
+        else { return nil }
+        let textValue = text as NSString
+        let reasoningValue = reasoning as NSString
+        var reasoningCursor = 0
+        var hasSpan = false
+        for step in timeline.steps where step.kind == .thinking {
+            guard let start = step.reasoningStartOffset else { continue }
+            let end = step.reasoningEndOffset ?? (step.finishedAt == nil ? reasoningValue.length : -1)
+            guard end >= start, start >= reasoningCursor,
+                  reasoningValue.substring(with: NSRange(location: reasoningCursor, length: start - reasoningCursor))
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            reasoningCursor = end
+            hasSpan = true
+        }
+        guard (reasoning.isEmpty || hasSpan),
+              reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        let steps = timeline.steps
+        var result: [AidenChronologicalRow] = []
+        var cursor = 0
+        var index = 0
+        while index < steps.count {
+            let step = steps[index]
+            let offset = step.contentOffset ?? cursor
+            if offset > cursor {
+                let slice = textValue.substring(with: NSRange(location: cursor, length: offset - cursor))
+                if !slice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append(.init(id: "text-\(cursor)", kind: .text, text: slice, steps: []))
+                }
+            }
+            if step.kind == .thinking {
+                let start = step.reasoningStartOffset
+                let end = step.reasoningEndOffset ?? reasoningValue.length
+                let slice = start.map { reasoningValue.substring(with: NSRange(location: $0, length: end - $0)) } ?? ""
+                result.append(.init(id: "reasoning-\(step.id)", kind: .reasoning, text: slice, steps: [step]))
+                index += 1
+            } else {
+                var group: [AidenAgentStep] = []
+                while index < steps.count && steps[index].kind == .tool && steps[index].contentOffset == offset {
+                    group.append(steps[index])
+                    index += 1
+                }
+                result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+            }
+            cursor = offset
+        }
+        if cursor < textValue.length {
+            let slice = textValue.substring(from: cursor)
+            if !slice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result.append(.init(id: "text-\(cursor)", kind: .text, text: slice, steps: []))
+            }
+        }
+        return result
     }
 }
 
@@ -334,7 +417,7 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
         isRendererSafe(contentLength: nil)
     }
 
-    func isRendererSafe(contentLength: Int?) -> Bool {
+    func isRendererSafe(contentLength: Int?, reasoningLength: Int? = nil) -> Bool {
         guard [1, 2, 3].contains(version),
               !generationId.isEmpty,
               generationId.unicodeScalars.count <= 128,
@@ -347,6 +430,7 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
         else { return false }
 
         var previousContentOffset = 0
+        var previousReasoningEndOffset = 0
         for (index, step) in steps.enumerated() {
             guard step.order == index,
                   (0...199).contains(step.order),
@@ -397,6 +481,21 @@ struct AidenGenerationTimeline: Codable, Equatable, Sendable {
                     return false
                 }
                 previousContentOffset = contentOffset
+                if step.kind == .thinking {
+                    if let start = step.reasoningStartOffset {
+                        guard start >= previousReasoningEndOffset,
+                              start <= AidenRemoteProtocol.maxSafeInteger,
+                              reasoningLength.map({ start <= $0 }) ?? true else { return false }
+                        if let end = step.reasoningEndOffset {
+                            guard end >= start,
+                                  end <= AidenRemoteProtocol.maxSafeInteger,
+                                  reasoningLength.map({ end <= $0 }) ?? true else { return false }
+                            previousReasoningEndOffset = end
+                        } else if step.finishedAt != nil { return false }
+                    } else if step.reasoningEndOffset != nil { return false }
+                }
+            } else if step.reasoningStartOffset != nil || step.reasoningEndOffset != nil {
+                return false
             }
 
             switch step.kind {
