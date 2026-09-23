@@ -2417,6 +2417,25 @@ export const llmClient = {
           compaction: compactionOptions,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          beforeQueuedUser: async (message) => {
+            if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
+              throw new Error("Queued guidance must contain text.");
+            }
+            const chat = await chatStore.appendMessage(
+              params.chatId,
+              { role: "user", content: message.content, model: params.model },
+              {
+                providerId: params.providerId,
+                model: params.model,
+                expectedWorkspaceId: initialization.workspaceId,
+              },
+            );
+            const visible = chat.messages[chat.messages.length - 1];
+            if (!visible || visible.role !== "user") {
+              throw new Error("Queued guidance was not saved in the visible chat.");
+            }
+            return visible.id;
+          },
           ...(currentUser
             ? {
                 appendInput: async () => {
@@ -2937,6 +2956,7 @@ export const llmClient = {
             break;
           }
           case "message_end": {
+            if (event.message.role === "user") return;
             if (event.message.role === "assistant") {
               requestUsage.ended();
               lastAssistantMessage = event.message;
@@ -3531,6 +3551,14 @@ export const llmClient = {
 
   answerQuestionnaire(promptId: string, response: unknown, ownerDocumentId: string): boolean {
     return questionnaires.respond(promptId, response, ownerDocumentId);
+  },
+
+  steer(streamId: string, text: string, ownerDocumentId: string): boolean {
+    const generation = active.get(streamId);
+    if (!generation || generation.owner.documentId !== ownerDocumentId || generation.cancelRequested) {
+      return false;
+    }
+    return generation.agent.queueSteer({ role: "user", content: text, timestamp: Date.now() }).accepted;
   },
 
   /**

@@ -220,9 +220,11 @@ export interface PiRuntimeSessionBinding {
   session: PiSessionPort | Promise<PiSessionPort>;
   initialMessages?: readonly AgentMessage[];
   compaction: Omit<PiCompactionCoordinatorOptions, "session">;
-  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
+  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[], visibleChatMessageId?: string) => Promise<void>;
   /** Host adapter for atomically journaling a visible user plus its sync marker. */
   appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
+  /** Foreground projection must save queued user guidance before Pi can continue. */
+  beforeQueuedUser?: (message: AgentMessage) => Promise<string>;
   signal?: AbortSignal;
   /** Foreground continue() does not emit its already-journaled user tail. */
   journalUserMessages?: boolean;
@@ -1283,6 +1285,9 @@ export class PiAgentRuntimeHarness {
         }
         // The managed initial input is already durable and Agent.continue()
         // does not re-emit it. Any emitted user is queued steer/follow-up input.
+        const visibleChatMessageId = event.message.role === "user"
+          ? await durability.beforeQueuedUser?.(event.message)
+          : undefined;
         this.pendingDurableMessages.push(event.message);
         this.capturedTurnMessages.push(structuredClone(event.message));
         if (event.message.role === "user") {
@@ -1299,7 +1304,7 @@ export class PiAgentRuntimeHarness {
         // Pi emits an assistant tool plan before executing its tools and emits
         // tool results before the next provider step. Awaiting here makes both
         // boundaries durable before any external effect or continuation.
-        await this.flushDurableMessages();
+        await this.flushDurableMessages(visibleChatMessageId);
       });
 
       const hostPrepare = options.prepareNextTurnWithContext;
@@ -2416,7 +2421,7 @@ export class PiAgentRuntimeHarness {
     }
   }
 
-  private async flushDurableMessages(): Promise<void> {
+  private async flushDurableMessages(visibleChatMessageId?: string): Promise<void> {
     const durability = this.durability;
     if (!durability || this.pendingDurableMessages.length === 0) return;
     const batch = this.pendingDurableMessages;
@@ -2425,6 +2430,7 @@ export class PiAgentRuntimeHarness {
       const operation = (durability.appendMessages ?? appendPiMessages)(
         await this.resolveSession(),
         batch,
+        visibleChatMessageId,
       );
       const signal = this.managedAbortController?.signal;
       if (!signal) {

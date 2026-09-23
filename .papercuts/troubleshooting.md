@@ -982,3 +982,8 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+
+## Composer busy controls — 2026-09-23
+
+- Pi's managed initial user input is not re-emitted, but Steer input is. The queued-user projection must be written before Pi's awaited `message_end` listener returns, and its Pi journal append must include the visible chat-message marker in the same transaction. Otherwise the next generation's visible-history sync duplicates the guidance.
+- This host defaults to Command Line Tools, where `simctl` is unavailable. Set `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` and use an iPhone simulator for iOS tests; no physical-device unlock is needed.

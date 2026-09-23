@@ -88,7 +88,12 @@ import {
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
-import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
+import {
+  loadComposerDraft,
+  markComposerSubmission,
+  saveComposerDraftText,
+  settleComposerSubmission,
+} from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
   COMPOSER_SLASH_RETRY_ID,
@@ -136,6 +141,8 @@ interface ComposerProps {
     options?: { visualize?: boolean; btw?: boolean },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
+  onSteer?: ComposerProps["onSend"];
+  onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
   onStop: () => void;
@@ -288,6 +295,8 @@ export function Composer({
   onSend,
   onStop,
   onQueue,
+  onSteer,
+  onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
   isGenerating,
@@ -336,11 +345,23 @@ export function Composer({
   slashPaletteBlocked = false,
   slashActionBusy = false,
 }: ComposerProps) {
+  const restoredText = React.useMemo(
+    () => initialText || loadComposerDraft(chatId).text,
+    [chatId, initialText],
+  );
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: initialText,
-    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, initialText),
+    text: restoredText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
+  const [busyMode, setBusyMode] = React.useState<"steer" | "queue" | "redirect">("queue");
+  const [confirmRedirect, setConfirmRedirect] = React.useState(false);
+  React.useEffect(() => {
+    if (!isGenerating) {
+      setBusyMode("queue");
+      setConfirmRedirect(false);
+    }
+  }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
     draftRef.current = draft;
@@ -365,7 +386,8 @@ export function Composer({
     slashInteractionRevisionRef.current += 1;
     textRevisionRef.current += 1;
     dispatchDraft({ type: "update", value: text });
-  }, []);
+    saveComposerDraftText(chatId, text);
+  }, [chatId]);
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
@@ -841,6 +863,7 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
+      mode?: "steer" | "queue" | "redirect";
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -848,6 +871,14 @@ export function Composer({
       sendPendingRef.current = true;
       firstSendPendingRef.current = freezeWhileSending;
       setSending(true);
+      try {
+        markComposerSubmission(chatId, payload.draftText);
+      } catch (error) {
+        sendPendingRef.current = false;
+        firstSendPendingRef.current = false;
+        setSending(false);
+        throw error;
+      }
 
       setText("");
       const optimisticTextRevision = textRevisionRef.current;
@@ -861,7 +892,19 @@ export function Composer({
       });
 
       try {
-        const submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        let submit: ComposerProps["onSend"];
+        if (payload.mode === "steer") {
+          if (!onSteer) throw new Error("Steer is unavailable for this response.");
+          submit = onSteer;
+        } else if (payload.mode === "redirect") {
+          if (!onRedirect) throw new Error("Redirect is unavailable for this response.");
+          submit = onRedirect;
+        } else if (payload.mode === "queue") {
+          if (!onQueue) throw new Error("Queue is unavailable for this response.");
+          submit = onQueue;
+        } else {
+          submit = onQueue && (isGenerating || hasQueuedMessages) && !payload.btw ? onQueue : onSend;
+        }
         await submit(
           payload.sendText,
           payload.attachments,
@@ -870,39 +913,42 @@ export function Composer({
             ? { visualize: payload.visualize, btw: payload.btw }
             : undefined,
         );
+        if (payload.mode === "steer") toast.info("Guidance queued. Aiden will read it at the next step.");
+        if (payload.mode === "queue") toast.info("Follow-up queued. It will run after the current response.");
+        if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
+        settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
       } catch (error) {
-        // An unknown append result may already be durable. ChatPane blocks
-        // another send until reload, so restoring it here would invite a
-        // duplicate message with a new turn identity.
-        if (!isAppendReconciliationRequired(error)) {
-          const currentDraft = draftRef.current.text;
-          const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
-          if (
-            textRevisionRef.current === optimisticTextRevision ||
-            restoredDraft !== currentDraft
-          ) {
-            setText(restoredDraft);
-          }
-
-          const currentAttachments = attachmentsRef.current;
-          const restoredAttachments = failedSendAttachments(
-            payload.attachments,
-            currentAttachments,
-          );
-          if (
-            attachmentRevisionRef.current === optimisticAttachmentRevision ||
-            restoredAttachments.length !== currentAttachments.length
-          ) {
-            attachmentRevisionRef.current += 1;
-            updateAttachments(restoredAttachments);
-          }
-          dispatchSkillSelection({
-            type: "send-failed",
-            optimisticRevision: optimisticSkillRevision,
-            submitted: payload.selectedSkill,
-          });
+        // Keep the submitted text after a rejected or uncertain acknowledgment.
+        // An uncertain append is reconciled by ChatPane; it is never replayed here.
+        const currentDraft = draftRef.current.text;
+        const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
+        if (
+          textRevisionRef.current === optimisticTextRevision ||
+          restoredDraft !== currentDraft
+        ) {
+          setText(restoredDraft);
         }
+
+        const currentAttachments = attachmentsRef.current;
+        const restoredAttachments = failedSendAttachments(
+          payload.attachments,
+          currentAttachments,
+        );
+        if (
+          attachmentRevisionRef.current === optimisticAttachmentRevision ||
+          restoredAttachments.length !== currentAttachments.length
+        ) {
+          attachmentRevisionRef.current += 1;
+          updateAttachments(restoredAttachments);
+        }
+        dispatchSkillSelection({
+          type: "send-failed",
+          optimisticRevision: optimisticSkillRevision,
+          submitted: payload.selectedSkill,
+        });
+        // Any failed IPC acknowledgement may have an unknown delivery outcome.
+        // Keep the marker until another deliberate submission settles it.
         throw error;
       } finally {
         sendPendingRef.current = false;
@@ -910,7 +956,7 @@ export function Composer({
         setSending(false);
       }
     },
-    [onSend, onQueue, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [chatId, onSend, onQueue, onSteer, onRedirect, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
@@ -1347,7 +1393,11 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  const submit = async () => {
+  const submit = async (redirectConfirmed = false) => {
+    if (redirectConfirmed && !isGenerating) {
+      toast.info("The previous response has finished. Send your message normally.");
+      return;
+    }
     if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current.isBusy || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
@@ -1363,6 +1413,20 @@ export function Composer({
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    const mode = isGenerating ? busyMode : hasQueuedMessages ? "queue" : undefined;
+    if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
+      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      return;
+    }
+    if (mode === "redirect" && !redirectConfirmed) {
+      if (attachments.length > 0 || selectedSkill) {
+        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
+        return;
+      }
+      setConfirmRedirect(true);
+      return;
+    }
+    if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
       toast.info(selectedSkillState.reason);
       return;
@@ -1381,6 +1445,7 @@ export function Composer({
         attachments,
         selectedSkill,
         skillRevision: skillSelection.revision,
+        mode,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -2067,10 +2132,31 @@ export function Composer({
                   )}
                 </Button>
                 {onQueue && isGenerating ? (
-                  <Button variant="transparent" size="small" iconOnly disabled={!canSend}
-                    onClick={() => void submit()} aria-label="Queue message" title="Queue message (Enter)">
-                    <ListPlus />
-                  </Button>
+                  <>
+                    <Button variant="accent" size="small" disabled={!canSend}
+                      onClick={() => void submit()} aria-label={busyMode === "queue" ? "Queue message" : busyMode === "steer" ? "Steer response" : "Redirect response"}>
+                      {busyMode === "queue" ? <ListPlus /> : <ArrowUp />}
+                      {busyMode === "queue" ? "Queue" : busyMode === "steer" ? "Steer" : "Redirect"}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="transparent" size="small" iconOnly aria-label="Choose message action">
+                          <ChevronDown aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem disabled={!onSteer || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("steer")}>
+                          Steer · Add guidance without stopping
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setBusyMode("queue")}>
+                          Queue · Run after this response
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={!onRedirect || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("redirect")}>
+                          Redirect · Stop and change direction
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
                 ) : null}
                 {isGenerating ? (
                   <Button
@@ -2100,6 +2186,18 @@ export function Composer({
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={confirmRedirect}
+        onOpenChange={setConfirmRedirect}
+        title="Redirect this response?"
+        description="Aiden will stop the current response and run your new direction next. Queued follow-ups will be cleared."
+        confirmLabel="Redirect"
+        returnFocus={() => inputRef?.current ?? null}
+        onConfirm={() => {
+          setConfirmRedirect(false);
+          void submit(true);
+        }}
+      />
       <AlertDialog
         open={voice.awaitingRecordedRetryConsent}
         onOpenChange={(open) => {

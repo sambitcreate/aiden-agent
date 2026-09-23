@@ -1151,6 +1151,11 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
   return invoke<boolean>("chat:cancel", streamId, "user_stop");
 }
 
+export async function steerGeneration(streamId: string, instruction: string): Promise<void> {
+  const receipt = await invoke<{ status: string }>("chat:steer", streamId, instruction);
+  if (receipt?.status !== "queued") throw new Error("Guidance outcome is unknown. Your draft is still here.");
+}
+
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
 
 export interface StreamCallbacks {

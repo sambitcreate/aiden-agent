@@ -50,6 +50,7 @@ import {
   createChatTurnId,
   settingsApi,
   startGeneration,
+  steerGeneration,
   stopDetachedGeneration,
   gitApi,
   workspacesApi,
@@ -1355,12 +1356,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           toast.error(error instanceof Error ? error.message : "Couldn't stop this response.");
         }
       });
-      return;
+      return true;
     }
-    if (!generationRef.current || !canStopGeneration) return;
+    if (!generationRef.current || !canStopGeneration) return false;
     setIsStoppingGeneration(true);
     setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
+    return true;
   }, [canStopGeneration, chatId, visibleDetachedProjection, isStoppingGeneration]);
 
   React.useEffect(() => {
@@ -1425,6 +1427,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     },
     [messageQueue],
+  );
+
+  const steerMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Steer requires text without attachments or a skill.");
+      }
+      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      await steerGeneration(streamId, text);
+    },
+    [isStoppingGeneration, visibleDetachedProjection],
+  );
+
+  const redirectMessage = React.useCallback(
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
+      if (!text.trim() || attachments.length > 0 || skillInvocation) {
+        throw new Error("Redirect requires text without attachments or a skill.");
+      }
+      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) {
+        throw new Error("The current response has ended. Send your message normally.");
+      }
+      const replacement = {
+        id: createChatTurnId(), text, attachments: [] as Attachment[],
+      };
+      messageQueue.replaceWith(replacement, handleStop);
+    },
+    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -2247,23 +2279,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
+                onSteer={draft ? undefined : steerMessage}
+                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 queuedMessages={
                   <QueuedMessages
                     key={chatId}
                     queue={messageQueue}
-                    canSteer={ready && ((isGenerating && canStopGeneration) || Boolean(visibleDetachedProjection)) && !isStoppingGeneration}
                     returnFocus={() => composerRef.current}
-                    onSteer={(id) => {
-                      if (!(canStopGeneration || visibleDetachedProjection) || isStoppingGeneration) return;
-                      messageQueue.move(id, 0);
-                      messageQueue.resume();
-                      handleStop();
-                    }}
                   />
                 }
                 onStop={() => {
-                  messageQueue.pause();
+                  messageQueue.discard();
                   handleStop();
                 }}
                 isGenerating={isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection)}

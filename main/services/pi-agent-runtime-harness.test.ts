@@ -75,6 +75,7 @@ async function managedTestHarness(
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
+    beforeQueuedUser?: PiRuntimeSessionBinding["beforeQueuedUser"];
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     initialSystemPrompt?: string;
@@ -158,6 +159,7 @@ async function managedTestHarness(
       session,
       appendMessages: options.appendMessages ?? appendPiMessages,
       appendInput: options.appendInput,
+      beforeQueuedUser: options.beforeQueuedUser,
       compaction: {
         models: compactionModels,
         model,
@@ -2136,6 +2138,7 @@ test("custom entry projectors are snapshotted while Aiden's namespace stays priv
 });
 
 test("managed steering is accepted only while active and queued input is durable", async () => {
+  const projected: string[] = [];
   let toolStarted!: () => void;
   const atTool = new Promise<void>((resolve) => {
     toolStarted = resolve;
@@ -2160,7 +2163,16 @@ test("managed steering is accepted only while active and queued input is durable
       fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
       fauxAssistantMessage("steered"),
     ],
-    { tools: [tool] },
+    {
+      tools: [tool],
+      beforeQueuedUser: async (message) => {
+        if (message.role !== "user" || typeof message.content !== "string") {
+          throw new Error("Unexpected queued message.");
+        }
+        projected.push(message.content);
+        return "visible-steer-message";
+      },
+    },
   );
   assert.deepEqual(
     harness.queueSteer({ role: "user", content: "too early", timestamp: Date.now() }),
@@ -2183,6 +2195,13 @@ test("managed steering is accepted only while active and queued input is durable
   assert.deepEqual(
     users.map((message) => message.content),
     ["start", "new instruction"],
+  );
+  assert.deepEqual(projected, ["new instruction"]);
+  assert.equal(
+    (await session.getBranch()).some((entry) =>
+      entry.type === "custom" && entry.customType === "aiden.chat-message.v1" &&
+      (entry.data as { chatMessageId?: string }).chatMessageId === "visible-steer-message"),
+    true,
   );
 });
 

@@ -1,5 +1,7 @@
 # Revisited generation controls — 2026-09-21
 
+September 23 composer audit: the old queued-row “Steer” actually stopped the response and sent the row next, so it was removed. Busy desktop input now selects true Pi Steer, Queue, or confirmed Redirect. Steer uses exact-stream document-owned IPC; when Pi emits queued user guidance, the Mac persists it before the next model step. The accepted queue is still memory-only until emission, so crash-durable admission remains a follow-up. Stop clears the local follow-up queue but preserves the independent composer draft. Device-local text draft records retain an unresolved marker and never automatically resend. See `docs/chat-composer-busy-controls.md` for the desktop/mobile gap table.
+
 Returning to a chat with a route-detached generation now uses the retained stream projection to expose the existing composer Stop and queue/steer controls. Stop targets that exact stream through the same-document `chat:cancel` authority check; the main handler acknowledges whether cancellation was admitted. Queued messages remain document-local and cannot append until the existing main-process idle and authoritative transcript reconciliation gates settle.
 
 The pane's detached Stop state has no local terminal callback. Clear it when the shell removes the detached lifecycle marker after authoritative settlement, otherwise steering leaves the queue disabled behind a stale “Stopping…” state. Keep reconciliation-only markers (no active projection) read-only. The ordinary local stream path is unchanged.

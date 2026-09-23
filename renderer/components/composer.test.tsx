@@ -4,6 +4,12 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ProviderIcon } from "./provider-icon";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import {
+  loadComposerDraft,
+  markComposerSubmission,
+  saveComposerDraftText,
+  settleComposerSubmission,
+} from "../lib/composer-draft-store";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -14,6 +20,44 @@ const PROVIDER_ARTWORK: ProviderArtwork = {
   dataBase64:
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
 };
+
+test("uncertain composer submission restores text without automatically resending", () => {
+  const values = new Map<string, string>();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  } as Storage;
+  try {
+    saveComposerDraftText("test-chat", "Change the plan");
+    markComposerSubmission("test-chat", "Change the plan");
+    saveComposerDraftText("test-chat", "");
+    assert.equal(loadComposerDraft("test-chat").text, "Change the plan");
+    assert.equal(loadComposerDraft("test-chat").unresolvedText, "Change the plan");
+    saveComposerDraftText("test-chat", "A newer thought");
+    settleComposerSubmission("test-chat", true, "A newer thought");
+    assert.equal(loadComposerDraft("test-chat").text, "A newer thought");
+    assert.equal(loadComposerDraft("test-chat").unresolvedText, undefined);
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
+
+test("submission refuses to clear a draft when its recovery marker cannot be saved", () => {
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = {
+    setItem: () => { throw new Error("Quota exceeded"); },
+  } as unknown as Storage;
+  try {
+    assert.throws(
+      () => markComposerSubmission("full-storage-chat", "Keep this text"),
+      /could not save this draft/u,
+    );
+  } finally {
+    globalThis.localStorage = prior;
+  }
+});
 
 test("custom provider artwork keeps its original pixels instead of becoming a mask", () => {
   const markup = renderToStaticMarkup(
@@ -216,7 +260,8 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
-  assert.match(composer, /!isAppendReconciliationRequired\(error\)/u);
+  assert.match(composer, /markComposerSubmission\(chatId, payload\.draftText\)/u);
+  assert.match(composer, /settleComposerSubmission\(chatId, true, draftRef\.current\.text\)/u);
   assert.match(
     composer,
     /if \(result\.command\.action\.kind === "composer-instruction"\) return;/u,
