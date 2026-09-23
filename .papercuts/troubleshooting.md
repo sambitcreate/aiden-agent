@@ -863,3 +863,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - A three-second marker poll can expire before the intended cancellation window begins. Wait for the actual marker with the existing bounded helper, and abort/drain the outstanding operation before removing its temporary repository.
 - A 1200ms post-marker exit timer can race a delayed test process and set upstream before abort. Use a bounded release-file handshake; abort before release and always release/drain in finally. Controlled pre-push and post-marker delays reproduce each separate race.
 - Fresh worktrees need `npm run build:worktree-remover` and `npm run build:worktree-file-io` before invoking the Git test file directly; the normal pretest script supplies these prerequisites.
+## 2026-09-22 — setsid fixture readiness race
+
+- A PID published by the intermediate process is still insufficient if the first parent exits before that process reaches setsid: production group cleanup can kill it. A controlled one-second pre-detachment delay reproduces the missing-marker failure. Synchronize first-parent exit with a bounded pipe acknowledgment after marker publication; keep the production cleanup, detached-child alarm, and test liveness assertions intact.
+- Build native test helpers before standalone shell tests; otherwise ENOENT is only a missing prerequisite, not a valid reproduction.
+
+- Fixture timeout cleanup cannot rely on group/direct signal ordering across setsid+fork. A parent-owned grant pipe makes persistence conditional on success, and EOF closes the late-fork race. Test absent-readiness-marker cleanup using a separate PID witness; mark ESRCH cleanup complete so an after-hook cannot signal a reused PID.

@@ -210,7 +210,8 @@ test("workspace identity drift is rejected before shell execution", async (t) =>
   assert.equal((await stat(rootPath)).isDirectory(), true);
 });
 
-test("a deliberate setsid double-fork proves the documented containment limit and self-cleans", async (t) => {
+for (const delay of [false, true]) {
+test(`a deliberate setsid double-fork proves the documented containment limit and self-cleans${delay ? " after delayed detachment" : ""}`, async (t) => {
   if (process.platform !== "darwin") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
@@ -244,7 +245,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   };
   t.after(cleanup);
   try {
-    const result = await run(t, `${fixture} ${marker}`);
+    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`);
+    assert.equal(result.exitCode, 0);
     assert.equal(result.outcome, "exited");
     const markerDeadline = Date.now() + 20_000;
     while (Date.now() < markerDeadline) {
@@ -265,6 +267,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
     await cleanup();
   }
 });
+
+}
 
 for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
   test(`control-channel ${failure} failure waits for helper close and rejects normally`, async () => {
@@ -374,3 +378,53 @@ for (const settlement of ["success", "callback-error", "stream-error", "watchdog
     assert.equal(stderr.destroyed, true);
   });
 }
+
+test("a stalled setsid handshake fails within the existing shell deadline", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const marker = path.join(rootPath, "detached.pid");
+  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  const result = await run(t, `${fixture} ${marker} --stall-detach`);
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 75);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+});
+
+test("a timed-out publication cannot leave a detached child without a readiness marker", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const marker = path.join(rootPath, "detached.pid");
+  const witness = `${marker}.spawned`;
+  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  let pid = 0;
+  let cleaned = false;
+  t.after(async () => {
+    if (cleaned) return;
+    if (pid <= 1) {
+      try { pid = Number.parseInt(await readFile(witness, "utf8"), 10); } catch { return; }
+    }
+    if (pid > 1) {
+      try { process.kill(pid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  });
+  const result = await run(t, `${fixture} ${marker} --stall-publish`);
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 75);
+  pid = Number.parseInt(await readFile(witness, "utf8"), 10);
+  assert.ok(pid > 1);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        cleaned = true;
+        return;
+      }
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail("detached child must exit after failed publication");
+});
