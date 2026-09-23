@@ -83,14 +83,12 @@ export async function transferManagedWorktreeFile(options: {
   const source = options.sourceIdentity ?? await captureManagedWorktreeRootIdentity(options.sourceRoot);
   const destination = options.destinationIdentity ??
     await captureManagedWorktreeRootIdentity(options.destinationRoot);
-  // Persisted identities may use aliases such as macOS /var. Normalize only
-  // paths; native checks must retain the saved device/inode after replacement.
-  const sourcePath = await fs.realpath(source.path).catch((error: unknown) => {
-    throw new ManagedWorktreeFileIoError("unsafe_source", error);
-  });
-  const destinationPath = await fs.realpath(destination.path).catch((error: unknown) => {
-    throw new ManagedWorktreeFileIoError("unsafe_destination", error);
-  });
+  // Only documented macOS system aliases are normalized. Do not realpath
+  // arbitrary ancestors: native no-follow traversal must reject substitution.
+  const fixedAliasPath = (value: string) => process.platform === "darwin"
+    ? value.replace(/^\/(tmp|var|etc)(?=\/|$)/u, "/private/$1") : value;
+  const sourcePath = fixedAliasPath(source.path);
+  const destinationPath = fixedAliasPath(destination.path);
   const args = [
     options.operation,
     sourcePath,

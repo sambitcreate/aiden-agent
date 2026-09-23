@@ -1147,3 +1147,43 @@ test("readWorktreeInclude rejects symlinks and oversized includes", async (t) =>
       error instanceof ManagedWorktreeProvisionerError && error.code === "include_invalid",
   );
 });
+
+test("capacity admission derives exact reports from controlled filesystem observations", async () => {
+  const { default: promises } = await import("node:fs/promises");
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = promises.statfs;
+  let blocks = 10;
+  const paths: string[] = [];
+  promises.statfs = (async (dir: string) => {
+    paths.push(dir);
+    return { bavail: blocks, bsize: 4096 };
+  }) as typeof promises.statfs;
+  syncBuiltinESMExports();
+  try {
+    const estimate = 101;
+    for (const [check, reserve, factor] of [
+      [checkCreateCapacity, 512 * 1024 * 1024, 1.25],
+      [checkSnapshotCapacity, 64 * 1024 * 1024, 1.1],
+    ] as const) {
+      blocks = 10;
+      await assert.rejects(check("/controlled-volume", estimate), (error: unknown) => {
+        assert.ok(error instanceof InsufficientDiskSpaceError);
+        assert.equal(error.code, "insufficient_disk_space");
+        assert.equal(error.availableBytes, 40960);
+        assert.equal(error.requiredBytes, Math.ceil(estimate * factor) + reserve);
+        assert.equal(error.reserveBytes, reserve);
+        assert.equal(error.estimatedBytes, estimate);
+        return true;
+      });
+      blocks = 2 ** 42; // Actual admission also accepts large finite statfs values.
+      assert.deepEqual(await check("/controlled-volume", estimate), {
+        availableBytes: blocks * 4096, requiredBytes: Math.ceil(estimate * factor) + reserve,
+        reserveBytes: reserve, estimatedBytes: estimate,
+      });
+    }
+    assert.deepEqual(paths, Array(4).fill("/controlled-volume"));
+  } finally {
+    promises.statfs = original;
+    syncBuiltinESMExports();
+  }
+});

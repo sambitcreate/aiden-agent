@@ -370,9 +370,8 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
 test("snapshot transfers canonicalize aliased identity paths without accepting replacement roots", async (t) => {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
-  const os = await import("node:os");
   const { transferManagedWorktreeFile, ManagedWorktreeFileIoError } = await import("./managed-worktree-file-io.js");
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-transfer-alias-"));
+  const base = await fs.mkdtemp(path.join("/tmp", "aiden-transfer-alias-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const original = path.join(base, "original");
   const alias = path.join(base, "alias");
@@ -382,7 +381,7 @@ test("snapshot transfers canonicalize aliased identity paths without accepting r
   await fs.symlink(original, alias);
   await fs.writeFile(path.join(original, ".env"), "SECRET=1\n");
   const metadata = await fs.stat(original, { bigint: true });
-  const identity = { path: alias, device: String(metadata.dev), inode: String(metadata.ino) };
+  const identity = { path: original, device: String(metadata.dev), inode: String(metadata.ino) };
   const copied = await transferManagedWorktreeFile({
     operation: "copy", sourceRoot: alias, sourceIdentity: identity, sourceRelativePath: ".env",
     destinationRoot: snapshot, destinationRelativePath: "blob", byteLimit: 1024, mode: 0o600,
@@ -394,6 +393,20 @@ test("snapshot transfers canonicalize aliased identity paths without accepting r
     byteLimit: copied.size, digest: copied.digest, mode: 0o600,
   });
   assert.equal(await fs.readFile(path.join(original, "restored.env"), "utf8"), "SECRET=1\n");
+  // An arbitrary alias to the SAME inode must fail in the wrapper too.
+  const ancestor = path.join(base, "ancestor");
+  await fs.symlink(base, ancestor);
+  for (const unsafePath of [alias, path.join(ancestor, "original")]) {
+    await assert.rejects(transferManagedWorktreeFile({
+      operation: "copy", sourceRoot: unsafePath, sourceIdentity: { ...identity, path: unsafePath }, sourceRelativePath: ".env",
+      destinationRoot: snapshot, destinationRelativePath: "unsafe", byteLimit: 1024, mode: 0o600,
+    }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source");
+    await assert.rejects(transferManagedWorktreeFile({
+      operation: "restore", sourceRoot: snapshot, sourceRelativePath: "blob",
+      destinationRoot: unsafePath, destinationIdentity: { ...identity, path: unsafePath }, destinationRelativePath: "unsafe.env",
+      byteLimit: copied.size, digest: copied.digest, mode: 0o600,
+    }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
+  }
   await fs.rename(original, path.join(base, "held"));
   await fs.mkdir(original);
   await fs.writeFile(path.join(original, ".env"), "OUTSIDE=1\n");
@@ -408,7 +421,7 @@ test("snapshot transfers canonicalize aliased identity paths without accepting r
   }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
   assert.deepEqual(await fs.readdir(original), [".env"]);
   assert.deepEqual(await fs.readdir(snapshot), ["blob"]);
-  await fs.unlink(alias);
+  await fs.rm(original, { recursive: true });
   await assert.rejects(transferManagedWorktreeFile({
     operation: "copy", sourceRoot: alias, sourceIdentity: identity, sourceRelativePath: ".env",
     destinationRoot: snapshot, destinationRelativePath: "missing", byteLimit: 1024, mode: 0o600,

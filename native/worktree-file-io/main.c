@@ -179,6 +179,10 @@ static int parent_at(int root, const char *relative, int create,
   }
 }
 
+static int exclusive_regular(const struct stat *metadata) {
+  return S_ISREG(metadata->st_mode) && metadata->st_nlink == 1;
+}
+
 static int same_source(const struct stat *before, const struct stat *after) {
   return before->st_dev == after->st_dev &&
          before->st_ino == after->st_ino &&
@@ -313,7 +317,7 @@ static int list_directory(int argc, char **argv) {
     if (++scanned > 8000 || emitted >= 4000) { truncated = 1; break; }
     struct stat child;
     if (fstatat(current, entry->d_name, &child, AT_SYMLINK_NOFOLLOW) != 0) { truncated = 1; continue; }
-    if (!S_ISDIR(child.st_mode) && !S_ISREG(child.st_mode)) continue;
+    if (!S_ISDIR(child.st_mode) && !exclusive_regular(&child)) continue;
     if (S_ISDIR(child.st_mode) && skip_directory(entry->d_name)) continue;
     size_t length = strlen(entry->d_name);
     if (length == 0 || length > 255) { truncated = 1; continue; }
@@ -360,7 +364,7 @@ static int editor_file(int argc, char **argv, int edit) {
   }
   int source = openat(parent, leaf, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
   struct stat before, after;
-  if (source < 0 || fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
+  if (source < 0 || fstat(source, &before) != 0 || !exclusive_regular(&before) ||
       before.st_size < 0 || (uint64_t)before.st_dev != file_device ||
       (uint64_t)before.st_ino != file_inode) {
     if (source >= 0) close(source);
@@ -378,7 +382,8 @@ static int editor_file(int argc, char **argv, int edit) {
     if (count <= 0) { free(content); close(source); free(input); close(parent); return fail("source_changed"); }
     total += (size_t)count;
   }
-  if (fstat(source, &after) != 0 || !same_source(&before, &after)) {
+  if (test_checkpoint('B') != 0 || fstat(source, &after) != 0 ||
+      !exclusive_regular(&after) || !same_source(&before, &after)) {
     free(content); close(source); free(input); close(parent); return fail("source_changed");
   }
   unsigned char digest_bytes[CC_SHA256_DIGEST_LENGTH];
@@ -426,10 +431,10 @@ static int editor_file(int argc, char **argv, int edit) {
   free(input);
   if (good && (fchmod(target, before.st_mode & 07777) != 0 || fsync(target) != 0)) good = 0;
   struct stat current;
-  if (good && (fstat(source, &after) != 0 || !same_source(&before, &after) ||
-      fstatat(parent, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
-      !same_source(&before, &current))) good = 0;
   if (good && test_checkpoint('D') != 0) good = 0;
+  if (good && (fstat(source, &after) != 0 || !exclusive_regular(&after) || !same_source(&before, &after) ||
+      fstatat(parent, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+      !exclusive_regular(&current) || !same_source(&before, &current))) good = 0;
   if (!good) {
     close(target); (void)unlinkat(parent, temporary, 0);
     close(source); close(parent); return fail("source_changed");
@@ -441,8 +446,9 @@ static int editor_file(int argc, char **argv, int edit) {
   struct stat displaced;
   int moved = openat(parent, recovery, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
   char moved_hash[CC_SHA256_DIGEST_LENGTH * 2 + 1];
-  good = moved >= 0 && fstat(moved, &displaced) == 0 && same_source(&before, &displaced) &&
-      file_digest(moved, (uint64_t)before.st_size, moved_hash) && strcmp(moved_hash, old_hash) == 0;
+  good = moved >= 0 && fstat(moved, &displaced) == 0 && exclusive_regular(&displaced) && same_source(&before, &displaced) &&
+      file_digest(moved, (uint64_t)before.st_size, moved_hash) && strcmp(moved_hash, old_hash) == 0 &&
+      fstat(moved, &displaced) == 0 && exclusive_regular(&displaced) && same_source(&before, &displaced);
   if (moved >= 0) close(moved);
   if (!good) {
     (void)linkat(parent, recovery, parent, leaf, 0);
@@ -458,13 +464,14 @@ static int editor_file(int argc, char **argv, int edit) {
   struct stat installed;
   char installed_hash[CC_SHA256_DIGEST_LENGTH * 2 + 1];
   good = fstat(target, &saved) == 0 &&
-      S_ISREG(saved.st_mode) && saved.st_size == (off_t)input_length &&
+      S_ISREG(saved.st_mode) && saved.st_nlink == 2 && saved.st_size == (off_t)input_length &&
       file_digest(target, input_length, installed_hash) &&
       strcmp(installed_hash, new_hash) == 0 &&
       fstatat(parent, leaf, &installed, AT_SYMLINK_NOFOLLOW) == 0 &&
       saved.st_dev == installed.st_dev && saved.st_ino == installed.st_ino &&
       fsync(parent) == 0;
-  if (good) (void)unlinkat(parent, temporary, 0);
+  if (good) good = unlinkat(parent, temporary, 0) == 0 &&
+      fstat(target, &saved) == 0 && exclusive_regular(&saved);
   close(target); close(source); close(parent);
   if (!good) return fail("io_failed");
   /* Report the installed descriptor's identity and the staged content hash. */

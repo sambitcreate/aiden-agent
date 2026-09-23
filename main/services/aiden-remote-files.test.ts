@@ -77,6 +77,14 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     assert.deepEqual(children.entries.map(entry => entry.displayPath), ["Sources/App.swift"]);
     const lazyDocument = await service.read("device-1", workspace.id, children.entries[0]!.id);
     assert.equal(lazyDocument.content, "let value = 1\n");
+    const outsideLink = path.join(temporary, "outside-hardlink");
+    await fs.link(path.join(root, "Sources", "App.swift"), outsideLink);
+    assert.equal((await service.children("device-1", workspace.id, sources.id)).entries.length, 0);
+    await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
+    await assert.rejects(() => service.write("device-1", workspace.id, lazyDocument.id,
+      { content: "must not save", expectedVersion: lazyDocument.version }));
+    assert.equal(await fs.readFile(outsideLink, "utf8"), "let value = 1\n");
+    await fs.unlink(outsideLink);
     const savedLazyDocument = await service.write("device-1", workspace.id, lazyDocument.id,
       { content: "let value = 2\n", expectedVersion: lazyDocument.version });
     assert.notEqual(savedLazyDocument.id, lazyDocument.id);

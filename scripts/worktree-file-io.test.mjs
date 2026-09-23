@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, link, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -164,6 +164,7 @@ test("editor read binds file identity and opened parent through a symlink swap",
   await writeFile(path.join(outside, "file.txt"), "outside\n");
   const args = ["read", ...await identity(source), "inside/file.txt", ...(await identity(file)).slice(1)];
   const result = await runEditor(args, Buffer.alloc(0), async marker => {
+    if (marker === "B") return;
     assert.equal(marker, "R");
     await rename(path.join(source, "inside"), path.join(source, "moved"));
     await symlink(outside, path.join(source, "inside"));
@@ -191,6 +192,7 @@ test("editor save stays in held parent and retains the original as recovery", as
   const args = ["edit", ...await identity(source), "inside/file.txt", ...(await identity(file)).slice(1), expected, String(input.length)];
   const result = await runEditor(args, input, async marker => {
     if (marker === "E") return;
+    if (marker === "B") return;
     assert.equal(marker, "D");
     await rename(path.join(source, "inside"), path.join(source, "moved"));
     await symlink(outside, path.join(source, "inside"));
@@ -306,4 +308,39 @@ test("transfers reject root and ancestor substitutions after path canonicalizati
       assert.equal((await readdir(other)).includes("result"), false);
     }
   }
+});
+
+test("lazy operations reject hard links and link-count changes during reads and saves", async (t) => {
+  if (process.platform !== "darwin") return;
+  const root = await directory(t);
+  const outside = await directory(t);
+  await writeFile(path.join(outside, "secret"), "secret");
+  await link(path.join(outside, "secret"), path.join(root, "linked"));
+  const rootId = await identity(root);
+  const linkedId = await identity(path.join(root, "linked"));
+  const listing = await runWithCheckpoints(["list", ...rootId, "", ...rootId.slice(1)], async () => {});
+  assert.equal(listing, "c\n");
+  for (const operation of ["read", "edit"]) {
+    const args = [operation, ...rootId, "linked", ...linkedId.slice(1)];
+    if (operation === "edit") args.push(createHash("sha256").update("secret").digest("hex"), "3");
+    const result = await runEditor(args, operation === "edit" ? Buffer.from("new") : Buffer.alloc(0));
+    assert.notEqual(result.code, 0);
+    assert.equal(result.stdout.length, 0);
+  }
+  // Capture an exclusive file identity, then add another link at each boundary.
+  for (const [operation, marker] of [["read", "R"], ["read", "B"], ["edit", "E"], ["edit", "B"], ["edit", "D"]]) {
+    const name = `${operation}-${marker}`;
+    await writeFile(path.join(root, name), "original");
+    const fileId = await identity(path.join(root, name));
+    const args = [operation, ...rootId, name, ...fileId.slice(1)];
+    if (operation === "edit") args.push(createHash("sha256").update("original").digest("hex"), "3");
+    const result = await runEditor(args, operation === "edit" ? Buffer.from("new") : Buffer.alloc(0), async checkpoint => {
+      if (checkpoint === marker) await link(path.join(root, name), path.join(outside, name));
+    });
+    assert.notEqual(result.code, 0, name);
+    assert.equal(result.stdout.length, 0, name);
+    assert.equal(await readFile(path.join(root, name), "utf8"), "original");
+    assert.equal(await readFile(path.join(outside, name), "utf8"), "original");
+  }
+  assert.equal(await readFile(path.join(outside, "secret"), "utf8"), "secret");
 });
