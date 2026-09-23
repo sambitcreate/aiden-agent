@@ -171,6 +171,7 @@ actor AidenChatCache {
         private var value: UInt64 = 0
         private var removed: [String: [String: UInt64]] = [:]
         private var purged: [String: UInt64] = [:]
+        private var summaryAuthority: [String: UInt64] = [:]
         private var metadataRemovalStarts: [String: UInt64] = [:]
         private var pending: [UInt64: (instanceId: String, chatId: String?)] = [:]
 
@@ -222,6 +223,22 @@ actor AidenChatCache {
             return token > (purged[instanceId] ?? 0) && token > (removed[instanceId]?[chatId] ?? 0)
         }
 
+        func reserveSummary(instanceId: String) -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            summaryAuthority[instanceId] = value
+            return value
+        }
+
+        func admitSummary(_ token: UInt64, instanceId: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard token >= (summaryAuthority[instanceId] ?? 0) else { return false }
+            summaryAuthority[instanceId] = token
+            return true
+        }
+
         func next() -> UInt64 {
             lock.lock()
             defer { lock.unlock() }
@@ -255,6 +272,10 @@ actor AidenChatCache {
     private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
 
+    nonisolated func reserveSummaryWrite(instanceId: String) -> UInt64 {
+        chatWriteClock.reserveSummary(instanceId: instanceId)
+    }
+
     nonisolated func reserveChatWrite() -> UInt64 {
         chatWriteClock.next()
     }
@@ -267,6 +288,13 @@ actor AidenChatCache {
     private var metadataCompletionTokens: [String: UInt64] = [:]
     private var workspaceWriteTokens: [String: [String: UInt64]] = [:]
     private var summaryWriteTokens: [String: UInt64] = [:]
+    private var admittedSummaries: [String: SummarySnapshot] = [:]
+    private var summaryFullTokens: [String: UInt64] = [:]
+    private var summaryRowTokens: [String: [String: UInt64]] = [:]
+
+    private func summaryRowAuthority(instanceId: String, chatId: String) -> UInt64 {
+        max(summaryFullTokens[instanceId] ?? 0, summaryRowTokens[instanceId]?[chatId] ?? 0)
+    }
     private var summaryWriteGenerations: [String: UInt64] = [:]
 
     init(
@@ -422,13 +450,13 @@ actor AidenChatCache {
             }
         }
         let cached = loadChatSummaries(instanceId: instanceId)
-        let summaryToken = summaryWriteTokens[instanceId] ?? 0
+        let summaryToken = summaryRowAuthority(instanceId: instanceId, chatId: chat.id)
         let existing = cached?.summaries.first { $0.id == chat.id }
         let winnerToken = max(listToken, chatWriteGenerations[instanceId]?[chat.id] ?? 0)
         if let winner = presentedWorkspaceChat(instanceId: instanceId, workspaceId: chat.workspaceId, chatId: chat.id),
-           summaryToken <= cutoff || (existing != nil && winnerToken >= summaryToken) {
+           summaryToken <= cutoff || (existing != nil && ((summaryFullTokens[instanceId] ?? 0) <= cutoff || winnerToken >= summaryToken)) {
             let summaries = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: [AidenChatSummary(chat: winner, preservingActivity: existing?.activity ?? .idle)])
-            try? persistChatSummaries(SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor), instanceId: instanceId, writeToken: max(authority, max(summaryToken, winnerToken)))
+            try? persistChatSummaries(SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor), instanceId: instanceId, writeToken: max(cutoff, max(summaryToken, winnerToken)), updatedRows: [chat.id: max(summaryToken, max(cutoff, winnerToken))])
         }
         return mayPublish
     }
@@ -566,6 +594,12 @@ actor AidenChatCache {
         var canonical = chat
         canonical.localTitleOverride = nil
         admittedChats[instanceId, default: [:]][chat.id] = canonical
+        if !canonical.isBotChat, writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) {
+            let cached = loadChatSummaries(instanceId: instanceId)
+            let activity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
+            let rows = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: [AidenChatSummary(chat: presenting(canonical, instanceId: instanceId), preservingActivity: activity)])
+            try? persistChatSummaries(.init(summaries: rows, nextCursor: cached?.nextCursor), instanceId: instanceId, writeToken: writeToken, updatedRows: [chat.id: writeToken])
+        }
         try save(
             ChatEnvelope(instanceId: instanceId, chat: canonical),
             to: fileURL(kind: "chats", instanceId, chat.id)
@@ -575,6 +609,10 @@ actor AidenChatCache {
     }
 
     func loadChatSummaries(instanceId: String, includingRemoved: Bool = false) -> SummarySnapshot? {
+        if let snapshot = admittedSummaries[instanceId] {
+            return .init(summaries: includingRemoved ? snapshot.summaries : snapshot.summaries.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }, nextCursor: snapshot.nextCursor)
+        }
+        guard (chatPurgeGenerations[instanceId] ?? 0) == 0 else { return nil }
         guard let envelope: ChatSummaryEnvelope = load(
             ChatSummaryEnvelope.self,
             from: fileURL(kind: "summaries", instanceId),
@@ -595,52 +633,93 @@ actor AidenChatCache {
         return SummarySnapshot(summaries: includingRemoved ? summaries : summaries.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) }, nextCursor: envelope.snapshot.nextCursor)
     }
 
+    func summaryState(instanceId: String) -> (snapshot: SummarySnapshot?, fullToken: UInt64, rowTokens: [String: UInt64]) {
+        (loadChatSummaries(instanceId: instanceId), summaryFullTokens[instanceId] ?? 0, summaryRowTokens[instanceId] ?? [:])
+    }
+
+    @discardableResult
     func saveChatSummaries(
         _ snapshot: SummarySnapshot,
         instanceId: String,
         generation: UInt64? = nil,
-        writeToken: UInt64
-    ) async throws {
+        writeToken: UInt64,
+        preservingCursor: Bool = false,
+        changedIDs: Set<String>? = nil,
+        editTokens: [String: UInt64]? = nil,
+        activityOnlyIDs: Set<String> = []
+    ) async throws -> Bool {
         await beforeMetadataWrite?()
-        guard metadataWriteIsRetained(writeToken, instanceId: instanceId) else { return }
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId) else { return false }
         var retained = snapshot.summaries.filter {
             !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id)
         }
-        var nextCursor = snapshot.nextCursor
+        var updatedRows: [String: UInt64]?
+        if let changedIDs {
+            let changedIDs = changedIDs.filter { (editTokens?[$0] ?? writeToken) >= summaryRowAuthority(instanceId: instanceId, chatId: $0) }
+            updatedRows = Dictionary(uniqueKeysWithValues: changedIDs.map { ($0, editTokens?[$0] ?? writeToken) })
+            let existing = loadChatSummaries(instanceId: instanceId)?.summaries ?? []
+            let changes = retained.filter { changedIDs.contains($0.id) }.compactMap { row -> AidenChatSummary? in
+                guard activityOnlyIDs.contains(row.id) else { return row }
+                guard var current = existing.first(where: { $0.id == row.id }) else { return nil }
+                current.activity = row.activity
+                return current
+            }
+            retained = AidenChatSummaryPage.merged(current: existing.filter { !changedIDs.contains($0.id) }, appending: changes)
+        }
+        var nextCursor = preservingCursor ? (loadChatSummaries(instanceId: instanceId).map(\.nextCursor) ?? snapshot.nextCursor) : snapshot.nextCursor
         let partial = metadataWriteIsPartial(writeToken, instanceId: instanceId)
         if partial {
             let cached = loadChatSummaries(instanceId: instanceId)
             retained = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: retained)
-            nextCursor = cached?.nextCursor
+            nextCursor = cached.map(\.nextCursor) ?? snapshot.nextCursor
         }
-        try persistChatSummaries(SummarySnapshot(summaries: retained, nextCursor: nextCursor), instanceId: instanceId, generation: partial ? nil : generation, writeToken: writeToken)
+        if updatedRows?.isEmpty == true { return true }
+        let acceptedSnapshot = SummarySnapshot(summaries: retained, nextCursor: nextCursor)
+        do {
+            return try persistChatSummaries(acceptedSnapshot, instanceId: instanceId, generation: partial ? nil : generation, writeToken: writeToken, updatedRows: updatedRows)
+        } catch {
+            // A validated, admitted page remains usable when only disk IO fails.
+            if admittedSummaries[instanceId] == acceptedSnapshot, updatedRows != nil || summaryWriteTokens[instanceId] == writeToken { return true }
+            throw error
+        }
     }
 
-    private func persistChatSummaries(_ snapshot: SummarySnapshot, instanceId: String, generation: UInt64? = nil, writeToken: UInt64) throws {
-        guard writeToken >= (summaryWriteTokens[instanceId] ?? 0) else { return }
+    @discardableResult
+    private func persistChatSummaries(_ snapshot: SummarySnapshot, instanceId: String, generation: UInt64? = nil, writeToken: UInt64, isRemoval: Bool = false, updatedRows: [String: UInt64]? = nil) throws -> Bool {
+        guard updatedRows != nil || writeToken >= (summaryWriteTokens[instanceId] ?? 0) else { return false }
         guard snapshot.summaries.count <= maxSummaryCacheItems else {
             throw CocoaError(.fileWriteOutOfSpace)
         }
         guard snapshot.summaries.allSatisfy(AidenChatSummary.isValidCachedProjection) else {
             throw AidenRemoteContractError.invalidJSON
         }
-        if let generation {
-            guard generation >= (summaryWriteGenerations[instanceId] ?? 0) else { return }
-            summaryWriteGenerations[instanceId] = generation
+        let envelope = ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard try encoder.encode(envelope).count <= maxSummaryCacheFileBytes else {
+            throw CocoaError(.fileWriteOutOfSpace)
         }
-        summaryWriteTokens[instanceId] = writeToken
-        try save(
-            ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot)),
-            to: fileURL(kind: "summaries", instanceId),
-            maximumBytes: maxSummaryCacheFileBytes
-        )
+        // Model-local generations cannot arbitrate between different Home owners.
+        // Removal runs synchronously on this actor. A concurrently reserved
+        // HTTP request cannot suppress its durable rewrite before cleanup ends.
+        if updatedRows == nil, !isRemoval {
+            guard chatWriteClock.admitSummary(writeToken, instanceId: instanceId) else { return false }
+        } else { _ = chatWriteClock.admitSummary(writeToken, instanceId: instanceId) }
+        if let updatedRows {
+            for (id, token) in updatedRows { summaryRowTokens[instanceId, default: [:]][id] = max(token, summaryRowTokens[instanceId]?[id] ?? 0) }
+        } else { summaryFullTokens[instanceId] = writeToken }
+        summaryWriteTokens[instanceId] = max(writeToken, summaryWriteTokens[instanceId] ?? 0)
+        admittedSummaries[instanceId] = snapshot
+        try save(envelope, to: fileURL(kind: "summaries", instanceId), maximumBytes: maxSummaryCacheFileBytes)
+        return true
     }
 
     func reconcileChatSummary(_ chat: AidenChat, instanceId: String, writeToken: UInt64) async throws {
         await beforeMetadataWrite?()
         guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
               !isChatHidden(instanceId: instanceId, chatId: chat.id),
-              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id), !chat.isBotChat else { return }
+              isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id), !chat.isBotChat,
+              writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) else { return }
         let cached = loadChatSummaries(instanceId: instanceId)
         let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
         let summaries = AidenChatSummaryPage.merged(
@@ -649,17 +728,19 @@ actor AidenChatCache {
         )
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
-            instanceId: instanceId, writeToken: writeToken
+            instanceId: instanceId, writeToken: writeToken, updatedRows: [chat.id: writeToken]
         )
     }
 
-    func removeChatSummary(instanceId: String, chatId: String, writeToken: UInt64? = nil) throws {
+    func removeChatSummary(instanceId: String, chatId: String, writeToken: UInt64? = nil, beforeWrite: (@Sendable () -> Void)? = nil) throws {
+        let removalToken = reserveSummaryWrite(instanceId: instanceId)
         guard let cached = loadChatSummaries(instanceId: instanceId, includingRemoved: true) else { return }
         let summaries = cached.summaries.filter { $0.id != chatId }
         guard summaries.count != cached.summaries.count else { return }
+        beforeWrite?()
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
-            instanceId: instanceId, writeToken: writeToken.map { max($0, summaryWriteTokens[instanceId] ?? 0) } ?? reserveChatWrite()
+            instanceId: instanceId, writeToken: removalToken, isRemoval: true, updatedRows: [chatId: removalToken]
         )
     }
 
@@ -761,6 +842,9 @@ actor AidenChatCache {
         workspaceFetchedTitles.removeValue(forKey: instanceId)
         admittedWorkspaceLists.removeValue(forKey: instanceId)
         summaryWriteTokens.removeValue(forKey: instanceId)
+        admittedSummaries.removeValue(forKey: instanceId)
+        summaryFullTokens.removeValue(forKey: instanceId)
+        summaryRowTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
         admittedChats.removeValue(forKey: instanceId)
         renameTitles.removeValue(forKey: instanceId)
