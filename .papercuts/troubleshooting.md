@@ -541,6 +541,17 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - For a default-on environment gate, do not use trimmed-value truthiness to detect absence: an unset variable may enable the default, but explicitly empty or whitespace-only overrides must remain fail-closed.
 - E2E migration fixtures that edit persisted chat files while Electron is still running can be overwritten by shutdown drains. Seed disk state only after the app closes and before the replacement process launches.
 
+## 2026-09-18 — CI feedback optimization
+
+- A fresh `npm ci` on this Mac again left Electron's executable absent; run `node node_modules/electron/install.js` before local E2E. The initial shard command stopped before starting any tests.
+- The host defaults to Node 26, while CI pins 22.22.3. Validate registry parsing and process behavior with the installed Node 22 path.
+- Workflow text tests can pass while referenced CLI arguments or package scripts are missing; validate the actual matrix commands and package entry points before pushing.
+- Filename-only lane balancing initially placed native helper tests away from their build prerequisites. Keep binary-dependent tests with those builds and cover that association in registry checks.
+- Local browser E2E encountered an assistant overlay intercepting an Add to chat click. Preserve the strict test and compare hosted behavior before changing product or fixture code.
+- Some `.mjs` regressions import TypeScript modules with `.js` specifiers. Keep ordinary lane tests under the original tsx resolver; plain Node loses that resolution behavior.
+- Moving release eligibility from per-step conditions to an admission job requires updating existing distribution and diagnostics policy tests to assert the new job boundary.
+- The core lane's browser-file regression also launches Chromium. A warm local browser cache hid the missing hosted prerequisite; declare browser installation on both core and renderer matrix entries and check it against preserved browser modes.
+
 - 2026-09-19 provider-streams: fresh worktree omits ignored `.memory`; read canonical checkout project context and will add a lane-specific note. Installed private node_modules with scripts disabled to avoid concurrent native/Electron builds.
 - 2026-09-19 provider-streams: explicit `git add` reported ignored `.papercuts` even while staging its tracked file; used explicit force-add for required lane artifacts.
 ## 2026-09-19 — upgrade compaction checkpoint recovery
@@ -850,6 +861,13 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - `npm run test:bots` stops before tests because the native inbox writer links against the CLT macOS 27 SDK with unsupported `arm64e.x1`; `npm --ignore-scripts run test:bots` passes 446 TypeScript tests, but native-helper-dependent pretests remain unverified.
 - Deep OpenCode review exposed the receipt-written/manifest-unpublished crash window after remount: publishing the live device would disagree with the old receipt. Preserve the receipt token in the durable manifest and return a separately re-inspected live token.
 - PR #209 review: Pullfrog required either a remount-stable volume identity or an explicitly documented, tested trust assumption. Node's `fs.statfs` exposes no `f_fsid`, so a real volume identity needs a native probe or a `diskutil` subprocess; the documented assumption is the patch-release choice, so the accepted substituted-volume case and the checks that still fail closed are now stated in `sameHomeByInode` and named in the remount regression.
+
+## 2026-09-21 — CI refresh
+- Reconciled PR #139 with current main in a new worktree; stale registry lacks newly shipped regression files and the worktree file-I/O helper prerequisite.
+- Removed the draft release-admission rewrite from this CI optimization scope to avoid overlapping the active release-hardening work.
+- Local full validation hits the existing CLT MacOSX27 SDK / linker architecture mismatch in the bot inbox writer build. TypeScript/lint and CI-policy tests pass; use pinned Xcode 26.6 hosted native/Electron validation without changing global developer-tool selection.
+- Adversarial review: added full-validation fallback for empty diffs, restricted documentation skips to prose extensions, and checked non-file execution modes/build prerequisites so registry coverage cannot silently lose Rust, browser, coverage, Ruby or native work.
+- Greptile caught iOS-only selection omitting shipping/TestFlight policies held by a desktop lane. Added conditional Node/install/policy steps to the selected iOS job and an invariant test; full runs keep the existing single preserved policy execution.
 
 ## 2026-09-21 — 0.42.2 release gates
 

@@ -154,7 +154,15 @@
     "test:browser": "tsx --test main/services/browser/*.test.ts main/services/browser-tools.test.ts main/services/browser-discovery.test.ts renderer/lib/browser-*.test.ts renderer/components/browser-panel.test.tsx",
     "test:custom-model-options": "tsx --test main/services/custom-model-options.test.ts",
     "test:tool-outputs": "tsx --test main/services/tool-output-store.test.ts main/services/coding-tools.test.ts main/services/mcp-tool-result.test.ts main/services/generation-timeline.test.ts main/services/chat-application-service.test.ts main/services/aiden-remote-protocol.test.ts renderer/components/activity-feed.test.tsx renderer/components/onboarding-flow.test.tsx",
-"test:chat-pull-requests": "tsx --test renderer/shared/chat-pull-requests.test.ts main/services/chat-pull-request-store.test.ts main/services/chat-pull-request-service.test.ts main/services/pull-request-current-resolver.test.ts main/services/pull-request-create-reconciliation.test.ts main/services/github-pull-request.test.ts"
+    "test:chat-pull-requests": "tsx --test renderer/shared/chat-pull-requests.test.ts main/services/chat-pull-request-store.test.ts main/services/chat-pull-request-service.test.ts main/services/pull-request-current-resolver.test.ts main/services/pull-request-create-reconciliation.test.ts main/services/github-pull-request.test.ts",
+    "test:ci": "node scripts/run-ci-tests.mjs",
+    "test:ci:core-git": "node scripts/run-ci-tests.mjs --lane core-git",
+    "test:ci:runtime-subagents": "node scripts/run-ci-tests.mjs --lane runtime-subagents",
+    "test:ci:renderer-other": "node scripts/run-ci-tests.mjs --lane renderer-other",
+    "test:ci:preserved": "node scripts/run-ci-tests.mjs --preserved",
+    "test:ci:registry": "node --test scripts/ci-test-registry.test.mjs",
+    "test:ci-policy": "node --test scripts/ci-changes.test.mjs scripts/ci-required.test.mjs scripts/ci-e2e-shards.test.mjs scripts/ci-test-registry.test.mjs scripts/check-ci-policy.test.mjs scripts/ci-timings.test.mjs",
+    "test:e2e:diagnostics:production:run": "AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests/e2e/diagnostics-production.spec.ts --config=playwright.config.ts --fail-on-flaky-tests"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
@@ -228,7 +236,8 @@
     "tsx": "^4.20.5",
     "typescript": "^5.5.3",
     "vite": "^8.0.2",
-    "wait-on": "^9.0.10"
+    "wait-on": "^9.0.10",
+    "yaml": "2.9.0"
   },
   "engines": {
     "node": ">=22.19"
