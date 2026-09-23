@@ -9,3 +9,9 @@ Register stdin error handling before the first write, record control failure, an
 Regressions cover async EPIPE, non-EPIPE EIO, synchronous throws, unsettled-before-close behavior, zero-exit rejection, and watchdog cleanup. The three initial regressions fail on baseline. The existing real native identity-drift, success, cancellation, signals, and cleanup cases remain. Both independent GPT-5.6 Sol medium reviews cleared the change. Full phase-5D, type-check, focused lint and final hosted validation are recorded in the PR.
 
 This is host transport error handling, not a shared native client contract, UI change, new permission, or onboarding capability. No rollout status change.
+
+## Write settlement follow-up
+
+PR #230 review 4078952232 exposed close-before-write-settlement ordering: child-process close accounts for readable stdio but does not prove that the stdin write callback completed. A valid buffered frame could previously be returned before a late write failure. The wrapper now awaits both helper close and control-write settlement; callback success permits decoding, while callback errors, independent stream errors, synchronous throws, and the watchdog permanently fail transport and settle the write wait. The watchdog also bounds a missing callback after helper close.
+
+Four deterministic valid-response cases cover close-first success, callback error, independent stream error, and missing callback/watchdog. Initial success/error ordering tests both fail on 6de3b9ec. Full phase-5D now has 16 shell + 25 package/signing cases. Both independent Sol medium reviewers cleared this ordering correction; type-check, focused lint, and diff checks pass.

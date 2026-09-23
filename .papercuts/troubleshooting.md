@@ -859,3 +859,5 @@ SDK UriTemplate.variableNames preserves duplicates: deduplicate before exact inp
 ## 2026-09-23 — shell helper early-exit stdin error
 
 - Workspace identity validation may exit before reading the control frame. A child-process error listener does not catch stdin EPIPE: install a stdin listener before writing, record transport failure, close control, and still await close/watchdog before rejecting. Keep write inside try/finally so synchronous failure also cleans timers/abort listeners/streams. Retain an error listener through stream destruction for late events.
+
+- Child `close` is not stdin write settlement. Await the write callback alongside helper close before decoding a valid frame; retain the independent error listener and bound a missing callback with the existing watchdog. Test close-first with valid response bytes and late callback/stream failure.

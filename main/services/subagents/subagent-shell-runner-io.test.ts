@@ -329,3 +329,48 @@ test("a failed control write keeps the watchdog until helper close", async () =>
   assert.equal(stdout.destroyed, true);
   assert.equal(stderr.destroyed, true);
 });
+
+for (const settlement of ["success", "callback-error", "stream-error", "watchdog"] as const) {
+  test(`helper close waits for the control-write callback (${settlement})`, async () => {
+    const child = new EventEmitter();
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let finishWrite: ((error?: Error | null) => void) | undefined;
+    stdin.write = ((_request: Uint8Array, callback: (error?: Error | null) => void) => {
+      finishWrite = callback;
+      return true;
+    }) as typeof stdin.write;
+    Object.assign(child, { stdin, stdout, stderr, kill: () => true });
+    const pending = runSubagentShellProductionInert({
+      workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+      command: "printf done", effectDigest: digest, nonce,
+      timeoutMs: 1, signal: new AbortController().signal,
+      spawnProcess: (() => child) as never,
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    const response = Buffer.alloc(164);
+    response.write("AIDSR001", 0, "ascii");
+    response.writeUInt32BE(1, 8);
+    response.writeUInt32BE(1, 12);
+    response.writeUInt32BE(1, 24);
+    response.write(nonce, 36, "ascii");
+    response.write(digest, 100, "ascii");
+    stdout.write(response);
+    child.emit("close", 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, "a valid response cannot precede write settlement");
+    assert.ok(finishWrite);
+    const error = Object.assign(new Error("late EPIPE"), { code: "EPIPE" });
+    if (settlement === "callback-error") finishWrite(error);
+    else if (settlement === "stream-error") stdin.emit("error", error);
+    else if (settlement === "success") finishWrite(null);
+    // The watchdog case deliberately never settles the callback.
+    if (settlement === "success") assert.equal((await pending).outcome, "exited");
+    else await assert.rejects(pending, /failed before returning a verified outcome/u);
+    assert.equal(stdin.destroyed, true);
+    assert.equal(stdout.destroyed, true);
+    assert.equal(stderr.destroyed, true);
+  });
+}

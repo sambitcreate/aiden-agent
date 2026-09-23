@@ -228,18 +228,25 @@ export async function runSubagentShellProductionInert(input: {
   let bytes = 0;
   let helperErrorBytes = 0;
   let controlWriteFailed = false;
+  let settleControlWrite!: () => void;
+  const controlWritten = new Promise<void>((resolve) => { settleControlWrite = resolve; });
   const closeControl = (): void => {
     child.stdin.destroy();
   };
   // A helper can reject its argv/workspace before reading the control payload.
   // Keep handling late stream errors through destruction, then reject only after
   // helper close (or the existing watchdog) has completed the lifecycle.
-  child.stdin.on("error", () => {
+  const failControlWrite = (): void => {
     controlWriteFailed = true;
     closeControl();
-  });
+    settleControlWrite();
+  };
+  child.stdin.on("error", failControlWrite);
   input.signal.addEventListener("abort", closeControl, { once: true });
-  const watchdog = setTimeout(() => child.kill("SIGKILL"), input.timeoutMs + 2_500);
+  const watchdog = setTimeout(() => {
+    failControlWrite();
+    child.kill("SIGKILL");
+  }, input.timeoutMs + 2_500);
   child.stdout.on("data", (chunk: Buffer) => {
     bytes += chunk.length;
     if (bytes > MAX_PROTOCOL_BYTES) child.kill("SIGKILL");
@@ -257,12 +264,15 @@ export async function runSubagentShellProductionInert(input: {
   );
   try {
     try {
-      child.stdin.write(request);
+      child.stdin.write(request, (error) => {
+        if (error) failControlWrite();
+        else settleControlWrite();
+      });
     } catch {
-      controlWriteFailed = true;
-      closeControl();
+      failControlWrite();
     }
-    const ended = await closed;
+    // Child close accounts for readable stdio, not completion of stdin writes.
+    const [ended] = await Promise.all([closed, controlWritten]);
     if (controlWriteFailed || ended.code !== 0 || ended.signal !== null) {
       throw new Error("The shell helper failed before returning a verified outcome.");
     }
