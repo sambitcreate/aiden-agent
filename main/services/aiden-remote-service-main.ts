@@ -55,6 +55,7 @@ import {
 } from "./aiden-remote-streams.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
+import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import { chatStore } from "./chat-store.js";
 import { AidenRemoteChatProgressService } from "./aiden-remote-chat-progress.js";
@@ -445,6 +446,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           });
           activeStreams = streams;
           const chats = new AidenRemoteChatService({
+            attachments: remoteAttachmentStore,
             application: chatApplicationService,
             chatStore,
             generation: {

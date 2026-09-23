@@ -13,6 +13,11 @@
 //
 // Design reference: pi-telegram (https://github.com/llblab/pi-telegram, MIT).
 
+export const MAX_TELEGRAM_QUEUE_TURNS = 20;
+export const MAX_TELEGRAM_QUEUE_BYTES = 32 * 1024 * 1024;
+
+export class TelegramQueueCapacityError extends Error {}
+
 export type QueueLane = "control" | "priority" | "default";
 
 import type { Attachment } from "../types.js";
@@ -48,6 +53,7 @@ export interface QueuedTelegramTurn {
   /** Process-local opaque id used by Telegram queue controls. */
   readonly id?: number;
   readonly lane: QueueLane;
+  readonly dispatchNext?: boolean;
   readonly text: string;
   /** Opaque skill selection; instructions are resolved only at dispatch/generation. */
   readonly skillInvocation?: TelegramSkillInvocation;
@@ -67,6 +73,13 @@ export interface QueuedTelegramTurn {
   readonly binding?: TelegramBotBindingSnapshot;
 }
 
+export function assertTelegramQueueCapacity(turns: readonly QueuedTelegramTurn[]): void {
+  if (turns.length > MAX_TELEGRAM_QUEUE_TURNS ||
+    Buffer.byteLength(JSON.stringify(turns), "utf8") > MAX_TELEGRAM_QUEUE_BYTES) {
+    throw new TelegramQueueCapacityError("The Telegram queue is full. Remove a queued prompt or use /stop before sending more.");
+  }
+}
+
 export interface TelegramQueueDependencies {
   isActive(): boolean;
   hasPendingDispatch(): boolean;
@@ -80,13 +93,19 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
   let nextId = 1;
 
   function enqueue(turn: QueuedTelegramTurn): QueuedTelegramTurn {
+    const duplicate = turn.sourceMessageId === undefined ? undefined : findBySource(
+      turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding,
+    );
+    if (duplicate) return duplicate;
+    assertTelegramQueueCapacity([...list(), turn]);
     const accepted = turn.id === undefined ? { ...turn, id: nextId++ } : turn;
     switch (accepted.lane) {
       case "control":
         control.push(accepted);
         break;
       case "priority":
-        priority.push(accepted);
+        if (accepted.dispatchNext) priority.unshift(accepted);
+        else priority.push(accepted);
         break;
       default:
         def.push(accepted);
@@ -177,10 +196,17 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
   }
 
   function replace(id: number, replacement: QueuedTelegramTurn): boolean {
-    const current = remove(id);
-    if (!current) return false;
-    enqueue({ ...replacement, id });
-    return true;
+    for (const lane of [control, priority, def]) {
+      const index = lane.findIndex((turn) => turn.id === id);
+      if (index < 0) continue;
+      const updated = { ...replacement, id, lane: lane[index]!.lane };
+      if (Buffer.byteLength(JSON.stringify(list().map((turn) => turn.id === id ? updated : turn)), "utf8") > MAX_TELEGRAM_QUEUE_BYTES) {
+        throw new TelegramQueueCapacityError("The Telegram queue is full. Remove attachments before editing this prompt.");
+      }
+      lane[index] = updated;
+      return true;
+    }
+    return false;
   }
 
   /** Drain control messages without dispatch gates (commands bypass the LLM). */

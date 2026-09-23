@@ -55,6 +55,11 @@ function StepLine({ step }: { step: AgentStep }) {
       <span className={`${toneClass(line.tone)} font-medium`}>{line.verb}</span>
       {line.object ? <span className="font-normal text-tertiary"> {line.object}</span> : null}
       {isToolStep(step) && step.lineChanges ? <LineChanges {...step.lineChanges} /> : null}
+      {isToolStep(step) && step.producedFile ? (
+        <span className="ml-2 rounded-control bg-list-hover px-2 py-0.5 text-mini text-secondary" title={step.producedFile.relativePath}>
+          File {step.producedFile.operation} · {step.producedFile.relativePath.split("/").pop()}
+        </span>
+      ) : null}
     </>
   );
 }

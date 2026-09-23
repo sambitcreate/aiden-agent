@@ -187,7 +187,8 @@ const featureBentos: FeatureBento[] = [
     id: "workspace",
     group: "create",
     title: "Workspace Agent",
-    description: "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response.",
+    description:
+      "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response. Aiden follows your global and workspace AGENTS.md guidance, refreshing it between model turns.",
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",
@@ -205,7 +206,8 @@ const featureBentos: FeatureBento[] = [
     id: "subagents",
     group: "create",
     title: "Native Subagents",
-    description: "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
+    description:
+      "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
     size: "standard",
@@ -214,7 +216,8 @@ const featureBentos: FeatureBento[] = [
     id: "browser",
     group: "create",
     title: "Browser & Annotations",
-    description: "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
+    description:
+      "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
     icon: Globe2,
     imageUrl: FEATURE_ILLUSTRATIONS.browser,
     size: "standard",
@@ -223,7 +226,7 @@ const featureBentos: FeatureBento[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat.",
+    description: "Browse, search, edit, and safely save workspace text files beside the chat. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
     size: "standard",
@@ -251,7 +254,8 @@ const featureBentos: FeatureBento[] = [
     id: "gitWorkflows",
     group: "create",
     title: "Git Workflows",
-    description: "Switch branches, create reviewed commits, and push with stale-state guards.",
+    description:
+      "Switch branches, create reviewed commits, push with stale-state guards, and link or open pull requests right from the chat.",
     icon: GitBranch,
     imageUrl: FEATURE_ILLUSTRATIONS.gitWorkflows,
     size: "wide",
@@ -270,7 +274,8 @@ const featureBentos: FeatureBento[] = [
     id: "models",
     group: "extend",
     title: "Model Freedom",
-    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
+    description:
+      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
     icon: Blocks,
     imageUrl: FEATURE_ILLUSTRATIONS.models,
     size: "hero",
@@ -318,7 +323,7 @@ const featureBentos: FeatureBento[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Create reusable instructions, then type $ to attach one. Turn all skills off anytime in Settings → Skills.",
+    description: "Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     imageUrl: FEATURE_ILLUSTRATIONS.skills,
     size: "wide",
@@ -327,7 +332,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Browse plugins, connect hosted MCP servers, and expose only the tools you enable.",
+    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",
@@ -386,7 +391,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Aiden in Telegram",
     description:
-      "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
+      "Use models, skills, files, and voice from your paired account. Queue follow-ups, interrupt a turn, or stop pending work.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",
@@ -672,10 +677,20 @@ export function OnboardingFlow() {
     setIndex(2);
   };
 
-  const openCustomProvider = () => setCustomProvider((current) => current ?? ({
-    id: `custom:${crypto.randomUUID()}`, kind: "openai", label: "Custom Provider", baseUrl: "",
-    models: [], needsKey: true, hasKey: false, deployment: "hosted",
-  }));
+  const openCustomProvider = () =>
+    setCustomProvider(
+      (current) =>
+        current ?? {
+          id: `custom:${crypto.randomUUID()}`,
+          kind: "openai",
+          label: "Custom Provider",
+          baseUrl: "",
+          models: [],
+          needsKey: true,
+          hasKey: false,
+          deployment: "hosted",
+        },
+    );
 
   const next = async () => {
     if (!canContinue || savingRef.current) return;
@@ -722,7 +737,10 @@ export function OnboardingFlow() {
         await completeProviderStep("openai-codex");
         return;
       }
-      if (choice === "custom") { openCustomProvider(); return; }
+      if (choice === "custom") {
+        openCustomProvider();
+        return;
+      }
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
@@ -1061,48 +1079,56 @@ export function OnboardingFlow() {
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
-                  {providerChoices.filter((item) => ["openai-signin", "lmstudio", "ollama", "custom"].includes(item.id)).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      disabled={saving}
-                      aria-pressed={choice === item.id}
-                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
-                      onClick={() => {
-                        selectProviderChoice(item.id);
-                        setBuiltinChoiceId(null);
-                        setProviderSkipped(false);
-                        if (item.id === "custom") openCustomProvider();
-                        if (item.id === "openai-key" || item.id === "anthropic") {
-                          setApiKeyDialogChoice(item.id);
-                        }
-                      }}
-                    >
-                      <span className="grid size-8 shrink-0 place-items-center text-primary">
-                        {item.iconProviderId ? (
-                          <ProviderIcon
-                            providerId={item.iconProviderId}
-                            providerLabel={item.title}
-                            className="size-5"
-                          />
-                        ) : (
-                          <Network className="size-5" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <Text variant="small-strong" className="block">
-                          {item.title}
-                        </Text>
-                        <Text variant="small" color="secondary" className="mt-0.5 block leading-4">
-                          {item.description}
-                        </Text>
-                      </span>
-                      <Check
-                        aria-hidden="true"
-                        className={`mt-0.5 size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
-                      />
-                    </button>
-                  ))}
+                  {providerChoices
+                    .filter((item) =>
+                      ["openai-signin", "lmstudio", "ollama", "custom"].includes(item.id),
+                    )
+                    .map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={saving}
+                        aria-pressed={choice === item.id}
+                        className={`flex min-h-[68px] items-start gap-2.5 rounded-control px-3 py-2.5 text-left outline-none transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "bg-list-selection" : "bg-well hover:bg-control"}`}
+                        onClick={() => {
+                          selectProviderChoice(item.id);
+                          setBuiltinChoiceId(null);
+                          setProviderSkipped(false);
+                          if (item.id === "custom") openCustomProvider();
+                          if (item.id === "openai-key" || item.id === "anthropic") {
+                            setApiKeyDialogChoice(item.id);
+                          }
+                        }}
+                      >
+                        <span className="grid size-8 shrink-0 place-items-center text-primary">
+                          {item.iconProviderId ? (
+                            <ProviderIcon
+                              providerId={item.iconProviderId}
+                              providerLabel={item.title}
+                              className="size-5"
+                            />
+                          ) : (
+                            <Network className="size-5" />
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <Text variant="small-strong" className="block">
+                            {item.title}
+                          </Text>
+                          <Text
+                            variant="small"
+                            color="secondary"
+                            className="mt-0.5 block leading-4"
+                          >
+                            {item.description}
+                          </Text>
+                        </span>
+                        <Check
+                          aria-hidden="true"
+                          className={`mt-0.5 size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
+                        />
+                      </button>
+                    ))}
                 </div>
                 {choice === "openai-signin" ? (
                   <div className="mt-3">
@@ -1147,13 +1173,27 @@ export function OnboardingFlow() {
                     className="mt-2 rounded-card bg-well p-2"
                   >
                     <div className="grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
-                      {providerChoices.filter((item) => ["openai-key", "anthropic", "tailscale"].includes(item.id)).map((item) => (
-                        <Button key={item.id} variant="transparent" disabled={saving}
-                          aria-pressed={choice === item.id} onClick={() => {
-                            selectProviderChoice(item.id); setBuiltinChoiceId(null); setProviderSkipped(false);
-                            if (item.id === "openai-key" || item.id === "anthropic") setApiKeyDialogChoice(item.id);
-                          }}>{item.title}</Button>
-                      ))}
+                      {providerChoices
+                        .filter((item) =>
+                          ["openai-key", "anthropic", "tailscale"].includes(item.id),
+                        )
+                        .map((item) => (
+                          <Button
+                            key={item.id}
+                            variant="transparent"
+                            disabled={saving}
+                            aria-pressed={choice === item.id}
+                            onClick={() => {
+                              selectProviderChoice(item.id);
+                              setBuiltinChoiceId(null);
+                              setProviderSkipped(false);
+                              if (item.id === "openai-key" || item.id === "anthropic")
+                                setApiKeyDialogChoice(item.id);
+                            }}
+                          >
+                            {item.title}
+                          </Button>
+                        ))}
                     </div>
                     {providers.isLoading && moreProviders.length === 0 ? (
                       <Text variant="small" color="secondary" className="block px-2 py-3">
@@ -1281,7 +1321,9 @@ export function OnboardingFlow() {
                       focus a tile to learn more.
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
-                      Phone and tablet access starts off. After setup, choose Connect a device in Settings → Aiden On The Go; Aiden must stay running, and Tailscale is optional.
+                      Phone and tablet access starts off. After setup, choose Connect a device in
+                      Settings → Aiden On The Go; Aiden must stay running, and Tailscale is
+                      optional.
                     </Text>
                   </div>
                 </div>
@@ -1397,17 +1439,25 @@ export function OnboardingFlow() {
         </div>
       </section>
       {customProvider ? (
-        <ProviderEditor provider={customProvider} open layer="onboarding" requireReady
-          onOpenChange={(open) => { if (!open) setCustomProvider(null); }}
+        <ProviderEditor
+          provider={customProvider}
+          open
+          layer="onboarding"
+          requireReady
+          onOpenChange={(open) => {
+            if (!open) setCustomProvider(null);
+          }}
           onSaved={async () => {
             const refreshed = await providersApi.list();
             queryClient.setQueryData(queryKeys.providers, refreshed);
             const ready = refreshed.find((provider) => provider.id === customProvider.id);
             const model = ready?.defaultModel;
-            if (!ready || !model || !ready.models.includes(model)) throw new Error("Choose an available default model before continuing.");
+            if (!ready || !model || !ready.models.includes(model))
+              throw new Error("Choose an available default model before continuing.");
             await completeProviderStep(ready.id);
             persistModelSelection(ready.id, model);
-          }} />
+          }}
+        />
       ) : null}
       {settingUpProvider ? (
         <BuiltinProviderEditor

@@ -24,6 +24,22 @@ export function ReasoningBlock({
   active = false,
   label = "Thinking",
 }: ReasoningBlockProps) {
+  if (!content.trim()) {
+    return (
+      <div role="status" aria-live="polite" className="reasoning-surface rounded-card bg-well px-3 py-2 text-small-strong text-secondary">
+        <span className={cn(active && "agent-thinking-shimmer")}>{label}</span>
+      </div>
+    );
+  }
+  return <ReadableReasoningBlock content={content} streaming={streaming} active={active} label={label} />;
+}
+
+function ReadableReasoningBlock({
+  content,
+  streaming = false,
+  active = false,
+  label = "Thinking",
+}: ReasoningBlockProps) {
   const contentId = React.useId();
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const followTailRef = React.useRef(streaming);

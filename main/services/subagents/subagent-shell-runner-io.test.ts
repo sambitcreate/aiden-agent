@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import {
   decodeSubagentShellResponse,
@@ -210,7 +210,8 @@ test("workspace identity drift is rejected before shell execution", async (t) =>
   assert.equal((await stat(rootPath)).isDirectory(), true);
 });
 
-test("a deliberate setsid double-fork proves the documented containment limit and self-cleans", async (t) => {
+for (const delay of [false, true]) {
+test(`a deliberate setsid double-fork proves the documented containment limit and self-cleans${delay ? " after delayed detachment" : ""}`, async (t) => {
   if (process.platform !== "darwin") return;
   const rootPath = await workspace(t);
   const marker = path.join(rootPath, "detached.pid");
@@ -244,7 +245,8 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   };
   t.after(cleanup);
   try {
-    const result = await run(t, `${fixture} ${marker}`);
+    const result = await run(t, `${fixture} ${marker}${delay ? " --delay-detach" : ""}`);
+    assert.equal(result.exitCode, 0);
     assert.equal(result.outcome, "exited");
     const markerDeadline = Date.now() + 20_000;
     while (Date.now() < markerDeadline) {
@@ -264,4 +266,165 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   } finally {
     await cleanup();
   }
+});
+
+}
+
+for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
+  test(`control-channel ${failure} failure waits for helper close and rejects normally`, async () => {
+    const child = new EventEmitter();
+    const stdin = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(Object.assign(new Error(`write ${failure}`), { code: failure }));
+      },
+    });
+    if (failure === "synchronous") {
+      stdin.write = (() => { throw new Error("synchronous write failure"); }) as typeof stdin.write;
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    Object.assign(child, { stdin, stdout, stderr, kill: () => true });
+    let settled = false;
+    const pending = runSubagentShellProductionInert({
+      workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+      command: "printf should-not-run", effectDigest: digest, nonce,
+      timeoutMs: 1_000, signal: new AbortController().signal,
+      spawnProcess: (() => child) as never,
+    });
+    const checked = assert.rejects(pending, /failed before returning a verified outcome/u)
+      .finally(() => { settled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stdin.destroyed, true);
+    assert.equal(settled, false, "write errors must not bypass helper close/cleanup");
+    // Even a zero exit cannot turn a failed control write into trusted success.
+    child.emit("close", 0, null);
+    await checked;
+    assert.equal(stdout.destroyed, true);
+    assert.equal(stderr.destroyed, true);
+  });
+}
+
+test("a failed control write keeps the watchdog until helper close", async () => {
+  const child = new EventEmitter();
+  const stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    },
+  });
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const kills: string[] = [];
+  Object.assign(child, {
+    stdin, stdout, stderr,
+    kill: (signal: string) => {
+      kills.push(signal);
+      child.emit("close", null, "SIGKILL");
+      return true;
+    },
+  });
+  await assert.rejects(runSubagentShellProductionInert({
+    workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+    command: "printf should-not-run", effectDigest: digest, nonce,
+    timeoutMs: 1, signal: new AbortController().signal,
+    spawnProcess: (() => child) as never,
+  }), /failed before returning a verified outcome/u);
+  assert.deepEqual(kills, ["SIGKILL"]);
+  assert.equal(stdin.destroyed, true);
+  assert.equal(stdout.destroyed, true);
+  assert.equal(stderr.destroyed, true);
+});
+
+for (const settlement of ["success", "callback-error", "stream-error", "watchdog"] as const) {
+  test(`helper close waits for the control-write callback (${settlement})`, async () => {
+    const child = new EventEmitter();
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let finishWrite: ((error?: Error | null) => void) | undefined;
+    stdin.write = ((_request: Uint8Array, callback: (error?: Error | null) => void) => {
+      finishWrite = callback;
+      return true;
+    }) as typeof stdin.write;
+    Object.assign(child, { stdin, stdout, stderr, kill: () => true });
+    const pending = runSubagentShellProductionInert({
+      workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+      command: "printf done", effectDigest: digest, nonce,
+      timeoutMs: 1, signal: new AbortController().signal,
+      spawnProcess: (() => child) as never,
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    const response = Buffer.alloc(164);
+    response.write("AIDSR001", 0, "ascii");
+    response.writeUInt32BE(1, 8);
+    response.writeUInt32BE(1, 12);
+    response.writeUInt32BE(1, 24);
+    response.write(nonce, 36, "ascii");
+    response.write(digest, 100, "ascii");
+    stdout.write(response);
+    child.emit("close", 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, "a valid response cannot precede write settlement");
+    assert.ok(finishWrite);
+    const error = Object.assign(new Error("late EPIPE"), { code: "EPIPE" });
+    if (settlement === "callback-error") finishWrite(error);
+    else if (settlement === "stream-error") stdin.emit("error", error);
+    else if (settlement === "success") finishWrite(null);
+    // The watchdog case deliberately never settles the callback.
+    if (settlement === "success") assert.equal((await pending).outcome, "exited");
+    else await assert.rejects(pending, /failed before returning a verified outcome/u);
+    assert.equal(stdin.destroyed, true);
+    assert.equal(stdout.destroyed, true);
+    assert.equal(stderr.destroyed, true);
+  });
+}
+
+test("a stalled setsid handshake fails within the existing shell deadline", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const marker = path.join(rootPath, "detached.pid");
+  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  const result = await run(t, `${fixture} ${marker} --stall-detach`);
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 75);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+});
+
+test("a timed-out publication cannot leave a detached child without a readiness marker", async (t) => {
+  if (process.platform !== "darwin") return;
+  const rootPath = await workspace(t);
+  const marker = path.join(rootPath, "detached.pid");
+  const witness = `${marker}.spawned`;
+  const fixture = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-setsid-fixture");
+  let pid = 0;
+  let cleaned = false;
+  t.after(async () => {
+    if (cleaned) return;
+    if (pid <= 1) {
+      try { pid = Number.parseInt(await readFile(witness, "utf8"), 10); } catch { return; }
+    }
+    if (pid > 1) {
+      try { process.kill(pid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  });
+  const result = await run(t, `${fixture} ${marker} --stall-publish`);
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.exitCode, 75);
+  pid = Number.parseInt(await readFile(witness, "utf8"), 10);
+  assert.ok(pid > 1);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        cleaned = true;
+        return;
+      }
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail("detached child must exit after failed publication");
 });

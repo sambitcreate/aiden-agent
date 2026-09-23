@@ -34,6 +34,8 @@ function discoveredCandidate(skill: DiscoveredSkill): SkillRegistryCandidate {
     name: skill.name,
     description: skill.description,
     instructions: skill.instructions,
+    modelInvocable: skill.modelInvocable ?? true,
+    userInvocable: skill.userInvocable ?? true,
     source: skill.source,
     enabled: true,
     path: skill.path,
@@ -77,7 +79,14 @@ async function resolvedBotSkills(
       ...configured.map(configuredCandidate),
       ...globalDiscovered.filter(({ source }) => source === "global").map(discoveredCandidate),
       ...workspaceDiscovered.map(discoveredCandidate),
-    ]).slice(0, BOT_CAPABILITY_LIMITS.skills),
+    ])
+      // Retain unavailable entries for saved selections, but never let them
+      // crowd eligible automatic skills out of the bounded Bot inventory.
+      .sort((left, right) =>
+        Number(right.available && right.modelInvocable !== false) -
+        Number(left.available && left.modelInvocable !== false),
+      )
+      .slice(0, BOT_CAPABILITY_LIMITS.skills),
   };
 }
 
@@ -91,7 +100,7 @@ export async function resolveBotCapabilitySkills(
     label: skill.name,
     description: skill.description,
     instructions: skill.instructions,
-    available: skill.available,
+    available: skill.available && skill.modelInvocable !== false,
     incarnationPartition: skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
   }));
 }
@@ -114,7 +123,7 @@ export async function resolveBotRuntimeSkillBindings(
     label: skill.name,
     description: skill.description,
     instructions: skill.instructions,
-    available: skill.available,
+    available: skill.available && skill.modelInvocable !== false,
     incarnationPartition: skill.source === "workspace" ? `bot:${dependencies.botId}` : "global",
   }));
 }
