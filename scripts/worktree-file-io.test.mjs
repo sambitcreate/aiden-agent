@@ -267,3 +267,43 @@ test("editor refuses a seventeenth retained recovery before changing the source"
   assert.equal(await readFile(file, "utf8"), "current\n");
   assert.deepEqual((await readdir(source)).sort(), before);
 });
+
+test("transfers reject root and ancestor substitutions after path canonicalization", async (t) => {
+  if (process.platform !== "darwin") return;
+  for (const operation of ["copy", "restore"]) {
+    for (const replacement of ["root", "ancestor"]) {
+      const base = await directory(t);
+      const parent = path.join(base, "parent");
+      const target = path.join(parent, "root");
+      const other = await directory(t);
+      await mkdir(target, { recursive: true });
+      await writeFile(path.join(target, "file"), "original");
+      await writeFile(path.join(other, "file"), "original");
+      // Identity paths are canonicalized before the local actor swaps them.
+      const targetIdentity = await identity(target);
+      const otherIdentity = await identity(other);
+      const args = operation === "copy"
+        ? [operation, ...targetIdentity, "file", ...otherIdentity, "result", "4096", "-", "384"]
+        : [operation, ...otherIdentity, "file", ...targetIdentity, "result", "8", createHash("sha256").update("original").digest("hex"), "384"];
+      if (replacement === "root") {
+        await rename(target, path.join(parent, "held"));
+        await mkdir(target);
+        await writeFile(path.join(target, "file"), "outside");
+      } else {
+        await rename(parent, path.join(base, "held"));
+        await symlink(path.join(base, "held"), parent);
+      }
+      const child = spawn(binary, args);
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (data) => { stderr += data; });
+      const code = await new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", resolve);
+      });
+      assert.notEqual(code, 0);
+      assert.equal(stderr.trim(), operation === "copy" ? "unsafe_source" : "unsafe_destination");
+      assert.equal((await readdir(target)).includes("result"), false);
+      assert.equal((await readdir(other)).includes("result"), false);
+    }
+  }
+});

@@ -861,3 +861,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Canonical Remote fixture changes require copying to `android/app/src/test/resources/contract.json`; the byte-for-byte guard caught the initially stale copy.
 
 - 2026-09-22 PR222 incremental review: managed sandbox blocks Git worktree index writes, gh network, router-test localhost binds, and Gradle's home lock. Connector reads still work. Build helper strips TMPDIR; direct clang with TMPDIR=/private/tmp successfully builds within allowed paths. Keep local fixes uncommitted and report restrictions; never bypass permissions or count blocked suites as passed.
+
+- 2026-09-23: Strict native ancestor traversal exposed persisted worktree /var alias paths during snapshot capture (PR222 CI). Canonicalize transfer identity paths but preserve saved dev/inode; cover alias compatibility and post-canonicalization substitutions. Lifecycle capacity test also transiently failed exact equality between two live statfs samples; focused recheck passed.

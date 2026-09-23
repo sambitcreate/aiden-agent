@@ -52,3 +52,9 @@ User restored full filesystem/network access. The preserved three incremental Pu
 Coordinator task 01a0c7a8-3a51-76a3-996d-77b2cd3e0e1c confirmed the user explicitly waived physical iOS testing. Physical acceptance is WAIVED, not passed; no physical tests or simulators launched. Earlier device-slot blocker is historical. Greptile remains externally blocked by its trial limit. New-head CI/Pullfrog will be checked after publication; predecessor CI is not credited to this patch.
 
 Android lint completed successfully after restored access. All affected local checks are green; publication and newest-head hosted checks follow.
+
+## CI transfer-alias correction — 2026-09-23
+
+Published f90d42dd4 and resolved incremental review threads. Hosted verify run 35878243333 failed in dirty-removal snapshot capture: persisted worktree identity paths can use /var aliases, but the strengthened native root walker rejects symlink ancestors. Reproduced locally. Transfer(copy/restore) wrapper now canonicalizes identity paths while preserving saved dev/inode authority; missing aliases return typed unsafe-source/destination errors. Lazy configured-ancestor admission remains unchanged. Worktree owner confirmed the persisted-path contract read-only. Both Sol reviewers cleared the fix.
+
+104 service-boundary tests and 10 native tests pass, including aliased copy/restore, replaced root refusal, removed alias typing and substitutions between canonicalization/native opening. TypeScript/scoped ESLint/diffcheck pass. Extra lifecycle suite initially 21/22: unrelated capacity test compared free disk bytes across two live samples while builds ran; focused recheck passed. No capacity implementation changed. Physical iOS testing remains waived; new-head CI/review follows publication.
