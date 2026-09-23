@@ -852,3 +852,9 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Local shell-runner native builds selected the incompatible CLT macOS 27 SDK unless `xcrun --sdk macosx` was explicit.
 - Local focused Electron repetition launched but every test exited before `firstWindow` on this host; the installed production Aiden was left running. Treat this as a host launch blocker and rely on exact-head hosted E2E for the gate fix; do not attribute it to the queue assertion.
 - Post-#185 main CI 35669501413 hit a new `--fail-on-flaky-tests` browser-lifecycle retry: the replacement page title was visible while `isLoadingMainFrame()` was still true. Wait for both the title and main-frame completion before delivering the queued stale-crash notification.
+
+## 2026-09-23 — Git cancellation fixture handshakes
+
+- A three-second marker poll can expire before the intended cancellation window begins. Wait for the actual marker with the existing bounded helper, and abort/drain the outstanding operation before removing its temporary repository.
+- A 1200ms post-marker exit timer can race a delayed test process and set upstream before abort. Use a bounded release-file handshake; abort before release and always release/drain in finally. Controlled pre-push and post-marker delays reproduce each separate race.
+- Fresh worktrees need `npm run build:worktree-remover` and `npm run build:worktree-file-io` before invoking the Git test file directly; the normal pretest script supplies these prerequisites.
