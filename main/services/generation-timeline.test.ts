@@ -780,3 +780,12 @@ test("produced files require completed host mutation provenance and survive time
     assert.equal(parseGenerationTimeline(invalid), undefined);
   }
 });
+
+test("form fill activity persists counts without source or field values", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("call-a", "form_fill", { attachment_id: "private-document", pid: 42, window_id: 7 });
+  projector.toolFinished("call-a", "completed", { filled: 1, notAttempted: 1, stoppedEarly: true, sourceDocument: "private-document", rows: [{ label: "Secret field", value: "secret-value" }] });
+  const timeline = projector.finish("completed");
+  assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
+  assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
+});

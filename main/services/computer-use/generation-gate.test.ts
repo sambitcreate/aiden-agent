@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   activatedComputerUseStreamIds,
+  cancelComputerUseAndSettle,
   ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./generation-gate.js";
@@ -81,4 +82,41 @@ test("a fresh direct or background-query status clears a stale manual-retry erro
 test("a failed status query overrides stale cached readiness", () => {
   assert.equal(computerUseReadinessReady(true, false), true);
   assert.equal(computerUseReadinessReady(true, true), false);
+});
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("cancel-and-settle waits for driver closure, generation completion and owner-map removal", async () => {
+  const driver = deferred();
+  const generation = deferred();
+  const active = new Map([["cu", { computerUse: { closeAndSettle: () => driver.promise }, completion: generation.promise }]]);
+  const gate = new ComputerUseGenerationGate();
+  const snapshot = gate.snapshot();
+  const cancellations: string[] = [];
+  let settled = false;
+  const done = cancelComputerUseAndSettle({ gate, initializations: () => new Map(), active: () => active,
+    cancel: (id) => { cancellations.push(id); }, timeoutMs: 1000,
+  }).then(() => { settled = true; });
+  assert.equal(gate.isCurrent(snapshot), false);
+  assert.deepEqual(cancellations, ["cu"]);
+  active.clear();
+  generation.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "removed maps and completed generation do not prove the driver settled");
+  driver.resolve();
+  await done;
+  assert.equal(settled, true);
+});
+
+test("cancel-and-settle rejects timeout and teardown errors rather than authorizing deletion", async () => {
+  for (const close of [() => new Promise<void>(() => {}), () => Promise.reject(new Error("driver failed"))]) {
+    const active = new Map([["cu", { computerUse: { closeAndSettle: close } }]]);
+    await assert.rejects(cancelComputerUseAndSettle({ gate: new ComputerUseGenerationGate(),
+      initializations: () => new Map(), active: () => active, cancel: () => { active.clear(); }, timeoutMs: 10,
+    }), /model was not removed/);
+  }
 });

@@ -891,6 +891,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
+  formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
   /** Global skill discovery/invocation gate. Omitted means enabled. */
   skillsEnabled?: boolean;
@@ -955,8 +957,31 @@ export interface ComputerUseStatus {
   driverVersion?: string;
   permissions: {
     accessibility: boolean | null;
+
     screenRecording: boolean | null;
   };
+}
+
+export type FormFillArtifactState =
+  | "not-downloaded"
+  | "downloading"
+  | "preparing"
+  | "ready"
+  | "update-required"
+  | "unsupported"
+  | "error";
+
+export interface FormFillArtifactStatus {
+  state: FormFillArtifactState;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  error?: string;
+}
+
+export interface FormFillSettingsView {
+  enabled: boolean;
+  status: FormFillArtifactStatus;
 }
 
 export interface Profile {

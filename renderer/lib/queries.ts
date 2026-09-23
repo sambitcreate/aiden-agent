@@ -13,6 +13,7 @@ import {
   botsApi,
   chatsApi,
   computerUseApi,
+  formFillApi,
   exaApi,
   gitApi,
   localVoiceApi,
@@ -61,6 +62,7 @@ export const queryKeys = {
   scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
+  formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
@@ -555,6 +557,17 @@ export function useComputerUseStatus(enabled = true) {
   return useQuery({
     queryKey: queryKeys.computerUseStatus,
     queryFn: () => computerUseApi.status(),
+    enabled,
+    retry: false,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useFormFillStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.formFillStatus,
+    queryFn: () => formFillApi.status(),
     enabled,
     retry: false,
     staleTime: 5_000,

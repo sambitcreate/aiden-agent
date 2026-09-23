@@ -438,3 +438,7 @@ test("MCP onboarding discloses service-supplied tool guidance", () => {
 test("MCP tour explains connected-service resource reads", () => {
   assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
 });
+
+test("blocked form filling is not advertised as a shipped tour feature", () => {
+  assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
+});

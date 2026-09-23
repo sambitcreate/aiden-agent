@@ -992,6 +992,13 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
     }
 
+    func testFormFillActivityDecodesCountOnlyOutcome() throws {
+        let step = try JSONDecoder().decode(AidenAgentStep.self, from: Data(
+            #"{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"form_fill","label":"Form fill","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"detail":"1 filled · 1 not attempted · stopped early"}"#.utf8
+        ))
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Form fill 1 filled · 1 not attempted · stopped early")
+    }
+
     func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
