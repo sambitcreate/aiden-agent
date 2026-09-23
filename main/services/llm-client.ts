@@ -3,6 +3,7 @@ import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
+import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
@@ -1323,6 +1324,10 @@ async function prepareGeneration(
       },
     });
     generationExtensions.push(generativeUiRuntime.extension);
+  }
+  if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
+    tools = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
+      () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (

@@ -1116,6 +1116,11 @@ private fun AidenTimelineCollapsibleCard(
                                 color = palette.foreground,
                                 modifier = Modifier.weight(1f)
                             )
+                            step.producedFile?.let { file ->
+                                Text("File ${file.operation} · ${file.relativePath.substringAfterLast('/')}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.foreground, maxLines = 1)
+                            }
                             step.lineChanges?.let { lines ->
                                 Surface(
                                     color = palette.canvas,

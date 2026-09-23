@@ -910,3 +910,10 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - The child compatibility test expected a needless final compaction checkpoint after active-output projection. Update it to assert exactly two provider requests and no checkpoint, preserving bounded output before the second inference.
 
 - PR #228 review exposed fake-provider summary fixtures exceeding their own windows. Capacity preflight must inspect Pi's assembled hidden prompt, not just retained-tail budgets. Calibrate fixture window/usage together; do not weaken the fence to preserve impossible mock requests. Pi's char/4 estimate also undercounts Unicode, so the summary fence adds UTF-8 allowance and documents its remaining heuristic limit.
+
+## 2026-09-22 — durable tool outputs
+
+- Fresh isolated worktree lacked node_modules; installed locked dependencies with npm ci --ignore-scripts before meaningful TypeScript checks. tsx requires its local pipe outside this task’s workspace sandbox.
+- Gradle requires the existing user cache and ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk; default Xcode selection points to CLT, so use DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer.
+- Physical iPhone tests are queued through the coordinator: device is locked; do not retry or use prohibited simulators. Unsigned generic iOS build succeeds but is not device execution evidence.
+- Canonical /private/var vs lexical /var paths caused valid new-file provenance to be discarded. Resolve the parent directory before forming the relative path; normalize Windows separators.

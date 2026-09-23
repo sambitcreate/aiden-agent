@@ -3654,6 +3654,12 @@ private struct AidenActivityStepLine: View {
             Text(AidenAgentActivityPresentation.line(for: step))
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if let file = step.producedFile {
+                Text("File \(file.operation) · \(file.relativePath.components(separatedBy: "/").last ?? file.relativePath)")
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .accessibilityLabel("File \(file.operation): \(file.relativePath)")
+            }
             if let changes = step.lineChanges, changes.additions > 0 || changes.deletions > 0 {
                 Text("+\(changes.additions) −\(changes.deletions)")
                     .font(.caption2.monospaced().weight(.medium))

@@ -179,6 +179,7 @@ test("shared chat reads expose stable staged-image recovery gates", async () => 
 test("shared chat deletion removes staged artifacts after the durable tombstone", async () => {
   const events: string[] = [];
   const application = fixture({
+    toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
     subagentRunStore: {
       deleteChat: async () => { events.push("tombstone"); },
       completeChatDeletion: async () => { events.push("complete"); },
@@ -207,7 +208,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["tombstone", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {

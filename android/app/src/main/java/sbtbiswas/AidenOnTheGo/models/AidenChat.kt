@@ -188,6 +188,18 @@ enum class AidenAgentStepStatus {
 }
 
 @Serializable
+data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
+    fun isValid(toolName: String?): Boolean {
+        val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
+        return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
+            !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
+            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
+            relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
+    }
+}
+
+@Serializable
 data class AidenAgentLineChanges(
     val additions: Int,
     val deletions: Int
@@ -209,7 +221,8 @@ data class AidenAgentStep(
     val durationMs: Double? = null,
     val target: String? = null,
     val detail: String? = null,
-    val lineChanges: AidenAgentLineChanges? = null
+    val lineChanges: AidenAgentLineChanges? = null,
+    val producedFile: AidenProducedFile? = null
 ) {
     @Serializable
     enum class Kind {
@@ -284,6 +297,7 @@ data class AidenGenerationTimeline(
                 (step.toolName != null && (step.toolName.isEmpty() || step.toolName.length > 80)) ||
                 (step.detail != null && (step.detail.isEmpty() || step.detail.length > 120 || step.detail.any { it.code < 32 || it.code == 127 })) ||
                 (step.target != null && !isValidTarget(step.target)) ||
+                (step.producedFile != null && (step.kind != AidenAgentStep.Kind.TOOL || step.status != AidenAgentStepStatus.COMPLETED || !step.producedFile.isValid(step.toolName))) ||
                 (step.lineChanges != null && (
                     version != 3 ||
                     step.kind != AidenAgentStep.Kind.TOOL ||

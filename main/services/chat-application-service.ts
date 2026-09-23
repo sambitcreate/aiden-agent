@@ -7,6 +7,7 @@ import type { chatStore } from "./chat-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import type { ToolOutputStore } from "./tool-output-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
@@ -36,6 +37,7 @@ export interface ChatApplicationMutationOptions {
 }
 
 export interface ChatApplicationDependencies {
+  toolOutputStore?: Pick<ToolOutputStore, "deleteByChat">;
   chatStore: Pick<
     typeof chatStore,
     "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
@@ -269,6 +271,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           throw new Error("Aiden could not delete this chat's subagent history.");
         }
         publishRollForward();
+        await deps.toolOutputStore?.deleteByChat(chatId);
         try {
           await deps.displayImageArtifactStore.deleteChat(chatId);
         } catch (error) {
