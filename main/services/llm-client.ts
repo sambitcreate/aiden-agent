@@ -1,4 +1,5 @@
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
+import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
@@ -1033,8 +1034,10 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  const mcpInstructionCollector = createMcpInstructionCollector();
   let tools = (
     await buildAgentTools({
+      onMcpServerInstructions: mcpInstructionCollector.capture,
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
@@ -1351,6 +1354,7 @@ async function prepareGeneration(
     git,
     tools,
     generationExtensions,
+    mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
     supportsImages,
@@ -1654,6 +1658,7 @@ export const llmClient = {
       git,
       tools,
       generationExtensions,
+      mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
       supportsImages,
@@ -2071,8 +2076,11 @@ export const llmClient = {
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
-      const runtimeContributions = applyCustomModelToolPolicy(
-        resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+      const runtimeContributions = withMcpServerInstructions(
+        applyCustomModelToolPolicy(
+          resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
+        ),
+        mcpServerInstructions,
       );
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {

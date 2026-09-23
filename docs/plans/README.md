@@ -6,6 +6,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 [MCP session context audit](mcp-session-context-audit.md) — Partial: advertised-capability status implemented for review; resources, server instructions and request-boundary instruction refresh remain explicit deliverables. Skill invocation is separately green in PR #214.
 [Skill and MCP session context](skill-mcp-session-context-plan.md) — Partial: skill invocation policy implemented in PR #214; implementation CI/review passed, physical iOS launch blocked by device lock. MCP metadata/resources/instructions and boundary refresh deferred.
+[Scoped MCP server instructions](mcp-server-instructions-plan.md) — Implemented for review: bounded generation-owned service guidance filtered by final tool admission. Resource operations and trusted AGENTS request-boundary refresh remain open. Related slices: #214 and #226.
 
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

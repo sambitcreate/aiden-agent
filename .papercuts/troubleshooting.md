@@ -890,3 +890,6 @@ The earlier skill slice covered model-context body loading, not lazy filesystem 
 
 - Isolated worktree Git metadata lives outside the writable sandbox; branch creation needed the existing git-switch escalation. tsx CLI also needs local socket permission.
 - Native validation needs explicit local SDK paths: `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`, Android Studio JBR, and `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. System xcode-select points at CommandLineTools; do not change it globally. Coordinate the physical iPhone slot with the upgrade coordinator.
+## 2026-09-22 MCP guidance test compatibility
+
+The repository TypeScript library target does not include Array.at; use slice(-1)[0] in fixtures without raising the target. Onboarding's source fixture is already loaded with readFileSync; reuse it for copy assertions instead of adding an unimported async reader. These test-only errors were corrected before commit.

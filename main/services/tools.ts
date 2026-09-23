@@ -1,3 +1,4 @@
+import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // Assembles the pi agent tool set for a generation: Web Search + Agent Skills +
 // MCP server tools, based on current settings. Empty when nothing is enabled.
 //
@@ -34,6 +35,8 @@ export { skillToolKey } from "./skill-registry-core.js";
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
+  /** Main-only generation sink, populated only by admitted MCP discovery. */
+  onMcpServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void;
   /** Workspace identity used as the default target for agent-created schedules. */
   workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
@@ -102,6 +105,7 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
   return collectMcpAgentTools(servers, {
     strict: ctx.mcpServerIds !== undefined,
+    onServerInstructions: ctx.onMcpServerInstructions,
   });
 }
 
