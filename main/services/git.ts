@@ -8,6 +8,7 @@ import { constants as fsConstants, type Stats } from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import {
   finalizeManagedWorktreeRemovalManifest,
@@ -5032,6 +5033,8 @@ export class GitService {
     await this.validateBranchName(repo, branch);
     return this.enqueueMutation(repo.commonDir, async () => {
       const createdFromHead = await this.requireHead(repo);
+      const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, createdFromHead);
+      await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
       const exists = await this.run(
         repo.cwd,
         ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
@@ -5538,15 +5541,54 @@ export class GitService {
     return (await this.run(cwd, [...args])).stdout;
   }
 
-  /** Sum of blob sizes at HEAD — the managed-worktree create estimate. */
-  async managedWorktreeCheckoutBytes(cwd: string): Promise<number> {
+  /** Bound a complete immutable checkout, including EOL expansion and file overhead.
+   * Attribute inspection uses an isolated index, never the user's index or filters.
+   */
+  async managedWorktreeCheckoutBytes(cwd: string, commit?: string): Promise<number> {
     const repo = this.requireRepository(await this.repository(cwd));
-    const head = await this.requireHead(repo);
-    const result = await this.run(repo.cwd, ["ls-tree", "-rlz", head, "--"]);
+    const head = commit ?? await this.requireHead(repo);
+    if (!GIT_OBJECT_ID.test(head)) {
+      throw new GitServiceError("invalid_input", "The checkout estimate requires a commit identity.");
+    }
+    const result = await this.run(repo.topLevel, ["ls-tree", "--full-tree", "-rlz", head, "--"]);
+    if (Buffer.byteLength(result.stdout) > DEFAULT_MAX_BUFFER_BYTES) {
+      throw new GitServiceError("output_limit", "The checkout listing exceeds the safe admission limit.");
+    }
     let bytes = 0;
-    for (const record of result.stdout.split("\u0000")) {
-      const match = /^\d{6} blob [0-9a-f]{40} +(\d+)\t/u.exec(record);
-      if (match) bytes += Number(match[1]);
+    const paths: string[] = [];
+    for (const record of result.stdout.split("\u0000").filter(Boolean)) {
+      const match = /^(\d{6}) (blob|commit) [0-9a-f]{40} +([0-9]+|-)\t([\s\S]+)$/u.exec(record);
+      if (!match) throw new GitServiceError("unsupported_scope", "The checkout size could not be determined safely.");
+      // Submodules are not recursively initialized by worktree add.
+      bytes += match[2] === "blob" ? Number(match[3]) * 2 + 4096 : 4096;
+      if (!Number.isSafeInteger(bytes)) throw new GitServiceError("unsupported_scope", "The checkout is too large to estimate safely.");
+      paths.push(match[4]);
+    }
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-checkout-estimate-"));
+    try {
+      const gitIndexFile = path.join(temporary, "index");
+      await this.run(repo.topLevel, ["read-tree", head], { gitIndexFile, hooksDisabled: true });
+      for (let offset = 0; offset < paths.length; offset += 128) {
+        const attributes = await this.run(repo.topLevel,
+          ["check-attr", "--cached", "-z", "--all", "--", ...paths.slice(offset, offset + 128)],
+          { gitIndexFile });
+        const values = attributes.stdout.split("\u0000");
+        for (let index = 0; index + 2 < values.length; index += 3) {
+          // Git cannot distinguish -filter from filter=unset here. A driver
+          // can also activate only in the new worktree via includeIf, so the
+          // source's filter config cannot safely resolve that ambiguity.
+          // Disabled ident is safe: its false/sentinel values do not expand.
+          const attribute = values[index + 1];
+          const value = values[index + 2];
+          if (["filter", "working-tree-encoding"].includes(attribute) ||
+              (attribute === "ident" && !["unset", "unspecified"].includes(value))) {
+            throw new GitServiceError("unsupported_scope",
+              "Managed worktrees cannot safely estimate checkout filters, ident expansion or working-tree encodings. Use a checkout without these transformations.");
+          }
+        }
+      }
+    } finally {
+      await fs.rm(temporary, { recursive: true, force: true });
     }
     return bytes;
   }
@@ -6011,12 +6053,12 @@ export class GitService {
     await this.run(
       worktreePath,
       ["read-tree", "--reset", "-u", snapshotCommit],
-      { mutation: true, signal },
+      { mutation: true, signal, hooksDisabled: true },
     );
     const head = (
       await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
     ).stdout.trim();
-    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal });
+    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal, hooksDisabled: true });
   }
 }
 
@@ -6169,8 +6211,8 @@ export const gitRepositoryPaths = (folderPath: string) =>
   gitService.repositoryPaths(folderPath);
 export const gitListFiles = (folderPath: string, args: readonly string[]) =>
   gitService.listFiles(folderPath, args);
-export const gitManagedWorktreeCheckoutBytes = (folderPath: string) =>
-  gitService.managedWorktreeCheckoutBytes(folderPath);
+export const gitManagedWorktreeCheckoutBytes = (folderPath: string, commit?: string) =>
+  gitService.managedWorktreeCheckoutBytes(folderPath, commit);
 export const gitCreateWorktree = (
   folderPath: string,
   root: string,

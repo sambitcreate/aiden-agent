@@ -937,3 +937,8 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - This host's default developer directory lacks `devicectl`; use `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` with isolated `/tmp/aiden-bot-ios-derived`.
 - Coordinator's physical-device run reports `com.apple.dt.deviceprep Code=-3`, `Unlock Sambit’s iPhone to Continue` for `00008110-00063CD91E98801E`. Do not count unsigned test compilation as XCTest execution or repeatedly launch a locked-device run.
 - A held MockWebServer disconnect exposed OkHttp's default connection retry replaying approval POSTs. Disable transport retries specifically for approval/Stop; keep unknown-outcome UI and authoritative reads instead of restoring captured cards.
+## 2026-09-22 — managed worktree stack audit
+
+- Fresh main already merged #185 while #189–193 remain open with incompatible duplicate contracts. A trial main→#189 merge conflicted in Git journals, provisioning metadata and package scripts; aborted it without discarding any PR work. Audit current architecture before transplanting dated research/stack fixes.
+- This task retained workspace-write despite global full-access configuration. Ordinary Git metadata writes, clang temporary output and tsx local IPC were blocked; required tool escalation was used without changing permission settings.
+- `st_dev` inequality does not prove independent APFS free-space pools. A read-only `diskutil info -plist` probe stalled and was stopped; keep admission conservative for unknown relationships instead of introducing a platform-discovery dependency. Git also collapses disabled filter/encoding attributes into literal sentinel values, and worktree-only `includeIf` makes source-config inspection unsafe.
