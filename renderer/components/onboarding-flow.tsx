@@ -188,7 +188,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Workspace Agent",
     description:
-      "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response.",
+      "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response. Aiden follows your global and workspace AGENTS.md guidance, refreshing it between model turns.",
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",

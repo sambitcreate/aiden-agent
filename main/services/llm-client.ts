@@ -1,5 +1,7 @@
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
+import { createAgentsInstructionRefresher } from "./agents-instructions.js";
+import { aidenConfigDir } from "./aiden-config-dir.js";
 import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
@@ -729,6 +731,34 @@ async function prepareGeneration(
   if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  // Bot and Assistant prompts retain their exact, separately granted sources.
+  const agentsInstructions = !botBound && !assistantMode
+    ? await createAgentsInstructionRefresher({
+        globalRoot: aidenConfigDir(),
+        workspaceRoot: permission !== "none" && workspace?.permission !== "none" ? folderPath : undefined,
+        revalidate: async (requestSignal) => {
+          signal.throwIfAborted();
+          requestSignal?.throwIfAborted();
+          if (!workspace) return;
+          const current = await configStore.getWorkspace(workspace.id);
+          if (!current || current.folderPath !== workspace.folderPath || current.permission !== workspace.permission) {
+            throw new Error("Workspace instruction access changed. Start a new response.");
+          }
+          await assertManagedWorktreeAdmission(current);
+          signal.throwIfAborted();
+          requestSignal?.throwIfAborted();
+        },
+      })
+    : undefined;
+  if (agentsInstructions) {
+    generationExtensions.push({
+      id: "aiden.agents-instruction-scope",
+      beforeProviderRequest: async (_context, requestSignal) => {
+        await agentsInstructions.assertCurrent(requestSignal);
+        return undefined;
+      },
+    });
+  }
   const git =
     folderPath && (!botContext || botContext.admission.authority.files.botHome)
       ? await gitInfo(folderPath)
@@ -1425,6 +1455,7 @@ async function prepareGeneration(
   }
   return {
     runtime: { ...runtime, model },
+    agentsInstructions,
     browserDiscovery,
     browserSelection,
     browserFileApprovals,
@@ -1747,6 +1778,7 @@ export const llmClient = {
     }
     const {
       runtime,
+      agentsInstructions,
       browserDiscovery,
       browserSelection,
       browserFileApprovals,
@@ -2182,12 +2214,15 @@ export const llmClient = {
         runtimeExtensions,
         runtimeExtensionSnapshot.revision,
       );
-      const runtimeContributions = withMcpServerInstructions(
+      const modelContributions = withMcpServerInstructions(
         applyCustomModelToolPolicy(
           resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
         ),
         mcpServerInstructions,
       );
+      const runtimeContributions = agentsInstructions
+        ? await agentsInstructions.apply(modelContributions, initialization.controller.signal)
+        : modelContributions;
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       const generationContextOptions = {
         contextWindow: model.contextWindow,
@@ -2411,12 +2446,13 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        prepareNextTurnWithContext: async ({ toolResults, context }) => {
+        prepareNextTurnWithContext: async ({ toolResults, context }, requestSignal) => {
           let nextContext = await prepareCustomModelToolContext(
             context,
             browserDiscovery?.prepare.bind(browserDiscovery),
             runtime.provider.modelMetadata?.[model.id]?.overrides,
           );
+          if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
             assertGenerationContextCapacity({

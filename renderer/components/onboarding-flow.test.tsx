@@ -442,3 +442,7 @@ test("MCP tour explains connected-service resource reads", () => {
 test("blocked form filling is not advertised as a shipped tour feature", () => {
   assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
 });
+
+test("workspace tour discloses AGENTS instruction loading and refresh", () => {
+  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
+});
