@@ -10,12 +10,15 @@ import java.io.File
 
 class AidenWorkspaceEnvironmentTest {
     @Test fun cachedDocumentDoesNotDisableLiveTreePaging() {
-        val cachedDocument = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = true)
+        val cachedDocument = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = true, connected = true)
         assertTrue(cachedDocument.canLoadPage)
         assertFalse(cachedDocument.canEditDocument)
-        val cachedIndex = AidenWorkspaceFileAvailability(indexOffline = true, documentOffline = false)
+        val cachedIndex = AidenWorkspaceFileAvailability(indexOffline = true, documentOffline = false, connected = true)
         assertFalse(cachedIndex.canLoadPage)
         assertTrue(cachedIndex.canEditDocument)
+        val retainedClientWhileOffline = AidenWorkspaceFileAvailability(indexOffline = false, documentOffline = false, connected = false)
+        assertFalse(retainedClientWhileOffline.canLoadPage)
+        assertFalse(retainedClientWhileOffline.canEditDocument)
     }
 
     @Test fun lazyTreeSearchAndPreviewStayBounded() {

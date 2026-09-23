@@ -48,6 +48,13 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
   try {
     if (process.platform === "darwin") {
     // Lazy pages do not read descendants, and directory handles remain device-bound.
+    const alias = path.join(temporary, "alias");
+    await fs.symlink(temporary, alias);
+    workspace.folderPath = path.join(alias, "workspace");
+    await assert.rejects(() => service.children("device-1", workspace.id),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "filesystem_identity_changed");
+    workspace.folderPath = root;
+    await fs.rm(alias);
     const originalRoot = path.join(temporary, "original-root");
     await fs.rename(root, originalRoot);
     await fs.symlink(temporary, root);
@@ -68,6 +75,19 @@ test("remote Files uses device/workspace-bound opaque handles and version-safe w
     const sources = rootPage.entries[0]!;
     const children = await service.children("device-1", workspace.id, sources.id);
     assert.deepEqual(children.entries.map(entry => entry.displayPath), ["Sources/App.swift"]);
+    const lazyDocument = await service.read("device-1", workspace.id, children.entries[0]!.id);
+    assert.equal(lazyDocument.content, "let value = 1\n");
+    const savedLazyDocument = await service.write("device-1", workspace.id, lazyDocument.id,
+      { content: "let value = 2\n", expectedVersion: lazyDocument.version });
+    assert.notEqual(savedLazyDocument.id, lazyDocument.id);
+    assert.match(savedLazyDocument.warning ?? "", /previous version/);
+    assert.equal((await service.read("device-1", workspace.id, savedLazyDocument.id)).content, "let value = 2\n");
+    await assert.rejects(() => service.read("device-1", workspace.id, lazyDocument.id));
+    await service.write("device-1", workspace.id, savedLazyDocument.id,
+      { content: "let value = 1\n", expectedVersion: savedLazyDocument.version });
+    for (const name of await fs.readdir(path.join(root, "Sources"))) {
+      if (name.includes("aiden-recovery")) await fs.rm(path.join(root, "Sources", name));
+    }
     await assert.rejects(() => service.children("device-2", workspace.id, sources.id));
     await assert.rejects(() => service.children("device-1", workspace.id, children.entries[0]!.id));
     await fs.mkdir(path.join(root, "Many"));
@@ -160,4 +180,32 @@ test("remote workspace owners survive disconnect-shaped reuse and revoke active 
   assert.equal(first.isDestroyed(), true);
   assert.equal(invalidations, 1);
   assert.notEqual(first, registry.owner("device-1"));
+});
+
+test("lazy save reserves capacity before mutation and renews the returned handle", { skip: process.platform !== "darwin" }, async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-save-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = await fs.realpath(temporary);
+  await fs.writeFile(path.join(root, "note.txt"), "old");
+  const workspace: Workspace = { id: "save", name: "Save", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
+  let now = Date.now();
+  const handles = new AidenOpaqueHandleStore({ now: () => now, maxEntries: 2 });
+  const service = new AidenRemoteFileService({ instanceId: "instance", now: () => now, handles,
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    application: createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async () => workspace }, workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(), assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath, stat: fs.stat,
+    }),
+  });
+  const file = (await service.children("device", workspace.id)).entries[0]!;
+  const opened = await service.read("device", workspace.id, file.id);
+  const blocker = handles.issue("file", handles.claimsFor(file.id, "file"));
+  await assert.rejects(service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version }));
+  assert.equal(await fs.readFile(path.join(root, "note.txt"), "utf8"), "old");
+  handles.discard(blocker);
+  now += 599_999;
+  const saved = await service.write("device", workspace.id, file.id, { content: "new", expectedVersion: opened.version });
+  now += 2;
+  assert.equal((await service.read("device", workspace.id, saved.id)).content, "new");
 });

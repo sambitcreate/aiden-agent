@@ -35,6 +35,8 @@ export interface WorkspaceFileEntry {
   depth: number;
   kind: WorkspaceFileKind;
   symbolic?: boolean;
+  filesystemDevice?: string;
+  filesystemInode?: string;
   size?: number;
   modifiedAt?: number;
 }
@@ -43,6 +45,10 @@ export interface WorkspaceFileIndex {
   entries: WorkspaceFileEntry[];
   truncated: boolean;
   skippedDirectories: number;
+}
+
+export function decodeWorkspaceFileText(buffer: Buffer, suppliedPath: string): string {
+  return decodeText(buffer, suppliedPath);
 }
 
 export interface WorkspaceFileDocument {
@@ -203,6 +209,7 @@ export async function listWorkspaceDirectory(
   const entries: WorkspaceFileEntry[] = result.entries.map(child => ({
     path: toPortablePath(path.join(directory, child.name)), name: child.name,
     parentPath: directory, depth: directory.split("/").filter(Boolean).length, kind: child.kind,
+    filesystemDevice: child.device, filesystemInode: child.inode,
   }));
   sortWorkspaceEntries(entries);
   return { entries, truncated: result.truncated, skippedDirectories: 0 };

@@ -377,9 +377,9 @@ object AidenWorkspaceEnvironmentValidation {
     }
 }
 
-data class AidenWorkspaceFileAvailability(val indexOffline: Boolean, val documentOffline: Boolean) {
-    val canLoadPage: Boolean get() = !indexOffline
-    val canEditDocument: Boolean get() = !documentOffline
+data class AidenWorkspaceFileAvailability(val indexOffline: Boolean, val documentOffline: Boolean, val connected: Boolean) {
+    val canLoadPage: Boolean get() = !indexOffline && connected
+    val canEditDocument: Boolean get() = !documentOffline && connected
 }
 
 object AidenWorkspaceFileTree {

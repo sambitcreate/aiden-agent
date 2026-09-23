@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -51,6 +52,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsState().value
+    val connectionState = coordinator.connectionState.collectAsState().value
     val cache = coordinator.workspaceCache
     val activeInstanceId = coordinator.activeInstanceId
 
@@ -76,7 +78,9 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     // Dialog States
     var showDiscardConfirmDialog by remember { mutableStateOf(false) }
     var showConflictDialog by remember { mutableStateOf(false) }
-    fun availability() = AidenWorkspaceFileAvailability(isOfflineIndex, isOfflineDocument)
+    fun availability() = AidenWorkspaceFileAvailability(
+        isOfflineIndex, isOfflineDocument, connectionState == AidenConnectionState.CONNECTED
+    )
 
     fun refreshFiles() {
         if (client != null) {
@@ -386,7 +390,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             lineHeight = 20.sp
                         ),
                         cursorBrush = SolidColor(palette.accent),
-                        readOnly = isOfflineDocument || client == null,
+                        readOnly = !availability().canEditDocument || client == null,
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())

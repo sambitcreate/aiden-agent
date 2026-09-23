@@ -1,7 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { lstat, stat } from "node:fs/promises";
 import type { Workspace } from "./types.js";
+import { readConfinedWorkspaceFile, editConfinedWorkspaceFile, ManagedWorktreeFileIoError,
+  type ConfinedWorkspaceFileIdentity } from "./managed-worktree-file-io.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenOpaqueHandleError,
@@ -15,6 +17,7 @@ import type { WorkspaceEnvironmentApplicationService } from "./workspace-environ
 import {
   listWorkspaceFiles,
   listWorkspaceDirectory,
+  decodeWorkspaceFileText,
   readWorkspaceFile,
   WorkspaceFileError,
   writeWorkspaceFile,
@@ -171,7 +174,11 @@ export class AidenRemoteFileService {
 
   private async assertRoot(workspace: Workspace, folderPath: string): Promise<{ path: string; device: string; inode: string }> {
     if (!workspace.folderPath) throw new AidenOpaqueHandleError("root_policy_changed");
-    const configured = await lstat(workspace.folderPath, { bigint: true });
+    // macOS system aliases are fixed; all workspace-controlled ancestors must
+    // already be canonical. The native helper separately walks without links.
+    const configuredPath = path.resolve(workspace.folderPath).replace(/^\/(tmp|var|etc)(?=\/|$)/u, "/private/$1");
+    if (configuredPath !== folderPath) throw new AidenOpaqueHandleError("filesystem_identity_changed");
+    const configured = await lstat(configuredPath, { bigint: true });
     const current = await stat(folderPath, { bigint: true });
     if (!configured.isDirectory() || configured.isSymbolicLink() ||
         configured.dev !== current.dev || configured.ino !== current.ino) {
@@ -293,6 +300,8 @@ export class AidenRemoteFileService {
               throw new AidenOpaqueHandleError("handle_invalid");
             }
             const current = await this.claims(deviceId, workspaceId, folderPath, revision, stored.displayPath, stored.snapshotId ?? "");
+            current.confinedRootDevice = rootIdentity.device;
+            current.confinedRootInode = rootIdentity.inode;
             this.handles.resolve(directoryId, "file", current);
             directoryPath = stored.displayPath;
             directoryClaims = stored;
@@ -307,6 +316,8 @@ export class AidenRemoteFileService {
             }
             const current = await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, stored.snapshotId ?? "");
             current.cursorOffset = stored.cursorOffset;
+            current.confinedRootDevice = rootIdentity.device;
+            current.confinedRootInode = rootIdentity.inode;
             this.handles.resolve(cursor, "cur", current);
             snapshotId = stored.snapshotId!;
             const cached = this.pages.get(snapshotId);
@@ -324,7 +335,8 @@ export class AidenRemoteFileService {
               ? { ...directoryClaims, snapshotId, expiresAt: this.now() + FILE_HANDLE_TTL_MS }
               : { ...await this.claims(deviceId, workspaceId, folderPath, revision, directoryPath, snapshotId),
                   canonicalRootPath: rootIdentity.path, canonicalPath: rootIdentity.path,
-                  filesystemDevice: rootIdentity.device, filesystemInode: rootIdentity.inode };
+                  filesystemDevice: rootIdentity.device, filesystemInode: rootIdentity.inode,
+                  confinedRootDevice: rootIdentity.device, confinedRootInode: rootIdentity.inode };
             const index = await listWorkspaceDirectory(folderPath, directoryPath, signal, {
               root: rootIdentity,
               directory: directoryClaims
@@ -340,8 +352,16 @@ export class AidenRemoteFileService {
             if (signal.aborted) throw new Error("Cancelled");
             try {
               const displayPath = safeDisplayPath(entry.path);
-              const claims = await this.claims(deviceId, workspaceId, folderPath, revision, displayPath, snapshotId);
-              claims.expiresAt = snapshot.claims.expiresAt;
+              if (!entry.filesystemDevice || !entry.filesystemInode) throw new AidenOpaqueHandleError("handle_invalid");
+              const claims: AidenOpaqueHandleClaims = {
+                instanceId: this.options.instanceId, deviceId, workspaceId, rootId: workspaceId,
+                policyRevision: revision, canonicalRootPath: rootIdentity.path,
+                canonicalPath: path.join(rootIdentity.path, displayPath),
+                filesystemDevice: entry.filesystemDevice, filesystemInode: entry.filesystemInode,
+                confinedRootDevice: rootIdentity.device, confinedRootInode: rootIdentity.inode,
+                kind: entry.kind === "directory" ? "directory" : "file", displayPath,
+                snapshotId, expiresAt: snapshot.claims.expiresAt,
+              };
               entries.push({ id: this.handles.issue("file", claims), displayPath, name: entry.name, kind: entry.kind,
                 ...(languageFor(entry) ? { language: languageFor(entry) } : {}) });
             } catch (error) {
@@ -371,7 +391,7 @@ export class AidenRemoteFileService {
     workspaceId: string,
     fileId: string,
     operation: (
-      input: { folderPath: string; displayPath: string; signal: AbortSignal },
+      input: { folderPath: string; displayPath: string; signal: AbortSignal; confinement?: ConfinedWorkspaceFileIdentity; claims: AidenOpaqueHandleClaims },
     ) => Promise<T>,
   ): Promise<T> {
     let stored: AidenOpaqueHandleClaims;
@@ -388,17 +408,24 @@ export class AidenRemoteFileService {
           if (!stored.displayPath || stored.workspaceId !== workspaceId) {
             throw new AidenOpaqueHandleError("handle_wrong_device");
           }
-          const current = await this.claims(
-            deviceId,
-            workspaceId,
-            folderPath,
-            projectAidenRemoteWorkspace(workspace).revision,
-            stored.displayPath,
-            stored.snapshotId ?? "",
+          let confinement: ConfinedWorkspaceFileIdentity | undefined;
+          if (stored.confinedRootDevice && stored.confinedRootInode) {
+            const root = await this.assertRoot(workspace, folderPath);
+            if (root.device !== stored.confinedRootDevice || root.inode !== stored.confinedRootInode || root.path !== stored.canonicalRootPath) {
+              throw new AidenOpaqueHandleError("filesystem_identity_changed");
+            }
+            confinement = { root, file: { device: stored.filesystemDevice, inode: stored.filesystemInode } };
+          }
+          const current = confinement ? {
+            ...stored, instanceId: this.options.instanceId, deviceId, workspaceId,
+            policyRevision: projectAidenRemoteWorkspace(workspace).revision,
+          } : await this.claims(
+            deviceId, workspaceId, folderPath, projectAidenRemoteWorkspace(workspace).revision,
+            stored.displayPath, stored.snapshotId ?? "",
           );
           current.expiresAt = stored.expiresAt;
           this.handles.resolve(fileId, "file", current);
-          return operation({ folderPath, displayPath: stored.displayPath, signal });
+          return operation({ folderPath, displayPath: stored.displayPath, signal, confinement, claims: stored });
         },
       );
     } catch (error) {
@@ -410,6 +437,11 @@ export class AidenRemoteFileService {
   read(deviceId: string, workspaceId: string, fileId: string): Promise<AidenRemoteFileDocument> {
     return this.withResolvedFile(deviceId, workspaceId, fileId, async (input) => {
       try {
+        if (input.confinement) {
+          const buffer = await readConfinedWorkspaceFile(input.confinement, input.displayPath, input.signal);
+          return { id: fileId, displayPath: input.displayPath, content: decodeWorkspaceFileText(buffer, input.displayPath),
+            version: createHash("sha256").update(buffer).digest("hex"), truncated: false };
+        }
         return projectedDocument(
           fileId,
           input.displayPath,
@@ -434,6 +466,21 @@ export class AidenRemoteFileService {
     const input = parseWrite(value);
     return this.withResolvedFile(deviceId, workspaceId, fileId, async (resolved) => {
       try {
+        if (resolved.confinement) {
+          const buffer = Buffer.from(input.content, "utf8");
+          decodeWorkspaceFileText(buffer, resolved.displayPath);
+          const id = this.handles.issue("file", { ...resolved.claims, expiresAt: this.now() + FILE_HANDLE_TTL_MS });
+          try {
+            const saved = await editConfinedWorkspaceFile(resolved.confinement, resolved.displayPath, buffer, input.expectedVersion, resolved.signal);
+            this.handles.updateReservedFileIdentity(id, saved.device, saved.inode);
+            return { id, displayPath: resolved.displayPath, content: input.content,
+              version: createHash("sha256").update(buffer).digest("hex"), truncated: false,
+              warning: `Saved your draft. The previous version remains at ${saved.recoveryName}. Up to 16 recovery copies are retained per folder; review and remove them on the Mac when no longer needed.` };
+          } catch (error) {
+            this.handles.discard(id);
+            throw error;
+          }
+        }
         const document = await writeWorkspaceFile(
           resolved.folderPath,
           resolved.displayPath,
@@ -443,7 +490,11 @@ export class AidenRemoteFileService {
         );
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
-        if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
+        if (error instanceof ManagedWorktreeFileIoError && error.code === "recovery_limit") {
+          throw new AidenRemoteServiceError("workspace_unavailable", "Review and remove unneeded .aiden-recovery files in this folder on the Mac before saving again.", 409);
+        }
+        if ((error instanceof WorkspaceFileError && error.code === "changed_on_disk") ||
+            (error instanceof ManagedWorktreeFileIoError && ["source_changed", "destination_exists"].includes(error.code))) {
           throw new AidenRemoteServiceError(
             "revision_conflict",
             "This file changed on the Mac. Reload it before saving.",
