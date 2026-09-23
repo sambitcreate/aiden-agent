@@ -883,3 +883,6 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 - Reusing the coordinator checkout's node_modules produced unrelated Live orb type errors because thinking-orbs was 0.1.1 while fresh main locks 0.3.1. Install this worktree's lockfile before claiming type-check results.
 - The local Codex and T3 source clones predate the cited September research. Verify upstream PR/files directly before concluding the research applies to Aiden's current implementation.
 - Full hosted verification also runs the subagent deletion source-contract test; expanding its one-line admission-release statement requires updating the literal matcher to preserve both release-order assertions.
+## 2026-09-22 MCP session scope reconciliation
+
+The earlier skill slice covered model-context body loading, not lazy filesystem reads or request-boundary instruction refresh. Audit exact production calls rather than assuming available SDK methods or Pi hooks are wired: main has no resource/getInstructions/AGENTS loader path. Keep metadata-only status separate from runtime authority changes, and preserve the green skill branch in a new worktree.

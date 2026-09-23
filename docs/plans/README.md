@@ -4,6 +4,8 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
+[MCP session context audit](mcp-session-context-audit.md) — Partial: advertised-capability status implemented for review; resources, server instructions and request-boundary instruction refresh remain explicit deliverables. Skill invocation is separately green in PR #214.
+
 | Plan                                                                                               | Status  | Current state                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Managed Worktree Lifecycle](managed-worktree-lifecycle-plan.md) | Partial | P0 lifecycle is implemented and under PR #185 review: hook-free managed creation, free-space admission, `.worktreeinclude` provisioning, durable snapshot records + synthetic `refs/aiden/snapshots/*` commits, byte-exact provisioned-ignored blob restore, journal v4 snapshot-aware quarantine deletion with force semantics, and first-class restore. GC/owner-kind/setup-script/UI phases remain open. |

@@ -1028,14 +1028,7 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export interface McpStatus {
-  connected: boolean;
-  toolCount: number;
-  tools: string[];
-  error?: string;
-  /** For OAuth servers: whether valid tokens are stored. */
-  authorized?: boolean;
-}
+export type { McpStatus } from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;
