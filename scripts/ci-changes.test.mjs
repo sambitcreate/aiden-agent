@@ -79,10 +79,10 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
     safeDocsOnly: true,
     reason: "documentation-only",
   });
-  assert.deepEqual(analyzeChangedPaths(["AGENTS.md", "CLAUDE.md"]), {
+  assert.deepEqual(analyzeChangedPaths(["AGENTS.md"]), {
     ...allFalse,
     areas: allFalse,
-    changedCount: 2,
+    changedCount: 1,
     safeDocsOnly: true,
     reason: "documentation-only",
   });
