@@ -26,6 +26,13 @@ test("changed-area classification is conservative and table-driven", () => {
     ["docs/chatgpt-ui-element-specimen.html", allTrue],
     ["README.md", allFalse],
     ["CHANGELOG.markdown", allFalse],
+    ["AGENTS.md", allFalse],
+    ["CLAUDE.md", allFalse],
+    ["PRODUCT.md", allFalse],
+    ["LICENSE.md", allFalse],
+    ["THIRD_PARTY_NOTICES.md", allFalse],
+    ["LICENSE", allTrue],
+    ["NOTES.md", allTrue],
     [".papercuts/troubleshooting.md", allFalse],
     ["android/app/src/main/MainActivity.kt", area("android")],
     ["ios/AidenOnTheGo/ContentView.swift", area("ios")],
@@ -50,9 +57,17 @@ test("changed-area classification is conservative and table-driven", () => {
 test("documentation-only decisions are restricted to the explicit safe paths", () => {
   assert.equal(isSafeDocumentationPath("docs/reference.txt"), false);
   assert.equal(isSafeDocumentationPath("README.md"), true);
+  assert.equal(isSafeDocumentationPath("AGENTS.md"), true);
+  assert.equal(isSafeDocumentationPath("CLAUDE.md"), true);
+  assert.equal(isSafeDocumentationPath("PRODUCT.md"), true);
+  assert.equal(isSafeDocumentationPath("LICENSE.md"), true);
+  assert.equal(isSafeDocumentationPath("THIRD_PARTY_NOTICES.md"), true);
+  assert.equal(isSafeDocumentationPath("LICENSE"), false);
+  assert.equal(isSafeDocumentationPath("NOTES.md"), false);
   assert.equal(isSafeDocumentationPath(".papercuts/notes.md"), true);
   assert.equal(isSafeDocumentationPath("android/README.md"), false);
   assert.equal(isSafeDocumentationPath(".github/README.md"), false);
+  assert.equal(isSafeDocumentationPath("renderer/AGENTS.md"), false);
   assert.equal(isSafeDocumentationPath("docs/../main/service.ts"), false);
 
   assert.deepEqual(decideChangedAreas(["docs/guide.md", "android/app/build.gradle"]), area("android"));
@@ -63,6 +78,20 @@ test("documentation-only decisions are restricted to the explicit safe paths", (
     changedCount: 2,
     safeDocsOnly: true,
     reason: "documentation-only",
+  });
+  assert.deepEqual(analyzeChangedPaths(["AGENTS.md", "CLAUDE.md"]), {
+    ...allFalse,
+    areas: allFalse,
+    changedCount: 2,
+    safeDocsOnly: true,
+    reason: "documentation-only",
+  });
+  assert.deepEqual(analyzeChangedPaths(["AGENTS.md", "renderer/components/chat.tsx"]), {
+    ...area("desktop"),
+    areas: area("desktop"),
+    changedCount: 2,
+    safeDocsOnly: false,
+    reason: "changed-paths",
   });
 });
 
