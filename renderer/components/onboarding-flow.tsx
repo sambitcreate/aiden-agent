@@ -327,7 +327,7 @@ const featureBentos: FeatureBento[] = [
     id: "mcp",
     group: "extend",
     title: "MCP Connectors",
-    description: "Connect MCP services for the tools you enable. Connected services may also provide guidance for using those tools.",
+    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
     imageUrl: FEATURE_ILLUSTRATIONS.mcp,
     size: "wide",

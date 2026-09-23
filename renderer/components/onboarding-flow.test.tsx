@@ -434,3 +434,7 @@ test("primary AI choices include custom setup without opening advanced providers
 test("MCP onboarding discloses service-supplied tool guidance", () => {
   assert.match(source, /Connected services may also provide guidance for using those tools\./u);
 });
+
+test("MCP tour explains connected-service resource reads", () => {
+  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+});
