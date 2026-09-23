@@ -187,3 +187,35 @@ test("cancelled concurrent discovery publishes no handles and a subsequent call 
   assert.equal(calls, 2);
   assert.deepEqual(await invoke(tool, { action: "list" }), result);
 });
+
+test("multi-variable templates fail closed before SDK expansion can escape URI authority", async () => {
+  for (const operator of ["", "+", "#", ".", "/", ";", "?", "&"]) {
+    let reads = 0;
+    const { tool } = fixture(port({
+      listResourceTemplates: async () => ({ resourceTemplates: [{ name: "Tenant", uriTemplate: `https://{${operator}tenant,version}.example.com/data` }] }),
+      readResource: async () => { reads++; return { contents: [] }; },
+    }));
+    const { resources } = await invoke(tool, { action: "list" });
+    await assert.rejects(invoke(tool, {
+      action: "read", handle: resources[1].handle,
+      variables: { tenant: "x@attacker.example#/?&=%", version: "v1" },
+    }), /one variable per expression/);
+    assert.equal(reads, 0);
+  }
+});
+
+test("single-variable expressions encode reserved input and retain exact variable/length gates", async () => {
+  const requested: string[] = [];
+  const { tool } = fixture(port({
+    listResourceTemplates: async () => ({ resourceTemplates: [{ name: "Tenant", uriTemplate: "https://{tenant}.example.com/data/{version}" }] }),
+    readResource: async ({ uri }) => { requested.push(uri); return { contents: [] }; },
+  }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const handle = resources[1].handle;
+  await invoke(tool, { action: "read", handle, variables: { tenant: "x@attacker.example#", version: "v1/?&=%" } });
+  assert.deepEqual(requested, ["https://x%40attacker.example%23.example.com/data/v1%2F%3F%26%3D%25"]);
+  for (const variables of [{ tenant: "x" }, { tenant: "x", version: "v1", extra: "y" }, { tenant: "x".repeat(2049), version: "v1" }]) {
+    await assert.rejects(invoke(tool, { action: "read", handle, variables }));
+  }
+  assert.equal(requested.length, 1);
+});
