@@ -886,3 +886,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 ## 2026-09-22 MCP session scope reconciliation
 
 The earlier skill slice covered model-context body loading, not lazy filesystem reads or request-boundary instruction refresh. Audit exact production calls rather than assuming available SDK methods or Pi hooks are wired: main has no resource/getInstructions/AGENTS loader path. Keep metadata-only status separate from runtime authority changes, and preserve the green skill branch in a new worktree.
+## 2026-09-22 skill invocation policy validation
+
+- Isolated worktree Git metadata lives outside the writable sandbox; branch creation needed the existing git-switch escalation. tsx CLI also needs local socket permission.
+- Native validation needs explicit local SDK paths: `ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk`, Android Studio JBR, and `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. System xcode-select points at CommandLineTools; do not change it globally. Coordinate the physical iPhone slot with the upgrade coordinator.

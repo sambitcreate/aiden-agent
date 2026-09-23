@@ -319,7 +319,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+    /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,

@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentHarnessResources, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import * as path from "node:path";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
@@ -21,6 +21,7 @@ export function makeSkillTool(
       description: `${summary} — call this to load detailed instructions before performing the task.`,
       parameters: Type.Object({}),
       execute: async (): Promise<AgentToolResult<null>> => {
+        if (skill.modelInvocable === false) throw new Error("This skill does not allow model invocation.");
         if (!(await isEnabled())) throw new Error("Skills are disabled in Settings → Skills.");
         if (!skill.path) return textResult(skill.instructions);
         const base = path.dirname(skill.path);
@@ -46,6 +47,25 @@ export function buildSkillTools(
   isEnabled: () => Promise<boolean> = async () => true,
 ): AgentTool[] {
   return snapshot.available
-    .filter((skill) => allowWorkspaceSkills || skill.source !== "workspace")
+    .filter((skill) => skill.modelInvocable !== false && (allowWorkspaceSkills || skill.source !== "workspace"))
     .map((skill) => makeSkillTool(skill, isEnabled));
+}
+
+export function piResourcesForSkillSnapshot(
+  snapshot: SkillRegistrySnapshot | undefined,
+): AgentHarnessResources {
+  if (!snapshot) return {};
+  return {
+    // Pi resources promise a truthful filePath. Configured database skills
+    // keep their existing leased invocation path until Pi supports in-memory
+    // resource locations.
+    skills: snapshot.available
+      .filter((skill) => skill.modelInvocable !== false && Boolean(skill.path))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        content: skill.instructions,
+        filePath: skill.path!,
+      })),
+  };
 }

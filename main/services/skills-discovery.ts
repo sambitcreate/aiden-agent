@@ -23,6 +23,8 @@ import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
   name?: string;
   description?: string;
 }
@@ -65,6 +67,15 @@ function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string }
       // bytes intact, and leave other control characters for registry rejection.
       frontmatter[key] =
         key === "description" ? node.value.replace(/[\r\n\t]+/g, " ").trim() : node.value;
+    }
+    for (const [key, field] of [
+      ["disable-model-invocation", "modelInvocable"],
+      ["user-invocable", "userInvocable"],
+    ] as const) {
+      if (!document.contents.has(key)) continue;
+      const node: unknown = document.contents.get(key, true);
+      if (!isScalar(node) || typeof node.value !== "boolean") return null;
+      frontmatter[field] = field === "modelInvocable" ? !node.value : node.value;
     }
     return { frontmatter, body };
   } catch {
@@ -344,6 +355,8 @@ async function scanPatterns(
         name,
         description: (frontmatter.description || "").trim(),
         instructions,
+        modelInvocable: frontmatter.modelInvocable ?? true,
+        userInvocable: frontmatter.userInvocable ?? true,
         source: config.source,
         path: skillMd,
       });

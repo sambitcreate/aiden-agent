@@ -625,7 +625,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       );
       if (!workspaceId) return extensionCommands;
       const snapshot = await skillRegistry.snapshot(workspaceId);
-      const skillCommands = snapshot.available.flatMap((skill) => {
+      const skillCommands = snapshot.catalog.flatMap((skill) => {
+        if (!skill.available) return [];
         const command = skill.name
           .toLowerCase()
           .replace(/[^a-z0-9_]+/gu, "_")
