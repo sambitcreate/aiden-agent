@@ -316,7 +316,7 @@ final class AidenChatTests: XCTestCase {
         let cache = AidenChatCache(root: root)
         var coordinator: AidenRemoteCoordinator!
         let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
-        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
         await model.load(observeProgress: false)
         let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
         let arrived = expectation(description: "pre-response approval read held")
@@ -339,7 +339,7 @@ final class AidenChatTests: XCTestCase {
         let cache = AidenChatCache(root: root)
         var coordinator: AidenRemoteCoordinator!
         let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
-        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
         await model.load(observeProgress: false)
         let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
         let responseArrived = expectation(description: "A response held")
@@ -369,7 +369,7 @@ final class AidenChatTests: XCTestCase {
         let cache = AidenChatCache(root: root)
         var coordinator: AidenRemoteCoordinator!
         let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
-        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
         await model.load(observeProgress: false)
         let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
         let firstArrived = expectation(description: "older approval read held")
@@ -407,7 +407,7 @@ final class AidenChatTests: XCTestCase {
             AidenChatProgressLifecycleURLProtocol.reset()
             try? FileManager.default.removeItem(at: root)
         }
-        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle", chatWriteToken: cache.reserveChatWrite())
         await model.load(observeProgress: false)
         XCTAssertEqual(model.pendingApproval?.id, "approval-current")
         await model.respondToApproval(.allow, approvalID: "approval-stale")
