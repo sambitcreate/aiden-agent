@@ -857,3 +857,5 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 - A PID published by the intermediate process is still insufficient if the first parent exits before that process reaches setsid: production group cleanup can kill it. A controlled one-second pre-detachment delay reproduces the missing-marker failure. Synchronize first-parent exit with a bounded pipe acknowledgment after marker publication; keep the production cleanup, detached-child alarm, and test liveness assertions intact.
 - Build native test helpers before standalone shell tests; otherwise ENOENT is only a missing prerequisite, not a valid reproduction.
+
+- Fixture timeout cleanup cannot rely on group/direct signal ordering across setsid+fork. A parent-owned grant pipe makes persistence conditional on success, and EOF closes the late-fork race. Test absent-readiness-marker cleanup using a separate PID witness; mark ESRCH cleanup complete so an after-hook cannot signal a reused PID.
