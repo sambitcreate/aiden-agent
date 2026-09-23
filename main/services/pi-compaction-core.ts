@@ -147,7 +147,15 @@ export class PiCompactionCoordinator {
       ...DEFAULT_COMPACTION_SETTINGS,
       ...options.settings,
     };
-    if (options.engine === "vcc") {
+    // Preserve Pi's defaults when both budgets fit. Small custom/local models
+    // otherwise get a non-positive trigger or retain their entire input while
+    // repeatedly adding summary checkpoints. Use the existing VCC bounds for
+    // those infeasible pairs across every coordinator surface.
+    if (
+      options.engine === "vcc" ||
+      this.settings.reserveTokens >= options.model.contextWindow ||
+      this.settings.keepRecentTokens > options.model.contextWindow - this.settings.reserveTokens
+    ) {
       this.settings.reserveTokens = Math.min(
         this.settings.reserveTokens,
         Math.floor(options.model.contextWindow / 4),
@@ -156,6 +164,9 @@ export class PiCompactionCoordinator {
         this.settings.keepRecentTokens,
         Math.floor((options.model.contextWindow - this.settings.reserveTokens) / 2),
       );
+    }
+    if (this.settings.enabled && this.settings.reserveTokens < 2) {
+      throw new Error("The selected model has insufficient output reserve for compaction.");
     }
   }
 
@@ -487,7 +498,7 @@ export class PiCompactionCoordinator {
             }
           : await compact(
               preparation,
-              this.options.models,
+              boundedCompactionModels(this.options.models),
               this.options.model,
               undefined,
               abortController.signal,
@@ -664,6 +675,44 @@ export function createPiCompactionModels(
       if (property === "completeSimple") {
         return (...args: Parameters<Models["completeSimple"]>) => streamSimple(...args).result();
       }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Models;
+}
+
+/** Fail closed on estimated summary overflow before provider I/O; this is not a provider tokenizer. */
+function boundedCompactionModels(models: Models): Models {
+  const assertFits = (...[model, context, options]: Parameters<Models["completeSimple"]>) => {
+    // Pi's ASCII heuristic undercounts high-density Unicode. Reserve UTF-8 bytes
+    // for non-ASCII text; keep the existing content estimate for the remainder.
+    const unicodeAllowance = (text: string) => {
+      const nonAscii = text.replace(/\p{ASCII}/gu, "");
+      return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
+    };
+    const systemPrompt = context.systemPrompt ?? "";
+    const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
+      context.messages.reduce((total, message) => {
+        const text = typeof message.content === "string" ? message.content : message.content
+          .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+        return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
+      }, 0);
+    const outputTokens = options?.maxTokens ?? model.maxTokens;
+    const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
+    if (inputTokens + outputTokens + safetyTokens > model.contextWindow) {
+      throw new Error("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+    }
+  };
+  return new Proxy(models, {
+    get(target, property) {
+      if (property === "completeSimple") return (...args: Parameters<Models["completeSimple"]>) => {
+        assertFits(...args);
+        return models.completeSimple(...args);
+      };
+      if (property === "streamSimple") return (...args: Parameters<Models["streamSimple"]>) => {
+        assertFits(...args);
+        return models.streamSimple(...args);
+      };
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },

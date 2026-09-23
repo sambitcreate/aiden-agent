@@ -903,3 +903,10 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - Model ownership must gate usage counters, not transient retry/reset handling. Independent review caught that coupling; preserve provider retries even when a response reports a model alias.
 
 - PR #215 hosted review: resetting an initialization promise does not clear DataStore corruption/unsupported-shape quarantine. Keep that authority fence, explicitly limit retry to transient recovery failures, and test operator repair with a fresh owner as well as actual durable-write failure.
+## 2026-09-22 — Small-context semantic budgets
+
+- Default Pi reserve/tail values can exceed a custom model window even though generation preflight is safe. Apply the already-used VCC bounds only to infeasible pairs; keep feasible and exact-fit defaults.
+- A retained-tail regression using one enormous first user entry cannot prove target-budget enforcement: Pi deliberately retains whole cut-point groups. Use several complete turns to prove prefix reduction without changing upstream pairing/cut semantics.
+- The child compatibility test expected a needless final compaction checkpoint after active-output projection. Update it to assert exactly two provider requests and no checkpoint, preserving bounded output before the second inference.
+
+- PR #228 review exposed fake-provider summary fixtures exceeding their own windows. Capacity preflight must inspect Pi's assembled hidden prompt, not just retained-tail budgets. Calibrate fixture window/usage together; do not weaken the fence to preserve impossible mock requests. Pi's char/4 estimate also undercounts Unicode, so the summary fence adds UTF-8 allowance and documents its remaining heuristic limit.
