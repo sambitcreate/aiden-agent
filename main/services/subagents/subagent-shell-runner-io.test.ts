@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import {
   decodeSubagentShellResponse,
@@ -264,4 +264,68 @@ test("a deliberate setsid double-fork proves the documented containment limit an
   } finally {
     await cleanup();
   }
+});
+
+for (const failure of ["EPIPE", "EIO", "synchronous"] as const) {
+  test(`control-channel ${failure} failure waits for helper close and rejects normally`, async () => {
+    const child = new EventEmitter();
+    const stdin = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(Object.assign(new Error(`write ${failure}`), { code: failure }));
+      },
+    });
+    if (failure === "synchronous") {
+      stdin.write = (() => { throw new Error("synchronous write failure"); }) as typeof stdin.write;
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    Object.assign(child, { stdin, stdout, stderr, kill: () => true });
+    let settled = false;
+    const pending = runSubagentShellProductionInert({
+      workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+      command: "printf should-not-run", effectDigest: digest, nonce,
+      timeoutMs: 1_000, signal: new AbortController().signal,
+      spawnProcess: (() => child) as never,
+    });
+    const checked = assert.rejects(pending, /failed before returning a verified outcome/u)
+      .finally(() => { settled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stdin.destroyed, true);
+    assert.equal(settled, false, "write errors must not bypass helper close/cleanup");
+    // Even a zero exit cannot turn a failed control write into trusted success.
+    child.emit("close", 0, null);
+    await checked;
+    assert.equal(stdout.destroyed, true);
+    assert.equal(stderr.destroyed, true);
+  });
+}
+
+test("a failed control write keeps the watchdog until helper close", async () => {
+  const child = new EventEmitter();
+  const stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    },
+  });
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const kills: string[] = [];
+  Object.assign(child, {
+    stdin, stdout, stderr,
+    kill: (signal: string) => {
+      kills.push(signal);
+      child.emit("close", null, "SIGKILL");
+      return true;
+    },
+  });
+  await assert.rejects(runSubagentShellProductionInert({
+    workspaceRoot: { path: "/workspace", device: "1", inode: "2" },
+    command: "printf should-not-run", effectDigest: digest, nonce,
+    timeoutMs: 1, signal: new AbortController().signal,
+    spawnProcess: (() => child) as never,
+  }), /failed before returning a verified outcome/u);
+  assert.deepEqual(kills, ["SIGKILL"]);
+  assert.equal(stdin.destroyed, true);
+  assert.equal(stdout.destroyed, true);
+  assert.equal(stderr.destroyed, true);
 });

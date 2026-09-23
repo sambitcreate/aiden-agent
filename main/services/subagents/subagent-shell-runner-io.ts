@@ -227,9 +227,17 @@ export async function runSubagentShellProductionInert(input: {
   const chunks: Buffer[] = [];
   let bytes = 0;
   let helperErrorBytes = 0;
+  let controlWriteFailed = false;
   const closeControl = (): void => {
     child.stdin.destroy();
   };
+  // A helper can reject its argv/workspace before reading the control payload.
+  // Keep handling late stream errors through destruction, then reject only after
+  // helper close (or the existing watchdog) has completed the lifecycle.
+  child.stdin.on("error", () => {
+    controlWriteFailed = true;
+    closeControl();
+  });
   input.signal.addEventListener("abort", closeControl, { once: true });
   const watchdog = setTimeout(() => child.kill("SIGKILL"), input.timeoutMs + 2_500);
   child.stdout.on("data", (chunk: Buffer) => {
@@ -247,10 +255,15 @@ export async function runSubagentShellProductionInert(input: {
       child.once("close", (code, signal) => resolve({ code, signal }));
     },
   );
-  child.stdin.write(request);
   try {
+    try {
+      child.stdin.write(request);
+    } catch {
+      controlWriteFailed = true;
+      closeControl();
+    }
     const ended = await closed;
-    if (ended.code !== 0 || ended.signal !== null) {
+    if (controlWriteFailed || ended.code !== 0 || ended.signal !== null) {
       throw new Error("The shell helper failed before returning a verified outcome.");
     }
     return decodeSubagentShellResponse(Buffer.concat(chunks), {
