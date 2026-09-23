@@ -9,3 +9,5 @@ The existing `waitForFile(readMarker, 15000)` helper replaces the iteration coun
 Validation includes original normal pass, pre-delay red before and green after the bounded marker wait, post-delay red before explicit release, and both delays together green after the complete correction. Temporary test copies are removed. Full Git suite, type-check, focused lint, two independent Sol medium reviews, and hosted validation are recorded in the PR. No UI, shared-client contract, permissions, onboarding, or rollout status changes.
 
 Local final validation: all 99 Git tests passed after building the normal native prerequisites; type-check, focused lint, diff checks, and both independent Sol medium reviews passed. Hosted CI is pending publication.
+
+PR #237 review 4079143358 identified that the original final-outcome assertions also passed when the post-read guard was absent, because run() rejected the already-aborted mutation. The fixture now transparently observes run() and asserts zero upstream mutation attempts. Temporarily disabling only the post-read guard fails that assertion (one attempt); restoring it passes. Production source is unchanged.
