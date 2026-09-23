@@ -392,7 +392,7 @@ actor AidenChatCache {
         if partial {
             let cached = loadChatSummaries(instanceId: instanceId)
             retained = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: retained)
-            nextCursor = cached?.nextCursor
+            if let cached { nextCursor = cached.nextCursor }
         }
         try persistChatSummaries(SummarySnapshot(summaries: retained, nextCursor: nextCursor), instanceId: instanceId, generation: partial ? nil : generation, writeToken: writeToken)
     }
