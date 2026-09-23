@@ -116,6 +116,9 @@ class AidenChatTest {
             id = "chat-recovery", workspaceId = "workspace-recovery", title = "Recovery",
             messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
         )
+        // Match the host's public projection: absent optional private fields
+        // must be omitted, not serialized as forbidden `reasoning: null` keys.
+        val wireJson = Json(json) { explicitNulls = false }
         val final = initial.copy(messages = listOf(AidenChatMessage(
             id = "final-reply", role = AidenChatRole.ASSISTANT, text = "Authoritative final", createdAt = Instant.EPOCH
         )))
@@ -141,10 +144,10 @@ class AidenChatTest {
                     )
                     path.endsWith("/chats/chat-recovery") && chatReads.incrementAndGet() == 1 -> {
                         if (holdInitialLoad) check(releaseInitialLoad.await(10, TimeUnit.SECONDS))
-                        MockResponse().setBody(json.encodeToString(initial))
+                        MockResponse().setBody(wireJson.encodeToString(initial))
                     }
                     path.endsWith("/chats/chat-recovery") && holdInitialLoad ->
-                        MockResponse().setBody(json.encodeToString(final))
+                        MockResponse().setBody(wireJson.encodeToString(final))
                     else -> MockResponse().setResponseCode(503).setBody(
                         """{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"""
                     )

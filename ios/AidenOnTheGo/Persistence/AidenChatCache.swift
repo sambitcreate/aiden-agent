@@ -232,6 +232,7 @@ actor AidenChatCache {
 
     private nonisolated let chatWriteClock = ChatWriteClock()
     private var chatWriteGenerations: [String: [String: UInt64]] = [:]
+    private var committedChatWrites: [String: [String: (token: UInt64, listToken: UInt64)]] = [:]
     private var removedChatIDs: [String: Set<String>] = [:]
     private var chatPurgeGenerations: [String: UInt64] = [:]
 
@@ -298,14 +299,33 @@ actor AidenChatCache {
 
     func saveChats(_ chats: [AidenChat], instanceId: String, workspaceId: String, writeToken: UInt64) async throws {
         await beforeMetadataWrite?()
-        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
-              writeToken >= (workspaceWriteTokens[instanceId]?[workspaceId] ?? 0) else { return }
-        workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
-        var retained = chats.filter { !isChatHidden(instanceId: instanceId, chatId: $0.id) && isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id) }
-        if metadataWriteIsPartial(writeToken, instanceId: instanceId) {
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId) else { return }
+        let latestListToken = workspaceWriteTokens[instanceId]?[workspaceId] ?? 0
+        let isOlderList = writeToken < latestListToken
+        let partial = isOlderList || metadataWriteIsPartial(writeToken, instanceId: instanceId)
+        var retained = isOlderList ? [] : chats.filter {
+            !isChatHidden(instanceId: instanceId, chatId: $0.id) &&
+            isChatWriteRetained(writeToken, instanceId: instanceId, chatId: $0.id)
+        }
+        // Detail and list delivery can cross in either direction. An older
+        // companion may add only a detail committed after the current list;
+        // an old replay must not undo a later authoritative list omission.
+        for (chatId, commit) in committedChatWrites[instanceId] ?? [:] {
+            let ownsRow = isOlderList
+                ? commit.token > latestListToken || (commit.token == writeToken && commit.listToken == latestListToken)
+                : commit.token >= writeToken
+            guard ownsRow else { continue }
+            retained.removeAll { $0.id == chatId }
+            if let current = loadChat(instanceId: instanceId, chatId: chatId),
+               current.workspaceId == workspaceId, !current.isBotChat {
+                retained.append(current)
+            }
+        }
+        if partial {
             let ids = Set(retained.map(\.id))
             retained += (loadChats(instanceId: instanceId, workspaceId: workspaceId) ?? []).filter { !ids.contains($0.id) }
         }
+        workspaceWriteTokens[instanceId, default: [:]][workspaceId] = max(writeToken, latestListToken)
         try save(
             ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: retained),
             to: fileURL(kind: "lists", instanceId, workspaceId)
@@ -350,6 +370,9 @@ actor AidenChatCache {
         try save(
             ChatEnvelope(instanceId: instanceId, chat: chat),
             to: fileURL(kind: "chats", instanceId, chat.id)
+        )
+        committedChatWrites[instanceId, default: [:]][chat.id] = (
+            writeToken, workspaceWriteTokens[instanceId]?[chat.workspaceId] ?? 0
         )
         removedChatIDs[instanceId]?.remove(chat.id)
         return true
@@ -497,6 +520,7 @@ actor AidenChatCache {
         metadataDeletionTokens[instanceId] = max(token, metadataDeletionTokens[instanceId] ?? 0)
         chatWriteGenerations[instanceId, default: [:]][chatId] = max(token, chatWriteGenerations[instanceId]?[chatId] ?? 0)
         removedChatIDs[instanceId, default: []].insert(chatId)
+        committedChatWrites[instanceId]?.removeValue(forKey: chatId)
         let directory = root.appending(path: "lists", directoryHint: .isDirectory)
         for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
             guard let envelope = load(ChatListEnvelope.self, from: url), envelope.instanceId == instanceId,
@@ -532,6 +556,7 @@ actor AidenChatCache {
         workspaceWriteTokens.removeValue(forKey: instanceId)
         summaryWriteTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
+        committedChatWrites.removeValue(forKey: instanceId)
         summaryWriteGenerations.removeValue(forKey: instanceId)
         purgeNamespace(root, instanceId: instanceId)
         for legacyRoot in legacyRoots where legacyRoot.standardizedFileURL != root.standardizedFileURL {

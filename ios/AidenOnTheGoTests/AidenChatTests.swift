@@ -397,7 +397,22 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls) async throws {
+    func testCancelledApprovalResponseCannotReplaceNewerRequest() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .cancelledControls)
+    }
+
+    @MainActor
+    func testCancelledStopPreservesCurrentRunAndApproval() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .cancelledControls)
+    }
+
+    @MainActor
+    func testConcurrentStopCallsSendOnlyOneCancellation() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", concurrentStops: true)
+    }
+
+    @MainActor
+    private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls, concurrentStops: Bool = false) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let cache = AidenChatCache(root: root)
         var coordinator: AidenRemoteCoordinator?
@@ -424,6 +439,7 @@ final class AidenChatTests: XCTestCase {
             if stop { await model.stop() }
             else { await model.respondToApproval(.allow, approvalID: "approval-current") }
         }
+        let concurrentStop = concurrentStops ? Task { @MainActor in await model.stop() } : nil
         await fulfillment(of: [arrived], timeout: 5)
         if stop {
             XCTAssertTrue(model.canControlCurrentRun)
@@ -440,18 +456,24 @@ final class AidenChatTests: XCTestCase {
             await coordinator.removeInstallation(installation.id)
         }
         AidenChatProgressLifecycleURLProtocol.setApprovalID(nextApproval)
-        if mode == .mismatchedApproval {
+        if mode == .mismatchedApproval || (mode == .cancelledControls && !stop) {
             await model.load(observeProgress: false)
             XCTAssertEqual(model.pendingApproval?.id, nextApproval)
             AidenChatProgressLifecycleURLProtocol.failApprovalReads()
         }
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await task.value
+        await concurrentStop?.value
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
         if stop {
             XCTAssertFalse(model.isStopping)
             XCTAssertEqual(model.streamState, .waitingForApproval)
-            XCTAssertTrue(model.presentedError?.contains("Stop was not confirmed") == true)
+            XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            if mode == .cancelledControls {
+                XCTAssertFalse(model.presentedError?.contains("Stop was not confirmed") == true)
+            } else {
+                XCTAssertTrue(model.presentedError?.contains("Stop was not confirmed") == true)
+            }
         } else {
             XCTAssertFalse(model.isRespondingToApproval)
             if mode == .revokedControls {
@@ -2811,6 +2833,84 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(cache.isChatWriteRetained(newToken, instanceId: "instance-a", chatId: chat.id))
     }
 
+    func testWorkspaceListPreservesNewerDetailAgainstOlderEmptyAndStaleRows() async throws {
+        for empty in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "list-detail-race-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let cache = AidenChatCache(root: root)
+            let original = sampleChat()
+            let listToken = cache.reserveChatWrite()
+            var updated = original
+            updated.title = "Accepted mutation"
+            let detailToken = cache.reserveChatWrite()
+            try await cache.saveChat(updated, instanceId: "instance-a", writeToken: detailToken)
+            try await cache.saveChats(empty ? [] : [original], instanceId: "instance-a", workspaceId: original.workspaceId, writeToken: listToken)
+            let reopened = AidenChatCache(root: root)
+            let rows = await reopened.loadChats(instanceId: "instance-a", workspaceId: original.workspaceId)
+            XCTAssertEqual(rows?.map(\.title), [updated.title])
+            // A later authoritative list can still remove the row.
+            try await cache.saveChats([], instanceId: "instance-a", workspaceId: original.workspaceId, writeToken: cache.reserveChatWrite())
+            let cleared = await cache.loadChats(instanceId: "instance-a", workspaceId: original.workspaceId)
+            XCTAssertEqual(cleared?.count, 0)
+        }
+    }
+
+    func testDelayedMutationCompanionMergesOnlyItsAcceptedRowIntoNewerList() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "list-companion-race-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        let mutationToken = cache.reserveChatWrite()
+        let listToken = cache.reserveChatWrite()
+        try await cache.saveChats([], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: listToken)
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: mutationToken)
+        try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: mutationToken)
+        let rows = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+        XCTAssertEqual(rows?.map(\.id), [chat.id])
+        await cache.removeChat(instanceId: "instance-a", chatId: chat.id)
+        try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: mutationToken)
+        let deleted = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+        XCTAssertEqual(deleted?.count, 0)
+    }
+
+    func testOlderListAndCompanionCannotUndoLaterAuthoritativeOmission() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "list-omission-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        let oldListToken = cache.reserveChatWrite()
+        let detailToken = cache.reserveChatWrite()
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: detailToken)
+        try await cache.saveChats([], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
+        for token in [oldListToken, detailToken] {
+            try await cache.saveChats([chat], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: token)
+            let rows = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+            XCTAssertEqual(rows?.count, 0)
+        }
+    }
+
+    func testFailedDetailWriteDoesNotPromoteOlderDiskSnapshotIntoList() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "list-failed-detail-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let chat = sampleChat()
+        try await cache.saveChat(chat, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
+        let listToken = cache.reserveChatWrite()
+        var oversized = chat
+        oversized.title = String(repeating: "x", count: 11 * 1_024 * 1_024)
+        do {
+            try await cache.saveChat(oversized, instanceId: "instance-a", writeToken: cache.reserveChatWrite())
+            XCTFail("Oversized detail must fail persistence")
+        } catch {
+            XCTAssertEqual((error as NSError).code, CocoaError.fileWriteOutOfSpace.rawValue)
+        }
+        try await cache.saveChats([], instanceId: "instance-a", workspaceId: chat.workspaceId, writeToken: listToken)
+        let rows = await cache.loadChats(instanceId: "instance-a", workspaceId: chat.workspaceId)
+        XCTAssertEqual(rows?.count, 0)
+        let detail = await cache.loadChat(instanceId: "instance-a", chatId: chat.id)
+        XCTAssertEqual(detail?.title, chat.title)
+    }
+
     func testChatWriteFencesSurviveRemovalAndPurgeWithoutCrossingInstances() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-write-fence-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4608,6 +4708,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case legacyControls
         case mismatchedStop
         case mismatchedApproval
+        case cancelledControls
         case revokedControls
         case unsupportedControls
     }
@@ -4870,6 +4971,12 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 
     private func complete(_ result: (HTTPURLResponse, Data), shouldFinish: Bool) {
+        let path = request.url?.path ?? ""
+        if Self.lock.withLock({ Self.mode == .cancelledControls }),
+           path.hasSuffix("/respond") || path.hasSuffix("/cancel") {
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
         client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: result.1)
         if shouldFinish {

@@ -1213,14 +1213,22 @@ final class AidenChatViewModel {
             return
         }
         let observationGeneration = progressObservationGeneration
+        let restorationGeneration = composerGeneration
+        let approvalStreamToRefresh = (pendingApproval != nil || streamState == .waitingForApproval || isRespondingToApproval)
+            ? activeStreamID : nil
         isLoading = true
         isRestoringStream = activeStreamID == nil
         defer {
             isLoading = false
             isRestoringStream = false
         }
+        // Establish whether recovery is needed before a draft read can suspend.
+        // An empty stream cache releases Send without waiting for draft I/O.
+        let cachedStream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id)
+        let needsStreamRestoration = activeStreamID == nil && cachedStream != nil
+        guard !isRemoved, coordinator.isCurrent(context) else { return }
+        isRestoringStream = needsStreamRestoration
         if draftSession == nil {
-            let restorationGeneration = composerGeneration
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             draftSession = session
@@ -1237,7 +1245,7 @@ final class AidenChatViewModel {
         }
         // Reserve Send synchronously, restore local drafts first, then let the
         // status probe run alongside independent transcript/catalog reads.
-        async let restoration: Void = restoreStreamIfNeeded()
+        async let restoration: Void = restoreStreamIfNeeded(needed: needsStreamRestoration)
         let cacheGeneration = transcriptGeneration
         if let cached = await cache.loadChat(instanceId: instanceId, chatId: chat.id) {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
@@ -1263,6 +1271,12 @@ final class AidenChatViewModel {
             if generation == transcriptGeneration, !isStarting, chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         await restoration
+        guard !isRemoved, coordinator.isCurrent(context) else { return }
+        // Refresh current authority on explicit reload without restarting an
+        // existing stream owner or discarding its in-memory replay buffers.
+        if let approvalStreamToRefresh, activeStreamID == approvalStreamToRefresh {
+            await restorePendingApproval(streamID: approvalStreamToRefresh, context: context)
+        }
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
@@ -2160,33 +2174,35 @@ final class AidenChatViewModel {
     }
 
     func stop() async {
-        guard canControlCurrentRun, !isStopping, !isReadOnlyPresentation else { return }
-        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
-        guard !isRemoved else { return }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
-        let previousState = streamState
-        guard previousState?.isTerminal != true else { return }
+        guard canControlCurrentRun, !isStopping, !isReadOnlyPresentation,
+              !isRemoved, let expectedStreamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        // Reserve before the cache read yields so simultaneous taps cannot both
+        // dispatch, and keep the current run visible until the Mac confirms Stop.
         isStopping = true
         defer { isStopping = false }
-        pendingApproval = nil
-        streamState = .cancelled
+        guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id),
+              !isRemoved, coordinator.isCurrent(context), canControlCurrentRun,
+              activeStreamID == expectedStreamID, stream.streamId == expectedStreamID,
+              stream.deviceId == context.deviceId, streamState?.isTerminal != true else { return }
         do {
             let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
+                  streamState?.isTerminal != true else { return }
             guard status.streamId == stream.streamId, status.chatId == chat.id else {
-                streamState = previousState
                 presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
                 return
             }
             await apply(status, streamID: stream.streamId, context: context, feedbackPolicy: .restoredStream)
             coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
         } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
+            // Cancellation does not prove that the Mac stopped or rejected the
+            // run. Preserve any status or approval received while awaiting it.
+            return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            streamState = previousState
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId,
+                  streamState?.isTerminal != true else { return }
             presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
@@ -2214,7 +2230,6 @@ final class AidenChatViewModel {
             await restorePendingApproval(streamID: streamID, context: context)
             return
         }
-        let previousState = streamState
         pendingApproval = nil
         streamState = .running
         do {
@@ -2230,9 +2245,13 @@ final class AidenChatViewModel {
             }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
         } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID else { return }
-            pendingApproval = approval
-            streamState = previousState
+            guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            // The decision may already have reached the Mac. Resolve current
+            // authority without resurrecting the captured card or showing an error.
+            if pendingApproval == nil {
+                await restorePendingApproval(streamID: streamID, context: context, isFallback: true)
+            }
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
@@ -2268,8 +2287,8 @@ final class AidenChatViewModel {
         recoveryWarning = nil
     }
 
-    private func restoreStreamIfNeeded() async {
-        guard !isRemoved, activeStreamID == nil, !isStarting else { return }
+    private func restoreStreamIfNeeded(needed: Bool) async {
+        guard needed, !isRemoved, activeStreamID == nil, !isStarting else { return }
         isRestoringStream = true
         defer { isRestoringStream = false }
         let generation = transcriptGeneration
@@ -2587,7 +2606,7 @@ final class AidenChatViewModel {
         announce: Bool = false,
         isFallback: Bool = false
     ) async {
-        guard coordinator.isCurrent(context), activeStreamID == streamID,
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == streamID,
               streamState?.isTerminal != true else { return }
         if isFallback, let read = approvalSnapshotInFlight,
            read.streamID == streamID, coordinator.isCurrent(read.context),

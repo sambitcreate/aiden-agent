@@ -994,3 +994,11 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-22 mobile recovery: synchronous Swift actor disk writes do not imply FIFO queued-call ordering. Reserve ordering tokens before the actor hop and reject stale tokens inside persistence; a held GET test alone cannot prove already-admitted write ordering. Verify disk through a reopened cache after deliberately reversed write delivery.
 
 - 2026-09-22 PR217: gh run view --log-failed refuses logs while sibling jobs run; direct gh api jobs/{id}/logs with --allow-escape-sequences retrieves completed-job logs. Rerun also rejected until workflow completion. Local focused ESLint lacks @eslint/js in this checkout; focused Node harness tests remain runnable after building native helper.
+
+## 2026-09-23 native integration repair
+- Preserved integration compiles but chat tests expose independent list-token, premature Stop, approval fallback, and draft/recovery interleavings; compilation alone missed these regressions.
+- Physical devices are offline; asked for simulator exception because ios/AGENTS.md prohibits it despite the simulator-based handoff.
+- Android full JVM execution exposed a reproducible terminal-settlement timeout; isolated reproduction is being inspected before treating it as runner flakiness.
+- The preserved worktree had no Node dependencies; install its lockfile dependencies before running the integrated worktree test.
+- Android held-load recovery timeout concealed a fixture contract error: default JSON serialization emitted forbidden `reasoning: null`; omit null optional fields to match the public host projection, then the full chat class passes.
+- Direct worktree test execution needs `build:worktree-remover` and `build:worktree-file-io` first; missing native helpers caused ENOENT before the prerequisite builds and rerun.
