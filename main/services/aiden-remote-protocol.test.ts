@@ -1536,7 +1536,7 @@ test("produced-file OpenAPI constraints agree with runtime path and provenance v
   const ajv = new Ajv2020({ strict: false });
   const validate = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
   const base = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "write_file", label: "Write file", status: "completed", startedAt: 1, updatedAt: 1 };
-  for (const relativePath of ["out/report.txt", "foo:bar.txt", "a:b/c.txt", "K:/secret", "😀".repeat(121), "😀".repeat(241), "/abs", "../secret", "a/../b", "a/./b", "a\\b", "a//b", "a/", "~file", "C:/secret", "bad\nname"]) {
+  for (const relativePath of [...["\u2028", "\u2029"].flatMap((separator) => [`a/${separator}/b`, `a/${separator}/../b`, `a/${separator}/./b`, `a/${separator}//b`, `a/${separator}/`]), "out/report.txt", "foo:bar.txt", "a:b/c.txt", "K:/secret", "😀".repeat(121), "😀".repeat(241), "/abs", "../secret", "a/../b", "a/./b", "a\\b", "a//b", "a/", "~file", "C:/secret", "bad\nname"]) {
     const file = { relativePath, operation: "written", bytes: 12 };
     assert.equal(validate({ ...base, producedFile: file }), Boolean(parseProducedFile(file, "write_file")), relativePath);
   }

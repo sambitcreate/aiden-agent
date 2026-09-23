@@ -18,3 +18,5 @@ Validation: 125 focused tests and 10 inventory-fence tests pass; TypeScript and 
 
 
 PR #219 at 58abfb02 passed hosted CI/Android/Electron gates. Pullfrog follow-up fixes include all three encrypted credential stores even in no-MCP workspaces, POSIX colon path parity, 240 Unicode code-point limits across clients, ASCII-only drive prefixes, and AJV-tested normative path/tool/status constraints. Follow-up validation: 128/128 focused tests, TypeScript, lint, Android chat/contract tests, and unsigned generic iOS test build pass; both independent reviewers clear. Follow-up hosted CI remains pending; physical XCTest remains blocked by device lock.
+
+Pullfrog incremental follow-up: ProducedFile schema lookaheads now scan all characters, including U+2028/U+2029; parity vectors cover valid paths, traversal, dot/empty segments and trailing separators for both. Protocol suite passes via node --import tsx (CLI IPC blocked by sandbox). Runtime/native validators unchanged. Hosted validation pending; physical device still locked.
