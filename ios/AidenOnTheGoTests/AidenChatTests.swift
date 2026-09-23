@@ -780,6 +780,87 @@ final class AidenChatTests: XCTestCase {
         }
     }
 
+    func testListTitleBeforeRenameActorEntrySurvivesLocalListOverwrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-list-title-mailbox-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        var receipt = sampleChat()
+        receipt.title = "Receipt B"
+        let origin = cache.reserveChatWrite()
+        let cutoff = cache.reserveChatWrite()
+        var remote = receipt
+        remote.title = "Authoritative C"
+        try await cache.saveChats([remote], instanceId: "title-mailbox", workspaceId: remote.workspaceId, writeToken: cache.reserveChatWrite(), isAuthoritativeFetch: true)
+        // A local snapshot cannot rewrite the recorded HTTP title provenance.
+        try await cache.saveChats([receipt], instanceId: "title-mailbox", workspaceId: receipt.workspaceId, writeToken: cache.reserveChatWrite())
+        let presented = await cache.acceptRename(receipt, instanceId: "title-mailbox", origin: origin, cutoff: cutoff)
+        XCTAssertEqual(presented?.displayTitle, remote.title)
+        XCTAssertEqual(presented?.title, receipt.title)
+        XCTAssertEqual(presented?.revision, receipt.revision)
+        let reopened = AidenChatCache(root: root)
+        let disk = await reopened.loadChat(instanceId: "title-mailbox", chatId: receipt.id)
+        let restored = await reopened.presenting(try XCTUnwrap(disk), instanceId: "title-mailbox")
+        XCTAssertEqual(restored.displayTitle, remote.title)
+    }
+
+    func testAuthoritativeListTitleSurvivesDetailHydrationWithOrWithoutListDiskFailure() async throws {
+        for authoritativeTitle in ["Coherent list C", ""] {
+            for failListWrite in [false, true] {
+                for authoritative in [false, true] {
+                    for requestedAfterReceipt in [false, true] {
+                        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-list-rename-disk-\(UUID())")
+                        defer { try? FileManager.default.removeItem(at: root) }
+                        let cache = AidenChatCache(root: root)
+                        var receipt = sampleChat()
+                        receipt.title = "Accepted rename B"
+                        let origin = cache.reserveChatWrite()
+                        let earlyListToken = cache.reserveChatWrite()
+                        _ = await cache.acceptRename(receipt, instanceId: "list-disk", origin: origin, cutoff: cache.reserveChatWrite())
+                        let listToken = requestedAfterReceipt ? cache.reserveChatWrite() : earlyListToken
+                        if failListWrite {
+                            let directory = root.appending(path: "lists")
+                            try? FileManager.default.removeItem(at: directory)
+                            try Data("blocked list directory".utf8).write(to: directory)
+                        }
+                        var latest = receipt
+                        latest.title = authoritativeTitle
+                        latest.revision = "list-C"
+                        do {
+                            try await cache.saveChats([latest], instanceId: "list-disk", workspaceId: latest.workspaceId, writeToken: listToken, isAuthoritativeFetch: authoritative)
+                            XCTAssertFalse(failListWrite)
+                        } catch { XCTAssertTrue(failListWrite) }
+                        let shouldSupersede = authoritative && requestedAfterReceipt
+                        let expectedTitle = shouldSupersede ? latest.title : receipt.title
+                        let rows = await cache.admittedWorkspaceChats(instanceId: "list-disk", workspaceId: latest.workspaceId)
+                        let admitted = try XCTUnwrap(rows?.first)
+                        let presented = await cache.presenting(admitted, instanceId: "list-disk")
+                        XCTAssertEqual(presented.displayTitle, expectedTitle)
+                        XCTAssertEqual(presented.revision, latest.revision)
+                        let detailed = await cache.admittedChat(instanceId: "list-disk", chatId: latest.id)
+                        let canonical = try XCTUnwrap(detailed)
+                        let hydrated = await cache.presenting(canonical, instanceId: "list-disk")
+                        XCTAssertEqual(hydrated.displayTitle, expectedTitle)
+                        XCTAssertEqual(hydrated.title, receipt.title)
+                        XCTAssertEqual(hydrated.revision, receipt.revision)
+                        let pending = await cache.needsRenameRefresh(instanceId: "list-disk", chatId: latest.id)
+                        XCTAssertTrue(pending, "An older canonical detail still requires a coherent read before mutation")
+                        let reopened = AidenChatCache(root: root)
+                        let disk = await reopened.loadChat(instanceId: "list-disk", chatId: receipt.id)
+                        let restored = await reopened.presenting(try XCTUnwrap(disk), instanceId: "list-disk")
+                        XCTAssertEqual(restored.displayTitle, expectedTitle)
+                        XCTAssertEqual(restored.title, receipt.title)
+                        XCTAssertEqual(restored.revision, receipt.revision)
+                        if shouldSupersede {
+                            try await cache.saveFetchedChat(latest, instanceId: "list-disk", writeToken: cache.reserveChatWrite())
+                            let retired = await cache.needsRenameRefresh(instanceId: "list-disk", chatId: latest.id)
+                            XCTAssertFalse(retired)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @MainActor
     func testRenamePublishesNewerListRowInsteadOfOlderDetailReceipt() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-rename-list-row-\(UUID())")

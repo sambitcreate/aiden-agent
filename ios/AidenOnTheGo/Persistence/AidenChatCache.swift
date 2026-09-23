@@ -236,6 +236,8 @@ actor AidenChatCache {
         let instanceId: String
         let chatId: String
         let title: String
+        // Missing on legacy records, where an empty title represented retirement.
+        var retired: Bool? = false
     }
     private struct PendingRename {
         let value: RenameTitle
@@ -246,6 +248,7 @@ actor AidenChatCache {
     private var renameOrigins: [String: [String: UInt64]] = [:]
     private var renameTitles: [String: [String: PendingRename]] = [:]
     private var retiredRenameTitles: [String: Set<String>] = [:]
+    private var workspaceFetchedTitles: [String: [String: [String: String]]] = [:]
     private var workspaceFetchTokens: [String: [String: UInt64]] = [:]
     private var admittedWorkspaceLists: [String: [String: [AidenChat]]] = [:]
     private var admittedChats: [String: [String: AidenChat]] = [:]
@@ -371,20 +374,30 @@ actor AidenChatCache {
         }
         workspaceWriteTokens[instanceId, default: [:]][workspaceId] = writeToken
         admittedWorkspaceLists[instanceId, default: [:]][workspaceId] = retained
-        if isAuthoritativeFetch { workspaceFetchTokens[instanceId, default: [:]][workspaceId] = writeToken }
+        if isAuthoritativeFetch {
+            workspaceFetchTokens[instanceId, default: [:]][workspaceId] = writeToken
+            let retainedIDs = Set(retained.map(\.id))
+            workspaceFetchedTitles[instanceId, default: [:]][workspaceId] = Dictionary(chats.filter { retainedIDs.contains($0.id) }.map { ($0.id, $0.title) }, uniquingKeysWith: { _, latest in latest })
+        }
+        defer {
+            // A list row supersedes the old receipt title even if list IO fails.
+            // Keep the new title separate until a coherent detail read catches
+            // up; generic detail hydration may still have an older canonical row.
+            for row in chats where isAuthoritativeFetch {
+                if retained.contains(where: { $0.id == row.id }),
+                   let pending = pendingRename(instanceId: instanceId, chatId: row.id), writeToken > pending.cutoff,
+                   (fetchedChatTokens[instanceId]?[row.id] ?? 0) <= writeToken {
+                    let value = RenameTitle(instanceId: instanceId, chatId: row.id, title: row.title)
+                    renameTitles[instanceId, default: [:]][row.id] = PendingRename(value: value, origin: pending.origin, cutoff: writeToken)
+                    retiredRenameTitles[instanceId]?.remove(row.id)
+                    try? save(value, to: fileURL(kind: "rename-titles", instanceId, row.id))
+                }
+            }
+        }
         try save(
             ChatListEnvelope(instanceId: instanceId, workspaceId: workspaceId, chats: retained),
             to: fileURL(kind: "lists", instanceId, workspaceId)
         )
-        // An admitted, later-requested full list row is a coherent title read.
-        for row in retained where isAuthoritativeFetch {
-            if chats.contains(where: { $0.id == row.id && $0.title == row.title }),
-               let pending = pendingRename(instanceId: instanceId, chatId: row.id), writeToken > pending.cutoff {
-                renameTitles[instanceId]?.removeValue(forKey: row.id)
-                retiredRenameTitles[instanceId, default: []].insert(row.id)
-                try? save(RenameTitle(instanceId: instanceId, chatId: row.id, title: ""), to: fileURL(kind: "rename-titles", instanceId, row.id))
-            }
-        }
         return true
     }
 
@@ -463,7 +476,7 @@ actor AidenChatCache {
               retiredRenameTitles[instanceId]?.contains(chatId) != true,
               let value: RenameTitle = load(RenameTitle.self, from: fileURL(kind: "rename-titles", instanceId, chatId)),
               value.instanceId == instanceId, value.chatId == chatId,
-              !value.title.isEmpty, value.title.unicodeScalars.count <= 1_024 else { return nil }
+              !(value.retired ?? value.title.isEmpty), value.title.unicodeScalars.count <= 1_024 else { return nil }
         let pending = PendingRename(value: value, origin: 0, cutoff: 0)
         renameTitles[instanceId, default: [:]][chatId] = pending
         return pending
@@ -487,11 +500,12 @@ actor AidenChatCache {
         // requested GET can retire it while that write is queued.
         let newestReceipt = origin > (renameOrigins[instanceId]?[receipt.id] ?? 0)
         if newestReceipt { renameOrigins[instanceId, default: [:]][receipt.id] = origin }
-        let newerListRow = (workspaceFetchTokens[instanceId]?[receipt.workspaceId] ?? 0) > cutoff &&
-            admittedWorkspaceLists[instanceId]?[receipt.workspaceId]?.contains(where: { $0.id == receipt.id }) == true
-        if newestReceipt, !newerListRow, (fetchedChatTokens[instanceId]?[receipt.id] ?? 0) <= cutoff {
-            let value = RenameTitle(instanceId: instanceId, chatId: receipt.id, title: receipt.title)
-            renameTitles[instanceId, default: [:]][receipt.id] = PendingRename(value: value, origin: origin, cutoff: cutoff)
+        let listToken = workspaceFetchTokens[instanceId]?[receipt.workspaceId] ?? 0
+        let newerListTitle = listToken > cutoff ? workspaceFetchedTitles[instanceId]?[receipt.workspaceId]?[receipt.id] : nil
+        let titleCutoff = newerListTitle == nil ? cutoff : listToken
+        if newestReceipt, (fetchedChatTokens[instanceId]?[receipt.id] ?? 0) <= titleCutoff {
+            let value = RenameTitle(instanceId: instanceId, chatId: receipt.id, title: newerListTitle ?? receipt.title)
+            renameTitles[instanceId, default: [:]][receipt.id] = PendingRename(value: value, origin: origin, cutoff: titleCutoff)
             retiredRenameTitles[instanceId]?.remove(receipt.id)
             try? save(value, to: fileURL(kind: "rename-titles", instanceId, receipt.id))
         }
@@ -531,7 +545,7 @@ actor AidenChatCache {
         if persisted {
             // Persist retirement atomically; a failed unlink cannot resurrect
             // an older receipt when a new cache actor opens the directory.
-            try? save(RenameTitle(instanceId: instanceId, chatId: chatId, title: ""), to: fileURL(kind: "rename-titles", instanceId, chatId))
+            try? save(RenameTitle(instanceId: instanceId, chatId: chatId, title: "", retired: true), to: fileURL(kind: "rename-titles", instanceId, chatId))
         } else if let canonical = admittedChats[instanceId]?[chatId] {
             // Keep a separate durable title for restart if the canonical file
             // could not be updated, without hiding the current memory winner.
@@ -708,6 +722,7 @@ actor AidenChatCache {
         try? fileManager.removeItem(at: fileURL(kind: "rename-titles", instanceId, chatId))
         for workspace in Array(admittedWorkspaceLists[instanceId]?.keys ?? Dictionary<String, [AidenChat]>().keys) {
             admittedWorkspaceLists[instanceId]?[workspace]?.removeAll { $0.id == chatId }
+            workspaceFetchedTitles[instanceId]?[workspace]?.removeValue(forKey: chatId)
         }
         let directory = root.appending(path: "lists", directoryHint: .isDirectory)
         for url in (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
@@ -743,6 +758,7 @@ actor AidenChatCache {
         removedChatIDs.removeValue(forKey: instanceId)
         workspaceWriteTokens.removeValue(forKey: instanceId)
         workspaceFetchTokens.removeValue(forKey: instanceId)
+        workspaceFetchedTitles.removeValue(forKey: instanceId)
         admittedWorkspaceLists.removeValue(forKey: instanceId)
         summaryWriteTokens.removeValue(forKey: instanceId)
         chatWriteGenerations.removeValue(forKey: instanceId)
