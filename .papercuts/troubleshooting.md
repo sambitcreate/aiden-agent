@@ -855,3 +855,7 @@ symlink with this checkout's own npm ci. Full type-check and lint then passed.
 
 ## MCP resources — 2026-09-22
 SDK UriTemplate.variableNames preserves duplicates: deduplicate before exact input-key validation. resources/read content URIs may differ from the requested URI; bound/project as data without minting handles. Cache only successful inventory or clear the same failed discovery promise so cancellation does not poison later calls.
+
+## 2026-09-23 — shell helper early-exit stdin error
+
+- Workspace identity validation may exit before reading the control frame. A child-process error listener does not catch stdin EPIPE: install a stdin listener before writing, record transport failure, close control, and still await close/watchdog before rejecting. Keep write inside try/finally so synchronous failure also cleans timers/abort listeners/streams. Retain an error listener through stream destruction for late events.
