@@ -896,3 +896,10 @@ The earlier skill slice covered model-context body loading, not lazy filesystem 
 ## 2026-09-22 MCP guidance test compatibility
 
 The repository TypeScript library target does not include Array.at; use slice(-1)[0] in fixtures without raising the target. Onboarding's source fixture is already loaded with readFileSync; reuse it for copy assertions instead of adding an unimported async reader. These test-only errors were corrected before commit.
+## 2026-09-22 — Pi budget and recovery audit
+
+- Worktree Git metadata lives outside its writable root; fetch/branch operations needed ordinary sandbox escalation. The `tsx` CLI also needs its temporary IPC socket, so `npm run test:compaction` needed escalation after EPERM. Locked `npm ci --ignore-scripts` and direct `node --import tsx` focused tests worked in the sandbox.
+- A startup race fixture initially intercepted `DataStore.load`, which is also called internally during normal store operations and deadlocked the fixture. Intercept the startup-only corruption check instead to hold a second recovery sweep deterministically.
+- Model ownership must gate usage counters, not transient retry/reset handling. Independent review caught that coupling; preserve provider retries even when a response reports a model alias.
+
+- PR #215 hosted review: resetting an initialization promise does not clear DataStore corruption/unsupported-shape quarantine. Keep that authority fence, explicitly limit retry to transient recovery failures, and test operator repair with a fresh owner as well as actual durable-write failure.
