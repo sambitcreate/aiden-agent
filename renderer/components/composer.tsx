@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { ComposerContextBar } from "./composer-context-bar";
+import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -1662,6 +1663,7 @@ export function Composer({
                 programmaticReturnFocusRef={inputRef}
               />
             ) : null}
+            <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
           <div

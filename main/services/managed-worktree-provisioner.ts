@@ -9,7 +9,7 @@ import { captureManagedWorktreeRootIdentity, ManagedWorktreeFileIoError, transfe
 const INCLUDE_FILE = ".worktreeinclude";
 const MAX_INCLUDE_BYTES = 64 * 1024;
 const MAX_PROVISIONED_FILES = 4_096;
-const MAX_PROVISIONED_BYTES = 256 * 1024 * 1024;
+export const MAX_PROVISIONED_BYTES = 256 * 1024 * 1024;
 const MAX_PATH_LENGTH = 512;
 
 export type ManagedWorktreeProvisionerErrorCode =

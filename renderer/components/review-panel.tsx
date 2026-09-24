@@ -23,6 +23,7 @@ import { useGitBranches, useGitComparison, useGitReview } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import type { GitComparison, GitFileDiff, GitReviewFile, Workspace } from "../lib/types";
 import type { EnvironmentReviewMode } from "./environment-panel";
+import { ChatPullRequestReviewFooter } from "./chat-pull-requests";
 
 interface LoadState<T> {
   data: T | null;
@@ -713,12 +714,15 @@ function CompareBranchPanel({
 
 export function ReviewPanel({
   workspace,
+  chatId,
   active,
   mode,
   onModeChange,
   onOpenFile,
 }: {
   workspace: Workspace | undefined;
+  /** Chat presented for this workspace; enables the remote PR footer link. */
+  chatId?: string;
   active: boolean;
   mode: EnvironmentReviewMode;
   onModeChange: (mode: EnvironmentReviewMode) => void;
@@ -773,6 +777,7 @@ export function ReviewPanel({
           <CompareBranchPanel workspace={workspace} active={active} onOpenFile={onOpenFile} />
         )}
       </div>
+      {chatId ? <ChatPullRequestReviewFooter chatId={chatId} /> : null}
     </div>
   );
 }

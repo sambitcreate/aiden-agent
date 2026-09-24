@@ -96,17 +96,29 @@ export function registerChatGenerationHandlers(): void {
   });
 
   // Resolve a pending tool-approval request ("ask" mode).
-  ipcMain.handle("chat:approve", async (event, approvalId: unknown, decision: unknown) => {
-    if (typeof approvalId !== "string" || !approvalId) return;
-    const owner = chatGenerationOwner(event);
-    const allowed = decision === "allow";
-    if (
-      !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId) &&
-      !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
-    ) {
-      throw new Error("This renderer document does not own that approval.");
-    }
-  });
+  ipcMain.handle(
+    "chat:approve",
+    async (event, approvalId: unknown, decision: unknown, options: unknown) => {
+      if (typeof approvalId !== "string" || !approvalId) return;
+      const owner = chatGenerationOwner(event);
+      const allowed = decision === "allow";
+      const formFillExcludedOrders = Array.isArray(
+        (options as { formFillExcludedOrders?: unknown } | null)?.formFillExcludedOrders,
+      )
+        ? (options as { formFillExcludedOrders: unknown[] }).formFillExcludedOrders.filter(
+            (order): order is number => Number.isSafeInteger(order),
+          )
+        : undefined;
+      if (
+        !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId, {
+          formFillExcludedOrders,
+        }) &&
+        !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
+      ) {
+        throw new Error("This renderer document does not own that approval.");
+      }
+    },
+  );
 
   ipcMain.handle(
     "chat:answerQuestionnaire",

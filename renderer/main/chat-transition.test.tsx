@@ -34,6 +34,12 @@ test("chat route renders ChatPane without remounting it per chatId", () => {
   );
 });
 
+test("chat pane hides the generic tool phase when a chronological row owns it", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
+  assert.match(pane, /resolveVisibleAgentActivity\(timelineActivity/u);
+});
+
 test("chat pane owns its own per-chat reset instead of relying on a remount", () => {
   const pane = source("./chat-pane.tsx");
 
@@ -274,15 +280,16 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
   const effect = between(
     scrollArea,
-    'if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");',
-    "resizeObserver.observe(element);",
+    "React.useLayoutEffect(() => {\n    const element = viewport.current;",
+    "const resolvedToolbar",
   );
 
-  const syncIndex = effect.indexOf("\n    update();");
+  const syncIndex = effect.indexOf('if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");');
   const frameIndex = effect.indexOf("requestAnimationFrame(update)");
-  assert.notEqual(syncIndex, -1, "ScrollArea must run update() synchronously in the layout effect");
+  assert.notEqual(syncIndex, -1, "ScrollArea must settle synchronously in the layout effect");
   assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
+  assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
 });
 
 test("scroll area still pads the viewport for its overlaid chrome", () => {
@@ -335,7 +342,7 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   assert.match(stop, /stopDetachedGeneration\(streamId\)/u);
   assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
-  assert.match(pane, /enabled: !draft && ready && !isGenerating[\s\S]*?!detachedGenerationDraining/u);
+  assert.match(pane, /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u);
 });
 
 test("a pre-append assistant read cannot hide controls for the newer user turn", async () => {
@@ -412,7 +419,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
-  assert.match(pane, /enabled: !draft && ready/u);
+  assert.match(pane, /enabled:\s*!draft &&\s*ready/u);
 });
 
 

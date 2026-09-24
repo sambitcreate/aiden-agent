@@ -5,6 +5,7 @@ import {
   safeToolDescriptor,
   safeToolIssueDetails,
 } from "./generation-timeline.js";
+import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -336,6 +337,69 @@ test("consecutive reasoning blocks merge into one timed stretch", () => {
   assert.equal(typeof trailing?.finishedAt, "number");
 });
 
+test("readable reasoning spans remain ordered across tools and reconcile to terminal content", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => snapshots.push(value));
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.toolStarted("call-a", "read_file", {});
+  projector.toolFinished("call-a", "completed");
+  projector.thinkingStarted();
+  projector.reasoningDelta(7, 13);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(firstStep, [
+    { start: 0, end: 5 },
+    { start: 7, end: 14 },
+  ], 14);
+  const final = projector.finish("completed");
+  const thoughts = final.steps.filter((step) => step.kind === "thinking");
+  assert.deepEqual(thoughts.map((step) => [step.reasoningStartOffset, step.reasoningEndOffset]), [
+    [0, 5], [7, 14],
+  ]);
+  assert.deepEqual(parseGenerationTimeline(final, 0, 14), final);
+  assert.equal(parseGenerationTimeline(final, 0, 13), undefined);
+  assert.ok(snapshots.some((snapshot) => snapshot.steps[2]?.kind === "thinking" &&
+    snapshot.steps[2].reasoningEndOffset === 14));
+});
+
+test("redacted Pi thinking between readable blocks keeps one chronological span", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  const firstStep = projector.stepCount();
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 13);
+  projector.thinkingEnded();
+  projector.thinkingStarted();
+  projector.reasoningDelta(15, 29);
+  projector.thinkingEnded();
+  const segments = terminalAssistantThinkingSegments({ role: "assistant", content: [
+    { type: "thinking", thinking: "visible first" },
+    { type: "thinking", thinking: "private", redacted: true },
+    { type: "thinking", thinking: "visible second" },
+  ] });
+  assert.ok(segments);
+  projector.reconcileReasoningSegments(firstStep, segments, 29);
+  const thought = projector.finish("completed").steps[0];
+  assert.equal(thought?.kind === "thinking" && thought.reasoningStartOffset, 0);
+  assert.equal(thought?.kind === "thinking" && thought.reasoningEndOffset, 29);
+});
+
+test("ambiguous terminal thinking and retry remove stale public spans", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 5);
+  projector.thinkingEnded();
+  projector.reconcileReasoningSegments(0, [], 0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+  projector.thinkingStarted();
+  projector.reasoningDelta(0, 3);
+  projector.rewindReasoningOffset(0);
+  assert.equal(projector.snapshot().steps.find((step) => step.kind === "thinking")
+    ?.reasoningStartOffset, undefined);
+});
+
 test("a reopened merged thinking step reads open again on the live timeline", () => {
   let now = 1_000;
   const snapshots: GenerationTimeline[] = [];
@@ -456,7 +520,7 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
   projector.setContentOffset(20);
   projector.thinkingStarted();
   projector.thinkingEnded();
-  projector.reconcileContentOffset(10, 15);
+  projector.reconcileContentOffset(10, "0123456789", "01234");
   projector.toolStarted("after-terminal", "read_file", {});
   projector.setContentOffset(30);
   projector.toolStarted("failed-attempt", "grep", {});
@@ -468,6 +532,21 @@ test("terminal reconciliation and retry rewind keep future offsets monotonic", (
     [15, 15, 15, 15],
   );
   assert.ok(snapshots.length > 0);
+});
+
+test("terminal Pi block order reanchors tools after rewritten text", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.setContentOffset(3);
+  projector.toolStarted("call-a", "read_file", {});
+  projector.setContentOffset(6);
+  projector.thinkingStarted();
+  projector.reconcileContentOffset(0, "abcXYZ", "aXYZ", {
+    stepStart: 0,
+    textStart: 0,
+    thinkingOffsets: [4],
+    toolOffsets: new Map([["call-a", 1]]),
+  });
+  assert.deepEqual(projector.snapshot().steps.map((step) => step.contentOffset), [1, 4]);
 });
 
 test("version 1 timelines replay without pretending to have presentation offsets", () => {
@@ -522,6 +601,10 @@ test("version 2 reasoning timelines replay without presentation offsets", () => 
   const parsed = parseGenerationTimeline(legacy);
   assert.equal(parsed?.version, 2);
   assert.equal(parsed?.steps[0]?.contentOffset, undefined);
+  assert.equal(parseGenerationTimeline({
+    ...legacy,
+    steps: [{ ...legacy.steps[0], reasoningStartOffset: 0, reasoningEndOffset: 2 }],
+  }), undefined);
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {
@@ -677,4 +760,32 @@ test("automatic compaction publishes bounded engine metrics without summary cont
   assert.equal(toolSteps(snapshot)[0].detail, "pi-vcc · 0.4s · ~25900 → 6758 tokens");
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
   assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
+});
+
+
+test("produced files require completed host mutation provenance and survive timeline replay", () => {
+  const file = { relativePath: "out/report.txt", operation: "written" as const, bytes: 12 };
+  const details = { kind: "file_line_changes", version: 1, additions: 1, deletions: 0, producedFile: file };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status] of [["good", "write_file", "completed"], ["mcp", "mcp_write", "completed"], ["failed", "write_file", "failed"]] as const) {
+    projector.toolStarted(id, tool, { path: "out/report.txt" });
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.snapshot();
+  assert.deepEqual(toolSteps(snapshot).map((step) => step.producedFile), [file, undefined, undefined]);
+  assert.deepEqual(toolSteps(parseGenerationTimeline(snapshot)!)[0]?.producedFile, file);
+  for (const relativePath of ["/Users/private.txt", "../secret", "out/../secret", "a\\b", "bad\nname", "a//b"]) {
+    const invalid = structuredClone(snapshot);
+    (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
+    assert.equal(parseGenerationTimeline(invalid), undefined);
+  }
+});
+
+test("form fill activity persists counts without source or field values", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("call-a", "form_fill", { attachment_id: "private-document", pid: 42, window_id: 7 });
+  projector.toolFinished("call-a", "completed", { filled: 1, notAttempted: 1, stoppedEarly: true, sourceDocument: "private-document", rows: [{ label: "Secret field", value: "secret-value" }] });
+  const timeline = projector.finish("completed");
+  assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
+  assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
 });

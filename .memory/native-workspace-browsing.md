@@ -74,3 +74,17 @@ Local checks: 104 service-boundary, 24 lifecycle, 11 native, 459 remote tests pa
 User superseded the review gate: "if CI passes then we are good no more review rounds." No further review rounds will be requested; latest-head required CI is the final acceptance gate. The three already-completed fixes will be published and their original findings resolved with evidence. Reviewers were told to stop further expansion.
 
 Boundary clarification: lazy edits never write or chmod the pre-existing source inode; they install a distinct staged inode. Existing externally hard-linked sources are rejected. A local actor already able to read/link workspace content may copy a newly staged or saved draft, including on a failed save; this change does not promise draft confidentiality against that actor. Post-install validation/output failure can report failure after installation; retained recovery preserves original bytes and reopening reconciles state. This existing ambiguity is not strengthened into transactional rollback by the link-count checks. Existing legacy copy/restore hardlink behavior is outside this scoped lazy-file change.
+
+Published completed fixes as 722a2dd83. All three original findings replied/resolved with regression evidence. User then explicitly said "kill the current review riund too. lthe work is done." Both local reviewers stopped; auto-triggered Pullfrog run35883310605 cancellation requested and force-cancelled. Automation now monitors required CI only; no further review rounds, no review acceptance gate. Adversarial reviewer withdrew staged-temp issue as out of enforceable same-UID boundary and found no remaining scoped must-fix. Physical waived; no merge/release/deploy.
+
+## Completion — 2026-09-23 16:12 UTC
+
+Exact published head722a2dd839d7abf2a15027c85baa6875014af438: all required CI passed. Run35883310917: macOS verify107257008639, Electron E2E107257008570, Android107257117669 and change detection green; release contract run35883310889 green. Completed under explicit user CI-only acceptance; all review rounds stopped, Pullfrog cancelled by request, physical iOS waived (not passed). Final evidence posted to PR and coordinator; heartbeat deleted. No merge/release/deploy. This closure note stays local to avoid changing the validated head.
+
+## Base-branch conflict resolution — 2026-09-23
+
+Merged origin/main7a4d9d0bd into the feature branch. Resolved four conflicts by retaining both troubleshooting histories and combining native Files onboarding with main's activity/recoverable-output copy and tests. Preserved all main worktree checkout/allocation regressions and its stricter safe-integer capacity policy. Adapted the deterministic statfs admission test to use a real temporary root, accept large safe observations, and reject unsafe observations; removed obsolete large-unsafe acceptance assertions. No review rounds restarted.
+
+Validation:60 onboarding,29 lifecycle,105 service-boundary,466 remote tests passed (1skip), TypeScript/scoped ESLint/whitespace pass. Mobile compilation/tests and final native checks follow below. Prior-head CI is historical; merged-head CI must run after push.
+
+Final merge checks:11 native tests,198 Android unit tests and Android lint passed; generic unsigned iOS device-platform app/test compilation passed. No physical/simulator tests launched.

@@ -381,6 +381,7 @@ class AidenRemoteClient(
         botScope: AidenBotPrivateResponseScope? = null,
         requestTimeoutSeconds: Long? = null,
         maximumResponseBytes: Int? = null,
+        retryConnectionFailure: Boolean = true,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -417,12 +418,15 @@ class AidenRemoteClient(
             "DELETE" -> if (requestBody != null) requestBuilder.delete(requestBody) else requestBuilder.delete()
         }
 
-        val callClient = requestTimeoutSeconds?.let {
-            httpClient.newBuilder()
-                .readTimeout(it, TimeUnit.SECONDS)
-                .callTimeout(it, TimeUnit.SECONDS)
-                .build()
-        } ?: httpClient
+        val callClient = if (requestTimeoutSeconds != null || !retryConnectionFailure) {
+            httpClient.newBuilder().apply {
+                if (requestTimeoutSeconds != null) {
+                    readTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                    callTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                }
+                if (!retryConnectionFailure) retryOnConnectionFailure(false)
+            }.build()
+        } else httpClient
         val response = try {
             callClient.newCall(requestBuilder.build()).awaitBody(maximumResponseBytes)
         } catch (error: CancellationException) {
@@ -886,6 +890,7 @@ class AidenRemoteClient(
     ): AidenStreamStatus = executeRequest(
         "/streams/$id/cancel",
         method = "POST",
+        retryConnectionFailure = false,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
@@ -903,6 +908,7 @@ class AidenRemoteClient(
     ): AidenApprovalResponse = executeRequest(
         "/approvals/$id/respond",
         method = "POST",
+        retryConnectionFailure = false,
         bodyJson = json.encodeToString(ApprovalRequest(decision = decision)),
         idempotencyKey = idempotencyKey
     ) { bytes ->

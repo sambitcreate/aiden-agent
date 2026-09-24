@@ -20,6 +20,8 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { boundedToolOutput } from "./tool-output-context.js";
+import { parseProducedFile, type ProducedFile } from "../../renderer/shared/produced-file.js";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -51,6 +53,7 @@ interface FileMutationDetailsV1 {
   version: 1;
   additions: number;
   deletions: number;
+  producedFile?: ProducedFile;
 }
 
 const MAX_EXACT_LINE_DIFF_DISTANCE = 2_048;
@@ -938,6 +941,7 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
       throwIfAborted(signal, "File write cancelled.");
       const details = fileMutationDetails(before, content);
       throwIfAborted(signal, "File write cancelled.");
+      details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "written", bytes: Buffer.byteLength(content) }, "write_file");
       await fs.writeFile(full, content, "utf-8");
       return fileMutationResult(`Wrote ${content.length} chars to ${p}.`, details);
     },
@@ -979,6 +983,7 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
       const updated = original.replace(old_string, new_string);
       const details = fileMutationDetails(original, updated);
       throwIfAborted(signal, "File edit cancelled.");
+      details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "edited", bytes: Buffer.byteLength(updated) }, "edit_file");
       await fs.writeFile(full, updated, "utf-8");
       return fileMutationResult(`Edited ${p}.`, details);
     },
@@ -1691,14 +1696,14 @@ function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
       }
       const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
-        return textResult(truncate(combined || "[no output]", MAX_OUTPUT_CHARS));
+        return textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS));
       }
       const reason = result.timedOut
         ? "Command timed out."
         : result.outputLimitExceeded
           ? "Command exceeded the output limit."
           : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-      return textResult(truncate(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS));
+      return textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS));
     },
   };
 }

@@ -179,6 +179,7 @@ test("shared chat reads expose stable staged-image recovery gates", async () => 
 test("shared chat deletion removes staged artifacts after the durable tombstone", async () => {
   const events: string[] = [];
   const application = fixture({
+    toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
     subagentRunStore: {
       deleteChat: async () => { events.push("tombstone"); },
       completeChatDeletion: async () => { events.push("complete"); },
@@ -207,7 +208,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["tombstone", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
@@ -312,4 +313,49 @@ test("chat deletion checks a remote revision before cancellation or private-hist
     /stale revision/u,
   );
   assert.deepEqual(effects, []);
+});
+
+test("all chat deletion paths fence uploads and clear them only at durable roll-forward", async () => {
+  const { AidenRemoteAttachmentStore } = await import("./aiden-remote-attachments.js");
+  for (const failure of ["none", "preflight", "after-tombstone"] as const) {
+    const attachments = new AidenRemoteAttachmentStore();
+    const input = { kind: "text", name: "private.txt", mimeType: "text/plain", text: "private" };
+    const record = attachments.upload("device-1", "chat-1", input);
+    const upload = attachments.beginUpload("device-1", "chat-1");
+    let tombstoned = false;
+    const app = fixture({
+      attachments,
+      subagentRunStore: {
+        deleteChat: async () => { tombstoned = true; },
+        completeChatDeletion: async () => { tombstoned = false; },
+        pendingChatDeletions: async () => tombstoned ? ["chat-1"] : [],
+      },
+      ...(failure === "after-tombstone" ? {
+        displayImageArtifactStore: {
+          availability: () => ({ available: true }), hasPending: async () => false,
+          deleteChat: async () => { throw new Error("disk failed"); },
+        },
+      } : {}),
+    });
+    const removal = app.service.remove("chat-1", {
+      assertCurrent: () => {
+        assert.throws(() => attachments.beginUpload("device-2", "chat-1"));
+        if (failure === "preflight") throw new Error("revision changed");
+      },
+    });
+    assert.throws(() => upload.assertCurrent());
+    upload.release();
+    if (failure === "none") await removal;
+    else await assert.rejects(removal);
+    if (failure === "preflight") {
+      assert.equal(attachments.consume("device-1", "chat-1", [record.id])?.[0]?.text, "private");
+    } else {
+      assert.throws(() => attachments.consume("device-1", "chat-1", [record.id]));
+    }
+    if (failure === "after-tombstone") {
+      assert.throws(() => attachments.beginUpload("device-1", "chat-1"));
+    } else {
+      attachments.beginUpload("device-1", "chat-1").release();
+    }
+  }
 });

@@ -54,3 +54,34 @@ test("global disable withholds Bot catalogs and runtime bindings without reading
   assert.deepEqual(await resolveBotCapabilitySkills(dependencies), []);
   assert.deepEqual(await resolveBotRuntimeSkillBindings(dependencies), []);
 });
+
+test("Bot automatic skill bindings honor model invocation independently of user menus", async () => {
+  const dependencies = {
+    loadIdentityKey: async () => Buffer.alloc(32, 7),
+    listConfigured: async () => [],
+    discover: async () => [
+      { id: "user", name: "User", description: "", instructions: "Explicit", source: "global" as const, path: "/skills/user/SKILL.md", modelInvocable: false, userInvocable: true },
+      { id: "model", name: "Model", description: "", instructions: "Automatic", source: "global" as const, path: "/skills/model/SKILL.md", modelInvocable: true, userInvocable: false },
+    ],
+  };
+  for (const resolve of [resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings]) {
+    const skills = await resolve(dependencies);
+    assert.equal(skills.find(({ label }) => label === "User")?.available, false);
+    assert.equal(skills.find(({ label }) => label === "Model")?.available, true);
+  }
+});
+
+test("user-only skills cannot crowd automatic skills out of bounded Bot inventory", async () => {
+  const dependencies = {
+    loadIdentityKey: async () => Buffer.alloc(32, 7),
+    listConfigured: async () => [],
+    discover: async () => Array.from({ length: 300 }, (_, i) => ({
+      id: String(i).padStart(4, "0"), name: `Skill ${i}`, description: "", instructions: "Body",
+      source: "global" as const, path: `/skills/${i}/SKILL.md`, modelInvocable: i === 299,
+    })),
+  };
+  for (const resolve of [resolveBotCapabilitySkills, resolveBotRuntimeSkillBindings]) {
+    const skills = await resolve(dependencies);
+    assert.equal(skills.find(({ label }) => label === "Skill 299")?.available, true);
+  }
+});

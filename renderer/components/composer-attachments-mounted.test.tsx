@@ -32,6 +32,7 @@ async function loadComposer() {
     "./git-branch-picker": "export const GitBranchPicker=()=>null;",
     "./workspace-picker": "export const WorkspacePicker=()=>null;",
     "./composer-context-bar": "export const ComposerContextBar=()=>null;",
+    "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],

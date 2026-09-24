@@ -24,6 +24,16 @@ import java.time.Instant
 class AidenBotContractTest {
     private val json = Json { ignoreUnknownKeys = true }
 
+    @Test
+    fun chatReasoningIsAcceptedOnlyForRegularChats() {
+        val regular = """{"id":"chat-1","messages":[{"role":"assistant","reasoning":"visible"}]}"""
+        val bot = """{"id":"chat-1","botId":"bot-1","messages":[{"role":"assistant","reasoning":"private"}]}"""
+        AidenBotPrivateResponseValidator.validate(regular, AidenBotPrivateResponseScope.ChatProjection)
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(bot, AidenBotPrivateResponseScope.ChatProjection)
+        }
+    }
+
     private fun loadSharedContractFixture(): AidenRemoteContractFixture {
         val stream = javaClass.classLoader?.getResourceAsStream("contract.json")
             ?: throw IllegalStateException("Resource contract.json not found")

@@ -7,6 +7,59 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
+        let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
+        XCTAssertTrue(file.isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: "foo:bar.txt", operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertTrue(AidenProducedFile(relativePath: String(repeating: "😀", count: 121), operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertFalse(AidenProducedFile(relativePath: String(repeating: "😀", count: 241), operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        XCTAssertFalse(file.isValid(toolName: "mcp_write"))
+        XCTAssertFalse(file.isValid(toolName: "edit_file"))
+        for path in ["C:/private", "/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname"] {
+            XCTAssertFalse(AidenProducedFile(relativePath: path, operation: "written", bytes: 12).isValid(toolName: "write_file"))
+        }
+        let data = try JSONEncoder().encode(file)
+        XCTAssertEqual(try JSONDecoder().decode(AidenProducedFile.self, from: data), file)
+    }
+
+    func testHistoryReasoningRejectsBotChatAndAcceptsRegularChat() throws {
+        let regular = """
+        {"id":"chat-1","workspaceId":"workspace-1","title":"Chat","messages":[{"id":"message-1","role":"assistant","text":"Done","reasoning":"Visible","createdAt":"2026-08-20T12:00:00Z"}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:00Z","revision":"rev-1"}
+        """
+        let decoder = JSONDecoder.aidenRemote()
+        XCTAssertEqual(try decoder.decodeAidenRemote(AidenChat.self, from: Data(regular.utf8)).messages[0].reasoning, "Visible")
+        let bot = regular.replacingOccurrences(of: "\"workspaceId\"", with: "\"botId\":\"bot-1\",\"workspaceId\"")
+        XCTAssertThrowsError(try decoder.decodeAidenRemote(AidenChat.self, from: Data(bot.utf8)))
+    }
+
+    func testChronologicalReasoningSurvivesRemoteDecodeAndKeepsToolOrder() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let message = try decoder.decode(AidenChatMessage.self, from: Data(
+            #"{"id":"message-1","role":"assistant","text":"Before.After.","reasoning":"First\n\nSecond","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1200,"finishedAt":1200,"contentOffset":0,"reasoningStartOffset":0,"reasoningEndOffset":5},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1200,"updatedAt":1400,"finishedAt":1400,"contentOffset":0},{"id":"think-2","order":2,"kind":"thinking","startedAt":1400,"updatedAt":1600,"finishedAt":1600,"contentOffset":7,"reasoningStartOffset":7,"reasoningEndOffset":13}]}}"#.utf8
+        ))
+        XCTAssertTrue(message.isWireSafe)
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: message.text, reasoning: message.reasoning ?? "", timeline: message.timeline)?
+                .map { ($0.kind, $0.text) }
+                .map { "\($0.0):\($0.1)" },
+            ["reasoning:First", "tool:", "text:Before.", "reasoning:Second", "text:After."]
+        )
+        XCTAssertNil(AidenChronologicalProjection.rows(text: message.text, reasoning: "First", timeline: message.timeline))
+        let noReasoningTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"think-1","order":0,"kind":"thinking","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-1","order":1,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: noReasoningTimeline)?
+                .map(\.kind),
+            [.text, .reasoning, .tool, .text]
+        )
+        let legacyTimeline = try decoder.decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":2,"generationId":"stream-old","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000}]}"#.utf8
+        ))
+        XCTAssertNil(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: legacyTimeline))
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -222,10 +275,200 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalTapUsesDisplayedIDAndBlocksDuplicateDecisions() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current")
+    }
+
+    @MainActor
+    func testUnknownApprovalResponseRefreshesCurrentRequestWithoutResending() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next")
+    }
+
+    @MainActor
+    func testStopWaitsForHostAndBlocksDuplicateTaps() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current")
+    }
+
+    @MainActor
+    func testLegacyWorkspaceRunStillOffersStop() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .legacyControls)
+    }
+
+    @MainActor
+    func testMismatchedStopAcknowledgementShowsFailure() async throws {
+        try await exerciseControlResponse(stop: true, nextApproval: "approval-current", mode: .mismatchedStop)
+    }
+
+    @MainActor
+    func testRevokedInstallationCannotRestoreApprovalAfterLateFailure() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current", mode: .revokedControls)
+    }
+
+    @MainActor
+    func testUnsupportedApprovalCapabilityNeverSendsDecision() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-current", mode: .unsupportedControls)
+    }
+
+    @MainActor
+    func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let arrived = expectation(description: "pre-response approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { arrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [arrived], timeout: 5)
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        await model.respondToApproval(.allow, approvalID: "approval-current")
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
+    func testAmbiguousResponseDoesNotSupersedeHeldAuthoritativeApproval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let responseArrived = expectation(description: "A response held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/respond") { responseArrived.fulfill() }
+        let response = Task { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        await fulfillment(of: [responseArrived], timeout: 5)
+        let releaseResponse = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let readArrived = expectation(description: "authoritative B read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { readArrived.fulfill() }
+        let read = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // Any redundant fallback would fail, but must not supersede this admitted read.
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        releaseResponse?()
+        await response.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await read.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
+    func testLatestAdmittedApprovalSnapshotWinsOverOlderCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        await model.load(observeProgress: false)
+        let context = try coordinator.requestContext(for: "instance-progress-lifecycle")
+        let firstArrived = expectation(description: "older approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-old")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { firstArrived.fulfill() }
+        let first = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [firstArrived], timeout: 5)
+        let releaseFirst = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+        let secondArrived = expectation(description: "newer approval read held")
+        AidenChatProgressLifecycleURLProtocol.setApprovalID("approval-new")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/approval") { secondArrived.fulfill() }
+        let second = Task { await model.restorePendingApproval(streamID: "stream-control", context: context) }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        await model.restorePendingApproval(streamID: "stale-stream", context: context)
+        releaseFirst?()
+        await first.value
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await second.value
+        XCTAssertEqual(model.pendingApproval?.id, "approval-new")
+    }
+
+    @MainActor
+    func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
+        try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
+    }
+
+    @MainActor
+    private func exerciseControlResponse(stop: Bool, nextApproval: String, mode: AidenChatProgressLifecycleURLProtocol.Mode = .controls) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator?
+        let model = try await makeProgressLifecycleModel(mode: mode, cache: cache) { coordinator = $0 }
+        defer {
+            model.stopProgressObservation()
+            AidenChatProgressLifecycleURLProtocol.reset()
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+        await model.respondToApproval(.allow, approvalID: "approval-stale")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+        if mode == .unsupportedControls {
+            await model.respondToApproval(.allow, approvalID: "approval-current")
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 0)
+            XCTAssertEqual(model.pendingApproval?.canRespond, false)
+            return
+        }
+        let arrived = expectation(description: "Control request is held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: stop ? "/cancel" : "/respond") { arrived.fulfill() }
+        let task = Task { @MainActor in
+            if stop { await model.stop() }
+            else { await model.respondToApproval(.allow, approvalID: "approval-current") }
+        }
+        await fulfillment(of: [arrived], timeout: 5)
+        if stop {
+            XCTAssertTrue(model.canControlCurrentRun)
+            XCTAssertTrue(model.isStopping)
+            XCTAssertEqual(model.streamState, .waitingForApproval)
+            await model.stop()
+        } else {
+            XCTAssertTrue(model.isRespondingToApproval)
+            await model.respondToApproval(.deny, approvalID: "approval-current")
+        }
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+        if mode == .revokedControls, let coordinator,
+           let installation = coordinator.installationStore.activeInstallation {
+            await coordinator.removeInstallation(installation.id)
+        }
+        AidenChatProgressLifecycleURLProtocol.setApprovalID(nextApproval)
+        if mode == .mismatchedApproval {
+            await model.load(observeProgress: false)
+            XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await task.value
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.controlWriteCount, 1)
+        if stop {
+            XCTAssertFalse(model.isStopping)
+            XCTAssertEqual(model.streamState, .waitingForApproval)
+            XCTAssertTrue(model.presentedError?.contains("Stop was not confirmed") == true)
+        } else {
+            XCTAssertFalse(model.isRespondingToApproval)
+            if mode == .revokedControls {
+                XCTAssertNil(model.pendingApproval)
+                XCTAssertFalse(model.canControlCurrentRun)
+            } else {
+                XCTAssertEqual(model.pendingApproval?.id, nextApproval)
+            }
+        }
+    }
+
+    @MainActor
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
-        draftStore: AidenChatDraftStore = .shared
+        draftStore: AidenChatDraftStore = .shared,
+        onCoordinator: ((AidenRemoteCoordinator) -> Void)? = nil
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
         let keychain = AidenChatProgressMemoryKeychain()
@@ -236,7 +479,7 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -261,6 +504,7 @@ final class AidenChatTests: XCTestCase {
         )
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
+        onCoordinator?(coordinator)
 
         let chat = try AidenRemoteJSONDecoder.decode(
             AidenChat.self,
@@ -746,6 +990,13 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.id, "html-1")
         XCTAssertEqual(chat.messages.first?.htmlArtifacts?.first?.title, "Dependencies")
         XCTAssertTrue(chat.messages.first?.htmlArtifacts?.first?.isWireSafe ?? false)
+    }
+
+    func testFormFillActivityDecodesCountOnlyOutcome() throws {
+        let step = try JSONDecoder().decode(AidenAgentStep.self, from: Data(
+            #"{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"form_fill","label":"Form fill","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"detail":"1 filled · 1 not attempted · stopped early"}"#.utf8
+        ))
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), "Form fill 1 filled · 1 not attempted · stopped early")
     }
 
     func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
@@ -2780,7 +3031,7 @@ final class AidenChatTests: XCTestCase {
             .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
         ])
         await model.stop()
-        await model.respondToApproval(.allow)
+        await model.respondToApproval(.allow, approvalID: "stale")
 
         XCTAssertEqual(rejectedUploads, 1)
         XCTAssertEqual(model.chat, chat)
@@ -2900,9 +3151,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case finite
         case rosterFailsAfterFirst
         case rosterEpochRotates
+        case controls
+        case legacyControls
+        case mismatchedStop
+        case mismatchedApproval
+        case revokedControls
+        case unsupportedControls
     }
 
     private static let lock = NSLock()
+    nonisolated(unsafe) private static var _controlWriteCount = 0
+    nonisolated(unsafe) private static var approvalID = "approval-current"
+    nonisolated(unsafe) private static var approvalReadFails = false
+    static func failApprovalReads() { lock.withLock { approvalReadFails = true } }
+    static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
+    static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
@@ -2919,14 +3182,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() {
-        let completion = lock.withLock {
+    static func takeHeldRequest() -> (@Sendable () -> Void)? {
+        lock.withLock {
             let completion = heldCompletion
             heldCompletion = nil
             return completion
         }
-        completion?()
     }
+
+    static func releaseHeldRequest() { takeHeldRequest()?() }
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -2944,6 +3208,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         releaseHeldRequest()
         lock.lock()
         self.mode = mode
+        _controlWriteCount = 0
+        approvalID = "approval-current"
+        approvalReadFails = false
         _progressRequestCount = 0
         _agentRequestCount = 0
         _turnRequestCount = 0
@@ -2963,16 +3230,46 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         var shouldFinish = true
         switch path {
         case "/api/aiden/v1/server":
-            result = Self.response(
-                for: request,
-                status: 200,
-                contentType: "application/json",
-                data: Data(
-                    """
-                    {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read"],"features":["chat-tasks-v1","chat-agents-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}
-                    """.utf8
-                )
-            )
+            var body: [String: Any] = [
+                "protocolVersion": 1, "instanceId": "instance-progress-lifecycle",
+                "name": "Progress Lifecycle Mac", "appVersion": "1.0",
+                "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write", "tasks:read", "agents:read", "approval:respond"],
+                "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write", "tasks:read", "agents:read", "approval:respond"],
+                "features": ["chat-tasks-v1", "chat-agents-v1"],
+                "connectionMode": "lan", "serverTime": "2026-09-14T12:00:00Z",
+            ]
+            if Self.lock.withLock({ Self.mode == .unsupportedControls }) {
+                body["capabilities"] = (body["capabilities"] as! [String]).filter { $0 != "approval:respond" }
+            }
+            if Self.lock.withLock({ Self.mode == .legacyControls }) {
+                body.removeValue(forKey: "serverCapabilities")
+                body["features"] = [String]()
+                body["capabilities"] = ["server:read", "workspace:read", "chat:read", "chat:write", "approval:respond"]
+            }
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: try! JSONSerialization.data(withJSONObject: body))
+        case "/api/aiden/v1/streams/stream-control":
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+        case "/api/aiden/v1/streams/stream-control/events":
+            shouldFinish = false
+            result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
+        case "/api/aiden/v1/streams/stream-control/approval":
+            if Self.lock.withLock({ Self.approvalReadFails }) {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
+            let id = Self.lock.withLock { Self.approvalID }
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
+                {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
+                """.utf8))
+        case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
+            Self.lock.withLock { Self._controlWriteCount += 1 }
+            if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            } else if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
+                result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-other","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"reconciling","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
+            } else {
+            result = Self.response(for: request, status: 503, contentType: "application/json", data: Data(#"{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}"#.utf8))
+            }
         case "/api/aiden/v1/workspaces":
             result = Self.response(
                 for: request,

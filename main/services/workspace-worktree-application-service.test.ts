@@ -1,3 +1,5 @@
+import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
+import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Workspace } from "./types.js";
@@ -10,6 +12,8 @@ const owner = {
 
 test("shared managed-worktree workflow preserves creation rollback gates and destructive deletion ordering", async () => {
   const events: string[] = [];
+  const createAdmissions: Array<[string, number]> = [];
+  const allocations: Array<[string, string, number]> = [];
   const source: Workspace = {
     id: "workspace-source",
     name: "Source",
@@ -39,7 +43,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     ensureWorktreeRoot: async () => "/aiden/worktrees",
     ensureSnapshotRoot: async () => "/aiden/worktree-snapshots",
     checkoutBytes: async () => 1_024,
-    checkCreateCapacity: async () => undefined,
+    checkCreateCapacity: async (root, bytes) => { createAdmissions.push([root, bytes]); },
+    checkWorktreeAllocation: async (root, common, bytes) => { allocations.push([root, common, bytes]); },
     checkSnapshotCapacity: async () => undefined,
     provisionIncludedFiles: async () => [],
     repositoryPaths: async (folderPath) => ({
@@ -147,6 +152,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "notify",
     "finish-mutation",
   ]);
+  assert.deepEqual(allocations, [["/aiden/worktrees", "/canonical/source/.git", 1024 + MAX_PROVISIONED_BYTES]]);
+  assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", MAX_PROVISIONED_BYTES]]);
 });
 
 
@@ -193,13 +200,16 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
       provisionedFiles: [".env"],
     },
   };
+  const restoreAdmissions: Array<[string, number]> = [];
+  const estimateCalls: Array<string | undefined> = [];
   const signal = new AbortController().signal;
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
       resolve: async () => ({ folderPath: worktreePath, workspace: managed }),
-      run: async () => {
-        throw new Error("source lookup unused");
-      },
+      run: async (_owner, _id, operation) => operation({
+        folderPath: repositoryPath,
+        workspace: { ...managed, folderPath: repositoryPath, managedWorktree: undefined },
+      }, signal),
       runRecord: async (_owner, id, operation) => {
         assert.equal(id, managed.id);
         return operation(managed, signal);
@@ -207,8 +217,15 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     },
     ensureWorktreeRoot: async () => nodePath.join(base, "worktrees"),
     ensureSnapshotRoot: async () => snapshotRoot,
-    checkoutBytes: async () => 0,
-    checkCreateCapacity: async () => undefined,
+    checkoutBytes: async (_root, commit) => {
+      estimateCalls.push(commit);
+      return commit === "b".repeat(40) ? 100 : 200;
+    },
+    checkCreateCapacity: async (root, bytes) => { restoreAdmissions.push([root, bytes]); },
+    checkWorktreeAllocation: async (root, common, bytes) => {
+      restoreAdmissions.push([root, bytes], [common, WORKTREE_GIT_METADATA_BYTES]);
+      throw new WorktreeCapacityUnavailableError();
+    },
     checkSnapshotCapacity: async (dir) => {
       capacityPaths.push(dir);
       return undefined;
@@ -235,7 +252,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
         head: "b".repeat(40),
       };
     },
-    snapshotRefCommit: async () => undefined,
+    snapshotRefCommit: async () => "c".repeat(40),
     deleteSnapshotRef: async (_repositoryPath, snapshotId, expectedCommit) => {
       deletedRefs.push({ snapshotId, expectedCommit });
       return !failRefDelete;
@@ -318,6 +335,31 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     manifest.provisionedFiles.map((file: { relativePath: string }) => file.relativePath),
     [".env"],
   );
+
+  // Restore budgets both captured trees and the private payload on their own
+  // volumes before any journal/checkout write. A denial preserves recovery.
+  await assert.rejects(service.restore(owner, "source", snapshotId), WorktreeCapacityUnavailableError);
+  assert.deepEqual(restoreAdmissions, [
+    [nodePath.join(base, "worktrees"), 300 + manifest.provisionedFiles[0].size],
+    [`${repositoryPath}/.git`, WORKTREE_GIT_METADATA_BYTES],
+  ]);
+  assert.equal(JSON.parse(await readFile(nodePath.join(snapshotRoot, snapshotId, "manifest.json"), "utf8")).state, "ready");
+  await assert.rejects(readFile(nodePath.join(snapshotRoot, snapshotId, "restore.json")), { code: "ENOENT" });
+
+  // A crash after applying the Git tree only needs private payload capacity.
+  // Even though the fake Git volume always refuses admission, this retry reaches
+  // ownership validation without querying its capacity or re-estimating trees.
+  restoreAdmissions.length = 0;
+  estimateCalls.length = 0;
+  await writeFile(nodePath.join(snapshotRoot, snapshotId, "restore.json"), JSON.stringify({
+    version: 1, phase: "snapshot_applied", snapshotId, workspaceId: "restored",
+    worktreePath, worktreeGitDir: managed.managedWorktree!.worktreeGitDir,
+    ownershipToken: managed.managedWorktree!.ownershipToken,
+    worktreeDevice: worktreeIdentity.dev, worktreeInode: worktreeIdentity.ino,
+  }));
+  await assert.rejects(service.restore(owner, "source", snapshotId), /partially restored managed worktree could not be verified/);
+  assert.deepEqual(restoreAdmissions, [[nodePath.dirname(worktreePath), manifest.provisionedFiles[0].size]]);
+  assert.deepEqual(estimateCalls, []);
 
   // An unknown ignored file blocks safe removal before any snapshot work.
   dirty = { head: "b".repeat(40), uncommitted: 0, ignored: 1, ignoredPaths: ["unknown.env"] };

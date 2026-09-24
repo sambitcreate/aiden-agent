@@ -91,6 +91,7 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   assert.equal(fixture.contractRevision, 11);
+  assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
@@ -1487,6 +1488,25 @@ test("Chat text keeps scalar bounds, validates UTF-16 timeline offsets, and reje
   }
 });
 
+test("chat parser limits reasoning to regular assistants and 100,000 UTF-16 units", () => {
+  const projection = {
+    id: "chat-1", workspaceId: "workspace-1", title: "Chat",
+    messages: [{ id: "message-1", role: "assistant", text: "Done", reasoning: "visible",
+      createdAt: "2026-08-23T00:00:00.000Z" }],
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z", revision: "revision-1",
+  };
+  assert.equal(parseAidenRemoteChatProjection(projection).messages[0]?.reasoning, "visible");
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection, botId: "bot-1" }),
+    /regular-assistant-only/u);
+  assert.throws(() => parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(60_000) }],
+  }), /UTF-16/u);
+  assert.equal(parseAidenRemoteChatProjection({ ...projection,
+    messages: [{ ...projection.messages[0], reasoning: "😀".repeat(50_000) }],
+  }).messages[0]?.reasoning?.length, 100_000);
+});
+
 test("SSE framing resumes by id, ignores duplicates and unknown nonterminal events, and reconciles gaps", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const [first, second] = fixture.events;
@@ -1526,4 +1546,22 @@ test("SSE framing resumes by id, ignores duplicates and unknown nonterminal even
     reconcileAidenSseFrames([{ id: "1", data: { ...future, streamId: "stream_other" } }], 0, first.streamId).reconcileRequired,
     true,
   );
+});
+
+test("produced-file OpenAPI constraints agree with runtime path and provenance validation", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { parseProducedFile } = await import("../../renderer/shared/produced-file.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const ajv = new Ajv2020({ strict: false });
+  const validate = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const base = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "write_file", label: "Write file", status: "completed", startedAt: 1, updatedAt: 1 };
+  for (const relativePath of [...["\u2028", "\u2029"].flatMap((separator) => [`a/${separator}/b`, `a/${separator}/../b`, `a/${separator}/./b`, `a/${separator}//b`, `a/${separator}/`]), "out/report.txt", "foo:bar.txt", "a:b/c.txt", "K:/secret", "😀".repeat(121), "😀".repeat(241), "/abs", "../secret", "a/../b", "a/./b", "a\\b", "a//b", "a/", "~file", "C:/secret", "bad\nname"]) {
+    const file = { relativePath, operation: "written", bytes: 12 };
+    assert.equal(validate({ ...base, producedFile: file }), Boolean(parseProducedFile(file, "write_file")), relativePath);
+  }
+  const producedFile = { relativePath: "report.txt", operation: "written", bytes: 12 };
+  assert.equal(validate({ ...base, producedFile, status: "failed" }), false);
+  assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
+  assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
+  assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
 });
