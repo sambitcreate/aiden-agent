@@ -4,7 +4,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 ## Active and partial
 
-[Durable Bot and chat runs](durable-jobs-leases-plan.md) — Foundation implemented for review (P0): SQLite admission/leases/controls and conservative runtime recovery port; 51 focused tests pass. Production Bot runtime, desktop and Remote/native rollout remain pending. No Comfy/Design integration.
+[Durable Bot and chat runs](durable-jobs-leases-plan.md) — Foundation implemented for review (P0): SQLite admission/leases/controls and conservative runtime recovery port; 53 focused tests pass. Production Bot runtime, desktop and Remote/native rollout remain pending. No Comfy/Design integration.
 
 [MCP session context audit](mcp-session-context-audit.md) — Partial: advertised-capability status implemented for review; resources, server instructions and request-boundary instruction refresh remain explicit deliverables. Skill invocation is separately green in PR #214.
 [Skill and MCP session context](skill-mcp-session-context-plan.md) — Partial: skill invocation policy implemented in PR #214; implementation CI/review passed, physical iOS launch blocked by device lock. MCP metadata/resources/instructions and boundary refresh deferred.

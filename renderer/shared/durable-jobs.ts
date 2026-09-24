@@ -30,6 +30,8 @@ export interface DurableJobInput {
   providerId: string;
   modelId: string;
   authorityRevision: string;
+  /** Original initiating authority, retained for revocation checks after restart. */
+  audienceId: string;
 }
 
 export interface DurableJobCheckpoint {

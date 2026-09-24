@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import {
   chmodSync,
   readFileSync,
@@ -433,3 +434,46 @@ test("independent profile roots do not share leases, receipts or reservations", 
   assert.ok(f.store.claim("one"));
   assert.ok(g.store.claim("one"));
 });
+
+test(
+  "simultaneous process contenders admit exactly one SQL owner",
+  { timeout: 15_000 },
+  async (t) => {
+    const { spawn } = await import("node:child_process");
+      const f = fixture(t);
+    f.store.enqueue(input, "actor", "key");
+    const script = `
+    import { DurableJobStore } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
+    const store = new DurableJobStore({root: process.env.JOB_TEST_ROOT, profileId: 'profile', now: () => 1000});
+    process.on('message', () => {
+      try { process.send(store.claim(String(process.pid))?.lease.leaseId ?? null); }
+      catch(error) { process.send({error: String(error)}); }
+      store.close(); process.disconnect();
+    });
+    process.send('ready');
+  `;
+    const children = [0, 1].map(() =>
+      spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", script],
+        {
+          env: { ...process.env, JOB_TEST_ROOT: f.root },
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        },
+      ),
+    );
+    t.after(() => {
+      for (const child of children)
+        if (child.exitCode === null && child.signalCode === null)
+          child.kill("SIGKILL");
+    });
+    const exits = children.map((child) => once(child, "exit"));
+    await Promise.all(children.map((child) => once(child, "message")));
+    const replies = children.map((child) => once(child, "message"));
+    for (const child of children) child.send("claim");
+    const values = (await Promise.all(replies)).map(([value]) => value);
+    await Promise.all(exits);
+    assert.equal(values.filter((value) => typeof value === "string").length, 1);
+    assert.equal(values.filter((value) => value === null).length, 1);
+  },
+);

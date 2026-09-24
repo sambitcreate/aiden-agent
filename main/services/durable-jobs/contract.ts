@@ -109,6 +109,7 @@ const inputKeys = [
   "providerId",
   "modelId",
   "authorityRevision",
+  "audienceId",
 ];
 export function parseInput(value: unknown): DurableJobInput {
   record(value, inputKeys);

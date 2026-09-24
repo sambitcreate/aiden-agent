@@ -22,6 +22,7 @@ export const input: DurableJobInput = {
   providerId: "provider",
   modelId: "model",
   authorityRevision: "policy-1",
+  audienceId: "desktop-authority",
 };
 export const checkpoint: DurableJobCheckpoint = {
   sessionId: "session",

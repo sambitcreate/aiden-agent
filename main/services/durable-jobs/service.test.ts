@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import test, { type TestContext } from "node:test";
 import type { DurableJobSnapshot } from "../../../renderer/shared/durable-jobs.js";
 import {
@@ -470,8 +471,7 @@ test(
   { timeout: 15_000 },
   async (t) => {
     const { spawn } = await import("node:child_process");
-    const { once } = await import("node:events");
-    const f = setup(t);
+      const f = setup(t);
     const job = await f.service.enqueue(input, "actor", "key");
     const script = `
     import { DurableJobStore } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
@@ -506,3 +506,29 @@ test(
     assert.equal(f.counts().calls, 0);
   },
 );
+
+test("original audience survives restart and revoked authority cannot resume", async (t) => {
+  const f = setup(t);
+  const job = await f.service.enqueue(input, "actor", "key");
+  const claim = f.store.claim("one")!;
+  f.store.admitted(claim.lease, checkpoint);
+  f.store.beginExecution(claim.lease, "start");
+  f.store.settle(claim.lease, evidence("checkpoint"));
+  f.store.control(control(f.store.get(job.id), "resume"));
+  f.runtime.acquire = async (restored) => {
+    assert.equal(restored.input.audienceId, input.audienceId);
+    return {
+      evidence: async () => evidence("stale_authority"),
+      appendInput: async () => assert.fail("revoked"),
+      execute: async () => assert.fail("revoked"),
+      close: async () => {},
+    };
+  };
+  const worker = new DurableJobWorker(
+    new DurableJobService(f.open(), f.runtime),
+    (error) => assert.fail(String(error)),
+  );
+  await worker.tick();
+  assert.equal(f.store.get(job.id).state, "needs_attention");
+  assert.equal(f.counts().calls, 0);
+});
