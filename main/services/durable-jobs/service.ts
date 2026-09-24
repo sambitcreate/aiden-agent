@@ -23,8 +23,16 @@ export interface JobExecutionContext {
 export interface JobRuntimeSession {
   /** Read authoritative session/effect/child evidence; never dispatches work. */
   evidence(): Promise<RecoveryEvidence>;
-  /** Reconcile/append the stable message ID once, with durable input validation. */
-  appendInput(): Promise<DurableJobCheckpoint>;
+  /**
+   * Reconcile/append the stable message ID once, with durable input validation.
+   * Invoke beforeCommit after asynchronous preparation, immediately before
+   * admitting the transcript write. Retain the chat reservation until any
+   * admitted write settles, including if the lease is revoked during IO.
+   */
+  appendInput(context: {
+    signal: AbortSignal;
+    beforeCommit(): void;
+  }): Promise<DurableJobCheckpoint>;
   execute(context: JobExecutionContext): Promise<RecoveryEvidence>;
   /** Settle or quarantine non-abortable work before releasing chat ownership. */
   close(): Promise<void>;
@@ -86,7 +94,10 @@ export class DurableJobService {
       if (session && job.intent === "none") {
         let mode: JobExecutionContext["mode"] | undefined;
         if (evidence.kind === "not_started" && !job.dispatched) {
-          const checkpoint = await session.appendInput();
+          const checkpoint = await session.appendInput({
+            signal,
+            beforeCommit: () => guard(),
+          });
           guard();
           this.store.admitted(lease, checkpoint);
           mode = "start";

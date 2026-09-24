@@ -598,3 +598,17 @@ test("checkpoint input mismatch is an integrity failure, not lease loss", (t) =>
     code("unsafe"),
   );
 });
+
+test("failed-safe evidence requires a checkpoint for an admissible retry", (t) => {
+  const f = fixture(t);
+  f.store.enqueue(input, "actor", "key");
+  const claim = f.store.claim("one")!;
+  assert.throws(
+    () =>
+      f.store.settle(
+        claim.lease,
+        evidence("failed_safe", { checkpoint: null }),
+      ),
+    code("invalid"),
+  );
+});

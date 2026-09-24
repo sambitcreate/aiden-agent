@@ -230,7 +230,10 @@ export function parseEvidence(value: unknown): RecoveryEvidence {
   if (value.checkpoint !== null) parseCheckpoint(value.checkpoint);
   if (value.resultRef !== null) identifier(value.resultRef);
   if (value.waitId !== null) identifier(value.waitId);
-  if (value.kind === "checkpoint" && !value.checkpoint)
+  if (
+    (value.kind === "checkpoint" || value.kind === "failed_safe") &&
+    !value.checkpoint
+  )
     throw new JobError("invalid");
   if (value.kind === "completed" && !value.resultRef)
     throw new JobError("invalid");

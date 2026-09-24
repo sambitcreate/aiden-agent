@@ -45,7 +45,8 @@ function setup(t: TestContext) {
       active = true;
       return {
         evidence: async () => current,
-        appendInput: async () => {
+        appendInput: async (context) => {
+          context.beforeCommit();
           appendCalls++;
           messages.add(job.input.messageId);
           return { ...checkpoint, inputMessageId: job.input.messageId };
@@ -326,8 +327,8 @@ test("failed dispatch commit makes zero provider calls", async (t) => {
     const session = (await original(value, signal))!;
     return {
       ...session,
-      appendInput: async () => {
-        const cp = await session.appendInput();
+      appendInput: async (context) => {
+        const cp = await session.appendInput(context);
         f.failWrites(true);
         return cp;
       },
@@ -578,4 +579,38 @@ test("equivalent checkpoint property order cannot reject safe Resume", async (t)
   await f.worker.tick();
   assert.deepEqual(f.modes, ["resume"]);
   assert.equal(f.store.get(job.id).state, "succeeded");
+});
+
+test("control during asynchronous input preparation fences the transcript commit", async (t) => {
+  const f = setup(t);
+  const entered = deferred();
+  const resume = deferred();
+  const original = f.runtime.acquire;
+  f.runtime.acquire = async (job, signal) => {
+    const session = await original(job, signal);
+    if (!session) return null;
+    return {
+      ...session,
+      appendInput: async (context) => {
+        entered.resolve();
+        await resume.promise;
+        context.beforeCommit();
+        return session.appendInput(context);
+      },
+    };
+  };
+  const job = await f.service.enqueue(input, "actor", "key");
+  const running = f.worker.tick();
+  await entered.promise;
+  f.store.control(control(f.store.get(job.id), "cancel"));
+  const replacement = new DurableJobWorker(
+    new DurableJobService(f.open(), f.runtime),
+    (error) => assert.fail(String(error)),
+  );
+  await replacement.tick();
+  assert.equal(f.store.get(job.id).recovery, "unsettled");
+  resume.resolve();
+  await running;
+  assert.equal(f.messages.size, 0);
+  assert.equal(f.counts().calls, 0);
 });
