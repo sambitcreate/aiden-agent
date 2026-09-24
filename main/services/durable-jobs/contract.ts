@@ -7,8 +7,8 @@ import type {
 } from "../../../renderer/shared/durable-jobs.js";
 
 export const JOB_LIMITS = Object.freeze({
-  jobs: 1_000,
-  controls: 4_096,
+  unresolvedJobs: 1_000,
+  unresolvedControls: 4_096,
   eventsPerJob: 64,
   attemptsPerJob: 64,
   recordBytes: 32_768,
@@ -140,7 +140,13 @@ export function parseCheckpoint(value: unknown): DurableJobCheckpoint {
       throw new JobError("invalid");
     list.forEach(identifier);
   }
-  return structuredClone(value) as unknown as DurableJobCheckpoint;
+  return {
+    sessionId: value.sessionId as string,
+    headId: value.headId as string,
+    inputMessageId: value.inputMessageId as string,
+    operationIds: [...(value.operationIds as string[])],
+    childRunIds: [...(value.childRunIds as string[])],
+  };
 }
 export function parseSnapshot(value: unknown): DurableJobSnapshot {
   record(value, [
@@ -199,7 +205,12 @@ export function parseSnapshot(value: unknown): DurableJobSnapshot {
       value.waitId === null)
   )
     throw new JobError("invalid");
-  return structuredClone(value) as unknown as DurableJobSnapshot;
+  return {
+    ...structuredClone(value),
+    input: parseInput(value.input),
+    checkpoint:
+      value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
+  } as unknown as DurableJobSnapshot;
 }
 export function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -228,5 +239,11 @@ export function parseEvidence(value: unknown): RecoveryEvidence {
     !value.waitId
   )
     throw new JobError("invalid");
-  return structuredClone(value) as unknown as RecoveryEvidence;
+  return {
+    kind: value.kind as DurableJobRecovery,
+    checkpoint:
+      value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
+    resultRef: value.resultRef as string | null,
+    waitId: value.waitId as string | null,
+  };
 }

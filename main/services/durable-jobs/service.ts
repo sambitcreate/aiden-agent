@@ -140,6 +140,11 @@ export class DurableJobService {
       // A failed settlement retains the lease/reservation; never publish a
       // terminal state that could allow another runtime into this chat.
       if (session && !closed) throw error;
+      if (
+        signal.aborted ||
+        (error instanceof JobError && error.code === "lost_lease")
+      )
+        return;
       try {
         this.store.settle(lease, missing());
       } catch (settleError) {

@@ -471,7 +471,7 @@ test(
   { timeout: 15_000 },
   async (t) => {
     const { spawn } = await import("node:child_process");
-      const f = setup(t);
+    const f = setup(t);
     const job = await f.service.enqueue(input, "actor", "key");
     const script = `
     import { DurableJobStore } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
@@ -531,4 +531,51 @@ test("original audience survives restart and revoked authority cannot resume", a
   await worker.tick();
   assert.equal(f.store.get(job.id).state, "needs_attention");
   assert.equal(f.counts().calls, 0);
+});
+
+test("shutdown preserves a resumable durable checkpoint for restart reconciliation", async (t) => {
+  const f = setup(t);
+  const entered = deferred();
+  const release = deferred();
+  const job = await f.service.enqueue(input, "actor", "key");
+  f.setExecute(async () => {
+    entered.resolve();
+    await release.promise;
+    f.setEvidence(evidence("checkpoint"));
+    return evidence("checkpoint");
+  });
+  const running = f.worker.tick();
+  await entered.promise;
+  assert.equal(await f.worker.stop(0), false);
+  release.resolve();
+  await running;
+  assert.equal(f.store.get(job.id).state, "running");
+  f.clock(100_000);
+  const restarted = new DurableJobWorker(
+    new DurableJobService(f.open(), f.runtime),
+    (error) => assert.fail(String(error)),
+  );
+  await restarted.tick();
+  assert.equal(f.store.get(job.id).recovery, "checkpoint");
+  assert.equal(f.store.get(job.id).state, "interrupted");
+  assert.doesNotThrow(() =>
+    f.store.control(control(f.store.get(job.id), "resume")),
+  );
+});
+
+test("equivalent checkpoint property order cannot reject safe Resume", async (t) => {
+  const f = setup(t);
+  const job = await f.service.enqueue(input, "actor", "key");
+  const claim = f.store.claim("old")!;
+  f.store.admitted(claim.lease, checkpoint);
+  f.store.beginExecution(claim.lease, "start");
+  f.store.settle(claim.lease, evidence("checkpoint"));
+  f.store.control(control(f.store.get(job.id), "resume"));
+  const reordered = Object.fromEntries(
+    Object.entries(checkpoint).reverse(),
+  ) as unknown as typeof checkpoint;
+  f.setEvidence(evidence("checkpoint", { checkpoint: reordered }));
+  await f.worker.tick();
+  assert.deepEqual(f.modes, ["resume"]);
+  assert.equal(f.store.get(job.id).state, "succeeded");
 });

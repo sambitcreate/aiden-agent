@@ -337,11 +337,15 @@ export class DurableJobStore {
       if (
         Number(
           (
-            this.db.prepare("SELECT count(*) AS n FROM jobs").get() as {
+            this.db
+              .prepare(
+                "SELECT count(*) AS n FROM jobs WHERE state NOT IN ('succeeded','cancelled')",
+              )
+              .get() as {
               n: number;
             }
           ).n,
-        ) >= JOB_LIMITS.jobs
+        ) >= JOB_LIMITS.unresolvedJobs
       )
         throw new JobError("capacity");
       const job: DurableJobSnapshot = {
@@ -601,11 +605,15 @@ export class DurableJobStore {
       if (
         Number(
           (
-            this.db.prepare("SELECT count(*) AS n FROM controls").get() as {
+            this.db
+              .prepare(
+                "SELECT count(*) AS n FROM controls JOIN jobs ON jobs.id=json_extract(controls.response, '$.id') WHERE jobs.state NOT IN ('succeeded','cancelled')",
+              )
+              .get() as {
               n: number;
             }
           ).n,
-        ) >= JOB_LIMITS.controls
+        ) >= JOB_LIMITS.unresolvedControls
       )
         throw new JobError("capacity");
       if (request.action === "resume" || request.action === "retry") {

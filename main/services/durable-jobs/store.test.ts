@@ -440,7 +440,7 @@ test(
   { timeout: 15_000 },
   async (t) => {
     const { spawn } = await import("node:child_process");
-      const f = fixture(t);
+    const f = fixture(t);
     f.store.enqueue(input, "actor", "key");
     const script = `
     import { DurableJobStore } from ${JSON.stringify(new URL("./store.ts", import.meta.url).href)};
@@ -477,3 +477,66 @@ test(
     assert.equal(values.filter((value) => value === null).length, 1);
   },
 );
+
+test("completed history and receipts do not exhaust active admission/control quotas", (t) => {
+  const f = fixture(t);
+  const first = f.store.enqueue(input, "actor", "key");
+  const completed = f.store.settle(
+    f.store.claim("one")!.lease,
+    evidence("completed"),
+  );
+  const raw = new DatabaseSync(path.join(f.root, "jobs-v1.sqlite"));
+  try {
+    raw.exec("BEGIN IMMEDIATE");
+    const insert = raw.prepare(
+      "INSERT INTO jobs VALUES(?,?,?,?,NULL,NULL,NULL,0,?)",
+    );
+    for (let i = 1; i < JOB_LIMITS.unresolvedJobs; i++) {
+      const job = {
+        ...completed,
+        id: `history-${i}`,
+        input: {
+          ...input,
+          chatId: `old-chat-${i}`,
+          messageId: `old-message-${i}`,
+          turnId: `old-turn-${i}`,
+        },
+      };
+      insert.run(
+        job.id,
+        job.input.chatId,
+        job.state,
+        job.revision,
+        JSON.stringify(job),
+      );
+    }
+    for (let i = 0; i < JOB_LIMITS.unresolvedControls; i++)
+      raw
+        .prepare(
+          "INSERT INTO controls(actor,key,digest,response) VALUES(?,?,?,?)",
+        )
+        .run("actor", `old-control-${i}`, "old", JSON.stringify(completed));
+    raw.exec("COMMIT");
+  } finally {
+    raw.close();
+  }
+  const next = f.store.enqueue(
+    { ...input, messageId: "new-message", turnId: "new-turn" },
+    "actor",
+    "new-key",
+  );
+  assert.doesNotThrow(() =>
+    f.store.control({
+      actor: "actor",
+      key: "new-control",
+      jobId: next.id,
+      expectedRevision: next.revision,
+      action: "pause",
+    }),
+  );
+  assert.equal(f.store.enqueue(input, "actor", "key").id, first.id);
+  assert.throws(
+    () => f.store.enqueue({ ...input, modelId: "other" }, "actor", "key"),
+    code("conflict"),
+  );
+});
