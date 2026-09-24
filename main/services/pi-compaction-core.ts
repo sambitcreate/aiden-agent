@@ -1,7 +1,10 @@
 import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shared/compaction.js";
 import { compileVccInWorker } from "./pi-vcc/worker-client.js";
+import { VccError } from "./pi-vcc/errors.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import {
   DEFAULT_COMPACTION_SETTINGS,
+  CompactionError,
   calculateContextTokens,
   compact,
   estimateContextTokens,
@@ -11,6 +14,7 @@ import {
   uuidv7,
   type AgentMessage,
   type CompactionSettings,
+  type CompactionPreparation,
   type CompactResult,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
@@ -102,6 +106,33 @@ class PiCompactionSessionError extends Error {
     super("The Pi compaction journal operation failed.");
     this.name = "PiCompactionSessionError";
   }
+}
+
+class CompactionSummaryBudgetError extends Error {
+  readonly name = "CompactionSummaryBudgetError";
+
+  constructor(
+    readonly inputTokens: number,
+    readonly outputTokens: number,
+    readonly safetyTokens: number,
+    readonly contextWindowTokens: number,
+  ) {
+    super("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+  }
+
+  get overBudgetTokens(): number {
+    return this.inputTokens + this.outputTokens + this.safetyTokens - this.contextWindowTokens;
+  }
+}
+
+function budgetDiagnosticFields(error: CompactionSummaryBudgetError) {
+  return {
+    inputTokens: error.inputTokens,
+    outputTokens: error.outputTokens,
+    safetyTokens: error.safetyTokens,
+    contextWindowTokens: error.contextWindowTokens,
+    overBudgetTokens: error.overBudgetTokens,
+  };
 }
 
 async function sessionOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -458,6 +489,8 @@ export class PiCompactionCoordinator {
     const startedAt = performance.now();
     const engine = compactionEngineFrom(this.options.engine);
     let started = false;
+    let budgetFailure: CompactionSummaryBudgetError | undefined;
+    let recoveryStage: "local-compiler" | "semantic-summary" | "checkpoint" | undefined;
     let removeParentAbort = () => {};
     try {
       const branch = await this.options.session.getBranch();
@@ -483,34 +516,61 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
-      const compactResult =
-        engine === "vcc"
-          ? {
-              ok: true as const,
-              value: await (this.options.compileVcc ?? compileVccInWorker)(
-                {
-                  branch,
-                  preparation,
-                  contextWindow: this.options.model.contextWindow,
-                },
-                abortController.signal,
-              ),
-            }
-          : await compact(
-              preparation,
-              boundedCompactionModels(this.options.models),
-              this.options.model,
-              undefined,
-              abortController.signal,
-              this.options.thinkingLevel,
-              this.options.summaryRetry ?? {
-                enabled: true,
-                maxRetries: 3,
-                baseDelayMs: 2_000,
-              },
-              this.options.summaryRetryCallbacks,
-            );
-      if (!compactResult.ok) throw compactResult.error;
+      const compileLocal = () => (this.options.compileVcc ?? compileVccInWorker)(
+        { branch, preparation, contextWindow: this.options.model.contextWindow },
+        abortController.signal,
+      );
+      const summarize = async (input: CompactionPreparation): Promise<CompactResult> => {
+        const compactResult = await compact(
+          input,
+          boundedCompactionModels(this.options.models),
+          this.options.model,
+          undefined,
+          abortController.signal,
+          this.options.thinkingLevel,
+          this.options.summaryRetry ?? {
+            enabled: true,
+            maxRetries: 3,
+            baseDelayMs: 2_000,
+          },
+          this.options.summaryRetryCallbacks,
+        );
+        if (!compactResult.ok) throw compactResult.error;
+        return compactResult.value;
+      };
+      let result: CompactResult;
+      if (engine === "vcc") {
+        result = await compileLocal();
+      } else {
+        try {
+          result = await summarize(preparation);
+        } catch (error) {
+          if (!(error instanceof CompactionSummaryBudgetError)) throw error;
+          budgetFailure = error;
+          writeDiagnosticEvent({
+            level: "warn", area: "generation", event: "compaction-budget-exceeded",
+            outcome: "degraded", fields: {
+              compactionReason: reason,
+              compactionFailure: "summary-budget",
+              ...budgetDiagnosticFields(error),
+            },
+          });
+          // The local compiler reduces the *same prepared branch* without
+          // publishing a checkpoint. Pi then writes the final semantic summary
+          // only after its ordinary bounded request succeeds.
+          recoveryStage = "local-compiler";
+          const local = await compileLocal();
+          recoveryStage = "semantic-summary";
+          result = await summarize({
+            ...preparation,
+            messagesToSummarize: [{ role: "user", content: local.summary, timestamp: Date.now() }],
+            turnPrefixMessages: [],
+            isSplitTurn: false,
+            previousSummary: undefined,
+          });
+          recoveryStage = "checkpoint";
+        }
+      }
       if (abortController.signal.aborted) {
         this.options.onEvent?.({
           type: "end",
@@ -521,7 +581,6 @@ export class PiCompactionCoordinator {
         return { compacted: false, shouldRetry: false };
       }
 
-      const result: CompactResult = compactResult.value;
       result.details = { ...(result.details as Record<string, unknown>), engine, version: 1 };
       const priorLeafId = await sessionOperation(() => this.options.session.getLeafId());
       if (priorLeafId !== (branch[branch.length - 1]?.id ?? null)) {
@@ -581,6 +640,16 @@ export class PiCompactionCoordinator {
         ...(result.usage === undefined ? {} : { usage: result.usage }),
         ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
       };
+      if (budgetFailure) {
+        writeDiagnosticEvent({
+          level: "info", area: "generation", event: "compaction-budget-recovered",
+          outcome: "recovered", fields: {
+            compactionReason: reason,
+            compactionFailure: "summary-budget",
+            ...budgetDiagnosticFields(budgetFailure),
+          },
+        });
+      }
       this.options.onEvent?.({
         type: "end",
         reason,
@@ -596,6 +665,26 @@ export class PiCompactionCoordinator {
     } catch (error) {
       const hostFailure = this.options.consumeHostFailure?.();
       const sessionFailed = error instanceof PiCompactionSessionError;
+      const aborted = this.activeAbortController?.signal.aborted === true;
+      if (!aborted) {
+        writeDiagnosticEvent({
+          level: "warn", area: "generation", event: "compaction-failed",
+          outcome: "failed", fields: {
+            compactionReason: reason,
+            compactionFailure: sessionFailed ? "journal" :
+              budgetFailure ? "budget-recovery" :
+                error instanceof CompactionSummaryBudgetError ? "summary-budget" :
+                  error instanceof CompactionError && error.code === "summarization_failed" ? "summary-provider" :
+                    error instanceof VccError ? "local-compiler" :
+                  hostFailure === "inference" ? "host-inference" :
+                    hostFailure === "policy" ? "host-policy" : "other",
+            ...(budgetFailure ? budgetDiagnosticFields(budgetFailure) :
+              error instanceof CompactionSummaryBudgetError ? budgetDiagnosticFields(error) : {}),
+            ...(recoveryStage ? { recoveryStage } : {}),
+            ...(error instanceof VccError ? { localCompilerCause: error.code } : {}),
+          },
+        });
+      }
       const errorMessage = hostFailure
         ? hostFailure === "policy"
           ? "The main-owned provider hook failed during compaction."
@@ -606,7 +695,6 @@ export class PiCompactionCoordinator {
             ? error.message
             : "compaction failed";
       if (started) {
-        const aborted = this.activeAbortController?.signal.aborted === true;
         this.options.onEvent?.({
           type: "end",
           reason,
@@ -700,7 +788,7 @@ function boundedCompactionModels(models: Models): Models {
     const outputTokens = options?.maxTokens ?? model.maxTokens;
     const safetyTokens = Math.max(64, Math.ceil(model.contextWindow * 0.05));
     if (inputTokens + outputTokens + safetyTokens > model.contextWindow) {
-      throw new Error("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+      throw new CompactionSummaryBudgetError(inputTokens, outputTokens, safetyTokens, model.contextWindow);
     }
   };
   return new Proxy(models, {

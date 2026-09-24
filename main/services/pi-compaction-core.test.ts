@@ -2115,13 +2115,14 @@ for (const reserveTokens of [0, 1]) {
 }
 
 for (const mode of ["manual", "automatic"] as const) {
-  test(`${mode} long-history small-model summary fails before provider I/O`, async () => {
+  test(`${mode} long-history small-model summary recovers through bounded local preparation`, async () => {
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow: 8_192 };
     let providerRequests = 0;
-    faux.setResponses([() => {
+    faux.setResponses([(context) => {
       providerRequests += 1;
-      return fauxAssistantMessage(structuredSummary("must not be requested"));
+      assert.ok(JSON.stringify(context).length < 20_000, "the provider receives the reduced summary, not the full history");
+      return fauxAssistantMessage(structuredSummary("bounded-recovery"));
     }]);
     const session = await memorySession();
     for (let turn = 0; turn < 10; turn += 1) {
@@ -2136,15 +2137,16 @@ for (const mode of ["manual", "automatic"] as const) {
       session, models, model: smallModel, thinkingLevel: "off",
     });
     const result = mode === "manual" ? await coordinator.compact() : await coordinator.check(last);
-    assert.equal(result.compacted, false);
+    assert.equal(result.compacted, true, result.errorMessage);
     assert.equal(result.shouldRetry, false);
-    assert.match(result.errorMessage ?? "", /summary exceeds the selected model context window/u);
-    assert.equal(providerRequests, 0);
-    assert.deepEqual(await session.getEntries(), entriesBefore);
+    assert.equal(providerRequests, 1);
+    assert.deepEqual((await session.getEntries()).slice(0, entriesBefore.length), entriesBefore);
+    assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+    assert.match(JSON.stringify(result.messages), /bounded-recovery/u);
   });
 }
 
-test("summary preflight includes output reserve and does not retry a local budget rejection", async () => {
+test("summary preflight includes output reserve and keeps the journal intact when local recovery fails", async () => {
   const { faux, models, model } = compactionFixture();
   let providerRequests = 0;
   let retries = 0;
@@ -2159,6 +2161,7 @@ test("summary preflight includes output reserve and does not retry a local budge
   const result = await new PiCompactionCoordinator({
     session, models, model: { ...model, maxTokens: 1_000 }, thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 900, keepRecentTokens: 100 },
+    compileVcc: async () => { throw new Error("Local compiler unavailable."); },
     onEvent: (event) => events.push(event),
     summaryRetryCallbacks: {
       onRetryScheduled: () => { retries += 1; },
@@ -2167,19 +2170,20 @@ test("summary preflight includes output reserve and does not retry a local budge
     },
   }).compact();
   assert.equal(result.failureCode, "compaction-failed");
-  assert.match(result.errorMessage ?? "", /summary exceeds/u);
+  assert.match(result.errorMessage ?? "", /Local compiler unavailable/u);
   assert.equal(providerRequests, 0);
   assert.equal(retries, 0);
   assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
   assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("summary preflight accounts conservatively for high-density Unicode", async () => {
+test("summary preflight reduces high-density Unicode before the provider call", async () => {
   const { faux, models, model } = compactionFixture();
   let providerRequests = 0;
-  faux.setResponses([() => {
+  faux.setResponses([(context) => {
     providerRequests += 1;
-    return fauxAssistantMessage(structuredSummary("must not be requested"));
+    assert.ok(JSON.stringify(context).length < 20_000);
+    return fauxAssistantMessage(structuredSummary("unicode-recovery"));
   }]);
   const session = await memorySession();
   const smallModel = { ...model, contextWindow: 8_192 };
@@ -2190,7 +2194,34 @@ test("summary preflight accounts conservatively for high-density Unicode", async
   const result = await new PiCompactionCoordinator({
     session, models, model: smallModel, thinkingLevel: "off",
   }).compact();
-  assert.match(result.errorMessage ?? "", /summary exceeds/u);
-  assert.equal(providerRequests, 0);
-  assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(providerRequests, 1);
+  assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+});
+
+test("switching a long chat from a million-token model to a 272k model compacts before provider I/O", async () => {
+  const { faux, models, model } = compactionFixture();
+  const currentModel = { ...model, contextWindow: 272_000, maxTokens: 128_000 };
+  const oldModel = { ...currentModel, id: "old-million-token-model", contextWindow: 1_000_000 };
+  const session = await memorySession();
+  for (let turn = 0; turn < 20; turn += 1) {
+    await session.appendMessage(user(`Old turn ${turn} ${"x".repeat(55_000)}`, turn * 2));
+    await session.appendMessage(assistant(oldModel, { timestamp: turn * 2 + 1 }));
+  }
+  let providerRequests = 0;
+  faux.setResponses([(context) => {
+    providerRequests += 1;
+    assert.ok(JSON.stringify(context).length < 30_000, "the oversized old history stays out of the new-model request");
+    return fauxAssistantMessage(structuredSummary("model-switch-recovered"));
+  }]);
+  const before = await session.getEntries();
+  const result = await new PiCompactionCoordinator({
+    session, models, model: currentModel, thinkingLevel: "off",
+  }).checkContextPressure({ contextTokens: 260_000, compressibleHistoryMessages: 40, shouldCompact: true });
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(providerRequests, 1);
+  const entries = await session.getEntries();
+  assert.deepEqual(entries.slice(0, before.length), before);
+  assert.equal(entries.filter((entry) => entry.type === "compaction").length, 1);
+  assert.match(JSON.stringify(result.messages), /model-switch-recovered/u);
 });
