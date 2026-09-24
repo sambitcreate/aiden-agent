@@ -615,17 +615,12 @@ test("control during asynchronous input preparation fences the transcript commit
   assert.equal(f.counts().calls, 0);
 });
 
-for (const scenario of [
-  "restart",
-  "resume",
-  "lost-admission-receipt",
-] as const) {
+for (const scenario of ["restart", "resume"] as const) {
   test(`pre-dispatch checkpoint starts once after ${scenario}`, async (t) => {
     const f = setup(t);
     const job = await f.service.enqueue(input, "actor", "key");
     const claim = f.store.claim("old")!;
-    if (scenario !== "lost-admission-receipt")
-      f.store.admitted(claim.lease, checkpoint);
+    f.store.admitted(claim.lease, checkpoint);
     f.setEvidence(evidence("checkpoint"));
     if (scenario === "resume") {
       f.store.control(control(f.store.get(job.id), "pause"));
@@ -658,3 +653,21 @@ test("pre-dispatch recovery rejects a changed stored checkpoint", async (t) => {
   assert.equal(f.store.get(job.id).state, "needs_attention");
   assert.equal(f.counts().calls, 0);
 });
+
+for (const changed of ["sessionId", "headId"] as const) {
+  test(`missing admission checkpoint rejects unbound ${changed}`, async (t) => {
+    const f = setup(t);
+    const job = await f.service.enqueue(input, "actor", "key");
+    f.store.claim("old");
+    f.setEvidence(
+      evidence("checkpoint", {
+        checkpoint: { ...checkpoint, [changed]: "changed" },
+      }),
+    );
+    f.clock(100_000);
+    await f.worker.tick();
+    assert.equal(f.store.get(job.id).state, "needs_attention");
+    assert.equal(f.store.get(job.id).recovery, "stale_authority");
+    assert.deepEqual(f.counts(), { calls: 0, appendCalls: 0 });
+  });
+}

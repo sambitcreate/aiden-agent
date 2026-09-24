@@ -103,11 +103,11 @@ export class DurableJobService {
           mode = "start";
         } else if (!job.dispatched && evidence.kind === "checkpoint") {
           if (
-            !job.checkpoint ||
+            job.checkpoint &&
             digest(evidence.checkpoint) === digest(job.checkpoint)
           ) {
-            // The runtime recovered the stable input commit; no execution was
-            // admitted in SQL. Preserve that input instead of appending again.
+            // Both authorities agree on the input commit and no execution was
+            // admitted in SQL. A missing SQL checkpoint is not a wildcard.
             this.store.admitted(lease, evidence.checkpoint!);
             mode = "start";
           } else {
