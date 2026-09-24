@@ -21,7 +21,7 @@ import {
   DEFAULT_COMPACTION_SETTINGS,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
-import { createInitialSystemMessage, getCurrentSystemPrompt, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -2367,14 +2367,20 @@ export const llmClient = {
           )
         : undefined;
       let initialMessages = (await promptJournal.buildContext()).messages;
+      const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
+      if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
-        const head = createInitialSystemMessage(systemPrompt, [...runtimeTools]);
         const prepared = await agentsInstructions.apply({
-          messages: head ? [head, ...initialMessages] : initialMessages,
+          messages: initialMessages,
           tools: [...runtimeTools],
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
         generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
+        assertGenerationContextCapacity({
+          contextWindow: model.contextWindow,
+          systemPrompt: generationContextOptions.systemPrompt,
+          tools: runtimeTools,
+        });
       }
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;

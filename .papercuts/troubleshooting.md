@@ -1,5 +1,8 @@
 # Troubleshooting
 
+- 2026-09-24 PR #246 follow-up: hosted desktop CI caught a frozen OAuth assertion still expecting Pi 0.84.4. When bumping a fail-closed version constant, update its negative fixture too. All three Electron shards failed after ordinary chats started; the initial transcript held executable tool callbacks, so `structuredClone` failed before mock provider output. Use `toToolDeclaration` before storing tools in transcript messages.
+- 2026-09-24 PR #246 local build: `/usr/bin/xcrun` selected the malformed CommandLineTools 27 SDK despite `xcode-select` pointing at Xcode. Set both scoped `DEVELOPER_DIR` and `SDKROOT` to the Xcode.app 26.5 SDK when running native build and E2E gates.
+
 - 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).
 
 - 2026-09-21 PR #207 follow-up: fully redacting after the ninth settled report preserved secrecy but erased useful long-task findings. Keep all settled text under the existing output budget, sanitize cross-report boundary fragments before final truncation, and bound comparisons with a fail-closed ceiling.

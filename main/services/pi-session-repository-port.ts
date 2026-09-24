@@ -165,9 +165,10 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
       await session.close(TODO_CONTEXT);
       throw new Error("The Pi journal changed immutable session metadata.");
     }
-    this.#activeMetadata.set(metadata.path, metadata);
+    const promotedMetadata = { ...metadata, storageVersion: 1 };
+    this.#activeMetadata.set(metadata.path, promotedMetadata);
     this.#activeSessions.set(metadata.path, session);
-    return createPiSessionPort(session, metadata);
+    return createPiSessionPort(session, promotedMetadata);
   }
 
   async create(options: {
@@ -179,7 +180,15 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
     const session = await this.#repository.create({
         ...options,
       }, TODO_CONTEXT);
-    await session.setValue(AIDEN_METADATA, custom, TODO_CONTEXT);
+    try {
+      await session.setValue(AIDEN_METADATA, custom, TODO_CONTEXT);
+    } catch (error) {
+      // create() has already published the file and claimed the session id.
+      // Release both before the caller retries this chat.
+      await session.close(TODO_CONTEXT);
+      await this.#repository.delete(session.metadata, TODO_CONTEXT);
+      throw error;
+    }
     const metadata: PiPersistentSessionMetadata = {
       ...session.metadata,
       cwd: session.metadata.cwd,
@@ -194,13 +203,25 @@ class CurrentPiSessionRepositoryPort implements PiSessionRepositoryPort {
   }
 
   async delete(metadata: PiPersistentSessionMetadata): Promise<void> {
-    if (metadata.storageVersion === 0) {
-      await unlink(metadata.path);
-      this.#activeMetadata.delete(metadata.path);
-      return;
+    const backupPath = `${metadata.path}.pi084-backup`;
+    let hasOwnedBackup = false;
+    try {
+      const backup = decodeUtf8(await readRegularFile(backupPath));
+      const header = parseOldPiV4Header(backup.split("\n", 1)[0] ?? "");
+      if (header?.id !== metadata.id || !isDeepStrictEqual(header.metadata, metadata.metadata)) {
+        throw new Error("The Pi 0.84.4 backup does not belong to this session.");
+      }
+      hasOwnedBackup = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     await this.#activeSessions.get(metadata.path)?.close(TODO_CONTEXT);
-    await this.#repository.delete(metadata as JsonlSessionMetadata, TODO_CONTEXT);
+    if (this.#activeSessions.has(metadata.path) || metadata.storageVersion !== 0) {
+      await this.#repository.delete({ ...metadata, storageVersion: 1 } as JsonlSessionMetadata, TODO_CONTEXT);
+    } else {
+      await unlink(metadata.path);
+    }
+    if (hasOwnedBackup) await unlink(backupPath);
     this.#activeMetadata.delete(metadata.path);
     this.#activeSessions.delete(metadata.path);
   }

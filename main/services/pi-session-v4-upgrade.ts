@@ -47,6 +47,8 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
   const physical = source.split("\n");
   const header = parseOldPiV4Header(physical[0] ?? "");
   if (!header) throw new Error("The legacy Pi v4 journal has an invalid header.");
+  // The old loader accepts a header-only journal and repairs its newline.
+  if (physical.length === 1) physical.push("");
   const complete = physical.slice(1, -1);
   if (!source.endsWith("\n")) {
     const tail = physical[physical.length - 1];
@@ -56,7 +58,6 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
   }
   const ids = new Set<string>();
   const lanes = new Map<string, string | null>();
-  const openOperations = new Set<string>();
   const writes: Record<string, unknown>[] = [];
   let nextSeq = 1;
   const append = (write: Record<string, unknown>) => writes.push({ ...write, seq: nextSeq++ });
@@ -109,12 +110,17 @@ export function convertOldPiV4Journal(source: string): { journal: string; header
           namespace: address.namespace, key: address.key, ...(mutation.label === undefined ? {} : { value: mutation.label }) });
       } else throw new Error("The legacy Pi v4 journal has an invalid fact.");
     } else if (mutation.kind === "record" && typeof mutation.id === "string" && typeof mutation.type === "string") {
-      if (mutation.type === "operation_started") openOperations.add(mutation.id);
-      if (mutation.type === "operation_finished" && typeof mutation.runId === "string") openOperations.delete(mutation.runId);
+      if (mutation.type === "usage") {
+        append({ kind: "usage", id: mutation.id, usage: mutation.usage,
+          adjustment: mutation.cause === "adjustment",
+          ...(typeof mutation.entryId === "string" ? { entryId: mutation.entryId } : {}),
+          ...(mutation.details === undefined ? {} : { details: mutation.details }) });
+      }
+      // Keep operation records, including an interrupted operation, for
+      // recovery inspection. A crash between start and finish is valid v4.
       append({ kind: "value", op: "set", namespace: "aiden.pi-legacy-record", key: mutation.id, value: mutation });
     } else throw new Error("The legacy Pi v4 journal has an invalid mutation.");
   }
-  if (openOperations.size) throw new Error("The legacy Pi v4 journal has an unsettled operation.");
   if (!lanes.has("main")) {
     append({ kind: "value", op: "set", namespace: "pi.branch.tip", key: "main", value: null });
   }

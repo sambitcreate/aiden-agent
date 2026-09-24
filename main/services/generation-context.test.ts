@@ -599,6 +599,31 @@ test("emergency projection retains the transcript prompt and tool declarations",
   assert.deepEqual(messages[0], system);
 });
 
+test("history pruning and emergency fallback replay all system patches", () => {
+  const base = createInitialSystemMessage("Keep host policy", [{
+    name: "safe_read", description: "Read a fixture", parameters: Type.Object({}),
+  }]);
+  assert.ok(base);
+  const patch = { role: "system" as const, content: "", timestamp: 2,
+    sections: { "agents-instructions": "Follow workspace guidance" } };
+  const history = compactGenerationContext(
+    [base, user("x".repeat(100_000)), patch, user("Continue")],
+    { ...options, contextWindow: 8_000 },
+  );
+  assert.equal(history.removedHistoryMessages, 1);
+  assert.equal(history.messages[0]?.role, "system");
+  assert.equal(history.messages[1]?.role, "user");
+  assert.match(getCurrentSystemPrompt(history.messages), /Follow workspace guidance/u);
+  const emergency = compactGenerationContext(
+    [base, patch, user("x".repeat(100_000))],
+    { ...options, contextWindow: 8_000 },
+  );
+  assert.equal(emergency.usedContextFallback, true);
+  assert.deepEqual(emergency.messages.slice(0, 2).map((message) => message.role), ["system", "user"]);
+  assert.match(getCurrentSystemPrompt(emergency.messages), /Follow workspace guidance/u);
+  assert.deepEqual(getCurrentTools(emergency.messages).map((tool) => tool.name), ["safe_read"]);
+});
+
 test("rejects a model whose static prompt and tools cannot fit even the fail-safe notice", () => {
   assert.throws(
     () =>

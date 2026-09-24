@@ -1,4 +1,4 @@
-import type { ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage, type ToolResultMessage, type UserMessage } from "@earendil-works/pi-ai";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   estimateContextTokens,
@@ -535,6 +535,15 @@ export function compactGenerationContext(
   });
   const overBudget = () =>
     estimatedTotalTokens(transformed) > inputBudgetTokens;
+  // A refreshed AGENTS/browser/MCP section may sit between historical turns.
+  // Replay the effective prompt and tool state before any history is removed.
+  if (overBudget()) {
+    const currentSystem = getCurrentSystemMessage(transformed);
+    if (currentSystem) {
+      transformed.splice(0, transformed.length, currentSystem,
+        ...transformed.filter((message) => message.role !== "system"));
+    }
+  }
   let removedHistoryMessages = 0;
   let compactedToolResults = 0;
   let removedCurrentTurnMessages = 0;
@@ -588,7 +597,9 @@ export function compactGenerationContext(
           break;
         }
       }
-      const start = checkpointIndex >= 0 ? checkpointIndex + 1 : transformed[0]?.role === "system" ? 1 : 0;
+      let systemPrefixEnd = 0;
+      while (transformed[systemPrefixEnd]?.role === "system") systemPrefixEnd += 1;
+      const start = Math.max(systemPrefixEnd, checkpointIndex >= 0 ? checkpointIndex + 1 : 0);
       const removed = currentUser - start;
       transformed.splice(start, removed);
       removedHistoryMessages += removed;
@@ -624,9 +635,10 @@ export function compactGenerationContext(
   // breaking protocol, replace only the outbound context with a bounded notice
   // that cannot continue the tool loop. Persisted Agent/chat state is untouched.
   if (overBudget()) {
-    const system = transformed[0]?.role === "system" ? transformed[0] : undefined;
-    removedCurrentTurnMessages += transformed.length - (system ? 1 : 0);
-    transformed.splice(system ? 1 : 0, transformed.length, contextFallback(retained));
+    let systemPrefixEnd = 0;
+    while (transformed[systemPrefixEnd]?.role === "system") systemPrefixEnd += 1;
+    removedCurrentTurnMessages += transformed.length - systemPrefixEnd;
+    transformed.splice(systemPrefixEnd, transformed.length, contextFallback(retained));
     usedContextFallback = true;
   }
 
