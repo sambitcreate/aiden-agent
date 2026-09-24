@@ -246,6 +246,7 @@ export class DurableJobStore {
     job: DurableJobSnapshot,
     now: number,
     release = false,
+    finishAttempt = false,
   ): DurableJobSnapshot {
     const revision = job.revision;
     job.revision++;
@@ -267,7 +268,7 @@ export class DurableJobStore {
         "DELETE FROM events WHERE job_id=? AND sequence NOT IN (SELECT sequence FROM events WHERE job_id=? ORDER BY sequence DESC LIMIT ?)",
       )
       .run(job.id, job.id, JOB_LIMITS.eventsPerJob);
-    if (release && job.attemptId)
+    if (finishAttempt && job.attemptId)
       this.db
         .prepare("UPDATE attempts SET finished_at=?,outcome=? WHERE id=?")
         .run(now, job.state, job.attemptId);
@@ -493,12 +494,10 @@ export class DurableJobStore {
     const checkpoint = parseCheckpoint(value);
     this.transaction((now) => {
       const job = this.owned(lease, now);
-      if (
-        job.state !== "running" ||
-        job.intent !== "none" ||
-        checkpoint.inputMessageId !== job.input.messageId
-      )
+      if (job.state !== "running" || job.intent !== "none")
         throw new JobError("lost_lease");
+      if (checkpoint.inputMessageId !== job.input.messageId)
+        throw new JobError("unsafe");
       job.checkpoint = checkpoint;
       this.save(job, now);
     });
@@ -537,7 +536,7 @@ export class DurableJobStore {
         job.state = evidence.kind;
       else if (evidence.kind === "failed_safe") job.state = "failed";
       else job.state = "interrupted";
-      return this.save(job, now, true);
+      return this.save(job, now, true, true);
     });
   }
   /** Host-only request to reread evidence; never grants resume or retry. */

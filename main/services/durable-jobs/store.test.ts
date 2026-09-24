@@ -540,3 +540,61 @@ test("completed history and receipts do not exhaust active admission/control quo
     code("conflict"),
   );
 });
+
+for (const action of ["resume", "retry"] as const) {
+  test(`${action} preserves the prior settled execution attempt`, (t) => {
+    const f = fixture(t);
+    const job = f.store.enqueue(input, "actor", "key");
+    const claim = f.store.claim("one")!;
+    f.store.admitted(claim.lease, checkpoint);
+    f.store.beginExecution(claim.lease, "start");
+    const settled = f.store.settle(
+      claim.lease,
+      evidence(action === "resume" ? "checkpoint" : "failed_safe"),
+    );
+    const attempts = f.store.attempts(job.id);
+    f.clock(2_000);
+    f.store.control({
+      actor: "actor",
+      key: action,
+      jobId: job.id,
+      expectedRevision: settled.revision,
+      action,
+    });
+    assert.deepEqual(f.store.attempts(job.id), attempts);
+  });
+}
+
+test("control requests do not finish an unsettled execution attempt", (t) => {
+  const f = fixture(t);
+  const job = f.store.enqueue(input, "actor", "key");
+  const claim = f.store.claim("one")!;
+  f.store.admitted(claim.lease, checkpoint);
+  const running = f.store.beginExecution(claim.lease, "start");
+  f.store.control({
+    actor: "actor",
+    key: "pause",
+    jobId: job.id,
+    expectedRevision: running.revision,
+    action: "pause",
+  });
+  assert.equal(f.store.attempts(job.id)[0].finished_at, null);
+  f.store.settle(f.store.claim("two")!.lease, evidence("checkpoint"));
+  assert.equal(f.store.attempts(job.id)[0].outcome, "paused");
+});
+
+test("checkpoint input mismatch is an integrity failure, not lease loss", (t) => {
+  const f = fixture(t);
+  f.store.enqueue(input, "actor", "key");
+  const claim = f.store.claim("one")!;
+  f.store.admitted(claim.lease, checkpoint);
+  f.store.beginExecution(claim.lease, "start");
+  assert.throws(
+    () =>
+      f.store.checkpoint(claim.lease, {
+        ...checkpoint,
+        inputMessageId: "other-message",
+      }),
+    code("unsafe"),
+  );
+});
