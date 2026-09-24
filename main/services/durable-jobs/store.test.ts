@@ -633,3 +633,21 @@ test("reconciliation without execution preserves a finished attempt", (t) => {
   assert.equal(f.store.get(job.id).state, "cancelled");
   assert.deepEqual(f.store.attempts(job.id), attempts);
 });
+
+test("reconciliation lease does not authorize input admission or execution", (t) => {
+  const f = fixture(t);
+  const job = f.store.enqueue(input, "actor", "key");
+  const first = f.store.claim("old")!;
+  f.store.admitted(first.lease, checkpoint);
+  const blocked = f.store.settle(first.lease, evidence("stale_authority"));
+  f.store.reconcile(job.id, blocked.revision);
+  const reconciliation = f.store.claim("new")!;
+  assert.throws(
+    () => f.store.admitted(reconciliation.lease, checkpoint),
+    code("unsafe"),
+  );
+  assert.throws(
+    () => f.store.beginExecution(reconciliation.lease, "start"),
+    code("unsafe"),
+  );
+});

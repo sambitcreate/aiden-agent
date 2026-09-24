@@ -458,6 +458,7 @@ export class DurableJobStore {
       const job = this.owned(lease, now);
       if (
         job.dispatched ||
+        (job.state !== "admitting" && job.state !== "queued") ||
         checkpoint.inputMessageId !== job.input.messageId ||
         job.intent !== "none"
       )
@@ -475,6 +476,7 @@ export class DurableJobStore {
       const job = this.owned(lease, now);
       if (
         job.intent !== "none" ||
+        job.state !== "queued" ||
         !job.checkpoint ||
         (mode === "start" ? job.dispatched : job.continuation !== mode)
       )

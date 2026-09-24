@@ -998,3 +998,5 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - PR #243 recovery review: an authoritative input checkpoint may exist before SQL dispatch (including a lost admission receipt). Recover this as start without re-appending; reject a changed stored head. Added restart, explicit-resume, lost-receipt, and mismatched-head regressions.
 
 - PR #243 correction: a missing SQL input checkpoint cannot prove the original session/head. Removed wildcard recovery; null-checkpoint evidence fails closed, with changed-session/head regressions. Exact stored checkpoints still recover before dispatch.
+
+- PR #243 recovery authority: a reconciliation lease does not authorize dispatch. Gate first-start on admitting/queued state in service and SQL admission/dispatch methods; recovered blocked runs settle observationally and require explicit Resume. Added checkpoint/not-started and direct-store regressions.

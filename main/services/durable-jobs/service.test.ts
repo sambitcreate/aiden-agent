@@ -671,3 +671,28 @@ for (const changed of ["sessionId", "headId"] as const) {
     assert.deepEqual(f.counts(), { calls: 0, appendCalls: 0 });
   });
 }
+
+for (const recovered of ["checkpoint", "not_started"] as const) {
+  test(`host reconciliation of pre-dispatch blocked work does not start from ${recovered}`, async (t) => {
+    const f = setup(t);
+    const job = await f.service.enqueue(input, "actor", "key");
+    const claim = f.store.claim("old")!;
+    f.store.admitted(claim.lease, checkpoint);
+    f.setEvidence(
+      evidence("checkpoint", {
+        checkpoint: { ...checkpoint, headId: "changed" },
+      }),
+    );
+    f.clock(100_000);
+    await f.worker.tick();
+    assert.equal(f.store.get(job.id).recovery, "stale_authority");
+    f.setEvidence(evidence(recovered));
+    f.store.reconcile(job.id, f.store.get(job.id).revision);
+    await f.worker.tick();
+    assert.equal(f.store.get(job.id).state, "interrupted");
+    assert.deepEqual(f.counts(), { calls: 0, appendCalls: 0 });
+    f.store.control(control(f.store.get(job.id), "resume"));
+    await f.worker.tick();
+    assert.equal(f.store.get(job.id).state, "succeeded");
+  });
+}

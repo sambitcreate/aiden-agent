@@ -93,7 +93,10 @@ export class DurableJobService {
       guard();
       if (session && job.intent === "none") {
         let mode: JobExecutionContext["mode"] | undefined;
-        if (evidence.kind === "not_started" && !job.dispatched) {
+        const canStart =
+          !job.dispatched &&
+          (job.state === "admitting" || job.state === "queued");
+        if (evidence.kind === "not_started" && canStart) {
           const checkpoint = await session.appendInput({
             signal,
             beforeCommit: () => guard(),
@@ -101,7 +104,7 @@ export class DurableJobService {
           guard();
           this.store.admitted(lease, checkpoint);
           mode = "start";
-        } else if (!job.dispatched && evidence.kind === "checkpoint") {
+        } else if (canStart && evidence.kind === "checkpoint") {
           if (
             job.checkpoint &&
             digest(evidence.checkpoint) === digest(job.checkpoint)
