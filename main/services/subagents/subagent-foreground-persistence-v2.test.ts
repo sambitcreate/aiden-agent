@@ -13,6 +13,7 @@ import type { SubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-ru
 import { SubagentControlMainV2 } from "./subagent-control-main.js";
 import { subagentWorkspaceWriteAllowedForGeneration } from "./eligibility.js";
 import { subagentMcpEffectProfileFingerprintV2 } from "./authority-v2.js";
+import { effectiveSubagentTaskCapabilities, parseSubagentToolRequest } from "./contracts.js";
 
 function runtime(): ResolvedModelRuntime {
   return {
@@ -71,6 +72,59 @@ test("foreground authority uses a bounded explicit read-only turn budget", async
     stop: () => {},
   });
   assert.equal(prepared.authority?.budgets.maxTurns, 72);
+  await prepared.abortPreparation();
+});
+
+test("implementer role defaults meet parent permission and independent rollout ceilings", async () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  });
+  const task = parsed.tasks[0]!;
+  const requestedCapabilities = effectiveSubagentTaskCapabilities(parsed, task);
+  for (const variant of [
+    { permission: "ask" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
+    { permission: "full" as const, writeEnabled: true, shellEnabled: true, expectedWrite: true, expectedShell: true },
+    { permission: "ask" as const, writeEnabled: false, shellEnabled: true, expectedWrite: false, expectedShell: true },
+    { permission: "ask" as const, writeEnabled: true, shellEnabled: false, expectedWrite: true, expectedShell: false },
+    { permission: "none" as const, writeEnabled: true, shellEnabled: true, expectedWrite: false, expectedShell: false },
+  ]) {
+    const parentWorkspace = { ...workspace, permission: variant.permission };
+    const persistence = createForegroundSubagentPersistenceV2({
+      ...input(store("v2", [])), workspace: parentWorkspace,
+      permission: variant.permission,
+      writeEnabled: variant.writeEnabled,
+      shellEnabled: variant.shellEnabled,
+      shellBinary: "/bin/zsh",
+      requestApproval: async () => true,
+      currentWorkspace: async () => parentWorkspace,
+      validateWorkspace: async () => {},
+    });
+    const prepared = await persistence.prepareRun({
+      identity: { runId: `run-${variant.permission}-${variant.writeEnabled}-${variant.shellEnabled}`, groupId: "group", childId: "child" },
+      task, requestedCapabilities, contextMode: "fresh",
+      contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+    });
+    assert.equal(prepared.authority?.capabilities.workspaceWrite, variant.expectedWrite);
+    assert.equal(prepared.authority?.capabilities.shell, variant.expectedShell);
+    assert.equal(prepared.authority?.capabilities.delegation, false);
+    await prepared.abortPreparation();
+  }
+  const fullWorkspace = { ...workspace, permission: "full" as const };
+  const narrowedTurn = createForegroundSubagentPersistenceV2({
+    ...input(store("v2", [])), workspace: fullWorkspace,
+    permission: "full", generationPermission: "read-only",
+    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    requestApproval: async () => true,
+    currentWorkspace: async () => fullWorkspace,
+    validateWorkspace: async () => {},
+  });
+  const prepared = await narrowedTurn.prepareRun({
+    identity: { runId: "run-narrowed", groupId: "group", childId: "child" },
+    task, requestedCapabilities, contextMode: "fresh",
+    contextRevision: "b".repeat(64), deadlineMs: 5_000, stop: () => {},
+  });
+  assert.equal(prepared.authority?.capabilities.workspaceWrite, false);
+  assert.equal(prepared.authority?.capabilities.shell, false);
   await prepared.abortPreparation();
 });
 

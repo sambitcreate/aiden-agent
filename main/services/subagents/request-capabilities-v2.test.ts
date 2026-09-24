@@ -105,6 +105,25 @@ test("legacy calls keep the workspace-read-only default", () => {
   );
 });
 
+test("implementer omission requests write and shell without widening omitted read roles", () => {
+  const request = parseSubagentToolRequest({ tasks: [
+    { role: "implementer", label: "Code", task: "Make the change." },
+    { role: "scout", label: "Inspect", task: "Inspect the tree." },
+  ] });
+  assert.equal(request.capabilities?.workspaceWrite, true);
+  assert.equal(request.capabilities?.shell, true);
+  assert.deepEqual(effectiveSubagentTaskCapabilities(request, request.tasks[0]!), {
+    workspaceRead: true, workspaceWrite: true, shell: true, delegate: false,
+    web: false, mcp: [],
+  });
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).workspaceWrite, false);
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[1]!).shell, false);
+  assert.equal(effectiveSubagentTaskCapabilities(request, request.tasks[0]!).delegate, false);
+  assert.throws(() => parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Code.", maxTurns: 72 }],
+  }), /read-only capabilities/u);
+});
+
 test("omitted root capabilities infer the exact mixed child lanes", () => {
   const parsed = parseSubagentToolRequest({
     tasks: [

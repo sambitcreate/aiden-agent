@@ -43,6 +43,7 @@ import {
   subagentMcpMutationAllowLabel,
 } from "../components/subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
+import { SubagentRunGrantApproval } from "../components/subagent-run-grant-approval";
 import { FormFillApproval } from "../components/form-fill-approval";
 import {
   chatsApi,
@@ -143,6 +144,7 @@ import {
   isFormFillBatchApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
@@ -1904,6 +1906,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const pendingShell =
     pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
+  const pendingRunGrantClaim =
+    typeof pendingDetails === "object" && pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-run-grant";
+  const pendingRunGrant = pending && isSubagentRunGrantApprovalDetails(pending.details)
+    ? pending.details : undefined;
+  const invalidPendingRunGrant = pendingRunGrantClaim && pendingRunGrant === undefined;
   const pendingFormFillClaim =
     typeof pendingDetails === "object" &&
     pendingDetails !== null &&
@@ -1916,6 +1925,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     invalidPendingWorkspaceWrite ||
     invalidPendingMcpMutation ||
     invalidPendingShell ||
+    invalidPendingRunGrant ||
     invalidPendingFormFill;
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
   React.useEffect(() => {
@@ -2092,6 +2102,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
                                 : pendingShell
                                   ? `${pendingShell.childLabel} wants to run a full-host command`
+                                  : pendingRunGrant
+                                    ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
                                   : `${toolLabel(pending.toolName)} needs approval`}
                         </Text>
                         <Text variant="small" color="secondary" as="p" className="mt-0.5">
@@ -2103,6 +2115,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                                 ? "Review this one exact external mutation before Aiden continues."
                                 : pendingShell
                                   ? "Review this one exact full-host command before Aiden continues."
+                                  : pendingRunGrant
+                                    ? "Review this grant for the entire subagent run."
                                   : "Review this one action before Aiden continues."}
                         </Text>
                       </div>
@@ -2130,6 +2144,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ) : pendingShell ? (
                       <SubagentShellApproval
                         details={pendingShell}
+                        descriptionId={`approval-summary-${pending.approvalId}`}
+                      />
+                    ) : pendingRunGrant ? (
+                      <SubagentRunGrantApproval
+                        details={pendingRunGrant}
                         descriptionId={`approval-summary-${pending.approvalId}`}
                       />
                     ) : pendingFormFill ? (
@@ -2177,6 +2196,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                               ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
                               : pendingMcpMutation
                                 ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                                : pendingRunGrant
+                                  ? "Allow for run"
                                 : "Allow once"}
                         </Button>
                       ) : null}

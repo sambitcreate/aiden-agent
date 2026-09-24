@@ -207,7 +207,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Native Subagents",
     description:
-      "Delegate scout, planner, and reviewer jobs, then follow their progress on Mac or mobile.",
+      "Delegate research, plans, reviews, or coding to a child agent. Implementer writes and commands follow your workspace permission.",
     icon: UsersRound,
     imageUrl: FEATURE_ILLUSTRATIONS.subagents,
     size: "standard",

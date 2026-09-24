@@ -65,7 +65,8 @@ test("two no-capability scouts need no model-supplied resource budget", () => {
   assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 128 }] }), true);
   assert.equal(validate({ ...noCapabilityRhymes, tasks: [{ ...noCapabilityRhymes.tasks[0], maxTurns: 129 }] }), false);
   assert.match(delegated.description, /infers only their exact union/u);
-  assert.match(delegated.description, /capability-less siblings workspace-read-only/u);
+  assert.match(delegated.description, /scout\/planner\/reviewer read-only/u);
+  assert.match(delegated.description, /implementer requests workspace writes and shell/u);
 });
 
 test("Phase 5E exposes shell only after the complete positive production gate", async () => {
@@ -213,9 +214,9 @@ test("workspace-write schema exposure is positive, rollbackable, and truthful ab
   assert.match(enabled.description, /positive foreground authority request/u);
   assert.match(
     enabled.description,
-    /only exact write_file\/edit_file calls are exposed/u,
+    /Only write_file\/edit_file calls are exposed/u,
   );
-  assert.match(JSON.stringify(enabled.parameters), /one-shot owner approval/u);
+  assert.match(JSON.stringify(enabled.parameters), /run-scoped grant/u);
 });
 
 test("read-only parent schema omits write requests over a full stored workspace", () => {

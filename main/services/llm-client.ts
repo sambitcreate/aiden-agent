@@ -887,7 +887,7 @@ async function prepareGeneration(
     childShellRollout &&
     subagentRunStore.selection === "v2" &&
     workspace?.permission !== "none" &&
-    permission !== "none" &&
+    (permission === "ask" || permission === "full") &&
     (!botContext || botContext.admission.authority.shell.enabled) &&
     (await access(subagentShellBinary).then(
       () => true,
@@ -916,6 +916,7 @@ async function prepareGeneration(
           thinkingLevel,
           ownerDocumentId,
           permission: workspace.permission,
+          generationPermission: permission,
           writeEnabled: subagentWriteEnabled,
           webEnabled: subagentWebEnabled,
           mcpInventory: subagentMcpInventory,

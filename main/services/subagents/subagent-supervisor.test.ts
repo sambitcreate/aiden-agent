@@ -2599,7 +2599,7 @@ test("model-facing tool is sequential and delegates validated tasks to the super
   };
   const roleSchema = wireSchema.properties.tasks.items.properties.role;
   assert.equal(roleSchema.type, "string");
-  assert.deepEqual(roleSchema.enum, ["scout", "planner", "reviewer"]);
+  assert.deepEqual(roleSchema.enum, ["scout", "planner", "reviewer", "implementer"]);
   assert.equal(roleSchema.anyOf, undefined);
   const result = await tool.execute("call", request(["Review"]));
   const block = result.content[0];
