@@ -101,6 +101,18 @@ export class DurableJobService {
           guard();
           this.store.admitted(lease, checkpoint);
           mode = "start";
+        } else if (!job.dispatched && evidence.kind === "checkpoint") {
+          if (
+            !job.checkpoint ||
+            digest(evidence.checkpoint) === digest(job.checkpoint)
+          ) {
+            // The runtime recovered the stable input commit; no execution was
+            // admitted in SQL. Preserve that input instead of appending again.
+            this.store.admitted(lease, evidence.checkpoint!);
+            mode = "start";
+          } else {
+            evidence = { ...missing(), kind: "stale_authority" };
+          }
         } else if (
           job.continuation === "resume" &&
           evidence.kind === "checkpoint" &&
