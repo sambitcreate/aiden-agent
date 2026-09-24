@@ -889,3 +889,15 @@ The Remote contract adds authenticated status/model-management/transcription rou
 iOS, Android, the shared Remote contracts, and the completed Bot companion-vision implementation are consolidated on one review branch based directly on `main`. Create Images/Banana, Gemini Live, and the Pi inline proposal remain intentionally separate so this pull request has one mobile-companion release boundary.
 
 Pull-request CI now gives Android its own Java 21/SDK 36 job. Pull requests run the complete debug JVM tests, lint, Android-test Kotlin compilation, and Compose UI verification without publishing an installable artifact. Relevant pushes to main additionally assemble and publish the debug APK plus its SHA-256 checksum as a 14-day workflow artifact. Hosted CI continues to compile the iOS app and test bundle for generic physical hardware without using a simulator; signed XCTest acceptance remains a recorded physical-device gate.
+
+
+## Desktop-configured Read Aloud follow-up — September 2026
+
+The user's approved `tts-v1` extension supersedes this plan's earlier exclusion
+of server TTS, only for explicit playback of the latest canonical assistant
+response using the paired desktop's separately enabled Gemini speech settings.
+iOS and Android never send arbitrary speech text or Google keys, and cannot
+enable/configure TTS. Native Settings shows status and desktop setup guidance;
+TODO: mobile configuration remains a future separately reviewed feature.
+The original `/speech` local transcription contract is unchanged. See the
+Gemini TTS plan and Remote API specification for replay, bounds and verification.

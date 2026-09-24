@@ -11,14 +11,15 @@ import { llmClient } from "../llm-client.js";
 import { chatStore } from "../chat-store.js";
 import { createTtsService } from "./service.js";
 import { createGeminiTtsProvider } from "./gemini-provider.js";
-import { TTS_DEDICATED_SECRET_ID } from "./credentials.js";
+import { readSavedGoogleTtsKey, TTS_DEDICATED_SECRET_ID } from "./credentials.js";
+import { piCredentialStore } from "../pi-credential-store.js";
 
 export const ttsService = createTtsService({
   config: configStore,
   credentials: {
     // Strict reads: unreadable secure storage fails closed instead of
     // silently degrading into "needs setup".
-    getGoogleKey: () => secrets.getKeyStrict("google"),
+    getGoogleKey: () => readSavedGoogleTtsKey(piCredentialStore),
     getDedicatedKey: () => secrets.getKeyStrict(TTS_DEDICATED_SECRET_ID),
   },
   source: {
@@ -26,7 +27,8 @@ export const ttsService = createTtsService({
     isChatBusy: (chatId) => llmClient.isChatBusy(chatId),
   },
   provider: createGeminiTtsProvider(),
-  emit: (event) => {
+  emit: (event, owner) => {
+    if (owner?.kind === "remote") return;
     ipcMain.broadcast("tts:event", event);
   },
   clock: {

@@ -1452,6 +1452,22 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun readAloudStatus(chatId: String? = null): AidenReadAloudStatus = executeRequest(
+        if (chatId == null) "/read-aloud" else "/chats/$chatId/read-aloud"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun startReadAloud(chatId: String, request: AidenReadAloudStart): AidenReadAloudJob = executeRequest(
+        "/chats/$chatId/read-aloud", method = "POST", bodyJson = json.encodeToString(request), retryConnectionFailure = false
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
+    suspend fun stopReadAloud(chatId: String, requestId: String): Unit = executeRequest(
+        "/chats/$chatId/read-aloud/stop", method = "POST", bodyJson = json.encodeToString(AidenReadAloudStop(requestId)), retryConnectionFailure = false
+    ) { Unit }
+
+    suspend fun readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int): AidenReadAloudAudio = executeRequest(
+        "/chats/$chatId/read-aloud/audio/$jobId/$segment/$offset"
+    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+
     suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }

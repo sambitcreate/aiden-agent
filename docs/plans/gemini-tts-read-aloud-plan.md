@@ -1,6 +1,6 @@
 # Gemini 3.8 Read Aloud and Voice Studio — Implementation Status
 
-**Status:** Partial implementation (desktop unary-WAV slice hardened; live acceptance, streaming, Voice Studio, and native cloud-TTS parity pending).
+**Status:** Partial implementation (desktop unary-WAV and desktop-configured native playback implemented; live acceptance, streaming, Voice Studio, and physical playback verification pending).
 **Branch:** `feature/gemini-3-8-tts`.
 **Full plan:** the delivered `plan.md` document (September 23, 2026 audit of `7a4d9d0b`).
 
@@ -34,6 +34,8 @@ records what is implemented on this branch and what remains gated; this is not a
 - `main/services/tts/settings.ts` + `credentials.ts`: version-guarded settings
   document parsing; saved-Google vs dedicated encrypted key resolution
   (`aiden-internal:tts-api-key`), fail-closed on unreadable secure storage.
+  Saved Google resolves through the encrypted managed `piCredentialStore`,
+  not the legacy custom-provider secret map.
 - `configStore.getTtsSettings/updateTtsSettings` seam with session-seeded
   compare-and-set revisions; `tts` field on both `AppSettings` shapes;
   `runtimeSettingsFrom` normalization.
@@ -47,15 +49,20 @@ records what is implemented on this branch and what remains gated; this is not a
   billable POSTs and AbortSignal propagation; loopback contract test proves the
   exact serialized body through the real SDK.
 - `main/services/tts/audio-store.ts`: bounded session retention, owner-scoped
-  continuation reads, contiguous-consumption tracking, atomic replacement,
-  and eviction only after the full segment has been retrieved. Overflow fails
-  explicitly; it never silently discards unread audio.
+  continuation reads and atomic replacement. Reads never evict a soundbite
+  prefix. The service evicts only whole inactive soundbites; active audio
+  overflow fails explicitly rather than dropping words or breaking replay.
 - `main/services/tts/service.ts` (+ `service-main.ts` bindings): job state
   machine with pending-start/terminal fencing, one active job per app,
   per-document request-ID deduplication, sequential synthesis with main-owned
   source checks before each dispatch, clearable per-request timeouts,
   pause-halt/resume-wake and idle expiry, usage reporting hook, and previews.
-  Owner invalidation and Stop release even completed job audio; concurrent
+  Stop halts audible playback but preserves completed audio for session replay;
+  owner invalidation and cache clear release it. Canonical response/effective
+  speech-setting identities reuse the same soundbite with no provider/usage
+  call, even with a fresh request ID. Bounded identity tombstones survive
+  eviction/clear, so unavailable or possibly-billed failed audio is never
+  regenerated automatically. Previews follow the same replay policy. Concurrent
   settings updates are serialized around revision checks. Only registered
   starter voices are currently admitted for synthesis.
 - IPC: `tts:*` handlers with strict parsing and `rendererDocumentOwner`;
@@ -102,7 +109,8 @@ records what is implemented on this branch and what remains gated; this is not a
 ## Remaining (gated, not advertised)
 
 - **Live Google acceptance** (Phase 0 gate): credentialed probes of both 3.8 TTS
-  models, voice list/get, cancellation — no key available in this checkout.
+  models, voice list/get, cancellation. A key is configured in the isolated dev
+  profile; no automated paid live-acceptance probes have been run.
 - **Production streaming PCM** (Phase 3): SSE StepDelta audio path, backpressure
   budgets, slow-consumer tests. Current playback is lossless unary WAV per
   segment.
@@ -112,9 +120,73 @@ records what is implemented on this branch and what remains gated; this is not a
 - **Release hardening** (Phase 5): usage-store integration (`text-to-speech`
   source), audio-focus arbitration with dictation/Live, Electron interaction
   tests, independent final sign-off, packaged acceptance.
-- **Remote/native parity** (Phase 6): `tts-v1` negotiation, mobile playback.
+- **Remote/native parity** (Phase 6, user-requested): `tts-v1` negotiation,
+  authenticated device/chat-scoped audio delivery and iOS/Android playback.
+  Existing `/speech` handles transcription, not TTS; do not reuse its writable
+  model-selection routes for read-aloud configuration. Native playback must
+  inherit desktop enablement, credentials, voice and reading policy. Native
+  Settings must be read-only with “Enable Read Aloud in the desktop app under
+  Settings → Text to Speech” guidance, and refresh status after desktop setup.
+  TODO (future feature): allow mobile configuration only with a separately
+  designed/authorized contract; do not expose settings/key mutations now.
+  Recheck Bot-chat/device access before each dispatch and audio read, scope
+  Stop to the owning device/job, fence navigation/background/revocation, and
+  never auto-regenerate after transport loss or cache eviction. This integration
+  is implemented below; physical/cloud playback acceptance is not yet claimed.
 
 ## Known pre-existing failures (not from this branch)
 
 `main/services/google-provider.test.ts` fails 3 cases on pristine `origin/main`
 (models.dev catalog drift in migration defaults).
+
+
+## Desktop-owned mobile playback — September 24, 2026
+
+Implemented the authenticated `tts-v1` Remote API and iOS/Android Read Aloud
+controls for the latest eligible assistant response. Both use the desktop's
+configuration, canonical source IDs, bounded in-memory WAV chunks, retained
+soundbite replay and owner/request-scoped Stop. Desktop audible completion now
+releases the shared playback slot without deleting its retained soundbite.
+Native lifecycle, audio focus/interruption/headphone removal, microphone entry,
+context changes and authorization/source changes stop playback. Settings are
+read-only, refreshable, and direct users to desktop Settings → Text to Speech;
+explicit TODOs retain mobile configuration as future work. Pairing/onboarding
+now disclose desktop ownership and the Google text/billing boundary. Reviewed
+the existing On The Go gallery tile; no new unaccepted Voice Studio capability
+or illustration is advertised.
+
+Verification: TypeScript/scoped ESLint/diff hygiene and Electron build pass.
+TTS suite 122 tests; full Remote suite 17 + 441 + 7 passed, with one existing
+skipped case. Android chat/progress/client/Bot suites 101 passed and debug APK
+assembled. iOS unsigned `build-for-testing` passed (including new tests).
+Physical XCTest was attempted on the available Smbt16ProMax but blocked because
+it was locked; stopped the waiting run, and do not count it as a pass. Final
+independent review was not admitted (subagent tree deadline); no sign-off is
+claimed. Real-device audible playback and live Google acceptance remain open.
+Evidence: `/tmp/aiden-native-tts.0Ef4XD/` on the development Mac.
+
+
+### Unlocked iPhone verification and simulator permission
+
+After the owner unlocked Smbt16ProMax, reran AidenChatTests,
+AidenRemoteClientTests and AidenRemotePhase0Tests on that physical iPhone:
+**224 passed, 5 skipped, 0 failures (229 total)**. The three new Read Aloud
+regressions passed. This supersedes the earlier locked-device test blocker;
+it does not establish live Google synthesis or real audible playback acceptance.
+Log: `/tmp/aiden-ios-unlocked.keqYnW/tests.log`; result bundle:
+`/tmp/aiden-tts-ios-device/Logs/Test/Test-AidenOnTheGo-2026.09.24_16-34-59--0400.xcresult`.
+
+At the owner's explicit request, `ios/AGENTS.md` now permits simulator testing
+and no longer requires the unavailable iPhone 13 Pro as the default destination.
+Physical-device evidence remains necessary for hardware, actual audio routing,
+and signing/Keychain/entitlements acceptance. No simulator run is claimed here.
+
+
+### PR publication follow-up
+
+The original PR CI lint failure was traced to test setters returning assignment
+values and an unused segmentation counter. Both are corrected without changing
+segmentation behavior. Fresh full ESLint, application and E2E TypeScript checks,
+CI registry (8 tests), TTS (122 tests), and diff hygiene pass locally. PR #245
+remains draft pending the acceptance/review gates above; rerun CI is authoritative
+for the new published revision.

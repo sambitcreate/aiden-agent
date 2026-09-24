@@ -53,6 +53,7 @@ export class ReadAloudController {
   private player: Player | null = null;
   private scheduledSegments = new Set<number>();
   private pumpingEpoch: number | null = null;
+  private finishedEpoch: number | null = null;
   private epoch = 0;
   private statusEpoch = 0;
   private disposed = false;
@@ -136,7 +137,9 @@ export class ReadAloudController {
       // the acknowledgement binds this surface to the exact job id.
       this.pending.snapshot = snapshot;
     }
-    if (snapshot.jobId !== this.state.job?.jobId) return;
+    // Replaying retained audio reuses its job ID. A stopped surface must not
+    // re-adopt that job when another surface explicitly starts a new playback.
+    if (snapshot.jobId !== this.state.job?.jobId || !this.player) return;
     this.acceptSnapshot(snapshot);
   }
 
@@ -168,6 +171,13 @@ export class ReadAloudController {
     const waiting =
       !!job && (job.phase !== "completed" || this.scheduledSegments.size < job.readySegments);
     this.patch({ playing, busy: !this.state.paused && !playing && waiting });
+    if (job?.phase === "completed" && !playing && !this.state.paused &&
+      this.player && this.player.segmentsPlayed >= job.totalSegments && this.finishedEpoch !== this.epoch) {
+      this.finishedEpoch = this.epoch;
+      // Release the shared playback slot after audible completion, preserving
+      // server-retained replay bytes so a phone can start next.
+      void this.api.stop().catch(() => undefined);
+    }
   }
 
   /** One reader per generation; loop against the newest snapshot, not an old event. */

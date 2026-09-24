@@ -65,7 +65,9 @@ export interface TtsConfigPort {
 }
 
 export interface TtsOwner {
-  /** Active renderer document; assigned by main, never by request fields. */
+  kind?: "remote";
+  authorizeSource?(chatId: string): Promise<void>;
+  /** Main-issued renderer document or paired-device session; never request fields. */
   documentId: string;
   isDestroyed(): boolean;
   onInvalidated(callback: () => void): () => void;
@@ -85,7 +87,7 @@ export interface TtsServiceDeps {
   credentials: TtsCredentialDeps;
   source: TtsSourceDeps;
   provider: TtsProviderPort;
-  emit(event: TtsServiceEvent): void;
+  emit(event: TtsServiceEvent, owner?: TtsOwner): void;
   recordUsage?(report: TtsUsageReport): void;
   clock: {
     now(): number;
@@ -118,6 +120,7 @@ class TtsJob {
   readonly kind: "read-aloud" | "preview";
   readonly chatId: string | null;
   readonly ownerDocumentId: string;
+  readonly owner: TtsOwner;
   phase: TtsJobPhase = "preparing";
   totalSegments = 0;
   readySegments = 0;
@@ -143,6 +146,7 @@ class TtsJob {
     this.kind = input.kind;
     this.chatId = input.chatId;
     this.ownerDocumentId = input.owner.documentId;
+    this.owner = input.owner;
     this.omissions = input.omissions;
   }
 
@@ -197,6 +201,48 @@ class TtsJob {
 export function createTtsService(deps: TtsServiceDeps) {
   const audioStore = new TtsAudioStore();
   let activeJob: TtsJob | null = null;
+  let pendingOwnerId: string | null = null;
+  // Bytes are session-only. Attempt identities survive eviction so Play cannot
+  // silently rebill a response whose audio is no longer retained.
+  const retainedJobs = new Map<string, TtsJob>();
+  const soundbitesByDocument = new Map<string, Map<string, string>>();
+
+  function soundbites(owner: TtsOwner): Map<string, string> {
+    let entries = soundbitesByDocument.get(owner.documentId);
+    if (entries) return entries;
+    entries = new Map();
+    soundbitesByDocument.set(owner.documentId, entries);
+    let release = () => undefined as void;
+    release = owner.onInvalidated(() => {
+      soundbitesByDocument.delete(owner.documentId);
+      for (const [id, job] of retainedJobs) {
+        if (job.ownerDocumentId !== owner.documentId) continue;
+        audioStore.releaseJob(id);
+        retainedJobs.delete(id);
+      }
+      if (activeJob?.ownerDocumentId === owner.documentId) cancelActiveJob("stopped", true);
+      release();
+    });
+    return entries;
+  }
+
+  function replay(owner: TtsOwner, identity: string, reservation: ReturnType<typeof reserveStart>) {
+    const entries = soundbites(owner);
+    const id = entries.get(identity);
+    if (!id) {
+      if (entries.size >= 1024) throw new TtsStartError(safeError("quota", "This session has reached its speech limit."));
+      return null;
+    }
+    const job = retainedJobs.get(id);
+    if (!job || job.phase !== "completed" ||
+      !Array.from({ length: job.totalSegments }, (_, index) => audioStore.has(id, index)).every(Boolean)) {
+      throw new TtsStartError(safeError("playback_unavailable",
+        "This soundbite is no longer available in this session. It will not be generated again automatically.", false, true));
+    }
+    reservation.attach(job);
+    emitJob(job);
+    return job.snapshot();
+  }
   let startEpoch = 0;
   let releasePendingOwner: (() => void) | null = null;
   let settingsQueue: Promise<unknown> = Promise.resolve();
@@ -214,7 +260,7 @@ export function createTtsService(deps: TtsServiceDeps) {
   >();
 
   function emitJob(job: TtsJob): void {
-    deps.emit({ kind: "job", snapshot: job.snapshot() });
+    deps.emit({ kind: "job", snapshot: job.snapshot() }, job.owner);
   }
 
   function terminateJob(
@@ -233,12 +279,19 @@ export function createTtsService(deps: TtsServiceDeps) {
   }
 
   /** One active job across the app: starting a new one stops the old. */
-  function cancelActiveJob(reason: "replaced" | "stopped"): void {
+  function cancelActiveJob(reason: "replaced" | "stopped", discard = false): void {
     const job = activeJob;
     if (!job) return;
     activeJob = null;
-    audioStore.releaseJob(job.id);
-    terminateJob(job, "cancelled", null);
+    if (discard || job.phase !== "completed") {
+      audioStore.releaseJob(job.id);
+      retainedJobs.delete(job.id);
+      terminateJob(job, "cancelled", null);
+    } else {
+      // Stop the old audible playback, without cancelling its retained
+      // synthesis record. A new preview/window must not overlap its audio.
+      deps.emit({ kind: "job", snapshot: { ...job.snapshot(), phase: "cancelled" } }, job.owner);
+    }
     job.dispose();
     if (reason === "stopped") deps.emit({ kind: "status" });
   }
@@ -247,18 +300,25 @@ export function createTtsService(deps: TtsServiceDeps) {
     startEpoch += 1;
     releasePendingOwner?.();
     releasePendingOwner = null;
+    pendingOwnerId = null;
   }
 
   function reserveStart(owner: TtsOwner) {
+    if (owner.kind === "remote" &&
+      ((activeJob && activeJob.ownerDocumentId !== owner.documentId) ||
+        (pendingOwnerId && pendingOwnerId !== owner.documentId))) {
+      throw new TtsStartError(safeError("playback_unavailable", "Read Aloud is in use on another device. Stop it there first."));
+    }
     revokeStarts();
     cancelActiveJob("replaced");
     const epoch = startEpoch;
+    pendingOwnerId = owner.documentId;
     let invalidated = false;
     const release = owner.onInvalidated(() => {
       invalidated = true;
       if (epoch !== startEpoch) return;
       revokeStarts();
-      cancelActiveJob("stopped");
+      cancelActiveJob("stopped", true);
     });
     releasePendingOwner = release;
     const assertCurrent = () => {
@@ -271,12 +331,16 @@ export function createTtsService(deps: TtsServiceDeps) {
       attach(job: TtsJob) {
         assertCurrent();
         releasePendingOwner = null;
+        pendingOwnerId = null;
         job.releaseOwner = release;
         activeJob = job;
       },
       release() {
         release();
-        if (releasePendingOwner === release) releasePendingOwner = null;
+        if (releasePendingOwner === release) {
+          releasePendingOwner = null;
+          pendingOwnerId = null;
+        }
       },
     };
   }
@@ -357,6 +421,7 @@ export function createTtsService(deps: TtsServiceDeps) {
         if (job.terminal()) return;
         if (job.source) {
           try {
+            await job.owner.authorizeSource?.(job.source.chatId);
             await revalidateTtsSource(deps.source, job.source);
           } catch (error) {
             if (!job.terminal()) terminateJob(job, "failed", sourceErrorToSafe(error));
@@ -392,14 +457,24 @@ export function createTtsService(deps: TtsServiceDeps) {
             }),
             signal: job.signal,
           });
+          if (job.owner.isDestroyed()) {
+            terminateJob(job, "cancelled", null);
+            return;
+          }
           if (job.terminal()) return;
           try {
+            for (const [id, retained] of retainedJobs) {
+              if (audioStore.retainedBytes + audio.audio.bytes.byteLength <= TTS_LIMITS.sessionAudioMaxBytes) break;
+              if (retained === activeJob) continue;
+              audioStore.releaseJob(id);
+              retainedJobs.delete(id);
+            }
             audioStore.put(job.id, segmentIndex, audio.audio);
           } catch {
             // Bounded retention: fail visibly instead of dropping audio.
             const limit = safeError(
               "audio_buffer_limit",
-              "Playback fell too far behind to keep this response's audio.",
+              "This response exceeded the session audio retention limit.",
               false,
               true,
             );
@@ -446,6 +521,8 @@ export function createTtsService(deps: TtsServiceDeps) {
       if (job.readySegments >= job.segments.length) {
         job.clearPauseTimeout();
         job.phase = "completed";
+        retainedJobs.set(job.id, job);
+        job.segments.length = 0;
         emitJob(job);
       }
     };
@@ -474,12 +551,19 @@ export function createTtsService(deps: TtsServiceDeps) {
       }
       // Source freshness is main-owned: the submitted reference is revalidated
       // against live chat state, never trusted from the renderer.
+      await owner.authorizeSource?.(request.source.chatId);
+      reservation.assertCurrent();
       const { content } = await revalidateTtsSource(deps.source, request.source).catch(
         (error: unknown) => {
           throw new TtsStartError(sourceErrorToSafe(error));
         },
       );
       reservation.assertCurrent();
+      const identity = JSON.stringify(["read-aloud", request.source.chatId,
+        request.source.messageId, request.source.sourceRevision, settings.model, voice,
+        deliveryStyle(settings), settings.reading.inlineCode, settings.reading.fencedCode, 1]);
+      const existing = replay(owner, identity, reservation);
+      if (existing) return existing;
       let preparation;
       try {
         preparation = prepareSpeechText({
@@ -504,6 +588,7 @@ export function createTtsService(deps: TtsServiceDeps) {
         omissions: preparation.omissions,
       });
       job.source = request.source;
+      soundbites(owner).set(identity, job.id);
       job.segments.push(...preparation.segments);
       job.totalSegments = preparation.segments.length;
       reservation.attach(job);
@@ -633,7 +718,7 @@ export function createTtsService(deps: TtsServiceDeps) {
         return previous.promise.then((snapshot) =>
           activeJob?.id === snapshot.jobId
             ? activeJob.snapshot()
-            : { ...snapshot, phase: "cancelled", readySegments: 0 },
+            : retainedJobs.get(snapshot.jobId)?.snapshot() ?? { ...snapshot, phase: "cancelled", readySegments: 0 },
         );
       }
       // Fail closed at the bound instead of evicting an ID that could be retried.
@@ -659,12 +744,16 @@ export function createTtsService(deps: TtsServiceDeps) {
         reservation.assertCurrent();
         const { settings } = resolved;
         const voice = resolveProviderVoice(settings);
+        const identity = JSON.stringify(["preview", TTS_PREVIEW_SENTENCE, settings.model, voice, deliveryStyle(settings), 1]);
+        const existing = replay(owner, identity, reservation);
+        if (existing) return existing;
         const job = new TtsJob({
           kind: "preview",
           chatId: null,
           owner,
           omissions: [],
         });
+        soundbites(owner).set(identity, job.id);
         job.segments.push(TTS_PREVIEW_SENTENCE.slice(0, TTS_LIMITS.previewMaxChars));
         job.totalSegments = 1;
         reservation.attach(job);
@@ -682,15 +771,21 @@ export function createTtsService(deps: TtsServiceDeps) {
       }
     },
 
+    jobStatus(owner: TtsOwner, jobId: string): TtsJobSnapshot | null {
+      const job = activeJob?.id === jobId ? activeJob : retainedJobs.get(jobId);
+      return !owner.isDestroyed() && job?.ownerDocumentId === owner.documentId ? job.snapshot() : null;
+    },
+
     readAudio(owner: TtsOwner, jobId: string, segment: number, offset: number, maxBytes: number) {
-      const job = activeJob;
-      if (!job || job.id !== jobId || job.ownerDocumentId !== owner.documentId) {
+      const job = activeJob?.id === jobId ? activeJob : retainedJobs.get(jobId);
+      if (owner.isDestroyed() || !job || job.id !== jobId || job.ownerDocumentId !== owner.documentId) {
         return null;
       }
       return audioStore.read(jobId, segment, offset, maxBytes);
     },
 
-    stop(_owner: TtsOwner): void {
+    stop(owner: TtsOwner): void {
+      if (activeJob?.ownerDocumentId !== owner.documentId && pendingOwnerId !== owner.documentId) return;
       revokeStarts();
       cancelActiveJob("stopped");
     },
@@ -724,7 +819,8 @@ export function createTtsService(deps: TtsServiceDeps) {
 
     clearCache(_owner: TtsOwner): void {
       revokeStarts();
-      cancelActiveJob("stopped");
+      cancelActiveJob("stopped", true);
+      retainedJobs.clear();
       audioStore.clear();
       deps.emit({ kind: "status" });
     },

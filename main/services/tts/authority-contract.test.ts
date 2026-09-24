@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { readSavedGoogleTtsKey } from "./credentials.js";
+
+test("saved Google TTS keys use the managed credential store, not legacy custom keys", async () => {
+  assert.equal(await readSavedGoogleTtsKey({ read: async (provider) => {
+    assert.equal(provider, "google");
+    return { type: "api_key", key: " test-google-key " };
+  } }), "test-google-key");
+  assert.equal(await readSavedGoogleTtsKey({ read: async () => undefined }), null);
+  assert.equal(await readSavedGoogleTtsKey({ read: async () => ({ type: "api_key" }) }), null);
+  assert.equal(await readSavedGoogleTtsKey({ read: async () => ({ type: "api_key", key: " " }) }), null);
+  await assert.rejects(readSavedGoogleTtsKey({ read: async () => {
+    throw new Error("secure storage unavailable");
+  } }), /secure storage unavailable/u);
+  assert.match(bindings, /getGoogleKey: \(\) => readSavedGoogleTtsKey\(piCredentialStore\)/u);
+  assert.doesNotMatch(bindings, /secrets\.getKeyStrict\("google"\)/u);
+});
 
 const handlers = readFileSync(new URL("../../handlers/tts.ts", import.meta.url), "utf8");
 const bindings = readFileSync(new URL("./service-main.ts", import.meta.url), "utf8");

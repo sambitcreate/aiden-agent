@@ -7,6 +7,31 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testReadAloudSharedFixtureAndBoundedAudio() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        struct Fixture: Decodable { let readAloudStatus: AidenReadAloudStatus; let readAloudAudio: AidenReadAloudAudio }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertTrue(fixture.readAloudStatus.enabled)
+        XCTAssertTrue(fixture.readAloudStatus.ready)
+        XCTAssertEqual(fixture.readAloudStatus.source?.chatId, "chat-1")
+        XCTAssertEqual(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: nil), Data([1, 2]))
+        XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 1, expectedTotal: nil))
+        XCTAssertThrowsError(try fixture.readAloudAudio.validatedBytes(offset: 0, expectedTotal: 99))
+        XCTAssertTrue(AidenReadAloudStatus.setupGuidance.contains("desktop"))
+    }
+    func testReadAloudRejectsInvalidAudioAndUnknownJobPhases() throws {
+        let invalid = AidenReadAloudAudio(bytesBase64: "AQI=", mimeType: "audio/wav", sampleRate: 24000, channels: 1,
+            segmentBytes: 2, nextOffset: 2, complete: false)
+        XCTAssertThrowsError(try invalid.validatedBytes(offset: 0, expectedTotal: nil))
+        XCTAssertFalse(AidenReadAloudJob(jobId: "job", chatId: "chat", phase: "unknown", totalSegments: 1, readySegments: 1, error: nil).isValid)
+        XCTAssertFalse(AidenReadAloudJob(jobId: "job", chatId: "chat", phase: "completed", totalSegments: 257, readySegments: 257, error: nil).isValid)
+    }
+    @MainActor func testReadAloudStopIsIdempotent() {
+        let player = AidenReadAloudPlayback()
+        player.stop(); player.stop()
+        XCTAssertNil(player.activeMessageID)
+    }
+
     func testProducedFileProvenanceRejectsForeignPathsAndUnrelatedTools() throws {
         let file = AidenProducedFile(relativePath: "out/report.txt", operation: "written", bytes: 12)
         XCTAssertTrue(file.isValid(toolName: "write_file"))

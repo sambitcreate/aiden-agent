@@ -327,7 +327,6 @@ function splitOversizedBlock(block: string): string[] {
     }
     // Sentence itself exceeds the hard bound: split at safe boundaries.
     let piece = "";
-    let pieceChars = 0;
     for (const char of sentence) {
       if (
         piece &&
@@ -335,11 +334,9 @@ function splitOversizedBlock(block: string): string[] {
       ) {
         out.push(piece);
         piece = char;
-        pieceChars = 1;
         continue;
       }
       piece += char;
-      pieceChars += 1;
     }
     if (piece) out.push(piece);
   }

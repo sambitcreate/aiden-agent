@@ -293,3 +293,38 @@ test("dispose fences reads and an effect reactivation can start again", async ()
   assert.equal(h.controller.head().playing, true);
   assert.equal(h.stops(), 1);
 });
+
+
+test("a retained completed soundbite replays from segment zero with a fresh player", async () => {
+  const h = harness();
+  h.api.start = async () => ({ ok: true, snapshot: job({ phase: "completed", totalSegments: 1, readySegments: 1 }) });
+  await h.controller.start(source);
+  await flush();
+  assert.equal(h.stops(), 0);
+  h.players[0]!.end(0);
+  assert.equal(h.controller.head().playing, false);
+  assert.equal(h.stops(), 1, "audible completion releases the cross-device playback slot");
+  h.controller.handleEvent({ kind: "job", snapshot: job({ phase: "completed", totalSegments: 1, readySegments: 1 }) });
+  assert.equal(h.stops(), 1, "completion releases exactly once");
+  await h.controller.start(source);
+  await flush();
+  assert.equal(h.players.length, 2);
+  assert.deepEqual(h.reads, [0, 0]);
+  assert.deepEqual(h.players[1]!.scheduled, [0]);
+  assert.equal(h.controller.head().job?.jobId, "job");
+  assert.equal(h.controller.head().playing, true);
+});
+
+
+test("a cancelled surface does not adopt another playback of the same retained job", async () => {
+  const h = harness();
+  await h.controller.start(source);
+  await flush();
+  h.controller.handleEvent({ kind: "job", snapshot: job({ phase: "cancelled" }) });
+  h.controller.handleEvent({ kind: "job", snapshot: job({ phase: "completed", readySegments: 3 }) });
+  await flush();
+  assert.equal(h.controller.head().busy, false);
+  assert.equal(h.controller.head().playing, false);
+  assert.equal(h.controller.head().job?.phase, "cancelled");
+  assert.equal(h.players.length, 1);
+});

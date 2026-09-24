@@ -372,3 +372,47 @@ When moving a phone between Macs, select the intended saved Mac before starting 
 ## 10. Contract change process
 
 Change this document, OpenAPI, TypeScript contract constants/types, shared fixtures, and Swift/TypeScript fixture tests in one phase. Additive changes increment `contractRevision`. Breaking changes require `/v2`. No handler may ship an undocumented route or field.
+
+
+## Desktop-configured Read Aloud (`tts-v1`)
+
+This additive feature is advertised by authenticated `GET /server`. It is separate
+from `/speech` (Parakeet transcription). It uses the desktop's opt-in, voice,
+model, reading policy and encrypted Google credential. There is no remote
+settings, key, voice-management, preview or cache-clear endpoint. TODO: mobile
+configuration is a future feature requiring its own reviewed authority contract.
+
+- `GET /read-aloud`: read-only readiness (`enabled`, `ready`, `settingsRevision`,
+  null `source`/`job`), requiring `chat:read`.
+- `GET /chats/{chatId}/read-aloud`: readiness, latest main-issued source reference,
+  and this device/chat session's current or retained job; requires chat read and
+  retained Bot-chat authorization where applicable.
+- `POST /chats/{chatId}/read-aloud`: explicit Play. The strict body is
+  `{requestId, source: {chatId, messageId, sourceRevision}, settingsRevision}`.
+  Requires `chat:write` and Bot write authorization when applicable. Canonical
+  desktop text is resolved in main; arbitrary text is never accepted. Returns
+  the job snapshot, not audio. POSTs are not automatically retried.
+- `POST /chats/{chatId}/read-aloud/stop`: `{requestId}` cancels only that device's
+  current matching playback intent. Earlier/later requests cannot stop each
+  other. Stop-before-start is remembered so request reordering cannot rebill.
+- `GET /chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}`: owner- and
+  chat-authorized continuation reads. Returns `bytesBase64`, `mimeType`,
+  `sampleRate`, `channels`, `segmentBytes`, `nextOffset`, `complete`. WAV is
+  24 kHz mono; each read is at most 64 KiB, a segment at most 8 MiB, and the
+  whole server session cache at most 32 MiB. No audio URLs or disk caches.
+
+Each source is revalidated before generation dispatch and remote audio reads;
+paired-device revocation and retained Bot authorization remain authoritative.
+Remote playback cannot take over another owner's active playback slot. Native
+clients release it after audible completion, Stop, navigation or backgrounding;
+server inactivity also releases it after two minutes without requests. Server
+transport restarts preserve request/soundbite identities; process/session
+invalidation is a retention boundary. A revoked session cannot be revived.
+
+Replay reuses a completed soundbite for the same canonical response and effective
+speech settings, with no extra provider call or usage record. Stop preserves
+completed bytes. Evicted, cleared, cancelled or possibly-billed failed identities
+never silently regenerate. Clients poll bounded status, validate each continuation,
+keep only a bounded segment in memory, and stop on stale source, access change,
+interruption or microphone use. Settings on both clients show desktop setup guidance,
+not an enable toggle. Existing native transcription controls are unchanged.

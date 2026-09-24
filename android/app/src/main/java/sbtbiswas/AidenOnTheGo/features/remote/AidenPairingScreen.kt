@@ -194,7 +194,7 @@ fun AidenPairingScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here.",
+                text = "On your Mac, open Settings → Aiden On The Go → Connect a device. Then scan its code here. Read Aloud uses your Mac’s setup: enable it on the desktop. Pressing Play sends selected response text from your Mac to Google; charges may apply.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.secondary
             )

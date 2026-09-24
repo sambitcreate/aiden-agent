@@ -1,3 +1,4 @@
+import AVFoundation
 import Accessibility
 import CryptoKit
 import ImageIO
@@ -856,6 +857,24 @@ final class AidenChatViewModel {
 #if DEBUG
         case readOnlyFixture
 #endif
+    }
+
+    let readAloud = AidenReadAloudPlayback()
+    var readAloudCandidateID: String? {
+        guard !isReadOnlyPresentation, !isStarting, streamState?.isTerminal != false,
+              coordinator.server?.features.contains("tts-v1") == true,
+              let last = chat.messages.last, last.role == .assistant,
+              last.timeline == nil || last.timeline?.status == .completed,
+              !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return last.id
+    }
+    func toggleReadAloud(_ messageID: String) {
+        if readAloud.activeMessageID != nil { readAloud.stop(); return }
+        guard let context = try? coordinator.requestContext(for: instanceId),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        NotificationCenter.default.post(name: .aidenStopDictationForReadAloud, object: nil)
+        readAloud.start(client: client, chatID: chat.id, messageID: messageID,
+            current: { [weak coordinator] in coordinator?.isCurrent(context) == true })
     }
 
     private let runtime: Runtime
@@ -2863,6 +2882,7 @@ struct AidenChatDetailView: View {
             model.startProgressObservation()
         }
         .task(id: botToolsSessionIdentity) {
+            model.readAloud.stop()
             guard let coordinator, let botToolsModel else { return }
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
@@ -2872,12 +2892,12 @@ struct AidenChatDetailView: View {
             AidenChatProgressSheet(kind: progressSheet, model: model)
         }
         .alert("Aiden On The Go", isPresented: Binding(
-            get: { model.presentedError != nil },
-            set: { if !$0 { model.presentedError = nil } }
+            get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
+            set: { if !$0 { model.presentedError = nil; model.readAloud.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { model.presentedError = nil }
+            Button("OK", role: .cancel) { model.presentedError = nil; model.readAloud.errorMessage = nil }
         } message: {
-            Text(model.presentedError ?? "The operation could not be completed.")
+            Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
         }
         .alert("Set Up Image Understanding", isPresented: $model.needsBotVisionSetup) {
             if let botID = model.chat.botId {
@@ -2890,14 +2910,19 @@ struct AidenChatDetailView: View {
         .onAppear {
             model.setHapticsActive(true)
         }
+        .onChange(of: model.readAloudCandidateID) { _, candidate in
+            if let active = model.readAloud.activeMessageID, active != candidate { model.readAloud.stop() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.startProgressObservation()
             } else {
+                model.readAloud.stop()
                 model.stopProgressObservation()
             }
         }
         .onDisappear {
+            model.readAloud.stop()
             model.setHapticsActive(false)
             model.stopProgressObservation()
             attachmentPicker.reset()
@@ -3025,7 +3050,9 @@ struct AidenChatDetailView: View {
             presentationStyle: presentationStyle,
             loadAttachmentImage: { attachment in
                 await model.attachmentImageData(for: attachment)
-            }
+            },
+            readAloudAction: model.readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
+            readAloudActive: model.readAloud.activeMessageID == message.id
         )
         .padding(.top, topPadding)
     }
@@ -3390,6 +3417,8 @@ private struct AidenMessageView: View {
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
+    var readAloudAction: (() -> Void)? = nil
+    var readAloudActive = false
 
     private var botReply: AidenBotReplyProjection? {
         guard presentationStyle == .botMessages, message.role == .assistant else { return nil }
@@ -3422,6 +3451,21 @@ private struct AidenMessageView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 4) {
+            if let readAloudAction {
+                HStack(spacing: 16) {
+                    Button { UIPasteboard.general.string = AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) } label: {
+                        Image(systemName: "doc.on.doc")
+                    }.accessibilityLabel("Copy response")
+                    Button(action: readAloudAction) {
+                        Image(systemName: readAloudActive ? "stop.fill" : "speaker.wave.2")
+                    }.accessibilityLabel(readAloudActive ? "Stop reading aloud" : "Read response aloud")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .frame(minHeight: 44)
+            }
+        }
         .contextMenu {
             if let copyText = AidenMessageActionContent.copyText(
                 for: message,
@@ -3446,6 +3490,7 @@ private struct AidenMessageView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
+
     }
 
     private var messageContent: some View {
@@ -5328,6 +5373,7 @@ private struct AidenComposerView: View {
                 Button {
                     Task {
                         guard !model.isReadOnlyPresentation else { return }
+                        model.readAloud.stop()
                         await voiceInput.toggle(
                             currentDraft: model.draft,
                             updateDraft: { model.draft = $0 },
@@ -5403,11 +5449,15 @@ private struct AidenComposerView: View {
         .task {
             guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
             didAutoStartVoice = true
+            model.readAloud.stop()
             await voiceInput.toggle(
                 currentDraft: model.draft,
                 updateDraft: { model.draft = $0 },
                 macTranscriber: model.transcribeMacSpeech
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
+            voiceInput.cancelDiscardingRecording()
         }
         .onDisappear {
             voiceInput.cancelDiscardingRecording()
@@ -5520,5 +5570,118 @@ private struct AidenComposerGlassModifier: ViewModifier {
 private extension View {
     func aidenComposerGlass(enabled: Bool = true) -> some View {
         modifier(AidenComposerGlassModifier(enabled: enabled))
+    }
+}
+
+
+extension Notification.Name {
+    static let aidenStopDictationForReadAloud = Notification.Name("AidenStopDictationForReadAloud")
+}
+
+@MainActor @Observable
+final class AidenReadAloudPlayback {
+    private(set) var activeMessageID: String?
+    var errorMessage: String?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var cancelRemote: (() -> Void)?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    func stop() {
+        generation += 1
+        task?.cancel(); task = nil
+        player?.stop(); player = nil
+        let wasActive = activeMessageID != nil
+        activeMessageID = nil
+        cancelRemote?(); cancelRemote = nil
+        for token in observers { NotificationCenter.default.removeObserver(token) }
+        observers.removeAll()
+        if wasActive { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+    }
+
+    func start(client: AidenRemoteClient, chatID: String, messageID: String, current: @escaping @MainActor () -> Bool) {
+        stop()
+        let epoch = generation
+        let requestID = UUID().uuidString
+        activeMessageID = messageID; errorMessage = nil
+        cancelRemote = { Task { try? await client.stopReadAloud(chatId: chatID, requestId: requestID) } }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.stop() }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+                Task { @MainActor in self?.stop() }
+            }
+        })
+        task = Task { [weak self] in
+            guard let self else { return }
+            @MainActor func check() throws {
+                guard !Task.isCancelled, self.generation == epoch, current() else { throw CancellationError() }
+            }
+            defer { if self.generation == epoch { self.stop() } }
+            do {
+                try check()
+                let status = try await client.readAloudStatus(chatId: chatID)
+                try check()
+                guard status.enabled, status.ready else {
+                    self.errorMessage = AidenReadAloudStatus.setupGuidance; return
+                }
+                guard let source = status.source, source.chatId == chatID, source.messageId == messageID else { throw AidenReadAloudFailure.unavailable }
+                var job = try await client.startReadAloud(chatId: chatID, request: .init(requestId: requestID, source: source, settingsRevision: status.settingsRevision))
+                try check()
+                let jobID = job.jobId
+                var polls = 0
+                while job.phase != "completed" {
+                    guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.phase != "cancelled", polls < 1_800 else {
+                        throw AidenReadAloudFailure.unavailable
+                    }
+                    if job.phase == "failed" {
+                        self.errorMessage = job.error?.message ?? "Read Aloud could not generate this response. Check the desktop settings."
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(500)); try check()
+                    let update = try await client.readAloudStatus(chatId: chatID)
+                    try check()
+                    guard update.ready, update.source?.sourceRevision == source.sourceRevision, let next = update.job else { throw AidenReadAloudFailure.unavailable }
+                    job = next; polls += 1
+                }
+                guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.readySegments == job.totalSegments else { throw AidenReadAloudFailure.invalidAudio }
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)
+                try AVAudioSession.sharedInstance().setActive(true)
+                var totalBytes = 0
+                for segment in 0..<job.totalSegments {
+                    var data = Data(); var expectedTotal: Int?
+                    while true {
+                        let chunk = try await client.readAloudAudio(chatId: chatID, jobId: jobID, segment: segment, offset: data.count)
+                        try check()
+                        data.append(try chunk.validatedBytes(offset: data.count, expectedTotal: expectedTotal))
+                        expectedTotal = chunk.segmentBytes
+                        if chunk.complete { break }
+                    }
+                    totalBytes += data.count
+                    guard totalBytes <= 32 * 1_024 * 1_024 else { throw AidenReadAloudFailure.invalidAudio }
+                    let audio = try AVAudioPlayer(data: data)
+                    self.player = audio
+                    guard audio.play() else { throw AidenReadAloudFailure.invalidAudio }
+                    var ticks = 0
+                    while audio.isPlaying {
+                        try await Task.sleep(for: .milliseconds(200)); try check()
+                        ticks += 1
+                        if ticks % 10 == 0 {
+                            let update = try await client.readAloudStatus(chatId: chatID)
+                            try check()
+                            guard update.ready, update.source?.sourceRevision == source.sourceRevision, update.job?.jobId == jobID, update.job?.phase == "completed" else { throw AidenReadAloudFailure.unavailable }
+                        }
+                    }
+                    self.player = nil
+                }
+            } catch is CancellationError {
+                // Navigation, backgrounding and replacement never retry synthesis.
+            } catch {
+                if self.generation == epoch && current() { self.errorMessage = error.localizedDescription }
+            }
+        }
     }
 }

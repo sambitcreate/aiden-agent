@@ -1,3 +1,4 @@
+import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
@@ -142,6 +143,7 @@ export interface AidenRemoteServiceOptions {
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
           status(deviceId: string): Promise<BotNoticeStatus>;
@@ -187,6 +189,7 @@ export interface AidenRemoteServiceOptions {
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
+        readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botNotice?: {
           status(deviceId: string): Promise<BotNoticeStatus>;

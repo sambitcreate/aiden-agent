@@ -10,7 +10,7 @@ const audio = (size = TTS_LIMITS.segmentAudioMaxBytes) => ({
   channels: 1,
 });
 
-test("partial and out-of-order reads never make unread audio evictable", () => {
+test("reads never evict a soundbite prefix needed for replay", () => {
   const store = new TtsAudioStore();
   for (let segment = 0; segment < 4; segment += 1) store.put("job", segment, audio());
   store.read("job", 0, 0, TTS_LIMITS.audioReadMaxBytes);
@@ -22,8 +22,8 @@ test("partial and out-of-order reads never make unread audio evictable", () => {
   while (offset < TTS_LIMITS.segmentAudioMaxBytes) {
     offset = store.read("job", 0, offset, TTS_LIMITS.audioReadMaxBytes)!.nextOffset;
   }
-  store.put("job", 4, audio());
-  assert.equal(store.has("job", 0), false);
+  assert.throws(() => store.put("job", 4, audio()), /audio_buffer_limit/u);
+  assert.equal(store.has("job", 0), true);
   assert.equal(store.has("job", 1), true);
   assert.equal(store.retainedBytes, TTS_LIMITS.sessionAudioMaxBytes);
 });

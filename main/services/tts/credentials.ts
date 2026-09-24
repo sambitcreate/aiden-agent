@@ -7,7 +7,18 @@
 // - "dedicated": a separate API key stored under a main-owned internal secret
 //   identity so removing it can never touch the shared Google provider key.
 
+import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { TtsSettingsV1 } from "../../../renderer/shared/tts.js";
+
+/** Built-in Google credentials are owned by Pi, not the custom-provider key map. */
+export async function readSavedGoogleTtsKey(
+  store: Pick<CredentialStore, "read">,
+): Promise<string | null> {
+  const credential = await store.read("google");
+  return credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()
+    ? credential.key.trim()
+    : null;
+}
 
 /** Internal secret identity for the dedicated TTS key. Never a provider id. */
 export const TTS_DEDICATED_SECRET_ID = "aiden-internal:tts-api-key";

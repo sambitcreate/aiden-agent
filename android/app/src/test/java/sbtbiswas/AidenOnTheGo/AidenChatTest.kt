@@ -42,6 +42,23 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @Test fun readAloudUsesSharedFixtureAndRejectsInvalidAudio() {
+        val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val root = Json.parseToJsonElement(data) as kotlinx.serialization.json.JsonObject
+        val decoder = Json { ignoreUnknownKeys = true }
+        val status = decoder.decodeFromString<sbtbiswas.AidenOnTheGo.models.AidenReadAloudStatus>(root.getValue("readAloudStatus").toString())
+        val audio = decoder.decodeFromString<sbtbiswas.AidenOnTheGo.models.AidenReadAloudAudio>(root.getValue("readAloudAudio").toString())
+        assertTrue(status.enabled && status.ready)
+        assertEquals("chat-1", status.source?.chatId)
+        assertTrue(audio.validatedBytes(0, null).contentEquals(byteArrayOf(1, 2)))
+        for (bad in listOf(audio.copy(complete = false), audio.copy(nextOffset = 1), audio.copy(segmentBytes = 9 * 1024 * 1024), audio.copy(channels = 2))) {
+            assertTrue(runCatching { bad.validatedBytes(0, null) }.isFailure)
+        }
+        assertTrue(runCatching { audio.validatedBytes(1, null) }.isFailure)
+        assertFalse(sbtbiswas.AidenOnTheGo.models.AidenReadAloudJob("job", "chat", "unknown", 1, 1).isValid)
+        assertTrue(sbtbiswas.AidenOnTheGo.models.READ_ALOUD_SETUP_GUIDANCE.contains("desktop"))
+    }
+
     @Test fun producedFileProvenanceRejectsForeignPathsAndUnrelatedTools() {
         val file = sbtbiswas.AidenOnTheGo.models.AidenProducedFile("out/report.txt", "written", 12)
         assertTrue(file.isValid("write_file"))

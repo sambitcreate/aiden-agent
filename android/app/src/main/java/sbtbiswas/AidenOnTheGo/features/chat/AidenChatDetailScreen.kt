@@ -147,6 +147,12 @@ fun AidenChatDetailScreen(
 
     val listState = rememberLazyListState()
 
+    val readAloudClient by coordinator.client.collectAsState()
+    val readAloud = remember(readAloudClient, chatId) {
+        AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
+            readAloudClient != null && coordinator.client.value === readAloudClient
+        }
+    }
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var pendingVoiceStart by remember { mutableStateOf(false) }
@@ -155,6 +161,15 @@ fun AidenChatDetailScreen(
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+
+    LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
+        if (isStreaming || (readAloud.activeMessageId != null && readAloud.activeMessageId != chat?.messages?.lastOrNull()?.id)) readAloud.stop()
+    }
+    DisposableEffect(readAloud, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) readAloud.stop() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); readAloud.stop() }
+    }
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -234,6 +249,7 @@ fun AidenChatDetailScreen(
     }
 
     fun startVoiceInput() {
+        readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
             currentDraft = currentDraft,
@@ -442,11 +458,11 @@ fun AidenChatDetailScreen(
 
                 // Error Banner
                 AnimatedVisibility(
-                    visible = presentedError != null,
+                    visible = presentedError != null || readAloud.error != null,
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
-                    presentedError?.let { err ->
+                    (presentedError ?: readAloud.error)?.let { err ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -616,6 +632,12 @@ fun AidenChatDetailScreen(
                             onCopy = { text -> copyToClipboard(context, text) },
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
+                            onReadAloud = if (!isStreaming && serverInfo?.features?.contains("tts-v1") == true &&
+                                chat?.messages?.lastOrNull()?.id == message.id && message.text.isNotBlank() &&
+                                (message.timeline == null || message.timeline.status == AidenGenerationTimelineStatus.COMPLETED)) {
+                                { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
+                            } else null,
+                            readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
                         )
                     }
@@ -778,6 +800,8 @@ private fun AssistantMessageRow(
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onReply: (String) -> Unit,
+    onReadAloud: (() -> Unit)? = null,
+    readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit
 ) {
     val projection = if (isBotChat) {
@@ -932,6 +956,19 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        if (onReadAloud != null) {
+            Row {
+                IconButton(onClick = { onCopy(displayText) }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = palette.secondary)
+                }
+                IconButton(onClick = onReadAloud) {
+                    Icon(if (readAloudActive) Icons.Default.Stop else Icons.Default.VolumeUp,
+                        contentDescription = if (readAloudActive) "Stop reading aloud" else "Read response aloud",
+                        tint = palette.secondary)
+                }
+            }
+        }
+
     }
 }
 

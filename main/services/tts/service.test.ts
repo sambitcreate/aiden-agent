@@ -1,3 +1,4 @@
+import { AidenRemoteTtsService } from "../aiden-remote-tts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -195,19 +196,19 @@ function harness(options?: { enabled?: boolean }): Harness {
   harnessState.revision = state.revision;
   Object.defineProperty(harnessState, "chat", {
     get: () => state.chat,
-    set: (value) => (state.chat = value),
+    set: (value) => { state.chat = value; },
   });
   Object.defineProperty(harnessState, "busy", {
     get: () => state.busy,
-    set: (value) => (state.busy = value),
+    set: (value) => { state.busy = value; },
   });
   Object.defineProperty(harnessState, "settings", {
     get: () => state.settings,
-    set: (value) => (state.settings = value),
+    set: (value) => { state.settings = value; },
   });
   Object.defineProperty(harnessState, "revision", {
     get: () => state.revision,
-    set: (value) => (state.revision = value),
+    set: (value) => { state.revision = value; },
   });
   harnessState.clock = clock;
   harnessState.usage = usage;
@@ -334,6 +335,7 @@ test("starting a second job cancels the first exactly once", async () => {
   const first = await h.service.start(h.owner(), startRequest(h));
   // Restore a resolving implementation for the second job.
   h.provider.synthesize = recording;
+  h.chat!.messages.find((message) => message.id === "a1")!.content = "A different response.";
   const second = await h.service.start(h.owner(), {
     ...startRequest(h),
     requestId: "req-2",
@@ -515,7 +517,7 @@ test("audio overflow with unread segments fails visibly instead of dropping", as
   const final = snapshots[snapshots.length - 1]!;
   assert.equal(final.phase, "failed");
   assert.equal(final.error!.code, "audio_buffer_limit");
-  assert.ok(final.error!.message.includes("too far behind"));
+  assert.ok(final.error!.message.includes("retention limit"));
 });
 
 test("cache clear stops jobs and wipes retained audio", async () => {
@@ -692,15 +694,17 @@ test("start rejects stale settings and unregistered voices without generation", 
   assert.equal(h.provider.calls.length, 0);
 });
 
-test("stop releases completed audio and repeated jobs do not exhaust the session budget", async () => {
+test("Stop retains completed audio and new Play IDs reuse the same soundbite", async () => {
   const h = harness();
   for (let i = 0; i < 5; i += 1) {
     const job = await h.service.start(h.owner(), { ...startRequest(h), requestId: `request-${i}` });
     await flush();
     assert.ok(h.service.audioStore.retainedBytes > 0);
     h.service.stop(h.owner());
-    assert.equal(h.service.audioStore.retainedBytes, 0);
-    assert.equal(h.service.readAudio(h.owner(), job.jobId, 0, 0, 1024), null);
+    assert.equal(h.service.audioStore.retainedBytes, wavBytes().byteLength);
+    assert.ok(h.service.readAudio(h.owner(), job.jobId, 0, 0, 1024));
+    assert.equal(h.provider.calls.length, 1);
+    assert.equal(h.usage.length, 1);
   }
 });
 
@@ -716,10 +720,192 @@ test("duplicate start IDs do not regenerate, even after Stop", async () => {
   assert.equal(h.provider.calls.length, 1);
   h.service.stop(h.owner());
   const retried = await h.service.start(h.owner(), request);
-  assert.equal(retried.phase, "cancelled");
+  assert.equal(retried.phase, "completed");
   assert.equal(h.provider.calls.length, 1);
   await assert.rejects(
     h.service.start(h.owner(), { ...request, settingsRevision: "other" }),
     TtsStartError,
   );
+});
+
+
+test("replay is byte-identical and independent of settings revision counters", async () => {
+  const h = harness();
+  const first = await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  const original = h.service.readAudio(h.owner(), first.jobId, 0, 0, 1024)!;
+  h.revision = "new-revision-same-settings";
+  const replayed = await h.service.start(h.owner(), { ...startRequest(h), requestId: "replay" });
+  assert.equal(replayed.jobId, first.jobId);
+  assert.equal(replayed.phase, "completed");
+  assert.deepEqual(h.service.readAudio(h.owner(), replayed.jobId, 0, 0, 1024), original);
+  assert.equal(h.provider.calls.length, 1);
+});
+
+test("cache clear does not turn Play into another billable generation", async () => {
+  const h = harness();
+  await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  h.service.clearCache(h.owner());
+  await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "again" }),
+    (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+  assert.equal(h.provider.calls.length, 1);
+});
+
+test("cancelled or possibly billed failed soundbites never regenerate with a fresh request ID", async () => {
+  for (const failure of [false, true]) {
+    const h = harness();
+    h.provider.synthesize = async (input) => {
+      h.provider.calls.push({ body: input.body as unknown as Record<string, unknown>, apiKey: input.apiKey });
+      if (failure) throw new Error("HTTP 503");
+      return new Promise(() => undefined);
+    };
+    await h.service.start(h.owner(), startRequest(h));
+    await flush();
+    h.service.stop(h.owner());
+    await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "another" }),
+      (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+    assert.equal(h.provider.calls.length, 1);
+  }
+});
+
+test("Preview replays completed audio and Stop from another owner cannot cancel a job", async () => {
+  const h = harness();
+  const first = await h.service.startPreview(h.owner());
+  await flush();
+  h.service.stop(h.owner("different-owner"));
+  assert.equal((await h.service.status(h.owner())).job?.jobId, first.jobId);
+  const again = await h.service.startPreview(h.owner());
+  assert.equal(again.jobId, first.jobId);
+  assert.equal(again.phase, "completed");
+  assert.equal(h.provider.calls.length, 1);
+});
+
+test("eviction drops an entire inactive soundbite and keeps a non-billable tombstone", async () => {
+  const h = harness();
+  const original = h.provider.synthesize.bind(h.provider);
+  h.provider.synthesize = async (input) => {
+    const generated = await original(input);
+    return { ...generated, audio: { ...generated.audio, bytes: new Uint8Array(TTS_LIMITS.segmentAudioMaxBytes) } };
+  };
+  const first = await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  const originalText = h.chat!.messages[1]!.content;
+  for (let i = 0; i < 4; i += 1) {
+    h.chat!.messages[1]!.content = `Response number ${i}`;
+    await h.service.start(h.owner(), { ...startRequest(h), requestId: `new-${i}` });
+    await flush();
+  }
+  assert.equal(h.service.audioStore.retainedBytes, TTS_LIMITS.sessionAudioMaxBytes);
+  assert.equal(h.service.readAudio(h.owner(), first.jobId, 0, 0, 64), null);
+  h.chat!.messages[1]!.content = originalText;
+  await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "evicted" }),
+    (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+  assert.equal(h.provider.calls.length, 5);
+});
+
+
+test("replacement stops audible completed playback without destroying its replay", async () => {
+  const h = harness();
+  const first = await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  await h.service.startPreview(h.owner());
+  await flush();
+  const stopped = h.events.filter((event) => event.kind === "job" &&
+    event.snapshot.jobId === first.jobId && event.snapshot.phase === "cancelled");
+  assert.equal(stopped.length, 1);
+  assert.ok(h.service.readAudio(h.owner(), first.jobId, 0, 0, 1024));
+  const replayed = await h.service.start(h.owner(), { ...startRequest(h), requestId: "after-preview" });
+  assert.equal(replayed.jobId, first.jobId);
+  assert.equal(replayed.phase, "completed");
+  assert.equal(h.provider.calls.length, 2); // One response, one preview; replay is free.
+});
+
+
+test("remote Read Aloud inherits desktop setup and replays only its device/chat audio", async () => {
+  const h = harness();
+  const remote = new AidenRemoteTtsService(h.service);
+  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const status = await remote.status(authority);
+  assert.equal(status.ready, true);
+  const first = await remote.start(authority, startRequest(h));
+  await flush();
+  const audio = await remote.read(authority, first.jobId, 0, 0);
+  assert.ok(audio.bytesBase64);
+  assert.equal("settings" in status, false);
+  const other = { ...authority, deviceId: "other-phone" };
+  await assert.rejects(remote.read(other, first.jobId, 0, 0), /unavailable/u);
+  remote.stop(authority, { requestId: "req-1" });
+  const replay = await remote.start(authority, { ...startRequest(h), requestId: "play-again" });
+  assert.equal(replay.jobId, first.jobId);
+  assert.equal(h.provider.calls.length, 1);
+  remote.revokeDevice("phone");
+  assert.equal(h.service.audioStore.retainedBytes, 0);
+  await assert.rejects(remote.read(authority, first.jobId, 0, 0), /access/u);
+});
+
+test("remote stop arriving before start prevents billing and cannot stop a newer intent", async () => {
+  const h = harness();
+  const remote = new AidenRemoteTtsService(h.service);
+  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  remote.stop(authority, { requestId: "req-1" });
+  await assert.rejects(remote.start(authority, startRequest(h)), /stopped/u);
+  assert.equal(h.provider.calls.length, 0);
+  const job = await remote.start(authority, { ...startRequest(h), requestId: "new-intent" });
+  await flush();
+  remote.stop(authority, { requestId: "req-1" });
+  assert.equal((await remote.status(authority)).job?.jobId, job.jobId);
+  await assert.rejects(remote.start(authority, { ...startRequest(h), source: { ...sourceRef(h), chatId: "other-chat" } }), /match/u);
+  remote.close();
+});
+
+test("remote cannot replace desktop playback; disabling on desktop stops remote audio reads", async () => {
+  const h = harness();
+  await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  const remote = new AidenRemoteTtsService(h.service);
+  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  await assert.rejects(remote.start(authority, startRequest(h)), /another device/u);
+  h.service.stop(h.owner());
+  const job = await remote.start(authority, { ...startRequest(h), requestId: "later" });
+  await flush();
+  await h.service.updateSettings(h.owner(), h.revision, { enabled: false });
+  assert.equal((await remote.status()).enabled, false);
+  await assert.rejects(remote.read(authority, job.jobId, 0, 0), /desktop/u);
+  remote.close();
+});
+
+test("remote authorization is rechecked between synthesis segments", async () => {
+  const h = harness(); twoSegments(h);
+  let permitted = true;
+  const remote = new AidenRemoteTtsService(h.service);
+  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true,
+    authorize: async () => { if (!permitted) throw new Error("Access revoked"); } };
+  const original = h.provider.synthesize.bind(h.provider);
+  h.provider.synthesize = async (input) => { const audio = await original(input); permitted = false; return audio; };
+  await remote.start(authority, startRequest(h));
+  await flush();
+  assert.equal(h.provider.calls.length, 1);
+  assert.equal(h.service.audioStore.retainedBytes, 0);
+  remote.close();
+});
+
+
+test("remote transport suspension preserves replay and source changes fence audio reads", async () => {
+  const h = harness();
+  const remote = new AidenRemoteTtsService(h.service);
+  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const job = await remote.start(authority, startRequest(h));
+  await flush();
+  remote.suspend();
+  await assert.rejects(remote.status(authority), /no longer available/u);
+  remote.resume();
+  const replay = await remote.start(authority, { ...startRequest(h), requestId: "after-reconnect" });
+  assert.equal(replay.jobId, job.jobId);
+  assert.equal(h.provider.calls.length, 1);
+  assert.ok((await remote.read(authority, job.jobId, 0, 0)).bytesBase64.length > 0);
+  h.chat!.messages[1]!.content = "Updated answer";
+  await assert.rejects(remote.read(authority, job.jobId, 0, 0), /response changed/u);
+  assert.equal(h.provider.calls.length, 1);
+  remote.close();
 });

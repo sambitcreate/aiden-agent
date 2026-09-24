@@ -1,7 +1,7 @@
 // Bounded, owner-scoped session audio retention for read aloud.
 //
-// No cross-owner sharing; exact identity keys; eviction removes completed
-// unneeded segments before active audio. Nothing here persists to disk and no
+// No cross-owner sharing; exact identity keys; eviction removes inactive
+// soundbites atomically in the service, never individual segments. Nothing persists to disk and no
 // audio ever enters chat JSON, portable config, or exports.
 
 import { TTS_LIMITS } from "../../../renderer/shared/tts.js";
@@ -46,7 +46,7 @@ export class TtsAudioStore {
   }
 
   /**
-   * Bounded insert. Evicts only fully-consumed segments; when unread audio
+   * Bounded insert. Preserves complete soundbites; when retained audio
    * would have to be dropped to make room, throws instead — overflow must
    * fail visibly, never silently skip words (plan §12.2).
    */
@@ -62,22 +62,15 @@ export class TtsAudioStore {
     const key = TtsAudioStore.key(jobId, segment);
     const existing = this.entries.get(key);
     const required = this.totalBytes - (existing?.bytes.byteLength ?? 0) + audio.bytes.byteLength;
-    const evictable = [...this.entries].reduce(
-      (sum, [entryKey, entry]) =>
-        sum +
-        (entryKey !== key && entry.readThrough === entry.bytes.byteLength
-          ? entry.bytes.byteLength
-          : 0),
-      0,
-    );
-    if (required - evictable > TTS_LIMITS.sessionAudioMaxBytes) {
+    // Playback reads do not consume the replay copy. The service may evict
+    // an entire inactive soundbite, never a prefix of the active response.
+    if (required > TTS_LIMITS.sessionAudioMaxBytes) {
       throw new Error("audio_buffer_limit");
     }
     if (existing) {
       this.totalBytes -= existing.bytes.byteLength;
       this.entries.delete(key);
     }
-    this.evictConsumedFor(audio.bytes.byteLength);
     this.entries.set(key, {
       ...audio,
       jobId,
@@ -139,20 +132,10 @@ export class TtsAudioStore {
     };
   }
 
-  /** Remove per-job audio (stop, cache clear, owner invalidation). */
+  /** Remove a whole soundbite (eviction, cache clear, owner invalidation). */
   releaseJob(jobId: string): void {
     for (const [key, entry] of this.entries) {
       if (entry.jobId !== jobId) continue;
-      this.totalBytes -= entry.bytes.byteLength;
-      this.entries.delete(key);
-    }
-  }
-
-  /** Only a fully retrieved segment can be evicted; a first chunk is not consumption. */
-  private evictConsumedFor(incomingBytes: number): void {
-    for (const [key, entry] of this.entries) {
-      if (this.totalBytes + incomingBytes <= TTS_LIMITS.sessionAudioMaxBytes) break;
-      if (entry.readThrough !== entry.bytes.byteLength) continue;
       this.totalBytes -= entry.bytes.byteLength;
       this.entries.delete(key);
     }

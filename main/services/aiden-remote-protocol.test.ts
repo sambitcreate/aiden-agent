@@ -291,6 +291,10 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/scheduled-tasks/mcp-servers",
     "/memory/settings",
     "/scheduled-tasks/settings",
+    "/read-aloud",
+    "/chats/{chatId}/read-aloud",
+    "/chats/{chatId}/read-aloud/stop",
+    "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
