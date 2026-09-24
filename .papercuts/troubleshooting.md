@@ -987,3 +987,4 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 
 - The diagnostic log records subagent failures but not their admission reason or the task status they affect. Correlating the private Pi journal showed a final review request rejected at the tree deadline and task 12 still `in_progress`. A bounded, content-free task transition diagnostic would make this easier to diagnose without exposing chat text.
 - The isolated worktree had no `node_modules`, so the first focused test and type-check attempts failed before execution. `npm ci --ignore-scripts` restored the locked JavaScript toolchain; reruns passed.
+- The focused todo suite missed an older source-shape assertion in the renderer preflight suite. Hosted CI and two review bots caught it; update that contract and run preflight when changing the shared `ScrollArea`.
