@@ -990,3 +990,5 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-23 PR #243 review: reproduced three failures before fixes—shutdown erased resumable evidence, checkpoint property order changed its digest, and lifetime terminal history exhausted active quotas. Canonicalized checkpoints, preserved shutdown recovery, and scoped quotas to unresolved work while retaining receipts. All three new regressions now pass.
 
 - PR #243 review: lease release and attempt settlement are distinct; recording an outcome on controls rewrote completed attempts and prematurely finished live ones. Added separate settlement flag plus resume/retry/pause regressions. Wrong-input checkpoints now report integrity failure rather than lease loss.
+
+- PR #243 Pullfrog review: asynchronous input preparation needs an explicit pre-commit lease guard plus retained chat reservation through IO settlement. Failed-safe evidence must include the checkpoint required by retry admission; added regressions for both.
