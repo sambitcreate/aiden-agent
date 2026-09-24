@@ -22,6 +22,7 @@ function fixture() {
   let steerReceipt: { accepted: true; queue: "steer" | "follow-up" } | { accepted: false; reason: "not-active" | "cancelled" | "invalid-message" | "capacity" } = { accepted: true, queue: "steer" };
   let followUpReceipt: typeof steerReceipt = { accepted: true, queue: "follow-up" };
   let appendError: unknown;
+  let readChatResult: Chat | null = null;
   let duringAppend: (() => void) | undefined;
   let afterAppend: (() => void) | undefined;
   const active = new Map<string, ChatRunInputGenerationRef>();
@@ -56,7 +57,7 @@ function fixture() {
       afterAppend?.();
       return { id: chatId, messages: [] } as unknown as Chat;
     },
-    readChat: async () => null,
+    readChat: async () => readChatResult,
     now: () => 7_777,
     newMessageId: () => "message_admitted_1",
   });
@@ -79,6 +80,9 @@ function fixture() {
     },
     setAppendError: (value: unknown) => {
       appendError = value;
+    },
+    setReadChatResult: (value: Chat | null) => {
+      readChatResult = value;
     },
     setDuringAppend: (hook: (() => void) | undefined) => {
       duringAppend = hook;
@@ -299,4 +303,46 @@ test("run input admission escalates uncertain persistence to an unknown outcome"
     app.admission.admit({ streamId: "stream-1", mode: "steer", text: "x" }),
     AidenOperationUnknownOutcomeError,
   );
+});
+
+test("run input admission proceeds when recovery proves the append committed", async () => {
+  const app = fixture();
+  app.setAppendError(new Error("flaky durability write"));
+  app.setReadChatResult({
+    id: "chat-1",
+    messages: [{ id: "message_admitted_1", role: "user", content: "Steer now" }],
+  } as unknown as Chat);
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "Steer now",
+    ownerDocumentId: "doc-1",
+  });
+  assert.deepEqual(result, {
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
+  assert.equal(app.steered.length, 1);
+});
+
+test("run input admission reports committed cancellation when the run is cancelled during persistence", async () => {
+  const app = fixture();
+  app.setAfterAppend(() => {
+    app.generation.cancelRequested = true;
+  });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "queued too late",
+  });
+  assert.deepEqual(result, {
+    admitted: false,
+    reason: "cancelled",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
+  assert.equal(app.appended.length, 1);
+  assert.equal(app.followedUp.length, 0);
 });

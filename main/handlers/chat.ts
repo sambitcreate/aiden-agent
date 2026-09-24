@@ -107,12 +107,18 @@ export function registerChatGenerationHandlers(): void {
       }
       const parsed = parseChatRunInput(input);
       const owner = chatGenerationOwner(event);
-      return llmClient.admitChatRunInput({
+      const result = await llmClient.admitChatRunInput({
         streamId,
         mode: parsed.mode,
         text: parsed.text,
         ownerDocumentId: owner.documentId,
       });
+      // A committed input mutates the transcript for every observing document,
+      // matching the remote path's chats:changed broadcast.
+      if (result.committed) {
+        ipcMain.broadcast("chats:changed", {});
+      }
+      return result;
     },
   );
 

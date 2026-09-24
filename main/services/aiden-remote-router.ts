@@ -2549,17 +2549,17 @@ export function createAidenRemoteRequestHandler(
         ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        const chatId = dependencies.streams.streamChatId(device.id, streamInputsMatch[1]!);
         writeJson(
           response,
           200,
-          await runChatMutation(dependencies.chats, device, chatId, "stream", () =>
-            dependencies.streams!.submitInput!(
-              device.id,
-              streamInputsMatch[1]!,
-              body,
-              key,
-            )),
+          await dependencies.streams.submitInput(
+            device.id,
+            streamInputsMatch[1]!,
+            body,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "stream", action),
+          ),
         );
         return;
       }

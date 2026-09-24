@@ -1225,3 +1225,85 @@ test("run input admission validates the body and binds to the owning device", as
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 });
+
+test("run input admission replays settled outcomes across a durable ledger restore", async () => {
+  const { AidenIdempotencyLedger } = await import("./aiden-remote-operation-contract.js");
+  const snapshots: unknown[] = [];
+  const calls: unknown[] = [];
+  const first = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistIdempotency: async (snapshot) => {
+      snapshots.push(snapshot);
+    },
+    submitInput: async (input) => {
+      calls.push(input);
+      return { admitted: false, reason: "capacity", committed: false };
+    },
+  });
+  first.create("device-1", "stream-1", "chat-1", "turn-1");
+  const original = await first.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Remember this." },
+    "input-key-durable-00001",
+  );
+  assert.equal(original.status, "rejected");
+  assert.equal(original.reason, "capacity");
+  assert.equal(calls.length, 1);
+
+  // A restart rebuilds the ledger from the persisted snapshot; the stream
+  // record is gone, yet the settled rejection must still replay verbatim.
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    idempotency: new AidenIdempotencyLedger(snapshots[snapshots.length - 1] as never),
+    persistIdempotency: async (snapshot) => {
+      snapshots.push(snapshot);
+    },
+    submitInput: async (input) => {
+      calls.push(input);
+      return { admitted: true, queue: "follow-up", committed: true, messageId: "m" };
+    },
+  });
+  const replayed = await restored.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Remember this." },
+    "input-key-durable-00001",
+  );
+  assert.deepEqual(replayed, original);
+  assert.equal(calls.length, 1);
+});
+
+test("run input admission reports an unknown outcome when outcome persistence fails", async () => {
+  let persists = 0;
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    persistIdempotency: async () => {
+      persists += 1;
+      if (persists > 1) throw new Error("disk lost");
+    },
+    submitInput: async () => ({
+      admitted: true,
+      queue: "steer",
+      committed: true,
+      messageId: "m",
+    }),
+  });
+  service.create("device-1", "stream-1", "chat-1", "turn-1");
+  await assert.rejects(
+    service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "steer", text: "x" },
+      "input-key-durable-00002",
+    ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "idempotency_in_flight",
+  );
+});

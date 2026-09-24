@@ -12,6 +12,7 @@ import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-rem
 import {
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   type AidenRemoteCapability,
+  type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
@@ -589,9 +590,13 @@ async function fixture(options: {
               streamId: string,
               input: { mode: "steer" | "queue"; text: string },
               _key: string,
+              runAccess?: (
+                chatId: string,
+                action: () => Promise<AidenRemoteStreamInputResult>,
+              ) => Promise<AidenRemoteStreamInputResult>,
             ) => {
               calls.push(`input:${deviceId}:${streamId}:${input.mode}`);
-              return {
+              const result = {
                 streamId,
                 chatId: "chat-1",
                 turnId: "turn-1",
@@ -601,6 +606,10 @@ async function fixture(options: {
                 committed: true,
                 messageId: "message-remote-input-1",
               };
+              if (runAccess) {
+                return runAccess("chat-1", async () => result);
+              }
+              return result;
             },
           }),
       respondApproval: async (deviceId, approvalId, decision, _key) => {

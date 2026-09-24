@@ -132,10 +132,18 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       return { admitted: false, reason: "cancelled", committed: true, messageId };
     }
     const message: AgentMessage = { role: "user", content: input.text, timestamp: now() };
-    const receipt =
-      input.mode === "steer"
-        ? generation.agent.queueSteer(message)
-        : generation.agent.queueFollowUp(message);
+    let receipt: PiRuntimeQueueReceipt;
+    try {
+      receipt =
+        input.mode === "steer"
+          ? generation.agent.queueSteer(message)
+          : generation.agent.queueFollowUp(message);
+    } catch {
+      // The harness pushes onto the accepted queue before invoking Pi; a throw
+      // here leaves both delivery and transcript state ambiguous. Keep the
+      // idempotency entry in flight rather than recording a false-clean failure.
+      throw new AidenOperationUnknownOutcomeError();
+    }
     if (!receipt.accepted) {
       return {
         admitted: false,

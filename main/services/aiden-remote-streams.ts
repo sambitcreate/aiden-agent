@@ -1176,12 +1176,19 @@ export class AidenRemoteStreamService {
    * Feature-gated shared foreground admission (Remote Slice 2). Domain
    * rejections resolve as `status: "rejected"` so the durable idempotency
    * ledger replays the original admission outcome for a retried request UUID.
+   * `runAccess` wraps fresh admissions in the router's chat-access validation;
+   * it stays inside the ledger action so a settled outcome still replays after
+   * the stream record is evicted or the chat becomes unavailable.
    */
   async submitInput(
     deviceId: string,
     streamId: string,
     rawInput: unknown,
     key: string,
+    runAccess?: (
+      chatId: string,
+      action: () => Promise<AidenRemoteStreamInputResult>,
+    ) => Promise<AidenRemoteStreamInputResult>,
   ): Promise<AidenRemoteStreamInputResult> {
     let parsed: { mode: AidenRemoteRunInputMode; text: string };
     try {
@@ -1199,58 +1206,61 @@ export class AidenRemoteStreamService {
         { streamId, mode: parsed.mode, text: parsed.text },
         async () => {
           const stream = this.requireStream(deviceId, streamId);
-          const base = {
-            streamId: stream.streamId,
-            chatId: stream.chatId,
-            turnId: stream.turnId,
-            mode: parsed.mode,
-          } as const;
-          if (terminal(stream.state)) {
+          const execute = async (): Promise<AidenRemoteStreamInputResult> => {
+            const base = {
+              streamId: stream.streamId,
+              chatId: stream.chatId,
+              turnId: stream.turnId,
+              mode: parsed.mode,
+            } as const;
+            if (terminal(stream.state)) {
+              return {
+                ...base,
+                status: "rejected" as const,
+                reason: "run_not_active" as const,
+                committed: false,
+              };
+            }
+            if (stream.cancelRequested) {
+              return {
+                ...base,
+                status: "rejected" as const,
+                reason: "cancelled" as const,
+                committed: false,
+              };
+            }
+            if (!this.options.submitInput) {
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "This endpoint is unavailable.",
+                404,
+              );
+            }
+            const admission = await this.options.submitInput({
+              streamId: stream.streamId,
+              chatId: stream.chatId,
+              mode: parsed.mode,
+              text: parsed.text,
+              ownerDocumentId: stream.owner.owner.documentId,
+            });
+            if (admission.admitted) {
+              this.append(stream, "status", { state: "running" }, false, "running");
+            }
+            if (admission.committed) {
+              this.options.notifyChatChanged?.(stream.chatId);
+            }
             return {
               ...base,
-              status: "rejected" as const,
-              reason: "run_not_active" as const,
-              committed: false,
+              status: admission.admitted ? ("admitted" as const) : ("rejected" as const),
+              ...(admission.queue === undefined ? {} : { queue: admission.queue }),
+              ...(admission.reason === undefined ? {} : { reason: admission.reason }),
+              committed: admission.committed,
+              ...(admission.messageId === undefined
+                ? {}
+                : { messageId: admission.messageId }),
             };
-          }
-          if (stream.cancelRequested) {
-            return {
-              ...base,
-              status: "rejected" as const,
-              reason: "cancelled" as const,
-              committed: false,
-            };
-          }
-          if (!this.options.submitInput) {
-            throw new AidenRemoteServiceError(
-              "not_found",
-              "This endpoint is unavailable.",
-              404,
-            );
-          }
-          const admission = await this.options.submitInput({
-            streamId: stream.streamId,
-            chatId: stream.chatId,
-            mode: parsed.mode,
-            text: parsed.text,
-            ownerDocumentId: stream.owner.owner.documentId,
-          });
-          if (admission.admitted) {
-            this.append(stream, "status", { state: "running" }, false, "running");
-          }
-          if (admission.committed) {
-            this.options.notifyChatChanged?.(stream.chatId);
-          }
-          return {
-            ...base,
-            status: admission.admitted ? ("admitted" as const) : ("rejected" as const),
-            ...(admission.queue === undefined ? {} : { queue: admission.queue }),
-            ...(admission.reason === undefined ? {} : { reason: admission.reason }),
-            committed: admission.committed,
-            ...(admission.messageId === undefined
-              ? {}
-              : { messageId: admission.messageId }),
           };
+          return runAccess ? runAccess(stream.chatId, execute) : execute();
         },
       );
     } catch (error) {
