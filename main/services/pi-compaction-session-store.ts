@@ -5,7 +5,6 @@ import { chmod, lstat, open, readFile, readdir, rename, stat, unlink, writeFile 
 import path from "node:path";
 import {
   type AgentMessage,
-  buildSessionContext,
 } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
@@ -153,15 +152,17 @@ function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boole
     const header = JSON.parse(headerLine) as {
       kind?: unknown;
       version?: unknown;
+      v?: unknown;
+      storageVersion?: unknown;
       id?: unknown;
       metadata?: { kind?: unknown; chatId?: unknown };
     };
     return (
       header.kind === "header" &&
-      header.version === 4 &&
+      (header.version === 4 || (header.v === 4 && header.storageVersion === 1)) &&
       header.id === chatId &&
-      header.metadata?.kind === SESSION_METADATA_KIND &&
-      header.metadata.chatId === chatId
+      (header.v === 4 || (header.metadata?.kind === SESSION_METADATA_KIND &&
+      header.metadata.chatId === chatId))
     );
   } catch {
     return false;
@@ -183,6 +184,42 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
       ? (header as { id?: unknown }).id : undefined;
     if (typeof id !== "string" || !(journalHeaderOwnsChat(prefix, id) || currentJournalHeaderOwnsChat(prefix, id))) {
       throw new Error("Pi journal history contains an unreadable session header.");
+    }
+    const currentHeader = JSON.parse(prefix) as { v?: number; storageVersion?: number };
+    if (currentHeader.v === 4 && currentHeader.storageVersion === 1) {
+      // New Pi stores an empty session's branch tip and Aiden metadata as
+      // values. Scan records on this descriptor so only actual history (or
+      // malformed data worth preserving) counts as private chat state.
+      let pending = Buffer.alloc(0);
+      let position = newline + 1;
+      const substantive = (line: Buffer): boolean => {
+        if (line.every((byte) => byte === 9 || byte === 10 || byte === 13 || byte === 32)) return false;
+        let record: Record<string, unknown>;
+        try { record = JSON.parse(decodeUtf8(line)) as Record<string, unknown>; }
+        catch { return true; }
+        if (!record || typeof record !== "object" || Array.isArray(record)) return true;
+        if (record.kind !== "value" || record.op !== "set") return true;
+        if (record.namespace === "pi.branch.tip" && record.key === "main" && record.value === null) return false;
+        if (record.namespace === "aiden" && record.key === "session-metadata") {
+          const value = record.value as { kind?: unknown; chatId?: unknown } | undefined;
+          return value?.kind !== SESSION_METADATA_KIND || value.chatId !== id;
+        }
+        return true;
+      };
+      while (true) {
+        const next = await handle.read(buffer, 0, buffer.length, position);
+        if (next.bytesRead === 0) return { chatId: id, hasBody: pending.length > 0 && substantive(pending) };
+        position += next.bytesRead;
+        const chunk = Buffer.concat([pending, buffer.subarray(0, next.bytesRead)]);
+        let start = 0;
+        for (let index = 0; index < chunk.length; index += 1) {
+          if (chunk[index] !== 10) continue;
+          if (substantive(chunk.subarray(start, index))) return { chatId: id, hasBody: true };
+          start = index + 1;
+        }
+        pending = chunk.subarray(start);
+        if (pending.length > JOURNAL_HEADER_SCAN_BYTES) return { chatId: id, hasBody: true };
+      }
     }
     // Even a malformed body is private state worth preserving. Only an exact
     // validated header followed by ASCII JSON whitespace counts as empty.
@@ -220,28 +257,35 @@ async function isCompletedEmptyMigration(promotedPath: string, chatId: string, r
         !journalHeaderOwnsChat(backupText.split("\n", 1)[0]!, chatId)) return false;
     const current = decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
     const records: unknown[] = current.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
-    if (records.length !== 4 || !current.endsWith("\n")) return false;
-    const [header, lane, startedValue, finishedValue] = records;
+    if (records.length !== 5 || !current.endsWith("\n")) return false;
+    const [header, metadataValue, lane, startedValue, finishedValue] = records;
     if (!startedValue || typeof startedValue !== "object" || !finishedValue || typeof finishedValue !== "object") return false;
-    const started = startedValue as Record<string, unknown>;
-    const finished = finishedValue as Record<string, unknown>;
+    const started = (startedValue as Record<string, unknown>).value as Record<string, unknown> | undefined;
+    const finished = (finishedValue as Record<string, unknown>).value as Record<string, unknown> | undefined;
+    if (!started || !finished) return false;
     const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
     if (typeof started.id !== "string" || !new RegExp(`^migration-${uuid}$`, "u").test(started.id) ||
         typeof finished.id !== "string" || !new RegExp(`^migration-finished-${uuid}$`, "u").test(finished.id) ||
         !Number.isSafeInteger(started.timestamp) || Number(started.timestamp) < 0 ||
         !Number.isSafeInteger(finished.timestamp) || Number(finished.timestamp) < Number(started.timestamp)) return false;
     return isDeepStrictEqual(header, {
-      kind: "header", version: 4, id: chatId, createdAt: Date.parse(legacy.header.timestamp), cwd: legacy.header.cwd,
+      v: 4, kind: "header", id: chatId, storageVersion: 1, nextSeq: 5,
+      createdAt: Date.parse(legacy.header.timestamp), cwd: legacy.header.cwd,
       ...(legacy.header.parentSession === undefined ? {} : { legacyParentSessionPath: legacy.header.parentSession }),
-      ...(legacy.header.metadata === undefined ? {} : { metadata: legacy.header.metadata }),
-    }) && isDeepStrictEqual(lane, { kind: "lane", seq: 1, lane: "main", leafId: null }) &&
-      isDeepStrictEqual(started, {
-        kind: "record", seq: 2, id: started.id, lane: "main", type: "operation_started", timestamp: started.timestamp,
-        sourceLeafId: null, intent: { kind: "navigation", targetId: null, summarize: false },
-      }) && isDeepStrictEqual(finished, {
-        kind: "record", seq: 3, id: finished.id, lane: "main", type: "operation_finished", timestamp: finished.timestamp,
-        runId: started.id, outcome: "completed",
-      });
+    }) && isDeepStrictEqual(metadataValue, {
+      kind: "value", op: "set", seq: 1, namespace: "aiden", key: "session-metadata",
+      value: legacy.header.metadata,
+    }) && isDeepStrictEqual(lane, {
+      kind: "value", op: "set", seq: 2, namespace: "pi.branch.tip", key: "main", value: null,
+    }) && isDeepStrictEqual(startedValue, {
+      kind: "value", op: "set", seq: 3, namespace: "aiden.pi-legacy-record", key: started.id,
+      value: { kind: "record", seq: 2, id: started.id, lane: "main", type: "operation_started", timestamp: started.timestamp,
+        sourceLeafId: null, intent: { kind: "navigation", targetId: null, summarize: false } },
+    }) && isDeepStrictEqual(finishedValue, {
+      kind: "value", op: "set", seq: 4, namespace: "aiden.pi-legacy-record", key: finished.id,
+      value: { kind: "record", seq: 3, id: finished.id, lane: "main", type: "operation_finished", timestamp: finished.timestamp,
+        runId: started.id, outcome: "completed" },
+    });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
@@ -399,7 +443,23 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
       getEntries: getBranch,
-      buildContext: async () => buildSessionContext(await getBranch(), { entryProjectors: projectors }),
+      buildContext: async () => {
+        const branch = await getBranch();
+        const lastCompaction = branch.findIndex((entry, index) =>
+          entry.type === "compaction" && !branch.slice(index + 1).some((later) => later.type === "compaction"));
+        const entries = lastCompaction < 0 ? branch : branch.slice(lastCompaction);
+        const messages: AgentMessage[] = [];
+        for (const [index, entry] of entries.entries()) {
+          if (entry.type === "message") messages.push(entry.message);
+          else if (entry.type === "compaction") {
+            messages.push({ role: "compactionSummary", summary: entry.summary, tokensBefore: entry.tokensBefore, timestamp: entry.timestamp });
+            messages.push(...entry.retainedTail);
+          } else if (entry.type === "custom") {
+            messages.push(...(projectors[entry.customType]?.(entry, index, entries) ?? []));
+          }
+        }
+        return { messages, thinkingLevel: "off", model: null, activeToolNames: null };
+      },
       getLeafId: () => session.getLeafId(),
       getMetadata: () => session.getMetadata(),
       moveTo: (entryId) => session.moveTo(entryId),

@@ -1,22 +1,18 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
 import {
   createFauxCore,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import {
-  InMemorySessionRepo,
-  type AfterToolCallResult,
-  type AgentMessage,
-  type AgentTool,
-} from "@earendil-works/pi-agent-core";
+import { convertToLlm, type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
@@ -48,11 +44,7 @@ function testHarness(
   const model = core.getModel();
   const { initialState: initialStateOverride, ...runtimeOptions } = options;
   const harness = new PiAgentRuntimeHarness({
-    convertToLlm: (messages) =>
-      messages.filter(
-        (message) =>
-          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-      ),
+    convertToLlm,
     streamFn: core.streamSimple,
     initialState: {
       systemPrompt: "Base prompt",
@@ -78,6 +70,7 @@ async function managedTestHarness(
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     initialSystemPrompt?: string;
+    initialMessages?: AgentMessage[];
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
@@ -127,11 +120,7 @@ async function managedTestHarness(
   const harness = new PiAgentRuntimeHarness({
     extensions: options.extensions,
     identity: options.identity,
-    convertToLlm: (messages) =>
-      messages.filter(
-        (message) =>
-          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-      ),
+    convertToLlm,
     streamFn: options.streamFn ?? core.streamSimple,
     ...(options.generationContextTransform
       ? {
@@ -149,7 +138,7 @@ async function managedTestHarness(
       systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
       thinkingLevel: "off",
       tools: options.tools ?? [],
-      messages: [],
+      messages: options.initialMessages ?? [],
       model,
     },
     beforeToolCall: options.beforeToolCall,
@@ -1162,7 +1151,7 @@ test("managed cancellation settles while session opening is still pending", asyn
     convertToLlm: (messages) =>
       messages.filter(
         (message) =>
-          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+          message.role === "system" || message.role === "user" || message.role === "assistant" || message.role === "toolResult",
       ),
     streamFn: core.streamSimple,
     initialState: {
@@ -1313,7 +1302,7 @@ test("managed run preserves a prior failed assistant for a later ordinary prompt
   });
 
   assert.equal(outcome.kind, "completed");
-  assert.deepEqual(observedRoles, ["user", "assistant", "user"]);
+  assert.deepEqual(observedRoles, ["system", "user", "assistant", "user"]);
   assert.match(observedText, /PRIVATE_PRIOR_FAILURE/u);
 });
 
@@ -1469,7 +1458,7 @@ test("cancellation after a large tool result does not wait for forced compaction
     convertToLlm: (messages) =>
       messages.filter(
         (message) =>
-          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+          message.role === "system" || message.role === "user" || message.role === "assistant" || message.role === "toolResult",
       ),
     streamFn: core.streamSimple,
     initialState: {
@@ -1557,7 +1546,7 @@ test("cancellation exposes no detached forced between-tool checkpoint", async ()
     convertToLlm: (messages) =>
       messages.filter(
         (message) =>
-          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+          message.role === "system" || message.role === "user" || message.role === "assistant" || message.role === "toolResult",
       ),
     streamFn: core.streamSimple,
     initialState: {
@@ -2779,7 +2768,7 @@ test("AGENTS edits enter only the next logical model request and preserve the to
     revalidate: async () => {},
     read: async () => readFile(file, "utf8"),
   });
-  const initial = await instructions.apply({ systemPrompt: "HOST" });
+  const initial = await instructions.apply({ messages: [{ role: "system", content: "HOST", timestamp: 0 }] });
   const tool = declarePiRuntimeReplay({
     name: "update_guidance", label: "Update guidance", description: "Fixture edit", parameters: Type.Object({}),
     execute: async () => {
@@ -2794,11 +2783,12 @@ test("AGENTS edits enter only the next logical model request and preserve the to
     fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
     fauxAssistantMessage("done"),
   ], {
-    initialSystemPrompt: initial.systemPrompt,
+    initialSystemPrompt: "HOST",
+    initialMessages: initial.messages,
     tools: [tool],
     streamFn: (model, context, options) => {
-      prompts.push(context.systemPrompt ?? "");
-      toolSets.push((context.tools ?? []).map(({ name }) => name));
+      prompts.push(getCurrentSystemPrompt(context.messages));
+      toolSets.push(getCurrentTools(context.messages).map(({ name }) => name));
       return providerCore.streamSimple(model, context, options);
     },
     prepareNextTurnWithContext: async ({ context }, signal) => ({ context: await instructions.apply(context, signal) }),

@@ -982,3 +982,11 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+# Pi 0.87.1 pin migration
+
+- The 0.87.1 typecheck exposed a larger session API break than the digest listed: `InMemorySessionRepo`, `buildSessionContext`, v4 JSONL header shape, and append/move methods changed. Recheck persisted journal compatibility before treating a clean prompt migration as shippable.
+- Pi's `TranscriptContext` is branded, so direct custom stream tests and wrappers need `normalizeContext`; raw `{messages}` fixtures no longer compile.
+- `test:subagents` first hit a CommandLineTools SDK linker error (`arm64e.x1` in MacOSX27.0.tbd). The three subagent native build scripts stripped toolchain variables; pass scoped `DEVELOPER_DIR` and `SDKROOT` through their sanitized child environments.
+- Pi's 0.87.1 catalog removed pinned Codex/Google fixture IDs and added built-in Radius models. Refresh provider fixtures and advance synthetic catalog timestamps beyond the bundled manifest when bumping the pin.
+- The full test command reached Bot native prebuild and found the same stripped SDK selection in `build-bot-inbox-writer.mjs`; preserve scoped `DEVELOPER_DIR` and `SDKROOT` there too.
+- A 0.87.1 provider smoke hung while `server.close()` waited on new SDK keepalive sockets; close loopback connections in fixture teardown. Anthropic now appends `?beta=true`, so assert the single `/v1/messages` pathname.

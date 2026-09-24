@@ -1,7 +1,7 @@
 import type { Api, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 
-/** Add reviewed transports to an older pinned Pi provider without rebuilding its auth contract. */
+/** Add reviewed transports to a pinned Pi provider without rebuilding its auth contract. */
 export function withProviderStreamOverrides(
   provider: Provider,
   overrides: Partial<Record<Api, ProviderStreams>>,
@@ -17,7 +17,7 @@ export function withProviderStreamOverrides(
   };
 }
 
-/** Pi 0.80 predates OpenCode Go's Responses-backed models published by pi.dev. */
+/** Keep OpenCode Go's remote Responses-backed models on the reviewed stream. */
 export function withAidenPiCompatibility(provider: Provider): Provider {
   if (provider.id !== "opencode-go") return provider;
   return withProviderStreamOverrides(provider, {

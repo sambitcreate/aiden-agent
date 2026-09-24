@@ -68,16 +68,16 @@ test("Google legacy models stay excluded across bundled, cached, and refreshed c
     (id) => ({ ...current, id, name: id }),
   );
   const baseline = { ...google, getModels: () => [current, ...legacy] };
-  const checkedAt = Date.parse("2026-09-10T16:01:00Z");
+  const checkedAt = Date.parse("2026-09-23T16:01:00Z");
   const store = memoryProviderStore({
     models: legacy,
     checkedAt,
-    lastModified: Date.parse("2026-09-10T16:00:00Z"),
+    lastModified: Date.parse("2026-09-23T16:00:00Z"),
   } as ModelsStoreEntry);
   const provider = withPiRemoteCatalog(baseline, {
     now: () => checkedAt,
     fetchImpl: async () => Response.json([current, ...legacy], {
-      headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+      headers: { "last-modified": "Wed, 23 Sep 2026 16:00:00 GMT" },
     }),
   });
   const models = createModels();
@@ -221,11 +221,11 @@ test("OpenCode Go overlay publishes ox-alpha without sending provider credential
         status: 200,
         headers: {
           etag: '"catalog-v1"',
-          "last-modified": "Thu, 20 Aug 2026 16:00:00 GMT",
+          "last-modified": "Wed, 23 Sep 2026 16:00:00 GMT",
         },
       });
     },
-    now: () => Date.parse("2026-08-20T16:01:00Z"),
+    now: () => Date.parse("2026-09-23T16:01:00Z"),
   });
 
   await refreshProvider(provider, store, {
@@ -246,11 +246,11 @@ test("OpenCode Go overlay publishes ox-alpha without sending provider credential
 });
 
 test("cached overlays hydrate offline and honor freshness unless force refreshed", async () => {
-  const checkedAt = Date.parse("2026-08-20T16:01:00Z");
+  const checkedAt = Date.parse("2026-09-23T16:01:00Z");
   const store = memoryProviderStore({
     models: [oxAlphaModel()],
     checkedAt,
-    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+    lastModified: Date.parse("2026-09-23T16:00:00Z"),
   } as ModelsStoreEntry);
   let fetches = 0;
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
@@ -273,9 +273,9 @@ test("cached overlays hydrate offline and honor freshness unless force refreshed
 });
 
 test("fresh empty and negative catalog results do not refetch on every launch", async () => {
-  const checkedAt = Date.parse("2026-08-22T16:00:00Z");
+  const checkedAt = Date.parse("2026-09-25T16:00:00Z");
   for (const firstResponse of [
-    () => Response.json({}, { headers: { "last-modified": "Sat, 22 Aug 2026 15:59:00 GMT" } }),
+    () => Response.json({}, { headers: { "last-modified": "Fri, 25 Sep 2026 15:59:00 GMT" } }),
     () => new Response(null, { status: 404 }),
     () => new Response(null, { status: 501 }),
   ]) {
@@ -298,8 +298,8 @@ test("fresh empty and negative catalog results do not refetch on every launch", 
 test("conditional refresh sends only the safe ETag validator and keeps a 304 overlay", async () => {
   const store = memoryProviderStore({
     models: [oxAlphaModel()],
-    checkedAt: Date.parse("2026-08-20T16:01:00Z"),
-    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+    checkedAt: Date.parse("2026-09-23T16:01:00Z"),
+    lastModified: Date.parse("2026-09-23T16:00:00Z"),
     etag: '"catalog-v1"',
   } as ModelsStoreEntry);
   let headers = new Headers();
@@ -346,7 +346,7 @@ test("configured provider refresh is isolated and publishes before its caller co
               api: "openai-responses",
             },
           },
-          { headers: { "last-modified": "Thu, 20 Aug 2026 16:00:00 GMT" } },
+          { headers: { "last-modified": "Wed, 23 Sep 2026 16:00:00 GMT" } },
         );
       },
     }),
@@ -402,7 +402,7 @@ test("catalog parser rejects duplicate ids, unsafe origins, credential headers, 
 });
 
 test("last-known-good catalog survives 404, 501, server errors, and malformed payloads", async () => {
-  const checkedAt = Date.parse("2026-08-20T16:01:00Z");
+  const checkedAt = Date.parse("2026-09-23T16:01:00Z");
   for (const response of [
     () => new Response(null, { status: 404 }),
     () => new Response(null, { status: 501 }),
@@ -412,7 +412,7 @@ test("last-known-good catalog survives 404, 501, server errors, and malformed pa
     const store = memoryProviderStore({
       models: [oxAlphaModel()],
       checkedAt,
-      lastModified: Date.parse("2026-08-20T16:00:00Z"),
+      lastModified: Date.parse("2026-09-23T16:00:00Z"),
       etag: '"old"',
     } as ModelsStoreEntry);
     const provider = withPiRemoteCatalog(opencodeGoProvider(), {
@@ -430,7 +430,7 @@ test("minimum-version and oversized responses fail closed without replacing the 
   const store = memoryProviderStore({
     models: [oxAlphaModel()],
     checkedAt: 1,
-    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+    lastModified: Date.parse("2026-09-23T16:00:00Z"),
   } as ModelsStoreEntry);
   for (const response of [
     () => Response.json({ "ox-alpha-free": oxAlphaModel() }, {
@@ -455,13 +455,13 @@ test("an older valid catalog cannot roll back a newer cached generation", async 
   const cached = oxAlphaModel();
   const store = memoryProviderStore({
     models: [cached],
-    checkedAt: Date.parse("2026-08-20T16:01:00Z"),
-    lastModified: Date.parse("2026-08-20T16:00:00Z"),
+    checkedAt: Date.parse("2026-09-23T16:01:00Z"),
+    lastModified: Date.parse("2026-09-23T16:00:00Z"),
   } as ModelsStoreEntry);
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
     fetchImpl: async () => Response.json({
       replacement: { ...cached, id: "replacement", name: "Older replacement" },
-    }, { headers: { "last-modified": "Wed, 19 Aug 2026 16:00:00 GMT" } }),
+    }, { headers: { "last-modified": "Wed, 23 Sep 2026 15:59:00 GMT" } }),
   });
 
   await refreshProvider(provider, store, { allowNetwork: false });
@@ -474,7 +474,7 @@ test("an older valid catalog cannot roll back a newer cached generation", async 
 });
 
 test("a future generation cannot poison the cache and a current catalog recovers it", async () => {
-  const now = Date.parse("2026-08-22T18:00:00Z");
+  const now = Date.parse("2026-09-25T18:00:00Z");
   const poisoned = { ...oxAlphaModel(), id: "future-poison", name: "Future poison" };
   const store = memoryProviderStore({
     models: [poisoned],
@@ -486,7 +486,7 @@ test("a future generation cannot poison the cache and a current catalog recovers
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
     now: () => now,
     fetchImpl: async () => Response.json({ recovered }, {
-      headers: { "last-modified": "Sat, 22 Aug 2026 17:59:00 GMT" },
+      headers: { "last-modified": "Fri, 25 Sep 2026 17:59:00 GMT" },
     }),
   });
 
@@ -509,18 +509,18 @@ test("a future generation cannot poison the cache and a current catalog recovers
 });
 
 test("clock rollback retains the last-known-good catalog and its downgrade fence", async () => {
-  const acceptedAt = Date.parse("2026-08-22T18:00:00Z");
+  const acceptedAt = Date.parse("2026-09-25T18:00:00Z");
   const cached = { ...oxAlphaModel(), id: "newer-cached", name: "Newer cached" };
   const store = memoryProviderStore({
     models: [cached],
     checkedAt: acceptedAt,
-    lastModified: Date.parse("2026-08-22T17:59:00Z"),
+    lastModified: Date.parse("2026-09-25T17:59:00Z"),
   } as ModelsStoreEntry);
   const older = { ...oxAlphaModel(), id: "older-remote", name: "Older remote" };
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
-    now: () => Date.parse("2026-08-22T17:00:00Z"),
+    now: () => Date.parse("2026-09-25T17:00:00Z"),
     fetchImpl: async () => Response.json({ older }, {
-      headers: { "last-modified": "Sat, 01 Aug 2026 12:00:00 GMT" },
+      headers: { "last-modified": "Fri, 25 Sep 2026 16:59:00 GMT" },
     }),
   });
 
@@ -534,8 +534,8 @@ test("clock rollback retains the last-known-good catalog and its downgrade fence
 });
 
 test("clock-rollback revalidation retains its acceptance boundary across restart", async () => {
-  const acceptedAt = Date.parse("2026-08-22T18:00:00Z");
-  const rolledBackNow = Date.parse("2026-08-22T17:00:00Z");
+  const acceptedAt = Date.parse("2026-09-25T18:00:00Z");
+  const rolledBackNow = Date.parse("2026-09-25T17:00:00Z");
   const cached = { ...oxAlphaModel(), id: "rollback-cached", name: "Rollback cached" };
   for (const response of [
     () => new Response(null, { status: 304 }),
@@ -545,7 +545,7 @@ test("clock-rollback revalidation retains its acceptance boundary across restart
     const store = memoryProviderStore({
       models: [cached],
       checkedAt: acceptedAt,
-      lastModified: Date.parse("2026-08-22T17:59:00Z"),
+      lastModified: Date.parse("2026-09-25T17:59:00Z"),
       etag: '"accepted"',
     } as ModelsStoreEntry);
     const provider = withPiRemoteCatalog(opencodeGoProvider(), {
@@ -861,7 +861,10 @@ for (const cleanup of ["delete", "empty-fallback", "fallback-fsync-error"] as co
       } });
       restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
       await restarted.refresh({ providers: ["radius"], allowNetwork: false });
-      assert.deepEqual(restarted.getModels("radius").map((model) => model.id), newer ? ["new-account-model"] : []);
+      assert.deepEqual(restarted.getModels("radius").map((model) => model.id), [
+        ...builtinModels().getModels("radius").map((model) => model.id),
+        ...(newer ? ["new-account-model"] : []),
+      ]);
     });
   }
 }
@@ -990,8 +993,10 @@ for (const mode of ["scoped", "full"] as const) {
         });
         restarted.setProvider(builtinProviders().find((provider) => provider.id === "radius")!);
         await restarted.refresh({ providers: ["radius"], allowNetwork: false });
-        assert.deepEqual(restarted.getModels("radius").map((model) => model.id),
-          newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]);
+        assert.deepEqual(restarted.getModels("radius").map((model) => model.id), [
+          ...builtinModels().getModels("radius").map((model) => model.id),
+          ...(newer === "none" ? [] : [newer === "identical" ? "old-account-model" : "new-account-model"]),
+        ]);
       });
     }
   }
@@ -1008,7 +1013,7 @@ for (const mode of ["scoped", "full"] as const) {
       const started = deferred<void>();
       const response = deferred<Response>();
       const provider = withPiRemoteCatalog(opencodeGoProvider(), {
-        now: () => Date.parse("2026-09-10T16:01:00Z"),
+        now: () => Date.parse("2026-09-23T16:01:00Z"),
         fetchImpl: async () => {
           started.resolve();
           return response.promise;
@@ -1025,7 +1030,7 @@ for (const mode of ["scoped", "full"] as const) {
       else await credentials.delete(provider.id);
       const obsolete = { ...oxAlphaModel(), id: "obsolete-catalog-model" };
       response.resolve(Response.json([obsolete], {
-        headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" },
+        headers: { "last-modified": "Wed, 23 Sep 2026 16:00:00 GMT" },
       }));
       const result = await pending;
       assert.equal(result.errors.size, 0);
@@ -1303,7 +1308,7 @@ test("a new full pi.dev refresh does not join the aborted scoped network request
   const requests: ReturnType<typeof deferred<Response>>[] = [];
   const started = deferred<void>();
   const provider = withPiRemoteCatalog(opencodeGoProvider(), {
-    now: () => Date.parse("2026-09-10T16:01:00Z"),
+    now: () => Date.parse("2026-09-23T16:01:00Z"),
     fetchImpl: async () => {
       const response = deferred<Response>();
       requests.push(response);
@@ -1321,7 +1326,7 @@ test("a new full pi.dev refresh does not join the aborted scoped network request
   const count = requests.length;
   requests.forEach((request, index) => request.resolve(Response.json([
     { ...oxAlphaModel(), id: index === 0 ? "obsolete-model" : "newest-model" },
-  ], { headers: { "last-modified": "Thu, 10 Sep 2026 16:00:00 GMT" } })));
+  ], { headers: { "last-modified": "Wed, 23 Sep 2026 16:00:00 GMT" } })));
   await Promise.all([old, next]);
   assert.equal(count, 2);
   assert.equal(models.getModel(provider.id, "obsolete-model"), undefined);
@@ -1422,7 +1427,7 @@ test("scoped catalog cancellation fences a hung publication credential check", a
 test("stale launch refresh selects only stale pi.dev overlays", async () => {
   const radius = builtinProviders().find((provider) => provider.id === "radius");
   assert.ok(radius);
-  const now = Date.parse("2026-08-22T18:00:00Z");
+  const now = Date.parse("2026-09-25T18:00:00Z");
   const stale = withPiRemoteCatalog(opencodeGoProvider(), { now: () => now });
   const fresh = withPiRemoteCatalog({ ...opencodeGoProvider(), id: "fresh-overlay" }, { now: () => now });
   const stores = new Map<string, ReturnType<typeof memoryProviderStore>>([

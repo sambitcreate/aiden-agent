@@ -112,6 +112,7 @@
         "main/services/pi-runtime-effect-store.test.ts",
         "main/services/pi-runtime-events.test.ts",
         "main/services/pi-session-migration.test.ts",
+        "main/services/pi-session-v4-upgrade.test.ts",
         "main/services/pi-session-port.test.ts",
         "main/services/pi-upgrade-evaluation.test.ts",
         "main/services/pi-vcc/vcc.test.ts",

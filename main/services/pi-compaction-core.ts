@@ -9,6 +9,8 @@ import {
   prepareCompaction,
   shouldCompact,
   uuidv7,
+  TODO_CONTEXT,
+  withAbortSignal,
   type AgentMessage,
   type CompactionSettings,
   type CompactResult,
@@ -23,6 +25,7 @@ import {
   type RetryCallbacks,
   type RetryPolicy,
   type Usage,
+  normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { PiSessionPort } from "./pi-session-port.js";
@@ -501,7 +504,6 @@ export class PiCompactionCoordinator {
               boundedCompactionModels(this.options.models),
               this.options.model,
               undefined,
-              abortController.signal,
               this.options.thinkingLevel,
               this.options.summaryRetry ?? {
                 enabled: true,
@@ -509,6 +511,7 @@ export class PiCompactionCoordinator {
                 baseDelayMs: 2_000,
               },
               this.options.summaryRetryCallbacks,
+              withAbortSignal(abortController.signal, TODO_CONTEXT),
             );
       if (!compactResult.ok) throw compactResult.error;
       if (abortController.signal.aborted) {
@@ -579,7 +582,7 @@ export class PiCompactionCoordinator {
         tokensBefore: result.tokensBefore,
         estimatedTokensAfter: estimatedMessageTokens(context.messages),
         ...(result.usage === undefined ? {} : { usage: result.usage }),
-        ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
+        ...(result.details ? { details: result.details as unknown as PiCompactionDetails } : {}),
       };
       this.options.onEvent?.({
         type: "end",
@@ -651,7 +654,7 @@ export function createPiCompactionModels(
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const stream = runtime.models.getModel(model.provider, model.id)
       ? runtime.models.streamSimple(model, context, options)
-      : runtime.streams.streamSimple(model, context, {
+      : runtime.streams.streamSimple(model, normalizeContext(context), {
           ...options,
           apiKey: options?.apiKey ?? runtime.apiKey,
           headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,

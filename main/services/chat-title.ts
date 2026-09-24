@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 // Background first-turn chat title generation. This is intentionally separate
 // from the interactive Agent: it makes one small, tool-free model request and
 // never delays or fails the user's actual chat turn.
@@ -110,10 +111,10 @@ async function generateWithChatModel(input: {
     result = await runtime.streams
       .streamSimple(
         runtime.model,
-        {
+        normalizeContext({
           systemPrompt: "You write short, specific titles for coding conversations.",
           messages: [{ role: "user", content: promptContent, timestamp: Date.now() }],
-        },
+        }),
         {
           apiKey: runtime.apiKey,
           headers: runtime.headers,

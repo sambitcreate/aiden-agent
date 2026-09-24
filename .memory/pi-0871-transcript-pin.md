@@ -1,0 +1,9 @@
+# Pi 0.87.1 transcript-owned prompt pin (2026-09-24)
+
+This branch pins `@earendil-works/pi-agent-core` and `pi-ai` to 0.87.1. Pi's system prompt and tool declarations now live in leading transcript system messages. Aiden's host refresher appends section patches for AGENTS and browser discovery; the harness installs returned context messages and preserves the effective leading system message through compaction, emergency projection, and recovery. Context projection counts static prompt/tools once.
+
+Pi 0.87.1 also replaced the 0.84.4 session repository interface and JSONL storage header. `pi-session-port.ts` retains Aiden's narrow journal contract over the new Session/Branch APIs. `pi-session-v4-upgrade.ts` converts old v4 journals on open with an exact private backup and rejects unsettled operations. The v3 migration now emits the new storage format and retains its rollback receipt contract. Child sessions use the new in-memory repository through the same port.
+
+The bundled model manifest was generated 2026-09-22T19:31:44.346Z. Remote catalog freshness uses that date and version 0.87.1; the native Remote `/models` protocol remains v1. Provider fixtures now reflect the new Codex, Google, and Radius catalogs. Chord is only a transitive dependency. No Pi plugins, Chord transport, project-trust replacement, or unreleased provider-stream hook were adopted.
+
+Gates passed: typecheck, compaction/VCC, MCP, full subagent suite, provider serialization smokes, catalog/model-picker tests, AGENTS refresh, and exact-head `npm test` (including 1,908 main tests and the final CI policy lane). The executable upgrade-evaluation script requires an installed candidate path and receipt directory; the same seven replay cases and scorecard passed in the compaction suite.

@@ -5,6 +5,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
@@ -581,6 +582,21 @@ test("replaces an oversized active request with a bounded fail-safe notice", () 
     /fewer\/lower-size attachments/u,
   );
   assert.equal((messages[0] as UserMessage).content.length, 100_000);
+});
+
+test("emergency projection retains the transcript prompt and tool declarations", () => {
+  const system = createInitialSystemMessage("Keep the host policy", [{
+    name: "safe_read", description: "Read a fixture", parameters: Type.Object({}),
+  }]);
+  assert.ok(system);
+  const messages = [system, user("x".repeat(100_000))] as AgentMessage[];
+  const result = compactGenerationContext(messages, { ...options, contextWindow: 8_000 });
+  assert.equal(result.usedContextFallback, true);
+  assert.equal(result.messages[0]?.role, "system");
+  assert.equal(getCurrentSystemPrompt(result.messages), "Keep the host policy");
+  assert.deepEqual(getCurrentTools(result.messages).map((tool) => tool.name), ["safe_read"]);
+  assert.equal(result.messages[1]?.role, "user");
+  assert.deepEqual(messages[0], system);
 });
 
 test("rejects a model whose static prompt and tools cannot fit even the fail-safe notice", () => {

@@ -93,7 +93,7 @@ export function estimateStaticContextTokens(options: GenerationContextOptions): 
 
 function messageTokens(messages: AgentMessage[]): number {
   return messages.reduce(
-    (total, message) => total + estimateTokens(message),
+    (total, message) => total + (message.role === "system" ? 0 : estimateTokens(message)),
     0,
   );
 }
@@ -588,7 +588,7 @@ export function compactGenerationContext(
           break;
         }
       }
-      const start = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
+      const start = checkpointIndex >= 0 ? checkpointIndex + 1 : transformed[0]?.role === "system" ? 1 : 0;
       const removed = currentUser - start;
       transformed.splice(start, removed);
       removedHistoryMessages += removed;
@@ -624,8 +624,9 @@ export function compactGenerationContext(
   // breaking protocol, replace only the outbound context with a bounded notice
   // that cannot continue the tool loop. Persisted Agent/chat state is untouched.
   if (overBudget()) {
-    removedCurrentTurnMessages += transformed.length;
-    transformed.splice(0, transformed.length, contextFallback(retained));
+    const system = transformed[0]?.role === "system" ? transformed[0] : undefined;
+    removedCurrentTurnMessages += transformed.length - (system ? 1 : 0);
+    transformed.splice(system ? 1 : 0, transformed.length, contextFallback(retained));
     usedContextFallback = true;
   }
 

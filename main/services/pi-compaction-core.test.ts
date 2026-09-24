@@ -1,9 +1,10 @@
+import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { InMemorySessionRepo, JsonlSessionRepo } from "@earendil-works/pi-agent-core";
+import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createModels,
@@ -1450,7 +1451,7 @@ test("opening a chat promotes its legacy v3 journal before current repository di
     "chat-v3-open",
   );
   assert.match(JSON.stringify(await session.buildContext()), /Inspect the image/u);
-  assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).version, 4);
+  assert.equal(JSON.parse((await readFile(journalPath, "utf8")).split("\n")[0]!).v, 4);
   assert.equal((await stat(`${journalPath}.v3-backup`)).mode & 0o777, 0o600);
   assert.equal((await stat(`${journalPath}.migration-v1.json`)).mode & 0o777, 0o600);
 
@@ -1744,20 +1745,22 @@ test("newest corrupt duplicate is quarantined and older valid history reopens", 
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const repo = new JsonlSessionRepo({
-    fs: new NodeExecutionEnv({ cwd: root }),
+    fileSystem: new NodeExecutionEnv({ cwd: root }),
     sessionsRoot: root,
   });
   const older = await repo.create({
     id: "chat-fallback-test",
     cwd: root,
-    metadata: {
-      kind: "aiden-chat-compaction-v1",
-      chatId: "chat-fallback-test",
-    },
-  });
-  await older.appendMessage(user("older valid", 10));
+  }, TODO_CONTEXT);
+  const olderPort = createPiSessionPort(older);
+  await older.setValue(
+    { namespace: "aiden", key: "session-metadata", kind: "value" },
+    { kind: "aiden-chat-compaction-v1", chatId: "chat-fallback-test" },
+    TODO_CONTEXT,
+  );
+  await olderPort.appendMessage(user("older valid", 10));
   await new Promise((resolve) => setTimeout(resolve, 2));
-  const olderMetadata = await older.getMetadata();
+  const olderMetadata = older.metadata;
   const newerPath = path.join(
     path.dirname(olderMetadata.path),
     `9999-12-31T23-59-59-999Z_chat-fallback-test.jsonl`,
