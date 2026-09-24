@@ -113,6 +113,8 @@ struct AidenChatProgressControls: View {
                                 stale: taskIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text(taskAccessibilityLabel(taskProgress)))
                         .accessibilityHint(Text("Opens task progress"))
                         .buttonStyle(.plain)
@@ -127,6 +129,8 @@ struct AidenChatProgressControls: View {
                                 stale: taskIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text("Task progress unavailable"))
                         .accessibilityHint(Text("Opens task progress details"))
                         .buttonStyle(.plain)
@@ -139,6 +143,8 @@ struct AidenChatProgressControls: View {
                                 stale: agentIsStale
                             )
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel(Text(agentAccessibilityLabel(agentRoster)))
                         .accessibilityHint(Text("Opens delegated agents"))
                         .buttonStyle(.plain)
@@ -202,12 +208,15 @@ struct AidenChatProgressControls: View {
     }
 }
 
-private struct AidenProgressChipLabel: View {
+struct AidenProgressChipLabel: View {
     @Environment(\.aidenPalette) private var palette
 
     let systemImage: String
     let title: String
     let stale: Bool
+    /// Deterministic chrome override for tests and hosted previews; nil
+    /// follows the system Reduce Transparency setting.
+    var reduceTransparency: Bool? = nil
 
     var body: some View {
         Label {
@@ -227,7 +236,11 @@ private struct AidenProgressChipLabel: View {
         .foregroundStyle(palette.foreground)
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
-        .background(palette.raised, in: Capsule())
+        .aidenChromeGlass(
+            isInteractive: true,
+            in: Capsule(),
+            reduceTransparency: reduceTransparency
+        )
         .contentShape(Capsule())
     }
 }

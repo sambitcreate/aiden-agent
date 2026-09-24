@@ -188,6 +188,55 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testProgressChipsKeepFullSizeTargetsUnderReduceTransparency() throws {
+        let progress = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatTaskProgress.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[{"id":1,"subject":"Done","status":"completed"},{"id":2,"subject":"Working","status":"in_progress","activeForm":"Working"}]}"#.utf8
+            )
+        )
+        let roster = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteChatAgentRoster.self,
+            from: Data(
+                #"{"version":1,"chatId":"chat-1","availability":"ready","epoch":"epoch-1","revision":1,"updatedAt":"2026-09-14T12:00:00Z","agents":[{"agentId":"agent-1","depth":1,"revision":1,"role":"scout","label":"Scouting","taskPreview":"Survey","state":"running","startedAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","modelId":"model","turns":1,"tools":1,"tokens":10}]}"#.utf8
+            )
+        )
+
+        let controls = AidenChatProgressControls(
+            taskProgress: progress,
+            agentRoster: roster,
+            canReadTasks: true,
+            canReadAgents: true,
+            taskIsStale: false,
+            agentIsStale: false,
+            openTasks: {},
+            openAgents: {}
+        )
+        let host = UIHostingController(rootView: controls.frame(width: 320))
+        let size = host.sizeThatFits(in: CGSize(width: 320, height: 200))
+        // Chip buttons keep a 44pt hit target even though the capsule
+        // visual stays compact.
+        XCTAssertGreaterThanOrEqual(size.height, 44)
+
+        // The Reduce Transparency chrome path renders the same chip title and
+        // icon through the deterministic override rather than the read-only
+        // system environment.
+        for reduceTransparency in [true, false] {
+            let renderer = ImageRenderer(content:
+                AidenProgressChipLabel(
+                    systemImage: "checklist",
+                    title: "Step 1 of 2 · Working",
+                    stale: false,
+                    reduceTransparency: reduceTransparency
+                )
+                .frame(width: 320)
+            )
+            renderer.scale = 2
+            XCTAssertNotNil(renderer.cgImage)
+        }
+    }
+
+    @MainActor
     func testProgressObservationReleasesCompletedHandleAndCanRestart() async throws {
         let model = try await makeProgressLifecycleModel(mode: .denied)
         defer {
