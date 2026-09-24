@@ -612,3 +612,24 @@ test("failed-safe evidence requires a checkpoint for an admissible retry", (t) =
     code("invalid"),
   );
 });
+
+test("reconciliation without execution preserves a finished attempt", (t) => {
+  const f = fixture(t);
+  const job = f.store.enqueue(input, "actor", "key");
+  const claim = f.store.claim("one")!;
+  f.store.admitted(claim.lease, checkpoint);
+  f.store.beginExecution(claim.lease, "start");
+  const settled = f.store.settle(claim.lease, evidence("checkpoint"));
+  const attempts = f.store.attempts(job.id);
+  f.clock(2_000);
+  f.store.control({
+    actor: "actor",
+    key: "cancel",
+    jobId: job.id,
+    expectedRevision: settled.revision,
+    action: "cancel",
+  });
+  f.store.settle(f.store.claim("two")!.lease, evidence("checkpoint"));
+  assert.equal(f.store.get(job.id).state, "cancelled");
+  assert.deepEqual(f.store.attempts(job.id), attempts);
+});

@@ -270,7 +270,9 @@ export class DurableJobStore {
       .run(job.id, job.id, JOB_LIMITS.eventsPerJob);
     if (finishAttempt && job.attemptId)
       this.db
-        .prepare("UPDATE attempts SET finished_at=?,outcome=? WHERE id=?")
+        .prepare(
+          "UPDATE attempts SET finished_at=?,outcome=? WHERE id=? AND finished_at IS NULL",
+        )
         .run(now, job.state, job.attemptId);
     return structuredClone(job);
   }

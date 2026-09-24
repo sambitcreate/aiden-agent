@@ -992,3 +992,5 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - PR #243 review: lease release and attempt settlement are distinct; recording an outcome on controls rewrote completed attempts and prematurely finished live ones. Added separate settlement flag plus resume/retry/pause regressions. Wrong-input checkpoints now report integrity failure rather than lease loss.
 
 - PR #243 Pullfrog review: asynchronous input preparation needs an explicit pre-commit lease guard plus retained chat reservation through IO settlement. Failed-safe evidence must include the checkpoint required by retry admission; added regressions for both.
+
+- PR #243 follow-up: reconciliation can occur after an attempt already finished; finalize only attempts with null finished_at to preserve historical outcome/time. Covered cancel-after-settlement without a new execution.
