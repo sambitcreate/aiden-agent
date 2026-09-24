@@ -1,5 +1,6 @@
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine } from "../shared/compaction";
+import type { TtsSettingsV1 } from "../shared/tts";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
@@ -870,6 +871,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
+  tts?: TtsSettingsV1;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;

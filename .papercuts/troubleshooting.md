@@ -982,3 +982,13 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+
+
+## 2026-09-24 — Gemini TTS review hardening
+
+- AbortSignal alone is not a terminal transition: the deliberately noncooperative provider test kept the job generating until the timeout callback itself marked failure. Test late resolutions as well as rejected aborts.
+- A bounded read is not full consumption. Marking a segment read after its first 64 KiB allowed eviction during continuation reads; retention now tracks contiguous bytes and rejects unread overflow atomically.
+- Generation completion precedes audible completion; wiring Settings preview directly to synthesis produced no audio. Use the same gesture-primed, job-owned controller and fence pending start/read/decode across Stop and navigation.
+- One authority child completed. UI child reached its turn limit without a reliable report; parent covered that gap. Final follow-up batch was refused at admission by the tree deadline, so fresh independent final sign-off remains open rather than retrying it.
+- Android chat/progress initially ran 56/57: failedSendRestoresDurableDraftAfterRestart raced Dispatchers.Main reset. No Android changes; chronology/progress isolation passed 20/20, then the same full selection passed 57/57 on confirmation. Preserve the flake evidence rather than treating the first run as green.
+- Physical iOS AidenChatTests ran on the available paired iPhone and passed 114/114; no simulator test run was used. Vite build passes with its chunk-size and Ghostty mixed-import warnings; release/package/live-Google gates were not run.

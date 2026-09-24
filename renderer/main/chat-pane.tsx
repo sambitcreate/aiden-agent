@@ -23,6 +23,8 @@ import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { BotAvatar } from "../components/bot-avatar";
 import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
+import { useReadAloud } from "../lib/tts-client";
+import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
@@ -418,6 +420,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
+  // Read aloud: one controller per chat surface; main owns eligibility.
+  const { state: readAloudState, controller: readAloudController } = useReadAloud(chatId);
+  const readAloudRef = React.useRef(readAloudController);
+  readAloudRef.current = readAloudController;
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
   const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
@@ -1210,6 +1216,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (attachments.length > 0 || skillInvocation) {
           throw new Error("Side questions do not accept attachments or skills.");
         }
+        // A new turn revokes any active read-aloud job for this chat.
+        readAloudRef.current?.stop();
         const question = text.trim();
         setBtwView({
           requestId: "pending",
@@ -1235,6 +1243,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (chatMessageQueue(chatId).getSnapshot().messages.length === 0)
         chatMessageQueue(chatId).resume();
+      // A new turn revokes any active read-aloud job for this chat.
+      readAloudRef.current?.stop();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
         throw new Error(
@@ -1986,6 +1996,81 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  // --- Read aloud wiring --------------------------------------------------
+  // Local candidate mirrors main's policy: the last assistant message after
+  // the latest user turn, while no live generation row is mounted. Main
+  // revalidates authoritatively on every start and segment.
+  const transcriptIdle = displayedStreamingText === null && !isStartingGeneration;
+  const readAloudCandidateId = React.useMemo(() => {
+    if (!transcriptIdle) return undefined;
+    let lastUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]!.role === "user") {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "assistant") {
+        // Never scan past a newer failed or empty response.
+        return message.providerFailure === undefined &&
+          (!message.timeline || message.timeline.status === "completed") && message.content.trim().length > 0
+          ? message.id : undefined;
+      }
+    }
+    return undefined;
+  }, [messages, transcriptIdle]);
+
+  React.useEffect(() => {
+    void readAloudController.refreshStatus(chatId);
+    return () => readAloudController.stop();
+  }, [chatId, readAloudCandidateId, readAloudController]);
+
+  const readAloudActive =
+    readAloudState.job?.kind === "read-aloud" &&
+    readAloudState.job.chatId === chatId &&
+    (readAloudState.busy || readAloudState.playing || readAloudState.paused);
+  const readAloudPhase: ReadAloudActionProps["phase"] = !readAloudState.status
+    ? "not-configured"
+    : !readAloudState.status.synthesisReady
+      ? "not-configured"
+      : readAloudActive || readAloudState.busy
+        ? readAloudState.paused
+          ? "paused"
+          : readAloudState.playing
+            ? "playing"
+            : "busy"
+        : readAloudState.error
+          ? "error"
+          : "ready";
+  const readAloudProps: ReadAloudActionProps | undefined = readAloudCandidateId &&
+    (!readAloudState.latestSource || readAloudState.latestSource.source?.messageId === readAloudCandidateId)
+    ? {
+        active: Boolean(readAloudActive || readAloudState.busy),
+        phase: readAloudPhase,
+        omissions: readAloudState.job?.omissions ?? [],
+        error: readAloudState.error?.message,
+        onActivate: () => {
+          const source = readAloudState.latestSource?.source;
+          if (!readAloudState.status?.synthesisReady) {
+            void navigate({ to: "/settings", search: { section: "tts" } });
+            return;
+          }
+          if (!source || source.messageId !== readAloudCandidateId) {
+            void readAloudController.refreshStatus(chatId);
+            return;
+          }
+          void readAloudController.start(source);
+        },
+        onStop: () => readAloudController.stop(),
+        onTogglePause: () => {
+          if (readAloudState.paused) void readAloudController.resume();
+          else void readAloudController.pause();
+        },
+      }
+    : undefined;
+
   return (
     <>
       <ScrollArea
@@ -2434,6 +2519,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             subagentsEnabled={environmentPanel.subagentsEnabled}
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
+            readAloudMessageId={readAloudCandidateId}
+            readAloud={readAloudProps}
             error={
               error ??
               (imageArtifactRecoveryUnavailable

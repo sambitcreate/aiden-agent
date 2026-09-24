@@ -180,7 +180,7 @@ test("uses the exact reviewed Google SDK without replacing Pi's own exact SDK", 
     "@earendil-works/pi-ai/node_modules/@google/genai",
   );
 
-  assert.equal(await packageVersion(directRoot), "2.19.0");
+  assert.equal(await packageVersion(directRoot), "2.24.0");
   assert.equal(await packageVersion(piGoogleRoot), "1.52.0");
   assert.notEqual(directRoot, piGoogleRoot);
 });
