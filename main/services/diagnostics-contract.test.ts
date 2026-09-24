@@ -8,10 +8,94 @@ import {
   MAX_DIAGNOSTIC_EVENT_BYTES,
   normalizeDiagnosticFields,
   projectDiagnosticError,
+  rendererDiagnosticClassification,
   sanitizeDiagnosticText,
 } from "./diagnostics-contract.js";
 
 const sessionId = "session-test";
+
+test("main-generated renderer references survive normalization without admitting arbitrary content", () => {
+  const referenceId = "RD-e20a0162-266b-49ab-ae0a-078f74efe71c";
+  assert.equal(normalizeDiagnosticFields({ referenceId })?.referenceId, referenceId);
+  assert.equal(createDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-global-error", fields: { referenceId } }, sessionId).fields?.referenceId, referenceId);
+  for (const value of [`${referenceId}\nprivate`, `https://private/${referenceId}`, `Bearer ${referenceId}`]) {
+    assert.equal(normalizeDiagnosticFields({ referenceId: value }), undefined);
+  }
+});
+
+test("structural causes retain HTTP evidence and cancellation without payloads", () => {
+  const secret = "private-prompt-auth-endpoint-task-content";
+  const error = Object.assign(new Error(secret), { cause: { status: 429, message: secret, request: secret } });
+  const projected = projectDiagnosticError(error);
+  assert.equal(projected.code, "rate-limited");
+  assert.equal(projected.causeCode, "rate-limited");
+  assert.equal(projected.httpStatus, 429);
+  assert.doesNotMatch(JSON.stringify(projected), /private-prompt/);
+  assert.equal(projectDiagnosticError(new Error("HTTP 503 private text")).httpStatus, undefined);
+  assert.equal(projectDiagnosticError({ status: "503" }).httpStatus, undefined);
+  assert.equal(projectDiagnosticError({ statusCode: 503 }).code, "service-unavailable");
+  const wrappedStatus = projectDiagnosticError({ status: 200, cause: { status: 503 } });
+  assert.equal(wrappedStatus.code, "service-unavailable");
+  assert.equal(wrappedStatus.httpStatus, 503);
+  const outerStatus = projectDiagnosticError({ status: 429, cause: { status: 503 } });
+  assert.equal(outerStatus.code, "rate-limited");
+  assert.equal(outerStatus.httpStatus, 429);
+  assert.equal(projectDiagnosticError({ code: "ECONNRESET", cause: { status: 503 } }).httpStatus, undefined);
+  assert.equal(projectDiagnosticError({ status: 404 }).code, "not-found");
+  assert.equal(projectDiagnosticError(Object.assign(new Error(secret), { cause: { code: "ABORT_ERR" } })).code, "cancelled");
+  assert.equal(projectDiagnosticError(Object.assign(new Error(secret), { name: "AbortError" })).code, "cancelled");
+  assert.equal(projectDiagnosticError(new TypeError(secret)).errorType, "TypeError");
+  assert.equal(projectDiagnosticError(new (class extends Error {})(secret)).errorType, "Error");
+  assert.equal(projectDiagnosticError(new (class extends TypeError {})(secret)).errorType, "TypeError");
+});
+
+test("renderer cancellation is counted as cancelled, not a process crash or failure", () => {
+  for (const suppressed of [0, 5]) {
+    assert.deepEqual(rendererDiagnosticClassification("AbortError", suppressed), {
+      code: "cancelled", outcome: "cancelled",
+    });
+  }
+  assert.deepEqual(rendererDiagnosticClassification("TypeError"), { code: "renderer-exception", outcome: "failed" });
+  assert.deepEqual(rendererDiagnosticClassification("UnknownError", 5), { code: "renderer-exception", outcome: "degraded" });
+});
+
+test("unknown cyclic and accessor errors stay bounded and content-free", () => {
+  for (const value of [null, undefined, "private-prompt", 0, {}, { code: "private-code" }]) {
+    assert.equal(projectDiagnosticError(value).code, "unknown");
+    assert.doesNotMatch(JSON.stringify(projectDiagnosticError(value)), /private/);
+  }
+  const cycle: { cause?: unknown } = {};
+  cycle.cause = cycle;
+  assert.equal(projectDiagnosticError(cycle).code, "unknown");
+  const getters = Object.defineProperties({}, Object.fromEntries(
+    ["name", "code", "status", "statusCode", "cause", "stack"].map((key) => [key, { get() { throw new Error("private"); } }]),
+  ));
+  assert.equal(projectDiagnosticError(getters).code, "unknown");
+  let traps = 0;
+  const hostile = new Proxy({}, {
+    getOwnPropertyDescriptor() { traps += 1; throw new Error("private trap"); },
+    getPrototypeOf() { traps += 1; throw new Error("private prototype"); },
+  });
+  assert.equal(projectDiagnosticError(hostile).code, "unknown");
+  assert.equal(projectDiagnosticError({ cause: hostile }).code, "unknown");
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  assert.equal(projectDiagnosticError(revoked.proxy).code, "unknown");
+  assert.equal(traps, 0);
+  assert.equal(projectDiagnosticError({ code: "X".repeat(100_000) }).code, "unknown");
+  assert.equal(projectDiagnosticError({ code: "private-a" }).fingerprint, projectDiagnosticError({ code: "private-b" }).fingerprint);
+  function alpha() { return new Error("private-a"); }
+  function beta() { return new Error("private-b"); }
+  assert.equal(projectDiagnosticError(alpha()).fingerprint, projectDiagnosticError(beta()).fingerprint);
+  assert.notEqual(projectDiagnosticError({ status: 429 }).fingerprint, projectDiagnosticError({ status: 503 }).fingerprint);
+  assert.deepEqual(normalizeDiagnosticFields({
+    httpStatus: 429, causeCode: "cancelled", failurePhase: "mcp-tool-discovery", providerCategory: "model_unavailable",
+  }), { httpStatus: 429, causeCode: "cancelled", failurePhase: "mcp-tool-discovery", providerCategory: "model_unavailable" });
+  for (const httpStatus of [99, 600, 429.5, Number.NaN, Infinity, "429"]) {
+    assert.equal(normalizeDiagnosticFields({ httpStatus }), undefined);
+  }
+  assert.equal(normalizeDiagnosticFields({ causeCode: "secret", failurePhase: "secret", providerCategory: "secret" }), undefined);
+});
 
 test("diagnostic events normalize names and allowlisted scalar fields", () => {
   const event = createDiagnosticEvent(

@@ -94,7 +94,7 @@ function providerInventory(
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
-          supportsImages: metadata?.vision === true,
+          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,
@@ -285,6 +285,12 @@ function ordinaryInventory(input: {
       label: "Subagents",
       description: "Delegate bounded parts of a task to Aiden subagents.",
       available: input.subagentsAvailable,
+    },
+    {
+      kind: "tasks",
+      label: "Task tracking",
+      description: "Keep a saved checklist and show progress for multi-step work.",
+      available: true,
     },
   ];
   return values.map((value) => ({

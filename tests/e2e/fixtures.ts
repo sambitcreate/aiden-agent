@@ -139,7 +139,7 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
-  relaunch: () => Promise<Page>;
+  relaunch: (afterClose?: () => Promise<void>) => Promise<Page>;
 };
 
 type AidenE2eOptions = {
@@ -752,6 +752,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           // retain Playwright's worker transport after Electron main exits.
           // E2E still verifies the owned main PID directly during teardown.
           AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
+          // The production candidate stays acceptance-gated. E2E opts in only
+          // to exercise its local setup/UI contract; it never connects Google.
+          AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1",
           AIDEN_RUNTIME_PROFILE: runtimeProfile,
           HOME: testRootDir,
           XDG_CACHE_HOME: testXdgCacheDir,
@@ -805,10 +808,11 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
-        relaunch: async () => {
+        relaunch: async (afterClose) => {
           const previous = app;
           app = undefined;
           await closeAiden(previous);
+          await afterClose?.();
           return launch();
         },
       };

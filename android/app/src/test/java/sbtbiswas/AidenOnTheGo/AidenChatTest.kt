@@ -1,23 +1,428 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.lifecycle.ViewModelStore
+import java.io.File
+import java.time.Instant
+import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.*
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
-import java.io.File
-import java.time.Instant
-import java.util.Base64
-import java.util.UUID
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @Test fun producedFileProvenanceRejectsForeignPathsAndUnrelatedTools() {
+        val file = sbtbiswas.AidenOnTheGo.models.AidenProducedFile("out/report.txt", "written", 12)
+        assertTrue(file.isValid("write_file"))
+        assertTrue(file.copy(relativePath = "foo:bar.txt").isValid("write_file"))
+        assertTrue(file.copy(relativePath = "😀".repeat(121)).isValid("write_file"))
+        assertFalse(file.copy(relativePath = "😀".repeat(241)).isValid("write_file"))
+        assertFalse(file.isValid("mcp_write"))
+        assertFalse(file.isValid("edit_file"))
+        for (path in listOf("C:/private", "/Users/private", "../secret", "a/../b", "a//b", "a\\b", "bad\nname")) {
+            assertFalse(file.copy(relativePath = path).isValid("write_file"))
+        }
+        assertEquals(file, Json.decodeFromString<sbtbiswas.AidenOnTheGo.models.AidenProducedFile>(Json.encodeToString(file)))
+    }
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    @Test
+    fun chronologicalReasoningKeepsToolsAndProseInOrder() {
+        val timeline = AidenGenerationTimeline(
+            version = 3, generationId = "stream-1", status = AidenGenerationTimelineStatus.COMPLETED,
+            startedAt = 1000.0, finishedAt = 2000.0,
+            steps = listOf(
+                AidenAgentStep("think-1", 0, AidenAgentStep.Kind.THINKING,
+                    startedAt = 1000.0, updatedAt = 1100.0, finishedAt = 1100.0,
+                    contentOffset = 0, reasoningStartOffset = 0, reasoningEndOffset = 5),
+                AidenAgentStep("tool-1", 1, AidenAgentStep.Kind.TOOL,
+                    toolCallId = "call-1", toolName = "read_file", label = "Read file",
+                    status = AidenAgentStepStatus.COMPLETED, startedAt = 1100.0,
+                    updatedAt = 1200.0, finishedAt = 1200.0, contentOffset = 0),
+                AidenAgentStep("think-2", 2, AidenAgentStep.Kind.THINKING,
+                    startedAt = 1200.0, updatedAt = 1300.0, finishedAt = 1300.0,
+                    contentOffset = 7, reasoningStartOffset = 7, reasoningEndOffset = 13)
+            )
+        )
+        val message = AidenChatMessage("message-1", AidenChatRole.ASSISTANT,
+            "Before.After.", reasoning = "First\n\nSecond", timeline = timeline, createdAt = Instant.EPOCH)
+        assertTrue(message.isWireSafe)
+        assertEquals(
+            listOf("REASONING:First", "TOOL:", "TEXT:Before.", "REASONING:Second", "TEXT:After."),
+            AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline)
+                ?.map { "${it.kind}:${it.text}" }
+        )
+        assertNull(AidenChronologicalProjection.rows(message.text, "First", timeline))
+        val hiddenTimeline = timeline.copy(steps = timeline.steps.map { step ->
+            step.copy(reasoningStartOffset = null, reasoningEndOffset = null)
+        })
+        assertEquals(
+            listOf(AidenChronologicalRow.Kind.REASONING, AidenChronologicalRow.Kind.TOOL,
+                AidenChronologicalRow.Kind.TEXT, AidenChronologicalRow.Kind.REASONING,
+                AidenChronologicalRow.Kind.TEXT),
+            AidenChronologicalProjection.rows(message.text, "", hiddenTimeline)?.map { it.kind }
+        )
+    }
+
+    @Test
+    fun failedSendRestoresDurableDraftAfterRestart() = assertFailedSendDraft()
+
+    @Test
+    fun failedSendPersistsSubmittedTextAndNewerEdits() = assertFailedSendDraft(newerText = "Newer unsent text")
+
+    @Test
+    fun failedSendCannotRestoreDraftAfterInstallationPurge() = assertFailedSendDraft(purgeWhileSending = true)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val turnArrived = CountDownLatch(1)
+        val releaseTurn = CountDownLatch(1)
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-draft", workspaceId = "workspace-draft", title = "Draft recovery",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-draft"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-draft/turns" -> {
+                    assertEquals("POST", request.method)
+                    turnArrived.countDown()
+                    check(releaseTurn.await(5, TimeUnit.SECONDS)) { "Send response was not released" }
+                    MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-draft","retryable":true}}""")
+                }
+                "/api/aiden/v1/chats/chat-draft" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                val installation = installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-draft", deviceId = "device-draft",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                // Use the production client binding without unrelated /server refresh work.
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Original unsent text")
+                assertTrue(model.canSend)
+                model.send()
+                withContext(Dispatchers.IO) { assertTrue(turnArrived.await(5, TimeUnit.SECONDS)) }
+                assertTrue(model.isStarting.value)
+                assertEquals("", model.draft.value)
+                // Sending intentionally clears persistence until a response is known.
+                assertNull(AidenChatDraftStore(directory).getDraft(installation.instanceId, initialChat.id))
+                if (newerText.isNotEmpty()) model.updateDraft(newerText)
+                if (purgeWhileSending) coordinator.removeInstallation(installation.id)
+                releaseTurn.countDown()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                val expected = if (newerText.isEmpty()) "Original unsent text" else "Original unsent text\n\n$newerText"
+                assertEquals(expected, model.draft.value)
+                assertEquals("Try again", model.presentedError.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+                viewModels.clear()
+                // A fresh store is the process-restart read path, not the ViewModel's memory.
+                val reopened = AidenChatDraftStore(directory)
+                assertEquals(
+                    if (purgeWhileSending) null else expected,
+                    reopened.getDraft(installation.instanceId, initialChat.id)
+                )
+            }
+        } finally {
+            releaseTurn.countDown()
+            runBlocking(dispatcher) { viewModels.clear() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun approvalTapIsBoundToDisplayedIdAndDuplicateTapsDoNotSend() = exerciseRunControl("approval")
+
+    @Test
+    fun unknownApprovalOutcomeRefreshesWithoutResendingCapturedCard() = exerciseRunControl("unknown")
+
+    @Test
+    fun approvalCompletionAfterRevocationCannotRestoreCard() = exerciseRunControl("revoked")
+
+    @Test
+    fun unsupportedApprovalCapabilityPreventsResponse() = exerciseRunControl("unsupported")
+
+    @Test
+    fun botControlsRequireBotWriteGrant() = exerciseRunControl("bot-denied")
+
+    @Test
+    fun duplicateStopWaitsForAcknowledgementAndShowsFailure() = exerciseRunControl("stop")
+
+    @Test
+    fun lateStopAcknowledgementCannotUndoTerminalEvent() = exerciseRunControl("stop-terminal")
+
+    @Test
+    fun lateApprovalFailureCannotUndoTerminalEvent() = exerciseRunControl("approval-terminal")
+
+    @Test
+    fun fallbackDoesNotCoalesceWithPreResponseSnapshot() = exerciseRunControl("approval-fallback-before")
+
+    @Test
+    fun ambiguousResponseCannotSupersedeHeldAuthoritativeApproval() = exerciseRunControl("approval-fallback-overlap")
+
+    @Test
+    fun latestAdmittedApprovalReadWinsWhenOlderCompletesFirst() = exerciseRunControl("approval-overlap")
+
+    @Test
+    fun mismatchedStopAcknowledgementShowsFailure() = exerciseRunControl("stop-mismatch")
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun exerciseRunControl(scenario: String) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val arrived = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val finishRead = CountDownLatch(1)
+        val terminal = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val failApprovalReads = java.util.concurrent.atomic.AtomicBoolean(false)
+        val snapshotId = java.util.concurrent.atomic.AtomicReference("approval-current")
+        val oldRead = CountDownLatch(1)
+        val newRead = CountDownLatch(1)
+        val releaseOld = CountDownLatch(1)
+        val releaseNew = CountDownLatch(1)
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE) +
+            if (scenario == "unsupported") emptyList() else listOf(AidenRemoteCapability.APPROVAL_RESPOND)
+        val chat = AidenChat(id = "chat-control", workspaceId = "workspace-control", title = "Controls",
+            botId = if (scenario == "bot-denied") "bot-control" else null, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "revision-control")
+        val status = """{"streamId":"stream-control","chatId":"chat-control","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"""
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path == "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-control","name":"Control Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":[],"connectionMode":"lan","serverTime":"2026-09-22T12:00:00Z"}""")
+                request.path == "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                request.path == "/api/aiden/v1/chats/chat-control" -> {
+                    if (terminal.get()) check(finishRead.await(10, TimeUnit.SECONDS))
+                    MockResponse().setBody(json.encodeToString(chat))
+                }
+                request.path == "/api/aiden/v1/streams/stream-control/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(if (terminal.get()) "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"message-control\"}}\n\n" else "")
+                request.path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody(status)
+                request.path == "/api/aiden/v1/streams/stream-control/approval" -> {
+                    if (failApprovalReads.get()) return MockResponse().setResponseCode(503)
+                    val id = snapshotId.get()
+                    if ((scenario in listOf("approval-overlap", "approval-fallback-overlap") && id != "approval-current") ||
+                        (scenario == "approval-fallback-before" && id == "approval-old")) {
+                        (if (id == "approval-old") oldRead else newRead).countDown()
+                        check((if (id == "approval-old") releaseOld else releaseNew).await(10, TimeUnit.SECONDS))
+                    }
+                    MockResponse().setBody("""{"approval":{"approvalId":"${id}","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}""")
+                }
+                request.method == "POST" -> {
+                    writes.incrementAndGet()
+                    arrived.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                    if (scenario.startsWith("stop-")) {
+                        val responseStatus = if (scenario == "stop-mismatch") status.replace("stream-control", "stream-other") else status.replace("waiting_for_approval", "reconciling")
+                        return MockResponse().setResponseCode(202).setBody(responseStatus)
+                    }
+                    if (scenario == "unknown") {
+                        snapshotId.set("approval-next")
+                        return MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                    }
+                    MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Unconfirmed","requestId":"request-control","retryable":true}}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        val scopeJob = Job()
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                val installation = installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-control", deviceId = "device-control", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic-credential", capabilities = grants), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
+                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
+                viewModels.put("control", model)
+                withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
+                if (scenario == "approval-fallback-before") {
+                    snapshotId.set("approval-old")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    release.countDown()
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    releaseOld.countDown()
+                    read.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    return@runBlocking
+                }
+                if (scenario == "approval-fallback-overlap") {
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    val read = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
+                    failApprovalReads.set(true)
+                    release.countDown()
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    releaseNew.countDown()
+                    read.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                    return@runBlocking
+                }
+                if (scenario == "approval-overlap") {
+                    snapshotId.set("approval-old")
+                    val old = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(oldRead.await(5, TimeUnit.SECONDS)) }
+                    snapshotId.set("approval-new")
+                    val newer = async { model.restorePendingApproval("stream-control") }
+                    withContext(Dispatchers.IO) { assertTrue(newRead.await(5, TimeUnit.SECONDS)) }
+                    model.restorePendingApproval("stale-stream")
+                    releaseOld.countDown()
+                    old.await()
+                    releaseNew.countDown()
+                    newer.await()
+                    assertEquals("approval-new", model.pendingApproval.value?.id)
+                    return@runBlocking
+                }
+                model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-stale")
+                assertEquals(0, writes.get())
+                if (scenario == "unsupported" || scenario == "bot-denied") {
+                    if (scenario == "bot-denied") {
+                        assertFalse(model.canControlCurrentRun)
+                        model.stop()
+                    }
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    assertEquals(0, writes.get())
+                    assertNotNull(model.pendingApproval.value)
+                    assertFalse(model.pendingApproval.value!!.canRespond)
+                    return@runBlocking
+                }
+                if (scenario.startsWith("stop")) {
+                    assertTrue(model.canControlCurrentRun)
+                    model.stop()
+                    model.stop()
+                    assertTrue(model.isStopping.value)
+                    assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+                } else {
+                    model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    model.respondToApproval(AidenApprovalDecision.DENY, "approval-current")
+                    assertTrue(model.isRespondingToApproval.value)
+                }
+                withContext(Dispatchers.IO) { assertTrue(arrived.await(5, TimeUnit.SECONDS)) }
+                assertEquals(1, writes.get())
+                if (scenario == "revoked") coordinator.removeInstallation(installation.id)
+                if (scenario.endsWith("terminal")) {
+                    terminal.set(true)
+                    withTimeout(5_000) { model.streamState.first { it?.isTerminal == true } }
+                }
+                release.countDown()
+                if (scenario.startsWith("stop")) {
+                    withTimeout(5_000) { model.isStopping.first { !it } }
+                    if (scenario.endsWith("terminal")) assertTrue(model.streamState.value!!.isTerminal)
+                    else {
+                        assertTrue(model.presentedError.value!!.contains("Stop was not confirmed"))
+                        assertFalse(model.streamState.value!!.isTerminal)
+                    }
+                } else {
+                    withTimeout(5_000) { model.isRespondingToApproval.first { !it } }
+                    if (scenario.endsWith("terminal")) {
+                        assertTrue(model.streamState.value!!.isTerminal)
+                        assertNull(model.pendingApproval.value)
+                    } else if (scenario == "revoked") {
+                        assertNull(model.pendingApproval.value)
+                        assertFalse(model.canControlCurrentRun)
+                        model.respondToApproval(AidenApprovalDecision.ALLOW, "approval-current")
+                    } else {
+                        assertEquals(if (scenario == "unknown") "approval-next" else "approval-current", model.pendingApproval.value?.id)
+                    }
+                }
+                assertEquals(1, writes.get())
+            }
+        } finally {
+            releaseOld.countDown()
+            releaseNew.countDown()
+            release.countDown()
+            finishRead.countDown()
+            runBlocking(dispatcher) { viewModels.clear(); scopeJob.cancel() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCustomModelOverridesPreserveImageAndVisibilityFlags() {
+        val catalog = json.decodeFromString<AidenModelCatalog>("""
+            {"providers":[{"id":"custom:tailnet","label":"Private","models":[{"id":"text","label":"Text","supportsImages":false},{"id":"vision","label":"Vision","supportsImages":true,"hidden":true}]}],"defaults":{}}
+        """.trimIndent())
+        assertFalse(catalog.providers.first().models.first().acceptsImageInput)
+        assertTrue(catalog.providers.first().models.last().acceptsImageInput)
+        assertEquals(listOf("text"), catalog.visibleProviders.first().models.map { it.id })
+    }
 
     @Test
     fun testHiddenAndAllHiddenProviderModelsStayOutOfNewSelections() {
@@ -321,6 +726,12 @@ class AidenChatTest {
 
         val traversalPath = timeline.copy(steps = listOf(baseStep.copy(target = """folder\..\secret""")))
         assertFalse(traversalPath.isRendererSafe())
+    }
+
+    @Test
+    fun formFillActivityDecodesCountOnlyOutcome() {
+        val step = json.decodeFromString<AidenAgentStep>("""{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"form_fill","label":"Form fill","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"detail":"1 filled · 1 not attempted · stopped early"}""")
+        assertEquals("Form fill 1 filled · 1 not attempted · stopped early", AidenAgentActivityPresentation.line(step))
     }
 
     @Test

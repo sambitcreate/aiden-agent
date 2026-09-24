@@ -14,12 +14,17 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
+import sbtbiswas.AidenOnTheGo.models.AidenChatAgentRoster
+import sbtbiswas.AidenOnTheGo.models.AidenChatProgressCodec
+import sbtbiswas.AidenOnTheGo.models.AidenChatTaskProgress
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.AidenSSEParserException
+import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
+import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseValidator
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.io.BufferedReader
 import java.io.InputStream
@@ -44,7 +49,11 @@ data class AidenRemoteEventPayload(
     val messageId: String? = null,
     val code: AidenRemoteErrorCode? = null,
     val message: String? = null,
-    val source: String? = null
+    val source: String? = null,
+    /** Direct task_update payload; the wire contract does not wrap snapshots. */
+    val taskProgress: AidenChatTaskProgress? = null,
+    /** Direct agents_update payload; the wire contract does not wrap snapshots. */
+    val agentRoster: AidenChatAgentRoster? = null
 ) {
     operator fun get(key: String): JsonPrimitive? {
         return when (key) {
@@ -83,6 +92,11 @@ data class AidenRemoteStreamEvent(
 typealias AidenRemoteEvent = AidenRemoteStreamEvent
 
 class AidenSSEParser {
+    enum class ExpectedChannel {
+        PARENT_STREAM,
+        CHAT_PROGRESS
+    }
+
     private var eventID: String? = null
     private var eventName: String? = null
     private val dataLines = mutableListOf<String>()
@@ -124,9 +138,9 @@ class AidenSSEParser {
     }
 
     fun finish(): AidenRemoteStreamEvent? {
-        if (frameBytes > 0) {
-            return finishFrame()
-        }
+        // EOF is not a frame delimiter. Discard pending fields so a truncated
+        // transport frame cannot apply state or advance the replay cursor.
+        reset()
         return null
     }
 
@@ -228,8 +242,11 @@ class AidenSSEParser {
             }
             val type = AidenRemoteEventType(typeRaw)
 
+            // The terminal bit is required on every event. A missing or
+            // malformed bit fails closed for both known and unknown types —
+            // an unknown type must never be silently treated as nonterminal.
             val terminal = rootObj["terminal"]?.jsonPrimitive?.booleanOrNull
-                ?: (type.isTerminal)
+                ?: throw AidenRemoteContractException.InvalidJson("Missing terminal")
 
             if (!AidenRemoteEventType.V1_KNOWN.contains(type)) {
                 if (terminal) {
@@ -268,6 +285,50 @@ class AidenSSEParser {
             validateNoForbiddenKeys(payloadObj)
 
             val presentKeys = payloadObj.keys
+            if (type == AidenRemoteEventType.TASK_UPDATE || type == AidenRemoteEventType.AGENTS_UPDATE) {
+                // Progress events carry the snapshot directly in `payload`.
+                // Decode them through the narrow contract codec so additive
+                // transcript/child fields cannot be silently ignored.
+                val decodedProgress = try {
+                    AidenBotPrivateResponseValidator.validate(
+                        payloadObj,
+                        AidenBotPrivateResponseScope.ChatProgressProjection
+                    )
+                    if (type == AidenRemoteEventType.TASK_UPDATE) {
+                        AidenChatProgressCodec.parseTaskProgress(payloadObj, "task_update payload")
+                    } else {
+                        AidenChatProgressCodec.parseAgentRoster(payloadObj, "agents_update payload")
+                    }
+                } catch (error: AidenRemoteContractException) {
+                    throw error
+                } catch (_: Exception) {
+                    throw AidenRemoteContractException.InvalidJson("Invalid ${type.rawValue} payload")
+                }
+                // Progress events are chat-scoped: the payload must carry the
+                // stream's chat identity, never a different chat's snapshot.
+                val payloadChatId = when (decodedProgress) {
+                    is AidenChatTaskProgress -> decodedProgress.chatId
+                    is AidenChatAgentRoster -> decodedProgress.chatId
+                    else -> null
+                }
+                if (payloadChatId != streamId) {
+                    throw AidenRemoteContractException.InvalidStreamIdentity
+                }
+                val decodedPayload = if (decodedProgress is AidenChatTaskProgress) {
+                    AidenRemoteEventPayload(taskProgress = decodedProgress)
+                } else {
+                    AidenRemoteEventPayload(agentRoster = decodedProgress as AidenChatAgentRoster)
+                }
+                return AidenRemoteStreamEvent(
+                    protocolVersion = protocolVersion,
+                    streamId = streamId,
+                    sequence = sequence,
+                    timestamp = timestamp,
+                    type = type,
+                    terminal = terminal,
+                    payload = decodedPayload
+                )
+            }
             val allowedKeys: Set<String> = when (type) {
                 AidenRemoteEventType.SNAPSHOT -> setOf("chatId", "turnId", "nextSequence")
                 AidenRemoteEventType.STATUS -> setOf("state")
@@ -348,7 +409,8 @@ class AidenSSEParser {
         fun parseStream(
             inputStream: InputStream,
             expectedStreamId: String? = null,
-            startSequence: Int = 0
+            startSequence: Int = 0,
+            expectedChannel: ExpectedChannel = ExpectedChannel.PARENT_STREAM
         ): Flow<AidenRemoteStreamEvent> = flow {
             val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
             val parser = AidenSSEParser()
@@ -361,6 +423,7 @@ class AidenSSEParser {
                     if (expectedStreamId != null && event.streamId != expectedStreamId) {
                         throw AidenRemoteContractException.InvalidStreamIdentity
                     }
+                    validateExpectedChannel(event, expectedChannel)
                     if (event.sequence <= lastSequence && lastSequence > 0) {
                         // ignore duplicate
                     } else {
@@ -375,8 +438,34 @@ class AidenSSEParser {
                 if (expectedStreamId != null && finalEvent.streamId != expectedStreamId) {
                     throw AidenRemoteContractException.InvalidStreamIdentity
                 }
+                validateExpectedChannel(finalEvent, expectedChannel)
                 if (finalEvent.sequence > lastSequence || lastSequence == 0) {
                     emit(finalEvent)
+                }
+            }
+        }
+
+        private fun validateExpectedChannel(
+            event: AidenRemoteStreamEvent,
+            expectedChannel: ExpectedChannel
+        ) {
+            val isProgressEvent = event.type == AidenRemoteEventType.TASK_UPDATE ||
+                event.type == AidenRemoteEventType.AGENTS_UPDATE
+            when (expectedChannel) {
+                ExpectedChannel.PARENT_STREAM -> {
+                    if (isProgressEvent) {
+                        throw AidenRemoteContractException.ProtocolViolation(
+                            "Progress event ${event.type.rawValue} is not valid on the parent stream"
+                        )
+                    }
+                }
+
+                ExpectedChannel.CHAT_PROGRESS -> {
+                    if (!isProgressEvent) {
+                        throw AidenRemoteContractException.ProtocolViolation(
+                            "Event ${event.type.rawValue} is not valid on the chat progress stream"
+                        )
+                    }
                 }
             }
         }

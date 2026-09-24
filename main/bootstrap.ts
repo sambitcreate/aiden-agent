@@ -1,4 +1,5 @@
 import path from "node:path";
+import { app } from "electron";
 
 import { initDiagnosticJournal, writeDiagnosticEventSync } from "./services/diagnostic-journal.js";
 import { initDiagnosticHealth } from "./services/diagnostic-health.js";
@@ -6,6 +7,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { installProcessDiagnostics } from "./services/process-diagnostics.js";
 import { configureRuntimeProfile } from "./runtime-profile.js";
+import { parseCaptureAcceptanceLaunch } from "./services/gemini-live/display-capture-acceptance-core.js";
 import {
   initSubagentRuntimeDiagnostics,
   SUBAGENT_RUNTIME_LOG_FILENAME,
@@ -30,8 +32,25 @@ initDiagnosticJournal({
 installProcessDiagnostics();
 void pruneExpiredDiagnosticCrashDumps(runtimeProfile.crashDumpsPath).catch(() => undefined);
 
+const captureAcceptance = parseCaptureAcceptanceLaunch({
+  argv: process.argv,
+  environment: process.env,
+  executablePath: process.execPath,
+  appPath: app.getAppPath(),
+  isPackaged: app.isPackaged,
+  platform: process.platform,
+  userDataPath: runtimeProfile.userDataPath,
+});
+
 try {
-  await import("./index.js");
+  if (captureAcceptance.requested) {
+    const { runDisplayCaptureAcceptance } = await import(
+      "./services/gemini-live/display-capture-acceptance.js"
+    );
+    app.exit(await runDisplayCaptureAcceptance(runtimeProfile));
+  } else {
+    await import("./index.js");
+  }
 } catch (error) {
   const projected = projectDiagnosticError(error);
   writeDiagnosticEventSync({

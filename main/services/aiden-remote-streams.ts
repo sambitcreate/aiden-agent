@@ -28,6 +28,7 @@ import {
 } from "./aiden-remote-operation-contract.js";
 
 const MAX_STREAMS = 256;
+const STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -101,11 +102,18 @@ export interface AidenRemoteStreamSnapshot {
     updatedAt: number;
     events: AidenRemoteStreamEvent[];
   }>;
+  /**
+   * Durable public turn identities for remote-created generations. Stream
+   * records are pruned after terminal retention, but progress rosters must
+   * keep echoing the issued `turnId` for as long as the chat's durable agent
+   * history survives.
+   */
+  turnIndex?: Array<{ streamId: string; chatId: string; turnId: string }>;
 }
 
 interface StreamSubscriber {
-  response: ServerResponse;
-  heartbeat: ReturnType<typeof setInterval>;
+  flush(): void;
+  close(): void;
 }
 
 interface StreamRecord {
@@ -118,6 +126,7 @@ interface StreamRecord {
   events: AidenRemoteStreamEvent[];
   eventBytes: number;
   subscribers: Set<StreamSubscriber>;
+  evictAfterDelivery?: boolean;
   owner: RemoteChatGenerationOwnerController;
   cancelRequested: boolean;
   cancellationSource: "device" | "server";
@@ -334,7 +343,37 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
       events,
     });
   }
-  return { version: 1, streams };
+  const identifier = /^[A-Za-z0-9._:-]{1,128}$/u;
+  const turnIndex: NonNullable<AidenRemoteStreamSnapshot["turnIndex"]> = [];
+  if (record.turnIndex !== undefined) {
+    if (!Array.isArray(record.turnIndex) || record.turnIndex.length > MAX_STREAMS * 4) {
+      throw new Error("Invalid Aiden Remote stream snapshot.");
+    }
+    const indexed = new Set<string>();
+    for (const rawEntry of record.turnIndex) {
+      const entry = ownRecord(rawEntry);
+      if (
+        !entry ||
+        Object.keys(entry).some((key) => !["streamId", "chatId", "turnId"].includes(key)) ||
+        typeof entry.streamId !== "string" ||
+        !identifier.test(entry.streamId) ||
+        indexed.has(entry.streamId) ||
+        typeof entry.chatId !== "string" ||
+        !identifier.test(entry.chatId) ||
+        typeof entry.turnId !== "string" ||
+        !identifier.test(entry.turnId)
+      ) {
+        throw new Error("Invalid Aiden Remote stream snapshot.");
+      }
+      indexed.add(entry.streamId);
+      turnIndex.push({
+        streamId: entry.streamId,
+        chatId: entry.chatId,
+        turnId: entry.turnId,
+      });
+    }
+  }
+  return { version: 1, streams, turnIndex };
 }
 
 export function normalizeAidenRemoteStreamSnapshot(value: unknown): AidenRemoteStreamSnapshot {
@@ -349,6 +388,9 @@ export function removeRevokedDeviceStreams(
   return {
     version: 1,
     streams: snapshot.streams.filter(({ deviceId }) => !revokedDeviceIds.has(deviceId)),
+    // Turn identities are per-chat public facts other paired devices still
+    // need for roster correlation after the issuing device is revoked.
+    turnIndex: snapshot.turnIndex,
   };
 }
 
@@ -358,6 +400,7 @@ function sseFrame(event: AidenRemoteStreamEvent): string {
 
 export class AidenRemoteStreamService {
   private readonly streams = new Map<string, StreamRecord>();
+  private readonly turnIndex = new Map<string, { chatId: string; turnId: string }>();
   private readonly approvals = new Map<string, ApprovalRecord>();
   private persistTail: Promise<void> = Promise.resolve();
   private persistDirty = false;
@@ -453,7 +496,11 @@ export class AidenRemoteStreamService {
   }
 
   private restore(snapshot: AidenRemoteStreamSnapshot): void {
-    for (const saved of parseSnapshot(snapshot).streams) {
+    const parsed = parseSnapshot(snapshot);
+    for (const entry of parsed.turnIndex ?? []) {
+      this.indexTurn(entry.streamId, entry.chatId, entry.turnId);
+    }
+    for (const saved of parsed.streams) {
       const base: Omit<StreamRecord, "owner"> = {
         ...saved,
         eventBytes: saved.events.reduce(
@@ -468,6 +515,7 @@ export class AidenRemoteStreamService {
       };
       const record: StreamRecord = { ...base, owner: this.ownerFor(base) };
       this.streams.set(record.streamId, record);
+      this.indexTurn(record.streamId, record.chatId, record.turnId);
       if (!terminal(record.state)) {
         this.append(
           record,
@@ -478,6 +526,15 @@ export class AidenRemoteStreamService {
         );
       }
     }
+  }
+
+  private indexTurn(streamId: string, chatId: string, turnId: string): void {
+    if (this.turnIndex.has(streamId)) return;
+    // Bounded oldest-first eviction; the index outlives stream records.
+    if (this.turnIndex.size >= MAX_STREAMS * 4) {
+      this.turnIndex.delete(this.turnIndex.keys().next().value!);
+    }
+    this.turnIndex.set(streamId, { chatId, turnId });
   }
 
   snapshot(): AidenRemoteStreamSnapshot {
@@ -491,6 +548,11 @@ export class AidenRemoteStreamService {
         state: stream.state,
         updatedAt: stream.updatedAt,
         events: structuredClone(stream.events),
+      })),
+      turnIndex: [...this.turnIndex.entries()].map(([streamId, entry]) => ({
+        streamId,
+        chatId: entry.chatId,
+        turnId: entry.turnId,
       })),
     };
   }
@@ -533,8 +595,7 @@ export class AidenRemoteStreamService {
       if (terminal(stream.state) && stream.updatedAt + TERMINAL_RETENTION_MS <= now) {
         stream.owner.invalidate();
         for (const subscriber of stream.subscribers) {
-          clearInterval(subscriber.heartbeat);
-          subscriber.response.end();
+          subscriber.close();
         }
         this.streams.delete(streamId);
       }
@@ -624,6 +685,7 @@ export class AidenRemoteStreamService {
     const owner = this.ownerFor(base);
     const record: StreamRecord = { ...base, owner };
     this.streams.set(streamId, record);
+    this.indexTurn(streamId, chatId, turnId);
     this.append(record, "status", { state: "queued" }, false, "queued");
     return owner;
   }
@@ -658,18 +720,7 @@ export class AidenRemoteStreamService {
     this.enforceAggregateBudget(stream.streamId);
     stream.state = state ?? stream.state;
     stream.updatedAt = this.options.now();
-    const frame = sseFrame(event);
-    for (const subscriber of [...stream.subscribers]) {
-      if (!subscriber.response.write(frame)) {
-        // Node applies backpressure. The durable in-memory journal remains the
-        // source of truth, so the client can reconnect from its last event ID.
-      }
-      if (isTerminal) {
-        clearInterval(subscriber.heartbeat);
-        subscriber.response.end();
-        stream.subscribers.delete(subscriber);
-      }
-    }
+    for (const subscriber of [...stream.subscribers]) subscriber.flush();
     if (isTerminal) {
       stream.owner.invalidate();
       for (const [approvalId, approval] of this.approvals) {
@@ -692,6 +743,15 @@ export class AidenRemoteStreamService {
       .filter((entry) => entry.streamId !== currentStreamId && terminal(entry.state))
       .sort((left, right) => left.updatedAt - right.updatedAt);
     for (const entry of terminalStreams) {
+      if (entry.subscribers.size > 0 || entry.evictAfterDelivery) {
+        // Keep accepted terminal bytes and replay state until delivery settles.
+        // A disconnected or timed-out subscriber may not have received it.
+        // Defer until successful delivery or normal retention expiry, even if
+        // further pressure arrives with no subscribers. Trimming still bounds
+        // journal bytes; undelivered records legitimately consume stream slots.
+        entry.evictAfterDelivery = true;
+        continue;
+      }
       entry.owner.invalidate();
       this.streams.delete(entry.streamId);
       if (snapshotBytes() <= MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES) return;
@@ -899,6 +959,14 @@ export class AidenRemoteStreamService {
     );
   }
 
+  /** Server-side identity correlation; not a device-authorized read. */
+  turnIdFor(chatId: string, streamId: string): string | undefined {
+    const stream = this.streams.get(streamId);
+    if (stream) return stream.chatId === chatId ? stream.turnId : undefined;
+    const indexed = this.turnIndex.get(streamId);
+    return indexed?.chatId === chatId ? indexed.turnId : undefined;
+  }
+
   status(deviceId: string, streamId: string): AidenRemoteStreamStatus {
     const stream = this.requireStream(deviceId, streamId);
     return {
@@ -1104,8 +1172,7 @@ export class AidenRemoteStreamService {
       stream.owner.invalidate();
       stream.activeTools.clear();
       for (const subscriber of stream.subscribers) {
-        clearInterval(subscriber.heartbeat);
-        subscriber.response.end();
+        subscriber.close();
       }
       stream.subscribers.clear();
       this.streams.delete(streamId);
@@ -1168,30 +1235,113 @@ export class AidenRemoteStreamService {
       );
       after = snapshot.sequence - 1;
     }
-    response.writeHead(200, {
-      "aiden-protocol-version": String(AIDEN_REMOTE_PROTOCOL_VERSION),
-      "cache-control": "no-store",
-      connection: "keep-alive",
-      "content-type": "text/event-stream; charset=utf-8",
-      "x-accel-buffering": "no",
-      "x-content-type-options": "nosniff",
-    });
-    for (const event of stream.events) {
-      if (event.sequence > after) response.write(sseFrame(event));
-    }
-    if (terminal(stream.state)) {
-      response.end();
-      return;
-    }
-    const subscriber: StreamSubscriber = {
-      response,
-      heartbeat: setInterval(() => response.write(": heartbeat\n\n"), 15_000),
-    };
-    subscriber.heartbeat.unref?.();
-    stream.subscribers.add(subscriber);
-    response.once("close", () => {
-      clearInterval(subscriber.heartbeat);
+    // The retained journal is also the pending-output queue. Never duplicate
+    // it into Node's writable buffer while a client is waiting for drain.
+    let closed = false;
+    let blocked = false;
+    let ending = false;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      clearTimeout(drainTimeout);
+      response.off("close", cleanup);
+      response.off("error", abort);
+      response.off("drain", onDrain);
+      response.off("finish", onFinish);
       stream.subscribers.delete(subscriber);
-    });
+    };
+    const abort = () => {
+      cleanup();
+      response.destroy();
+    };
+    const onFinish = () => {
+      cleanup();
+      // Only fully flushed terminal delivery can satisfy deferred eviction.
+      // Disconnect/error/timeout cleanup must leave replay available.
+      if (stream.evictAfterDelivery && stream.subscribers.size === 0 && this.streams.get(streamId) === stream) {
+        stream.owner.invalidate();
+        this.streams.delete(streamId);
+        this.persist();
+      }
+    };
+    const close = () => {
+      if (closed || ending) return;
+      ending = true;
+      response.once("finish", onFinish);
+      drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
+      drainTimeout.unref?.();
+      try {
+        response.end();
+      } catch {
+        abort();
+      }
+    };
+    const write = (frame: string): boolean => {
+      try {
+        if (response.destroyed || response.writableEnded) {
+          cleanup();
+          return false;
+        }
+        if (!response.write(frame)) {
+          blocked = true;
+          drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
+          drainTimeout.unref?.();
+        }
+      } catch {
+        abort();
+        return false;
+      }
+      return !blocked && !closed;
+    };
+    const flush = () => {
+      if (closed || blocked || ending) return;
+      const firstSequence = stream.events[0]?.sequence ?? 1;
+      if (after < firstSequence - 1) {
+        // The client fell behind retention. Reconnect uses the existing
+        // snapshot recovery path instead of silently skipping events.
+        abort();
+        return;
+      }
+      for (let index = Math.max(0, after - firstSequence + 1); index < stream.events.length; index++) {
+        const event = stream.events[index]!;
+        after = event.sequence;
+        if (!write(sseFrame(event))) return;
+      }
+      if (terminal(stream.state)) close();
+    };
+    const onDrain = () => {
+      if (closed || ending) return;
+      blocked = false;
+      clearTimeout(drainTimeout);
+      drainTimeout = undefined;
+      flush();
+    };
+    const subscriber: StreamSubscriber = { flush, close: abort };
+    stream.subscribers.add(subscriber);
+    response.once("close", cleanup);
+    response.once("error", abort);
+    response.on("drain", onDrain);
+    try {
+      response.writeHead(200, {
+        "aiden-protocol-version": String(AIDEN_REMOTE_PROTOCOL_VERSION),
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "content-type": "text/event-stream; charset=utf-8",
+        "x-accel-buffering": "no",
+        "x-content-type-options": "nosniff",
+      });
+      flush();
+      if (!closed) {
+        heartbeat = setInterval(() => {
+          if (!closed && !blocked && !ending) write(": heartbeat\n\n");
+        }, 15_000);
+        heartbeat.unref?.();
+      }
+    } catch {
+      abort();
+    }
   }
 }

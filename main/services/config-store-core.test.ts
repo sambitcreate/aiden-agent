@@ -2883,3 +2883,15 @@ test("global skills preference persists independently of individual skill choice
   assert.equal((await h.store.getSettings()).skillsEnabled, true);
   assert.deepEqual(await h.store.listSkills(), [skill]);
 });
+
+test("custom model overrides survive restart and reset through the config store", async (t) => {
+  const h = await harness(t);
+  const configured = { ...provider, modelMetadata: { "qwen3-8b": { source: "lmstudio" as const, overrides: { vision: true, maxImages: 2 } } } };
+  await h.store.saveProvider(configured);
+  const loaded = await h.store.getProvider(provider.id);
+  assert.deepEqual(loaded?.modelMetadata?.["qwen3-8b"].overrides, { vision: true, maxImages: 2 });
+  await h.store.saveProvider({ ...loaded!, modelMetadata: { "qwen3-8b": { source: "lmstudio" } } });
+  const reset = await h.store.getProvider(provider.id);
+  assert.equal(reset?.modelMetadata?.["qwen3-8b"].overrides, undefined);
+  assert.equal(reset?.customModelOptions, undefined);
+});

@@ -1195,3 +1195,35 @@ test("cancellation poisons the generation and closes its helper", async () => {
   assert.ok(session.closed);
   assert.ok(host.shutdownCount >= 1);
 });
+
+test("strict close retains teardown errors even when ordinary cancellation already closed", async () => {
+  const { controller, session, host } = harness(false);
+  await controller.execute("apps", { action: "list_apps" });
+  session.close = async () => { throw new Error("session failed"); };
+  host.shutdown = async () => { throw new Error("broker failed"); };
+  await controller.close();
+  await assert.rejects(controller.closeAndSettle(), /teardown failed/);
+});
+
+test("strict close waits for an in-flight driver mutation to unwind after abort", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  session.handler = async (call) => {
+    if (call.name === "set_value") { entered(); await gate; }
+    return fakeResponse(call);
+  };
+  const mutation = approved(controller, "fill", { action: "set_value", element: 1, value: "Blue" });
+  const handled = mutation.catch(() => {});
+  await started;
+  let settled = false;
+  const close = controller.closeAndSettle().then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  release();
+  await Promise.all([handled, close]);
+  assert.equal(settled, true);
+});

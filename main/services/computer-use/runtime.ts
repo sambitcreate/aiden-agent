@@ -1,5 +1,4 @@
 import { app } from "../../platform.js";
-import { isPackagedRuntime } from "../../runtime-mode.js";
 import { resolveCuaDriverInstallation } from "./binary.js";
 import { ComputerUseController } from "./controller.js";
 import { CuaDriverHost } from "./host.js";
@@ -21,7 +20,8 @@ export async function createCuaDriverHost(signal: AbortSignal): Promise<CuaDrive
   const installation = await resolveCuaDriverInstallation(
     {
       platform: process.platform,
-      isPackaged: isPackagedRuntime(),
+      // A packaged app keeps its bundled helpers even with an isolated dev profile.
+      isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
     },

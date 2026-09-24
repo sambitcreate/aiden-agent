@@ -1,0 +1,65 @@
+import { ipcMain } from "../platform.js";
+import {
+  authorizeAidenLiveComputerUse,
+  geminiLiveService,
+} from "../services/gemini-live/service-main.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import {
+  bindGeminiLiveDisplayMediaDocument,
+} from "../services/gemini-live/display-media-contract.js";
+import {
+  parseAssistantLiveStartIntent,
+  parseAssistantLiveAudioIntent,
+  parseAssistantLiveEmptyIntent,
+  parseAssistantLiveFrameIntent,
+  parseAssistantLiveDisplayReleaseIntent,
+  parseAssistantLiveStopIntent,
+} from "./assistant-live-parse.js";
+import { invokeAssistantLiveStart } from "./assistant-live-start.js";
+import { invokeAssistantLiveStatus } from "./assistant-live-status.js";
+
+function owner(event: Electron.IpcMainInvokeEvent) {
+  return rendererDocumentOwner(
+    event,
+    () =>
+      new Error(
+        "Assistant Live must be controlled by the active application document.",
+      ),
+  );
+}
+
+export function registerAssistantLiveHandlers(): void {
+  ipcMain.handle("assistant-live:status", (event) =>
+    invokeAssistantLiveStatus(geminiLiveService, owner(event)),
+  );
+  ipcMain.handle("assistant-live:authorize-computer-use", (event, input: unknown) => {
+    parseAssistantLiveStopIntent(input);
+    return authorizeAidenLiveComputerUse(owner(event));
+  });
+  ipcMain.handle("assistant-live:start", (event, input: unknown) => {
+    const requestOwner = owner(event);
+    const intent = parseAssistantLiveStartIntent(input);
+    return invokeAssistantLiveStart(geminiLiveService, requestOwner, intent);
+  });
+  ipcMain.handle("assistant-live:stop", (event, input: unknown) => {
+    parseAssistantLiveStopIntent(input);
+    return geminiLiveService.stop(owner(event));
+  });
+  ipcMain.handle("assistant-live:audio", (event, input: unknown) => {
+    const intent = parseAssistantLiveAudioIntent(input);
+    return geminiLiveService.sendAudio(owner(event), intent.sessionId, intent.pcm);
+  });
+  ipcMain.handle("assistant-live:display-bind", (event, input: unknown) => {
+    parseAssistantLiveEmptyIntent(input, "display-bind");
+    const binding = bindGeminiLiveDisplayMediaDocument(event);
+    return geminiLiveService.bindDisplayMedia(owner(event), binding);
+  });
+  ipcMain.handle("assistant-live:display-release", (event, input: unknown) => {
+    const intent = parseAssistantLiveDisplayReleaseIntent(input);
+    return geminiLiveService.releaseDisplayMedia(owner(event), intent.bindingId);
+  });
+  ipcMain.handle("assistant-live:frame", (event, input: unknown) => {
+    const intent = parseAssistantLiveFrameIntent(input);
+    return geminiLiveService.sendFrame(owner(event), intent.sessionId, intent.frame);
+  });
+}

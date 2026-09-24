@@ -4,6 +4,8 @@ import type { Chat } from "./types";
 export interface ChatDraft {
   readonly chat: Chat;
   readonly sending: boolean;
+  /** Optional one-shot composer seed supplied by an explicit app entry point. */
+  readonly initialText?: string;
 }
 
 const drafts = new Map<string, ChatDraft>();
@@ -20,7 +22,11 @@ export function getChatDraft(id: string): ChatDraft | undefined {
   return drafts.get(id);
 }
 
-export function createChatDraft(workspaceId: string, id = crypto.randomUUID()): ChatDraft {
+export function createChatDraft(
+  workspaceId: string,
+  id = crypto.randomUUID(),
+  initialText?: string,
+): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   // Multiple New activations can supersede navigation before a pane mounts.
   // Only keep drafts that acquired a view owner or have a send to settle.
@@ -31,6 +37,7 @@ export function createChatDraft(workspaceId: string, id = crypto.randomUUID()): 
   const draft: ChatDraft = {
     chat: { id, workspaceId, title: "New agent", messages: [], createdAt: now, updatedAt: now },
     sending: false,
+    ...(initialText ? { initialText } : {}),
   };
   drafts.set(id, draft);
   notify();

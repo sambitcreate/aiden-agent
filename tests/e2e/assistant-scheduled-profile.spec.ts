@@ -1,31 +1,25 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explore", async ({
+test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to explore", async ({
   aiden,
 }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
 
-  // Assistant is a local dock. Exercise its state without submitting a prompt
-  // (and therefore without creating a provider request or an assistant thread).
-  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
-  const assistantComposer = page.getByRole("textbox", { name: "Message Aiden" });
-  const assistantPanel = assistantComposer.locator(
-    "xpath=ancestor::div[.//button[@aria-label='New conversation']][1]",
-  );
-  await expect(assistantComposer).toBeVisible();
-  await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
-  await expect(page.getByText("Try asking", { exact: true })).toBeVisible();
-  // Main chat history has its own sidebar “Recent” bucket. A fresh Assistant
-  // session deliberately has no saved Assistant threads to list yet.
-  await expect(assistantPanel.getByText("Recent", { exact: true })).toHaveCount(0);
-  await assistantComposer.fill("Unsaved assistant draft");
-  await page.getByRole("button", { name: "Minimize Aiden" }).click();
-  await expect(page.getByRole("button", { name: "Open Aiden" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Aiden" }).press("Enter");
-  await expect(assistantComposer).toHaveValue("Unsaved assistant draft");
-  await assistantComposer.fill("");
-  await page.getByRole("button", { name: "Minimize Aiden" }).click();
+  // The dock is now the one-time Aiden Live setup entry point. Exercise the
+  // keyboard path without requesting system permissions or contacting Google.
+  const liveSetupTrigger = page.getByRole("button", { name: "Set up Aiden Live" });
+  await liveSetupTrigger.press("Enter");
+  const liveSetup = page.getByRole("dialog", { name: "Set up Aiden Live" });
+  await expect(liveSetup).toBeVisible();
+  await expect(liveSetup.getByText("Beta", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Google Live model", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Microphone", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toBeVisible();
+  await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
+  await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
+  await expect(liveSetup).toHaveCount(0);
+  await expect(liveSetupTrigger).toBeVisible();
 
   // Natural-language creation stays available even if manual task dependencies
   // are unavailable. Templates only open an editor; Escape closes without saving.
@@ -58,7 +52,12 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
     "true",
   );
   await page.getByRole("tab", { name: "All", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Create with Aiden", exact: true })).toBeEnabled();
+  const createWithAiden = page.getByRole("button", { name: "Create with Aiden", exact: true });
+  await expect(createWithAiden).toBeEnabled();
+  await createWithAiden.click();
+  const seededComposer = page.locator("textarea");
+  await expect(seededComposer).toHaveValue("Create an automation that ");
+  await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   const dailyBrief = page.getByRole("button", { name: /Daily brief/u });
   await expect(dailyBrief).toBeVisible();
   if (await dailyBrief.isEnabled()) {

@@ -110,13 +110,21 @@ class AidenInstallationStore(
     fun updateServerCapabilities(
         instanceId: String,
         serverCapabilities: List<AidenRemoteCapability>,
-        serverName: String?
+        serverName: String?,
+        deviceCapabilities: List<AidenRemoteCapability>
     ) {
         val list = _installations.value.toMutableList()
         val index = list.indexOfFirst { it.instanceId == instanceId }
         if (index != -1) {
             val item = list[index]
+            // /server's capabilities is the device's exact grant list and may
+            // narrow. Drops are narrowing-only here; grants are added solely by
+            // the negotiation path below. Narrowing first keeps the stored
+            // model's serverCapabilities superset invariant valid when the
+            // server withdraws a grant.
+            val refreshedDeviceGrants = deviceCapabilities.toSet()
             val updated = item.copy(
+                deviceCapabilities = item.deviceCapabilities.filter { refreshedDeviceGrants.contains(it) },
                 serverCapabilities = serverCapabilities,
                 name = serverName ?: item.name,
                 lastConnectedAt = Instant.now()
@@ -125,6 +133,27 @@ class AidenInstallationStore(
             _installations.value = list
             save()
         }
+    }
+
+    fun updateDeviceCapabilities(
+        instanceId: String,
+        deviceCapabilities: List<AidenRemoteCapability>
+    ) {
+        val list = _installations.value.toMutableList()
+        val index = list.indexOfFirst { it.instanceId == instanceId }
+        if (index == -1) return
+        val item = list[index]
+        // A non-null serverCapabilities list is authoritative. Do not persist
+        // a grant until the server has advertised it after negotiation.
+        if (item.serverCapabilities != null && !item.serverCapabilities!!.containsAll(deviceCapabilities)) return
+        // The negotiation route can only add progress grants; a response that
+        // drops or widens unrelated authority is contract-invalid. Reject it
+        // instead of persisting different non-progress authority.
+        val progress = setOf(AidenRemoteCapability.TASKS_READ, AidenRemoteCapability.AGENTS_READ)
+        if (item.deviceCapabilities.toSet() - progress != deviceCapabilities.toSet() - progress) return
+        list[index] = item.copy(deviceCapabilities = deviceCapabilities)
+        _installations.value = list
+        save()
     }
 
     fun getCredential(installation: AidenInstallation): String? {

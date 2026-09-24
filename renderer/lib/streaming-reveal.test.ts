@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import {
   advanceStreamingRevealCount,
   advanceStreamingRevealSchedule,
+  clampStreamingRevealSchedule,
   STREAMING_REVEAL_COMPLETE_DELAY_MS,
   STREAMING_REVEAL_FALLBACK_MS,
   STREAMING_REVEAL_HANDOFF_MS,
@@ -262,6 +263,16 @@ test("reduced motion exposes the latest backlog without hiding it when motion re
   );
   assert.equal(restored.revealedCount, 10);
   assert.ok(restored.dueAt !== null);
+});
+
+test("terminal replacement clamps reveal state before later growth", () => {
+  const shortened = clampStreamingRevealSchedule({ revealedCount: 8, dueAt: 100 }, 3);
+  assert.deepEqual(shortened, { revealedCount: 3, dueAt: null });
+  const grown = advanceStreamingRevealSchedule(
+    shortened, { unitCount: 5, complete: false, reducedMotion: false }, 200,
+  );
+  assert.equal(grown.revealedCount, 3);
+  assert.ok(grown.dueAt !== null);
 });
 
 test("reduced motion removes the final handoff wait", () => {

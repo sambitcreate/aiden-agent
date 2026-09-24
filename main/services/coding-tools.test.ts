@@ -1371,6 +1371,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 0,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 11 },
     });
 
     const overwritten = await writeFile.execute("overwrite", {
@@ -1382,6 +1383,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "written", bytes: 18 },
     });
 
     const edited = await editFile.execute("edit", {
@@ -1394,6 +1396,7 @@ test("file mutation tools report bounded line additions and deletions", async ()
       version: 1,
       additions: 2,
       deletions: 1,
+      producedFile: { relativePath: "src/app.ts", operation: "edited", bytes: 27 },
     });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -2038,4 +2041,16 @@ test("grep reports protected, oversized, and total-byte incompleteness", async (
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("POSIX colon filenames retain actual write and edit provenance", { skip: process.platform === "win32" }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-colon-file-"));
+  try {
+    const tools = buildCodingTools(root);
+    const written = await tools.find((tool) => tool.name === "write_file")!.execute("write", { path: "foo:bar.txt", content: "alpha" });
+    assert.deepEqual((written.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "written", bytes: 5 });
+    const edited = await tools.find((tool) => tool.name === "edit_file")!.execute("edit", { path: "foo:bar.txt", old_string: "alpha", new_string: "beta" });
+    assert.deepEqual((edited.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "edited", bytes: 4 });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

@@ -45,6 +45,35 @@ test("legacy messages render unchanged without provenance", () => {
   assert.doesNotMatch(markup, /skill/u);
 });
 
+test("saved reasoning disclosures stay in order around tools and prose", () => {
+  const timeline: GenerationTimeline = {
+    version: 3, generationId: "stream-1", status: "completed", startedAt: 1, finishedAt: 5,
+    steps: [
+      { id: "think-1", order: 0, kind: "thinking", startedAt: 1, updatedAt: 2,
+        finishedAt: 2, contentOffset: 0, reasoningStartOffset: 0, reasoningEndOffset: 5 },
+      { id: "tool-1", order: 1, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+        label: "Read file", status: "completed", startedAt: 2, updatedAt: 3,
+        finishedAt: 3, contentOffset: 0 },
+      { id: "think-2", order: 2, kind: "thinking", startedAt: 3, updatedAt: 4,
+        finishedAt: 4, contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
+    ],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList chatId="chat-1" messages={[{
+      id: "assistant-1", role: "assistant", content: "Before.After.", reasoning: "First\n\nSecond",
+      timeline, createdAt: 1,
+    }]} streamingText={null} streamingReasoning={null} timeline={null}
+      liveSubagents={[]} subagentsEnabled={false} onOpenSubagent={() => undefined}
+      agentActivity={null} error={null} />,
+  );
+  const thoughtPositions = [...markup.matchAll(/reasoning-surface/gu)].map((match) => match.index);
+  assert.equal(thoughtPositions.length, 2);
+  assert.ok(thoughtPositions[0]! < markup.indexOf("activity-feed"));
+  assert.ok(markup.indexOf("activity-feed") < markup.indexOf("Before."));
+  assert.ok(markup.indexOf("Before.") < thoughtPositions[1]!);
+  assert.ok(thoughtPositions[1]! < markup.indexOf("After."));
+});
+
 test("persisted assistant images render inline with an accessible preview action", () => {
   const markup = renderToStaticMarkup(
     <MessageList
@@ -353,7 +382,7 @@ test("settled reasoning uses one duration-labelled disclosure without an activit
   assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
 });
 
-test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
+test("an in-flight render_artifact call stays at its tool row", () => {
   const renderStep: AgentToolStep = {
     id: "tool-1",
     order: 0,
@@ -387,10 +416,9 @@ test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
       error={null}
     />,
   );
-  assert.match(markup, />Visualizing</u);
-  assert.doesNotMatch(markup, /Visualizing…/u);
+  assert.match(markup, /aria-label="Render artifact"/u);
+  assert.doesNotMatch(markup, /reasoning-surface/u);
   assert.match(markup, /agent-thinking-shimmer/u);
-  assert.equal(markup.match(/reasoning-surface/gu)?.length, 1);
 
   const reasoningMarkup = renderToStaticMarkup(
     <MessageList
@@ -407,7 +435,7 @@ test("an in-flight render_artifact call shows the Visualizing shimmer", () => {
       error={null}
     />,
   );
-  assert.match(reasoningMarkup, />Visualizing</u);
+  assert.doesNotMatch(reasoningMarkup, />Visualizing</u);
   assert.match(reasoningMarkup, /Earlier reasoning/u);
   assert.equal(reasoningMarkup.match(/reasoning-surface/gu)?.length, 1);
   // Once the turn settles the shimmer is gone.

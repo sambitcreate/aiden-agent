@@ -1,4 +1,5 @@
 import { Type, type AssistantMessage, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "./types.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
@@ -52,7 +53,9 @@ export function createVisionAnalysisTool(input: {
 }, dependencies: VisionAnalysisToolDependencies = {}): AgentTool {
   const resolveRuntime = dependencies.resolveRuntime ?? (async (providerId, modelId, signal) => {
     const { resolveBotModelRuntime } = await import("./model-runtime.js");
-    return resolveBotModelRuntime(providerId, modelId, signal);
+    // One-shot tool call; a fresh id still satisfies gateway per-request
+    // attribution.
+    return resolveBotModelRuntime(providerId, modelId, signal, randomUUID());
   });
   const recordUsage = dependencies.recordUsage ?? (async (record) => {
     const { usageStore } = await import("./usage-store.js");

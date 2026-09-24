@@ -142,9 +142,11 @@ test("chat removal deletes private child history before the chat can disappear",
     completeDeletion,
   );
   const releaseAdmission = applicationService.indexOf(
-    "if (releaseAdmission) finishDeletion()",
+    "if (releaseAdmission) {",
     completeDeletion,
   );
+  assert.match(applicationService.slice(releaseAdmission),
+    /if \(releaseAdmission\) \{\s*finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
@@ -495,13 +497,13 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     "dependencies.beginWorkspaceMutation(workspaceId)",
   );
   const destructiveDelete = worktreeApplicationService.indexOf(
-    "dependencies.deleteManagedWorktree(managed, signal)",
+    "dependencies.deleteManagedWorktree(managed, signal, lifecycle)",
     beginMutation,
   );
   assert.ok(deleteHandler >= 0);
   assert.match(
     workspaces.slice(deleteHandler),
-    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
+    /workspaceWorktreeApplicationService\.remove\(owner, id, undefined, \{ force \}\)/u,
   );
   assert.ok(beginMutation >= 0);
   assert.ok(destructiveDelete > beginMutation);
@@ -648,7 +650,7 @@ test("every workspace path capability is renderer-document owned and mutation ad
       `${channel} must use workspace operation admission`,
     );
   }
-  for (const channel of ["workspaces:gitInfo", "git:branches"]) {
+  for (const channel of ["workspaces:gitInfo", "git:branches", "git:pullRequestStatus"]) {
     assert.match(
       ipcHandlerSource(workspaces, channel),
       /withOptionalWorkspaceOperation\(\s*event,\s*workspaceId,/u,
@@ -658,6 +660,7 @@ test("every workspace path capability is renderer-document owned and mutation ad
 
   assert.match(ipcHandlerSource(workspaces, "workspaces:gitInfo"), /gitInfo\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:branches"), /gitBranches\(.+signal\)/u);
+  assert.match(ipcHandlerSource(workspaces, "git:pullRequestStatus"), /githubCurrentPullRequest\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:worktrees"), /gitWorktrees\(.+signal\)/u);
   assert.match(git, /async info\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async branches\(cwd: string, signal\?: AbortSignal\)/u);
@@ -816,7 +819,7 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   const managedDelete = ipcHandlerStart(workspaces, "git:deleteManagedWorktree");
   assert.match(
     workspaces.slice(managedDelete),
-    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
+    /workspaceWorktreeApplicationService\.remove\(owner, id, undefined, \{ force \}\)/u,
   );
   const managedRemove = worktreeApplicationService.indexOf("const remove = async (");
   const managedTerminalClose = worktreeApplicationService.indexOf(

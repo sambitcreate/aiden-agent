@@ -46,7 +46,8 @@ import {
 import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
-import { providerFailureFromTerminalOutcome } from "./provider-failure.js";
+import { providerFailureDiagnosticFields, providerFailureFromTerminalOutcome } from "./provider-failure.js";
+import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import {
   projectNextContextUsage,
@@ -1586,6 +1587,15 @@ export class PiAgentRuntimeHarness {
         finalized.kind === "provider_failed"
           ? providerFailureFromTerminalOutcome(finalized)
           : undefined;
+      if (finalized.kind === "provider_failed") {
+        // Classify before closing the raw provider message; only closed fields
+        // reach the journal and all consumers retain the redacted outcome.
+        writeDiagnosticEvent({
+          level: "warn", area: "generation", event: "provider-failed",
+          outcome: "failed", code: "provider-failed",
+          fields: providerFailureDiagnosticFields(finalized),
+        });
+      }
       const closed =
         finalized.kind === "completed" || !finalized.finalMessage
           ? providerFailure

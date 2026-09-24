@@ -402,6 +402,15 @@ export function advanceStreamingRevealSchedule(
   };
 }
 
+export function clampStreamingRevealSchedule(
+  state: StreamingRevealScheduleState,
+  unitCount: number,
+): StreamingRevealScheduleState {
+  return state.revealedCount > unitCount
+    ? { revealedCount: unitCount, dueAt: null }
+    : state;
+}
+
 export function streamingRevealHandoffDelay(reduceMotion: boolean): number {
   return reduceMotion ? 0 : STREAMING_REVEAL_HANDOFF_MS;
 }
