@@ -24,6 +24,8 @@ import {
   parseAidenSseFrames,
   reconcileAidenSseFrames,
   parseAidenRemoteContractFixture,
+  parseAidenRemoteStreamInputRequest,
+  parseAidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 
 const protocolRoot = path.resolve(process.cwd(), "protocol/aiden-remote/v1");
@@ -90,13 +92,18 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 11);
+  assert.equal(fixture.contractRevision, 12);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, AIDEN_REMOTE_CAPABILITIES);
   assert.deepEqual(fixture.server.capabilities, fixture.pairingExchange.capabilities);
   assert.equal(record(fixture.chat, "fixture chat").botId, "bot_fixture_01");
+  assert.equal(fixture.server.features.includes("chat-run-input-v1"), true);
+  assert.deepEqual(fixture.streamInput.request, { mode: "queue", text: "Also add a regression test." });
+  assert.equal(fixture.streamInput.response.status, "admitted");
+  assert.equal(fixture.streamInput.response.queue, "follow-up");
+  assert.equal(fixture.streamInput.response.committed, true);
   assert.equal(record(fixture.speechStatus, "fixture speech status").selectedModelId, "parakeet-v3");
   assert.equal(record(fixture.speechTranscription, "fixture speech transcription").modelId, "parakeet-v3");
   assert.equal(
@@ -260,6 +267,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
     "/streams/{streamId}/cancel",
+    "/streams/{streamId}/inputs",
     "/approvals/{approvalId}/respond",
     "/models",
     "/speech",
@@ -932,6 +940,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/bots/{botId}/avatar", "put"],
     ["/bot-access-notice/acknowledgement", "post"],
     ["/streams/{streamId}/cancel", "post"],
+    ["/streams/{streamId}/inputs", "post"],
     ["/approvals/{approvalId}/respond", "post"],
     ["/workspaces/{workspaceId}/git/branches", "post"],
     ["/workspaces/{workspaceId}/git/checkout", "post"],
@@ -1564,4 +1573,64 @@ test("produced-file OpenAPI constraints agree with runtime path and provenance v
   assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
   assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
   assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
+});
+
+test("stream input contracts reject unknown modes, oversized text, and unknown reasons", () => {
+  const admitted = parseAidenRemoteStreamInputResult({
+    streamId: "stream_1",
+    chatId: "chat_1",
+    turnId: "turn_1",
+    mode: "steer",
+    status: "admitted",
+    queue: "steer",
+    committed: true,
+    messageId: "msg_1",
+  });
+  assert.equal(admitted.mode, "steer");
+  assert.equal(admitted.status, "admitted");
+  assert.equal(admitted.queue, "steer");
+
+  const rejected = parseAidenRemoteStreamInputResult({
+    streamId: "stream_1",
+    chatId: "chat_1",
+    turnId: "turn_1",
+    mode: "queue",
+    status: "rejected",
+    reason: "capacity",
+    committed: false,
+  });
+  assert.equal(rejected.reason, "capacity");
+
+  assert.throws(
+    () => parseAidenRemoteStreamInputRequest({ mode: "read", text: "x" }),
+    /mode/u,
+  );
+  assert.throws(
+    () => parseAidenRemoteStreamInputRequest({ mode: "steer", text: "x".repeat(200_001) }),
+    /text/u,
+  );
+  assert.throws(
+    () => parseAidenRemoteStreamInputResult({
+      streamId: "stream_1",
+      chatId: "chat_1",
+      turnId: "turn_1",
+      mode: "queue",
+      status: "rejected",
+      reason: "violence",
+      committed: false,
+    }),
+    /reason/u,
+  );
+  // Admitted receipts must name the queue lane; rejected receipts must not.
+  assert.throws(
+    () => parseAidenRemoteStreamInputResult({
+      streamId: "stream_1",
+      chatId: "chat_1",
+      turnId: "turn_1",
+      mode: "steer",
+      status: "admitted",
+      committed: true,
+    }),
+    /queue/u,
+  );
 });

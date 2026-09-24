@@ -13,6 +13,7 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
+  AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
@@ -145,7 +146,10 @@ export interface AidenRemoteRouterDependencies {
   streams?: Pick<
     AidenRemoteStreamService,
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
-  >;
+  > &
+    Partial<
+      Pick<AidenRemoteStreamService, "submitInput" | "supportsRunInput">
+    >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -247,6 +251,7 @@ export type AidenRemoteRouteLabel =
   | "streamApproval"
   | "streamEvents"
   | "streamCancel"
+  | "streamInputs"
   | "approvalRespond"
   | "unknown";
 
@@ -307,6 +312,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   streamApproval: ["/streams/:streamId/approval"],
   streamEvents: ["/streams/:streamId/events"],
   streamCancel: ["/streams/:streamId/cancel"],
+  streamInputs: ["/streams/:streamId/inputs"],
   approvalRespond: ["/approvals/:approvalId/respond"],
   unknown: [],
 };
@@ -1220,6 +1226,9 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(progressCapabilitySupported(dependencies, "agents:read")
               ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE]
+              : []),
+            ...(dependencies.streams?.supportsRunInput?.() === true
+              ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -2522,6 +2531,35 @@ export function createAidenRemoteRequestHandler(
           202,
           await runChatMutation(dependencies.chats, device, chatId, "stream", () =>
             dependencies.streams!.cancel(device.id, cancelMatch[1]!, key)),
+        );
+        return;
+      }
+      const streamInputsMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/inputs$/u.exec(path);
+      if (streamInputsMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "streamInputs";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const body = await readJsonBody(request);
+        if (
+          !dependencies.streams?.submitInput ||
+          dependencies.streams.supportsRunInput?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = dependencies.streams.streamChatId(device.id, streamInputsMatch[1]!);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(dependencies.chats, device, chatId, "stream", () =>
+            dependencies.streams!.submitInput!(
+              device.id,
+              streamInputsMatch[1]!,
+              body,
+              key,
+            )),
         );
         return;
       }

@@ -901,6 +901,23 @@ class AidenRemoteClient(
         cancelStream(turnId)
     }
 
+    /** Remote Slice 2: mid-flight input bound to the displayed stream. Control
+     * writes never auto-retry; the stable request UUID makes manual retries
+     * replay the Mac's original admission outcome. */
+    suspend fun submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ): AidenStreamInputResult = executeRequest(
+        "/streams/$id/inputs",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = json.encodeToString(input),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
     suspend fun respondToApproval(
         id: String,
         decision: AidenApprovalDecision,

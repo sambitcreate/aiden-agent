@@ -1,5 +1,9 @@
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
+  ChatRunInputMode,
+  ChatRunInputRejectionReason,
+} from "../../renderer/shared/chat-run-input.js";
+import type {
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
   AidenRemoteChatSummaryProjection,
@@ -67,6 +71,18 @@ export const AIDEN_REMOTE_PROGRESS_FEATURES = [
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
 ] as const;
+
+/**
+ * Server feature token for the shared foreground admission endpoint
+ * `POST /streams/{streamId}/inputs`. Advertised only while the host wires a
+ * main-owned admission path; old servers omit it and clients must fall back
+ * to the Stop-only busy composer.
+ */
+export const AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1" as const;
+
+export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
+export type AidenRemoteRunInputMode = ChatRunInputMode;
+export const AIDEN_REMOTE_RUN_INPUT_MAX_TEXT = 200_000;
 
 export const AIDEN_REMOTE_EVENT_TYPES = [
   "snapshot",
@@ -745,6 +761,10 @@ export interface AidenRemoteContractFixture {
   turnStart: unknown;
   streamStatus: unknown;
   streamApproval: unknown;
+  streamInput: {
+    request: AidenRemoteStreamInputRequest;
+    response: AidenRemoteStreamInputResult;
+  };
   events: AidenRemoteStreamEvent[];
   fileIndex: unknown;
   fileDocument: unknown;
@@ -3355,6 +3375,100 @@ export function parseAidenRemoteChatAgentRoster(
   return { ...base, availability, unavailableReason, agents: [] };
 }
 
+export interface AidenRemoteStreamInputRequest {
+  mode: AidenRemoteRunInputMode;
+  text: string;
+}
+
+export type AidenRemoteStreamInputRejectionReason = ChatRunInputRejectionReason;
+
+/**
+ * Admission receipt for `POST /streams/{streamId}/inputs`. `committed` means
+ * the user message is durable in the chat transcript; a rejected-but-committed
+ * input remains conversation history and must not be resent.
+ */
+export interface AidenRemoteStreamInputResult {
+  streamId: string;
+  chatId: string;
+  turnId: string;
+  mode: AidenRemoteRunInputMode;
+  status: "admitted" | "rejected";
+  queue?: "steer" | "follow-up";
+  reason?: AidenRemoteStreamInputRejectionReason;
+  committed: boolean;
+  messageId?: string;
+}
+
+export function parseAidenRemoteStreamInputRequest(
+  value: unknown,
+): AidenRemoteStreamInputRequest {
+  if (!isRecord(value)) {
+    throw new Error("Stream input request must be an object.");
+  }
+  assertExactKeys(value, ["mode", "text"], "Stream input request");
+  const mode = enumMember(value.mode, AIDEN_REMOTE_RUN_INPUT_MODES, "Stream input mode");
+  const text = boundedText(
+    value.text,
+    "Stream input text",
+    AIDEN_REMOTE_RUN_INPUT_MAX_TEXT,
+  );
+  return { mode, text };
+}
+
+export function parseAidenRemoteStreamInputResult(
+  value: unknown,
+): AidenRemoteStreamInputResult {
+  if (!isRecord(value)) {
+    throw new Error("Stream input result must be an object.");
+  }
+  assertExactKeys(
+    value,
+    ["streamId", "chatId", "turnId", "mode", "status", "queue", "reason", "committed", "messageId"],
+    "Stream input result",
+  );
+  const streamId = boundedText(value.streamId, "Stream input result streamId", 128);
+  const chatId = boundedText(value.chatId, "Stream input result chatId", 128);
+  const turnId = boundedText(value.turnId, "Stream input result turnId", 128);
+  const mode = enumMember(value.mode, AIDEN_REMOTE_RUN_INPUT_MODES, "Stream input result mode");
+  const status = enumMember(value.status, ["admitted", "rejected"] as const, "Stream input result status");
+  const queue = hasOwn(value, "queue")
+    ? enumMember(value.queue, ["steer", "follow-up"] as const, "Stream input result queue")
+    : undefined;
+  const reason = hasOwn(value, "reason")
+    ? enumMember(
+        value.reason,
+        ["run_not_active", "cancelled", "capacity", "invalid"] as const,
+        "Stream input result reason",
+      )
+    : undefined;
+  if (typeof value.committed !== "boolean") {
+    throw new Error("Stream input result committed must be boolean.");
+  }
+  const messageId = hasOwn(value, "messageId")
+    ? boundedText(value.messageId, "Stream input result messageId", 128)
+    : undefined;
+  if (status === "admitted" && (queue === undefined || reason !== undefined || value.committed !== true || messageId === undefined)) {
+    throw new Error("Admitted stream input results must carry queue, committed, and messageId.");
+  }
+  if (status === "rejected" && (reason === undefined || queue !== undefined)) {
+    throw new Error("Rejected stream input results must carry reason and no queue.");
+  }
+  if (value.committed === true && messageId === undefined) {
+    throw new Error("Committed stream input results must carry messageId.");
+  }
+  return {
+    streamId,
+    chatId,
+    turnId,
+    mode,
+    status,
+    ...(queue === undefined ? {} : { queue }),
+    ...(reason === undefined ? {} : { reason }),
+    committed: value.committed,
+    ...(messageId === undefined ? {} : { messageId }),
+  };
+}
+
 export function parseAidenRemoteDeviceCapabilitiesUpdateRequest(
   value: unknown,
 ): AidenRemoteDeviceCapabilitiesUpdateRequest {
@@ -3756,8 +3870,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     throw new Error("Aiden Remote contract fixture protocolVersion must be 1.");
   }
   const contractRevision = requiredInteger(value, "contractRevision");
-  if (contractRevision < 11) {
-    throw new Error("The canonical progress fixture requires contractRevision 11 or newer.");
+  if (contractRevision < 12) {
+    throw new Error("The canonical progress fixture requires contractRevision 12 or newer.");
   }
   if (value.generated !== false) throw new Error("The canonical fixture must be synthetic.");
   const fixtureNotice = boundedText(value.notice, "Fixture notice", 280);
@@ -3844,6 +3958,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SUMMARY_FEATURE)) {
     throw new Error("Fixture server must advertise chat summaries.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE)) {
+    throw new Error("Fixture server must advertise chat run input.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
@@ -4399,6 +4516,33 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   ) {
     throw new Error("Canonical agent roster must target the canonical turn.");
   }
+  const streamInputRecord = isRecord(value.streamInput) ? value.streamInput : null;
+  if (!streamInputRecord) throw new Error("Stream input fixture must be an object.");
+  assertExactKeys(streamInputRecord, ["request", "response"], "Stream input fixture");
+  const streamInput = {
+    request: parseAidenRemoteStreamInputRequest(streamInputRecord.request),
+    response: parseAidenRemoteStreamInputResult(streamInputRecord.response),
+  };
+  if (
+    streamInput.response.chatId !== chat.id ||
+    streamInput.response.mode !== streamInput.request.mode
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical Chat.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.streamId === "string" &&
+    streamInput.response.streamId !== value.turnStart.streamId
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical stream.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.turnId === "string" &&
+    streamInput.response.turnId !== value.turnStart.turnId
+  ) {
+    throw new Error("Canonical stream input fixture must target the canonical turn.");
+  }
   if (
     JSON.stringify(deviceCapabilitiesUpdate.response.capabilities) !==
       JSON.stringify(deviceCapabilities) ||
@@ -4513,6 +4657,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     turnStart: value.turnStart,
     streamStatus: value.streamStatus,
     streamApproval: value.streamApproval,
+    streamInput,
     fileIndex: value.fileIndex,
     fileDocument: value.fileDocument,
     git: value.git,

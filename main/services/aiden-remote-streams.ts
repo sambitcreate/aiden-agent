@@ -19,8 +19,15 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteStreamEvent,
+  parseAidenRemoteStreamInputRequest,
   type AidenRemoteCapability,
+  type AidenRemoteRunInputMode,
+  type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
+import type {
+  ChatRunInputAdmissionRequest,
+  ChatRunInputAdmissionResult,
+} from "./chat-run-input-admission.js";
 import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
@@ -413,6 +420,13 @@ export class AidenRemoteStreamService {
       now(): number;
       cancel(streamId: string, ownerDocumentId: string): boolean;
       approve(approvalId: string, decision: "allow" | "deny", ownerDocumentId: string): boolean;
+      /**
+       * Host-owned foreground admission (Remote Slice 2). When absent the
+       * `/streams/{id}/inputs` route is unadvertised and returns not_found.
+       */
+      submitInput?(
+        input: ChatRunInputAdmissionRequest & { chatId: string },
+      ): Promise<ChatRunInputAdmissionResult>;
       notifyChatChanged?: (chatId: string) => void;
       notifyApprovalChanged?: (chatId: string) => void;
       snapshot?: AidenRemoteStreamSnapshot;
@@ -1146,6 +1160,97 @@ export class AidenRemoteStreamService {
             this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
           }
           return this.status(deviceId, streamId);
+        },
+      );
+    } catch (error) {
+      return this.mapIdempotencyError(error);
+    }
+  }
+
+  /** True only while the host wires the main-owned run-input admission path. */
+  supportsRunInput(): boolean {
+    return this.options.submitInput !== undefined;
+  }
+
+  /**
+   * Feature-gated shared foreground admission (Remote Slice 2). Domain
+   * rejections resolve as `status: "rejected"` so the durable idempotency
+   * ledger replays the original admission outcome for a retried request UUID.
+   */
+  async submitInput(
+    deviceId: string,
+    streamId: string,
+    rawInput: unknown,
+    key: string,
+  ): Promise<AidenRemoteStreamInputResult> {
+    let parsed: { mode: AidenRemoteRunInputMode; text: string };
+    try {
+      parsed = parseAidenRemoteStreamInputRequest(rawInput);
+    } catch {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The stream input request is invalid.",
+        400,
+      );
+    }
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /streams/{id}/inputs", resourceId: streamId, key },
+        { streamId, mode: parsed.mode, text: parsed.text },
+        async () => {
+          const stream = this.requireStream(deviceId, streamId);
+          const base = {
+            streamId: stream.streamId,
+            chatId: stream.chatId,
+            turnId: stream.turnId,
+            mode: parsed.mode,
+          } as const;
+          if (terminal(stream.state)) {
+            return {
+              ...base,
+              status: "rejected" as const,
+              reason: "run_not_active" as const,
+              committed: false,
+            };
+          }
+          if (stream.cancelRequested) {
+            return {
+              ...base,
+              status: "rejected" as const,
+              reason: "cancelled" as const,
+              committed: false,
+            };
+          }
+          if (!this.options.submitInput) {
+            throw new AidenRemoteServiceError(
+              "not_found",
+              "This endpoint is unavailable.",
+              404,
+            );
+          }
+          const admission = await this.options.submitInput({
+            streamId: stream.streamId,
+            chatId: stream.chatId,
+            mode: parsed.mode,
+            text: parsed.text,
+            ownerDocumentId: stream.owner.owner.documentId,
+          });
+          if (admission.admitted) {
+            this.append(stream, "status", { state: "running" }, false, "running");
+          }
+          if (admission.committed) {
+            this.options.notifyChatChanged?.(stream.chatId);
+          }
+          return {
+            ...base,
+            status: admission.admitted ? ("admitted" as const) : ("rejected" as const),
+            ...(admission.queue === undefined ? {} : { queue: admission.queue }),
+            ...(admission.reason === undefined ? {} : { reason: admission.reason }),
+            committed: admission.committed,
+            ...(admission.messageId === undefined
+              ? {}
+              : { messageId: admission.messageId }),
+          };
         },
       );
     } catch (error) {

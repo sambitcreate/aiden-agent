@@ -870,6 +870,51 @@ data class AidenStreamApprovalSnapshot(
 )
 
 @Serializable
+enum class AidenStreamInputMode {
+    @SerialName("steer") STEER,
+    @SerialName("queue") QUEUE
+}
+
+@Serializable
+data class AidenStreamInputRequest(
+    val mode: AidenStreamInputMode,
+    val text: String
+)
+
+@Serializable
+enum class AidenStreamInputStatus {
+    @SerialName("admitted") ADMITTED,
+    @SerialName("rejected") REJECTED
+}
+
+@Serializable
+enum class AidenStreamInputQueue {
+    @SerialName("steer") STEER,
+    @SerialName("follow-up") FOLLOW_UP
+}
+
+@Serializable
+enum class AidenStreamInputRejectionReason {
+    @SerialName("run_not_active") RUN_NOT_ACTIVE,
+    @SerialName("cancelled") CANCELLED,
+    @SerialName("capacity") CAPACITY,
+    @SerialName("invalid") INVALID
+}
+
+@Serializable
+data class AidenStreamInputResult(
+    val streamId: String,
+    val chatId: String,
+    val turnId: String,
+    val mode: AidenStreamInputMode,
+    val status: AidenStreamInputStatus,
+    val queue: AidenStreamInputQueue? = null,
+    val reason: AidenStreamInputRejectionReason? = null,
+    val committed: Boolean,
+    val messageId: String? = null
+)
+
+@Serializable
 enum class AidenApprovalDecision {
     @SerialName("allow") ALLOW,
     @SerialName("deny") DENY

@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 11)
+        XCTAssertEqual(fixture.contractRevision, 12)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -157,6 +157,12 @@ final class AidenRemotePhase0Tests: XCTestCase {
         )
         XCTAssertTrue(fixture.server.supportsChatTasks)
         XCTAssertTrue(fixture.server.supportsChatAgents)
+        XCTAssertTrue(fixture.server.supportsChatRunInput)
+        XCTAssertEqual(fixture.streamInput?.request.mode, .queue)
+        XCTAssertEqual(fixture.streamInput?.response.status, .admitted)
+        XCTAssertEqual(fixture.streamInput?.response.queue, .followUp)
+        XCTAssertEqual(fixture.streamInput?.response.committed, true)
+        XCTAssertEqual(fixture.streamInput?.response.streamId, fixture.streamStatus.streamId)
         XCTAssertTrue(fixture.botCapabilityCatalog.fileScopes.contains { $0.kind == .fullMac })
         XCTAssertEqual(fixture.speechStatus.selectedModelId, "parakeet-v3")
         XCTAssertEqual(fixture.speechStatus.input.sampleRate, 16_000)

@@ -30,12 +30,21 @@ PR #205 owns managed-home remount recovery; this plan does not change those file
 - Run Telegram/onboarding/type/lint checks and two independent Sol medium reviews.
   Open focused PR, address hosted reviews and wait for required checks.
 
-## Slice 2: shared foreground admission (owned follow-up, not shipped)
+## Slice 2: shared foreground admission (shipped on feature/on-the-go-midflight-ops)
 
 PiAgentRuntimeHarness has queueSteer/queueFollowUp, but llm-client has no public
 admission path and its message_start projection only handles assistant messages.
 Calling those primitives directly would lose host-owned user transcript/projection
 semantics. Implement a main-owned admission boundary before adding consumers:
+
+> **Status (2026-09-24):** Implemented on `feature/on-the-go-midflight-ops`.
+> `llmClient.admitChatRunInput` fronts `chat-run-input-admission.ts` (probe →
+> durable user-message append → Pi queue admission), Remote
+> `POST /streams/{streamId}/inputs` (feature `chat-run-input-v1`, idempotent,
+> contract revision 12), desktop IPC `chat:admitRunInput`, and additive iOS/
+> Android DTOs + client methods. Native composer UX follows in the On The Go
+> slice C work; the capability stays server-advertised only because the full
+> host path is verified.
 
 1. Negotiate an additive capability (`chat-run-input-v1`, subject to native review).
 2. Bind requests to chat, exact stream/run identity, authenticated principal,

@@ -196,6 +196,12 @@ data class AidenBotLegacyNonNegotiatingFixture(
 )
 
 @Serializable
+data class AidenStreamInputFixture(
+    val request: AidenStreamInputRequest,
+    val response: AidenStreamInputResult
+)
+
+@Serializable
 data class AidenRemoteContractFixture(
     val contractRevision: Int,
     val protocolVersion: Int,
@@ -237,6 +243,7 @@ data class AidenRemoteContractFixture(
     val agentRoster: AidenChatAgentRoster? = null,
     val deviceCapabilitiesUpdate: AidenDeviceCapabilitiesUpdateFixture? = null,
     val chatProgressEvents: List<AidenRemoteStreamEvent> = emptyList(),
+    val streamInput: AidenStreamInputFixture? = null,
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
     val error: AidenRemoteErrorEnvelope? = null
 )

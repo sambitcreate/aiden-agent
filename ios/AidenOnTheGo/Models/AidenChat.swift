@@ -1630,6 +1630,46 @@ struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
     let approval: AidenStreamPendingApproval?
 }
 
+/// Remote Slice 2 mid-flight input modes (POST /streams/{id}/inputs).
+enum AidenStreamInputMode: String, Codable, Sendable {
+    case steer
+    case queue
+}
+
+struct AidenStreamInputRequest: Codable, Equatable, Sendable {
+    let mode: AidenStreamInputMode
+    let text: String
+}
+
+enum AidenStreamInputQueue: String, Codable, Sendable {
+    case steer
+    case followUp = "follow-up"
+}
+
+enum AidenStreamInputRejectionReason: String, Codable, Sendable {
+    case runNotActive = "run_not_active"
+    case cancelled
+    case capacity
+    case invalid
+}
+
+struct AidenStreamInputResult: Codable, Equatable, Sendable {
+    let streamId: String
+    let chatId: String
+    let turnId: String
+    let mode: AidenStreamInputMode
+    let status: AidenStreamInputStatus
+    let queue: AidenStreamInputQueue?
+    let reason: AidenStreamInputRejectionReason?
+    let committed: Bool
+    let messageId: String?
+}
+
+enum AidenStreamInputStatus: String, Codable, Sendable {
+    case admitted
+    case rejected
+}
+
 enum AidenApprovalDecision: String, Codable, Sendable {
     case allow
     case deny

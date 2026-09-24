@@ -73,6 +73,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSummariesFeature = "chat-summaries-v1"
     static let chatTasksFeature = "chat-tasks-v1"
     static let chatAgentsFeature = "chat-agents-v1"
+    static let chatRunInputFeature = "chat-run-input-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -204,6 +205,10 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatAgents: Bool {
         features.contains(Self.chatAgentsFeature)
+    }
+
+    var supportsChatRunInput: Bool {
+        features.contains(Self.chatRunInputFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -1709,6 +1714,22 @@ final class AidenRemoteClient: @unchecked Sendable {
             path: ["streams", id, "cancel"],
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()],
             acceptedStatus: [202]
+        )
+    }
+
+    /// Remote Slice 2: submits mid-flight input bound to the displayed stream.
+    /// The Mac persists the user message before Pi queue admission; callers
+    /// must pass a stable request UUID so retries replay the original outcome.
+    func submitStreamInput(
+        id: String,
+        input: AidenStreamInputRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenStreamInputResult {
+        try await send(
+            method: "POST",
+            path: ["streams", id, "inputs"],
+            body: input,
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }
 

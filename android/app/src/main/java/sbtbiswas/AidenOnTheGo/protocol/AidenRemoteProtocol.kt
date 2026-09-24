@@ -40,6 +40,7 @@ object AidenRemoteProtocol {
     const val MAX_JSON_NESTING_DEPTH = 128
     const val CHAT_TASKS_FEATURE = "chat-tasks-v1"
     const val CHAT_AGENTS_FEATURE = "chat-agents-v1"
+    const val CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1"
     const val CHAT_PROGRESS_EPOCH_MAX_LENGTH = 64
     const val MAX_CHAT_PREVIOUS_TURNS = 16
     const val MAX_CHAT_TASKS = 256

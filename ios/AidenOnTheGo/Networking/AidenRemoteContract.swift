@@ -2325,6 +2325,21 @@ struct AidenRemoteContractFixture: Decodable {
         private enum CodingKeys: String, CodingKey { case request, response }
     }
 
+    struct StreamInputFixture: Decodable {
+        let request: AidenStreamInputRequest
+        let response: AidenStreamInputResult
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["request", "response"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            request = try values.decode(AidenStreamInputRequest.self, forKey: .request)
+            response = try values.decode(AidenStreamInputResult.self, forKey: .response)
+        }
+
+        private enum CodingKeys: String, CodingKey { case request, response }
+    }
+
     let contractRevision: Int
     let protocolVersion: Int
     let capabilities: [AidenRemoteCapability]
@@ -2364,6 +2379,7 @@ struct AidenRemoteContractFixture: Decodable {
     let chatProgressEvents: [AidenRemoteStreamEvent]
     let streamStatus: AidenStreamStatus
     let streamApproval: AidenStreamApprovalSnapshot
+    let streamInput: StreamInputFixture?
     let events: [AidenRemoteStreamEvent]
     let speechStatus: AidenSpeechStatus
     let speechTranscription: AidenSpeechTranscription
@@ -2435,6 +2451,7 @@ struct AidenRemoteContractFixture: Decodable {
         ) ?? []
         streamStatus = try values.decode(AidenStreamStatus.self, forKey: .streamStatus)
         streamApproval = try values.decode(AidenStreamApprovalSnapshot.self, forKey: .streamApproval)
+        streamInput = try values.decodeIfPresent(StreamInputFixture.self, forKey: .streamInput)
         events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
         speechStatus = try values.decode(AidenSpeechStatus.self, forKey: .speechStatus)
         speechTranscription = try values.decode(AidenSpeechTranscription.self, forKey: .speechTranscription)
@@ -2642,7 +2659,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
         case taskProgress, agentRoster, deviceCapabilitiesUpdate, chatProgressEvents
-        case streamStatus, streamApproval, events, speechStatus, speechTranscription, error
+        case streamStatus, streamApproval, streamInput, events, speechStatus, speechTranscription, error
     }
 }
 

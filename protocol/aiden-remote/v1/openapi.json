@@ -1910,6 +1910,52 @@
         }
       }
     },
+    "/streams/{streamId}/inputs": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "submitStreamInput",
+        "description": "Shared foreground admission for mid-flight user input (advertised as the chat-run-input-v1 server feature). The Mac host derives the chat from the stream, revalidates ownership and run state, persists the user message before returning an accepted receipt, and binds the admission to the Idempotency-Key request UUID. Domain rejections return 200 with status=rejected so the client draft stays unconsumed; committed=true means the message is durable transcript history and must not be resent.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/StreamId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Admission outcome for the requested input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamInputResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/approvals/{approvalId}/respond": {
       "parameters": [
         {
@@ -6614,6 +6660,87 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StreamInputRequest": {
+        "type": "object",
+        "required": [
+          "mode",
+          "text"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ],
+            "description": "steer injects guidance into the active turn; queue follows up after the current turn."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200000
+          }
+        },
+        "additionalProperties": false
+      },
+      "StreamInputResult": {
+        "type": "object",
+        "required": [
+          "streamId",
+          "chatId",
+          "turnId",
+          "mode",
+          "status",
+          "committed"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ]
+          },
+          "status": {
+            "enum": [
+              "admitted",
+              "rejected"
+            ]
+          },
+          "queue": {
+            "enum": [
+              "steer",
+              "follow-up"
+            ],
+            "description": "Runtime queue that accepted the input; present only when status=admitted."
+          },
+          "reason": {
+            "enum": [
+              "run_not_active",
+              "cancelled",
+              "capacity",
+              "invalid"
+            ],
+            "description": "Rejection reason; present only when status=rejected."
+          },
+          "committed": {
+            "type": "boolean",
+            "description": "True once the user message is durable in the chat transcript; a rejected-but-committed input must not be resent."
+          },
+          "messageId": {
+            "type": "string",
+            "description": "Transcript identity of the committed user message."
           }
         },
         "additionalProperties": false

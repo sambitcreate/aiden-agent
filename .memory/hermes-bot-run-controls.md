@@ -37,3 +37,17 @@ for /queue, /continue and /interrupt now produce unchanged/not-sent receipts,
 never a new admission or interrupt. Five regressions cover pending/dequeued
 sources. Telegram238 passed, both Sol medium re-reviews clear; plan documents
 exact text and unchanged ordinary-prompt edit behavior.
+
+Slice 2 follow-through (2026-09-24, branch feature/on-the-go-midflight-ops):
+shared foreground admission is now implemented and advertised as
+`chat-run-input-v1` (contract revision 12). `llmClient.admitChatRunInput` is the
+single main-owned boundary: Pi queue preflight probe → durable user-message
+append (appendChatMessageWithReconciliation; unknown outcomes escalate to
+AidenOperationUnknownOutcomeError) → queueSteer/queueFollowUp. Committed-but-
+rejected results keep the persisted message and report `committed: true`.
+Remote `POST /streams/{streamId}/inputs` is idempotent per request UUID via the
+stream service ledger, binds stream→chat→turn→ownerDocumentId, revalidates
+bot chat access through runChatMutation, and returns 404 when unwired.
+Desktop `chat:admitRunInput` IPC shares the same boundary and owner check.
+iOS/Android gained additive DTOs, `supportsChatRunInput`, and client methods;
+native Steer/Queue composer UX remains the On The Go slice C work.

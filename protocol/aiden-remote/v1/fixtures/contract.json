@@ -1,5 +1,5 @@
 {
-  "contractRevision": 11,
+  "contractRevision": 12,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -48,7 +48,7 @@
     "appVersion": "0.30.0",
     "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read"],
     "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1"],
+    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1"],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -158,6 +158,19 @@
       "toolName": "write",
       "expiresAt": "2026-08-18T19:06:08.000Z",
       "canAllow": true
+    }
+  },
+  "streamInput": {
+    "request": { "mode": "queue", "text": "Also add a regression test." },
+    "response": {
+      "streamId": "stream_fixture_01",
+      "chatId": "chat_fixture_01",
+      "turnId": "turn_fixture_01",
+      "mode": "queue",
+      "status": "admitted",
+      "queue": "follow-up",
+      "committed": true,
+      "messageId": "message_fixture_user_03"
     }
   },
   "events": [

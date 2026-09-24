@@ -1008,3 +1008,220 @@ test("stream capacity does not reclaim genuinely active generations", () => {
   assert.equal(app.service.snapshot().streams.length, 256);
   assert.deepEqual(app.cancelled, []);
 });
+
+function inputFixture(submitInput?: (input: {
+  streamId: string;
+  chatId: string;
+  mode: "steer" | "queue";
+  text: string;
+  ownerDocumentId?: string;
+}) => Promise<{
+  admitted: boolean;
+  queue?: "steer" | "follow-up";
+  reason?: "run_not_active" | "cancelled" | "capacity" | "invalid";
+  committed: boolean;
+  messageId?: string;
+}>) {
+  let now = 1_000;
+  const calls: Array<Record<string, unknown>> = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    ...(submitInput
+      ? {
+          submitInput: async (input) => {
+            calls.push({ ...input });
+            return submitInput(input);
+          },
+        }
+      : {}),
+  });
+  return { service, calls };
+}
+
+test("run input admission binds to the stream owner and returns an accepted receipt", async () => {
+  const app = inputFixture(async (input) => ({
+    admitted: true,
+    queue: input.mode === "steer" ? "steer" : "follow-up",
+    committed: true,
+    messageId: "message_remote_1",
+  }));
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:status", { streamId: "stream-1" });
+  const result = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Follow up after this." },
+    "input-key-0000000001",
+  );
+  assert.equal(result.status, "admitted");
+  assert.equal(result.queue, "follow-up");
+  assert.equal(result.committed, true);
+  assert.equal(result.messageId, "message_remote_1");
+  assert.equal(result.streamId, "stream-1");
+  assert.equal(result.chatId, "chat-1");
+  assert.equal(result.turnId, "turn-1");
+  assert.equal(result.mode, "queue");
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.calls[0]!.streamId, "stream-1");
+  assert.equal(app.calls[0]!.chatId, "chat-1");
+  assert.equal(app.calls[0]!.mode, "queue");
+  assert.equal(app.calls[0]!.text, "Follow up after this.");
+  assert.equal(app.calls[0]!.ownerDocumentId, owner.owner.documentId);
+});
+
+test("run input admission rejects terminal and cancelled streams without calling the host", async () => {
+  const app = inputFixture(async () => ({
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "m",
+  }));
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:done", {
+    streamId: "stream-1",
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+  });
+  const terminal = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "too late" },
+    "input-key-0000000002",
+  );
+  assert.deepEqual(terminal, {
+    streamId: "stream-1",
+    chatId: "chat-1",
+    turnId: "turn-1",
+    mode: "steer",
+    status: "rejected",
+    reason: "run_not_active",
+    committed: false,
+  });
+  assert.equal(app.calls.length, 0);
+
+  const cancelling = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    submitInput: async () => {
+      app.calls.push({});
+      return { admitted: true, queue: "steer", committed: true, messageId: "m" };
+    },
+  });
+  cancelling.create("device-1", "stream-2", "chat-1", "turn-2");
+  await cancelling.cancel("device-1", "stream-2", "cancel-key-0000000001");
+  const cancelled = await cancelling.submitInput(
+    "device-1",
+    "stream-2",
+    { mode: "steer", text: "stop racing" },
+    "input-key-0000000003",
+  );
+  assert.equal(cancelled.status, "rejected");
+  assert.equal(cancelled.reason, "cancelled");
+  assert.equal(cancelled.committed, false);
+  assert.equal(app.calls.length, 0);
+});
+
+test("run input admission replays the original outcome and rejects conflicting reuse", async () => {
+  let outcome = {
+    admitted: true,
+    queue: "follow-up" as const,
+    committed: true,
+    messageId: "message_remote_2",
+  };
+  const app = inputFixture(async () => outcome);
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const input = { mode: "queue" as const, text: "Queue this." };
+  const first = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004");
+  const replay = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004");
+  assert.deepEqual(replay, first);
+  assert.equal(app.calls.length, 1);
+  await assert.rejects(
+    app.service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "queue", text: "Different text." },
+      "input-key-0000000004",
+    ),
+    (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
+  );
+
+  // A host rejection is a recorded domain outcome: same request UUID replays it.
+  outcome = { admitted: false, reason: "capacity", committed: false } as never;
+  const rejected = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "Full queue." },
+    "input-key-0000000005",
+  );
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.reason, "capacity");
+  const rejectedReplay = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "Full queue." },
+    "input-key-0000000005",
+  );
+  assert.deepEqual(rejectedReplay, rejected);
+  assert.equal(app.calls.length, 2);
+});
+
+test("run input admission reports committed rejections and stays hidden when unwired", async () => {
+  const app = inputFixture(async () => ({
+    admitted: false,
+    reason: "run_not_active",
+    committed: true,
+    messageId: "message_orphaned_1",
+  }));
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const result = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "steer", text: "ended mid-flight" },
+    "input-key-0000000006",
+  );
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "run_not_active");
+  assert.equal(result.committed, true);
+  assert.equal(result.messageId, "message_orphaned_1");
+
+  const unwired = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+  });
+  unwired.create("device-1", "stream-9", "chat-9", "turn-9");
+  assert.equal(unwired.supportsRunInput(), false);
+  await assert.rejects(
+    unwired.submitInput("device-1", "stream-9", { mode: "queue", text: "x" }, "input-key-0000000007"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  assert.equal(app.service.supportsRunInput(), true);
+});
+
+test("run input admission validates the body and binds to the owning device", async () => {
+  const app = inputFixture(async () => ({
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "m",
+  }));
+  app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "read", text: "x" }, "input-key-0000000008"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "" }, "input-key-0000000008"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-2", "stream-1", { mode: "steer", text: "x" }, "input-key-0000000008"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  await assert.rejects(
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "x" }, "short"),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+});

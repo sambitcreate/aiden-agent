@@ -279,6 +279,11 @@ import {
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
+import {
+  createChatRunInputAdmission,
+  type ChatRunInputAdmissionRequest,
+  type ChatRunInputAdmissionResult,
+} from "./chat-run-input-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import {
@@ -447,6 +452,12 @@ const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+const runInputAdmission = createChatRunInputAdmission({
+  active,
+  isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
+  appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
+  readChat: (chatId) => chatStore.get(chatId),
+});
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
 const geminiContextCache = new GeminiContextCache({
@@ -3593,6 +3604,18 @@ export const llmClient = {
     approvals.cancelStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
     return true;
+  },
+
+  /**
+   * Shared foreground admission for mid-flight user input. Remote API
+   * `POST /streams/{id}/inputs` and the desktop IPC surface both enter the Pi
+   * runtime queues through this boundary so transcript persistence and
+   * owner/cancel validation stay main-owned.
+   */
+  admitChatRunInput(
+    input: ChatRunInputAdmissionRequest,
+  ): Promise<ChatRunInputAdmissionResult> {
+    return runInputAdmission.admit(input);
   },
 
   isChatBusy(chatId: string): boolean {

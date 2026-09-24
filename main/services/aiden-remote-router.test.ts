@@ -34,6 +34,7 @@ async function fixture(options: {
   oversizedChatResponse?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
+  runInputAvailable?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -579,6 +580,29 @@ async function fixture(options: {
           updatedAt: new Date(4_000).toISOString(),
         };
       },
+      ...(options.runInputAvailable === false
+        ? {}
+        : {
+            supportsRunInput: () => true,
+            submitInput: async (
+              deviceId: string,
+              streamId: string,
+              input: { mode: "steer" | "queue"; text: string },
+              _key: string,
+            ) => {
+              calls.push(`input:${deviceId}:${streamId}:${input.mode}`);
+              return {
+                streamId,
+                chatId: "chat-1",
+                turnId: "turn-1",
+                mode: input.mode,
+                status: "admitted" as const,
+                queue: input.mode === "steer" ? ("steer" as const) : ("follow-up" as const),
+                committed: true,
+                messageId: "message-remote-input-1",
+              };
+            },
+          }),
       respondApproval: async (deviceId, approvalId, decision, _key) => {
         calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
         return { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
@@ -832,6 +856,81 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
   } finally {
     await app.close();
+  }
+});
+
+test("stream inputs advertise the run-input feature and gate on chat:write", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write"],
+  });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-run-input-v1"), true);
+
+    const missingKey = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ mode: "steer", text: "Now." }),
+    });
+    assert.equal(missingKey.status, 400);
+    assert.equal(
+      app.calls.some((call) => call.startsWith("input:")),
+      false,
+    );
+
+    const admitted = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-steer-key-0001" },
+      body: JSON.stringify({ mode: "steer", text: "Prefer the cached path." }),
+    });
+    assert.equal(admitted.status, 200);
+    const receipt = await admitted.json();
+    assert.equal(receipt.status, "admitted");
+    assert.equal(receipt.queue, "steer");
+    assert.equal(receipt.committed, true);
+    assert.equal(
+      app.calls.some((call) => call === "input:device-authorized-12345678:stream-1:steer"),
+      true,
+    );
+  } finally {
+    await app.close();
+  }
+
+  const readOnly = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const denied = await fetch(`${readOnly.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-readonly-key-01" },
+      body: JSON.stringify({ mode: "steer", text: "Denied." }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(
+      readOnly.calls.some((call) => call.startsWith("input:")),
+      false,
+    );
+  } finally {
+    await readOnly.close();
+  }
+
+  const unavailable = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write"],
+    runInputAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${unavailable.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-run-input-v1"), false);
+    const missing = await fetch(`${unavailable.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-absent-key-0001" },
+      body: JSON.stringify({ mode: "queue", text: "Not wired." }),
+    });
+    assert.equal(missing.status, 404);
+  } finally {
+    await unavailable.close();
   }
 });
 
@@ -1743,6 +1842,23 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
       headers: { ...headers, "idempotency-key": "cancel-stream-key-0001" },
     });
     assert.equal(cancelled.status, 202);
+
+    const input = await fetch(`${app.base}/streams/stream-1/inputs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "input-stream-key-0001" },
+      body: JSON.stringify({ mode: "queue", text: "Follow up with tests." }),
+    });
+    assert.equal(input.status, 200);
+    assert.deepEqual(await input.json(), {
+      streamId: "stream-1",
+      chatId: "chat-1",
+      turnId: "turn-1",
+      mode: "queue",
+      status: "admitted",
+      queue: "follow-up",
+      committed: true,
+      messageId: "message-remote-input-1",
+    });
 
     const approval = await fetch(`${app.base}/approvals/approval-1/respond`, {
       method: "POST",

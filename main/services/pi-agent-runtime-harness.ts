@@ -2141,6 +2141,24 @@ export class PiAgentRuntimeHarness {
     }
   }
 
+  /**
+   * Synchronous admission preflight mirroring rejectedQueueReceipt minus the
+   * message check. Hosts probe before durable transcript writes so a closed or
+   * exhausted queue fails fast instead of orphaning a committed user message.
+   * A still-open probe does not reserve capacity: the queue may close before
+   * the later queueSteer/queueFollowUp call, which re-validates atomically.
+   */
+  queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined {
+    if (this.disposed || !this.managedRunning || !this.managedQueueOpen) {
+      return "not-active";
+    }
+    if (this.appCancelRequested) return "cancelled";
+    if (this.acceptedQueuedMessages.length >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
+      return "capacity";
+    }
+    return undefined;
+  }
+
   queueSteer(message: AgentMessage): PiRuntimeQueueReceipt {
     const rejected = this.rejectedQueueReceipt(message);
     if (rejected) return rejected;
