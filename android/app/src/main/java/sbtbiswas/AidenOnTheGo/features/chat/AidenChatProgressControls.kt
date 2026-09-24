@@ -207,7 +207,7 @@ private fun AidenProgressChip(
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
                 role = Role.Button
-                contentDescription = "$description: $label"
+                contentDescription = "$description: $label${supportingLabel?.let { ", $it" } ?: ""}"
             }
     ) {
         Column(

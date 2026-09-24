@@ -188,7 +188,7 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testProgressChipsKeepFullSizeTargetsUnderReduceTransparency() throws {
+    func testProgressChipsKeepFullSizeTargetsAndRenderChromeFallbacks() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
             from: Data(
@@ -215,8 +215,8 @@ final class AidenChatTests: XCTestCase {
         let host = UIHostingController(rootView: controls.frame(width: 320))
         let size = host.sizeThatFits(in: CGSize(width: 320, height: 200))
         // Chip buttons keep a 44pt hit target even though the capsule
-        // visual stays compact.
-        XCTAssertGreaterThanOrEqual(size.height, 44)
+        // visual stays compact; the row adds its 6pt bottom padding on top.
+        XCTAssertGreaterThanOrEqual(size.height, 50)
 
         // The Reduce Transparency chrome path renders the same chip title and
         // icon through the deterministic override rather than the read-only

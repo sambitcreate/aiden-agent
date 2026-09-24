@@ -56,7 +56,7 @@ class AidenChatProgressUiTest {
     }
 
     @Test
-    fun taskAndAgentChipsRenderAsActionableElevatedControls() {
+    fun taskAndAgentChipsRenderAsActionableControls() {
         val progress = AidenChatTaskProgress(
             version = 1,
             chatId = "chat_progress",
@@ -86,7 +86,7 @@ class AidenChatProgressUiTest {
             }
         }
 
-        compose.onNodeWithText("Step 1 / 2 steps").assertExists().assertHasClickAction().performClick()
+        compose.onNodeWithText("Step 2 / 2").assertExists().assertHasClickAction().performClick()
         compose.onNodeWithText("1 agent").assertExists().assertHasClickAction().performClick()
         compose.runOnIdle {
             assertEquals(1, taskClicks)

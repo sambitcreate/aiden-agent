@@ -241,7 +241,6 @@ struct AidenProgressChipLabel: View {
             in: Capsule(),
             reduceTransparency: reduceTransparency
         )
-        .contentShape(Capsule())
     }
 }
 

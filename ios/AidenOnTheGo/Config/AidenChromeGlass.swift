@@ -16,14 +16,14 @@ struct AidenChromeGlassModifier<GlassShape: InsettableShape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        let reduceTransparency = reduceTransparency ?? environmentReduceTransparency
-        if #available(iOS 26, *), !reduceTransparency {
+        let resolvedReduceTransparency = reduceTransparency ?? environmentReduceTransparency
+        if #available(iOS 26, *), !resolvedReduceTransparency {
             if isInteractive {
                 content.glassEffect(.regular.interactive(), in: shape)
             } else {
                 content.glassEffect(.regular, in: shape)
             }
-        } else if reduceTransparency {
+        } else if resolvedReduceTransparency {
             content
                 .background(palette.raised, in: shape)
                 .overlay(shape.stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
