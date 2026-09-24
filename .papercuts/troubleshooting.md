@@ -982,3 +982,8 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+
+## 2026-09-24 — production todo diagnosis
+
+- The diagnostic log records subagent failures but not their admission reason or the task status they affect. Correlating the private Pi journal showed a final review request rejected at the tree deadline and task 12 still `in_progress`. A bounded, content-free task transition diagnostic would make this easier to diagnose without exposing chat text.
+- The isolated worktree had no `node_modules`, so the first focused test and type-check attempts failed before execution. `npm ci --ignore-scripts` restored the locked JavaScript toolchain; reruns passed.
