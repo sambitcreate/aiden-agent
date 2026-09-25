@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
@@ -223,6 +224,17 @@ class AidenChatViewModel(
         return installation?.takeIf {
             it.instanceId == instanceId && it.deviceId == deviceId && activeClient() != null
         }
+    }
+
+    /**
+     * Quiet Open Chat: while this conversation is on screen its ambient
+     * notification stays quiet; blocking kinds still post. Mirrors iOS.
+     */
+    private var isChatForegrounded = false
+
+    fun setChatForegrounded(foregrounded: Boolean) {
+        isChatForegrounded = foregrounded
+        if (foregrounded) liveNotificationManager?.dismissNotification(chatId)
     }
 
     /** Attach the standalone chat progress stream while the detail screen is foregrounded. */
@@ -611,7 +623,17 @@ class AidenChatViewModel(
             state == AidenStreamState.QUEUED -> AgentRunActivityStatus.STARTING
             else -> AgentRunActivityStatus.THINKING
         }
+        when (AidenQuietOpenChat.decision(status, isChatForegrounded)) {
+            AidenQuietOpenChat.Decision.SUPPRESS,
+            AidenQuietOpenChat.Decision.DISMISS -> {
+                liveNotificationManager?.dismissNotification(chatId)
+                return
+            }
+            AidenQuietOpenChat.Decision.POST -> Unit
+        }
         val activity = when {
+            state == AidenStreamState.WAITING_FOR_APPROVAL && _pendingQuestion.value != null ->
+                "Aiden needs your input"
             state == AidenStreamState.WAITING_FOR_APPROVAL -> "Waiting for your approval"
             activeStep?.label?.isNotBlank() == true -> activeStep.label
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName

@@ -1108,12 +1108,38 @@ final class AidenChatViewModel {
             || (turnModelSelection.providerId != nil && turnModelSelection.modelId != nil)
     }
 
+    /// Quiet Open Chat: while this conversation is on screen its ambient
+    /// surfaces stay quiet; blocking kinds (approvals, errors) still publish.
+    @ObservationIgnored private var isChatForegrounded = false
+
+    private var isAmbientSurfaceQuiet: Bool {
+        isChatForegrounded && UIApplication.shared.applicationState == .active
+    }
+
+    func setChatForegrounded(_ foregrounded: Bool) {
+        isChatForegrounded = foregrounded
+        // Foreground-enter quiets the ambient surface: the Live Activity marks
+        // stale (matching Android dismissing its posted notification) and
+        // recovers on the next published update.
+        if foregrounded, let streamID = activeStreamID {
+            Task { await liveActivities.markStale(instanceID: instanceId, streamID: streamID) }
+        }
+    }
+
     func setHapticsActive(_ active: Bool) {
         if active {
             coordinator.haptics.activate(scope: hapticScope)
         } else {
             coordinator.haptics.deactivate(scope: hapticScope)
         }
+    }
+
+    private func publishLiveActivityStatus(streamID: String, state: AidenStreamState) async {
+        guard AidenQuietOpenChat.publishesStatus(
+            state,
+            isChatForegrounded: isAmbientSurfaceQuiet
+        ) else { return }
+        await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: state)
     }
 
     func load(observeProgress: Bool = true) async {
@@ -2436,25 +2462,33 @@ final class AidenChatViewModel {
                     pendingApproval = nil
                     pendingQuestion = nil
                 }
-                await liveActivities.updateStatus(instanceID: instanceId, streamID: event.streamId, state: state)
+                await publishLiveActivityStatus(streamID: event.streamId, state: state)
             }
         case .textDelta:
             liveText += payload.text ?? ""
             streamState = .running
-            await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
+            }
         case .reasoningDelta:
             reasoning += payload.text ?? ""
-            await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.reasoning(instanceID: instanceId, streamID: event.streamId)
+            }
         case .toolStarted:
             if let id = payload.toolId, let name = payload.name {
                 tools.append(AidenLiveTool(id: id, name: name, status: nil))
             }
-            await liveActivities.toolStarted(name: payload.name, instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.toolStarted(name: payload.name, instanceID: instanceId, streamID: event.streamId)
+            }
         case .toolFinished:
             if let id = payload.toolId, let index = tools.firstIndex(where: { $0.id == id }) {
                 tools[index].status = payload.status
             }
-            await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
+            if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
+                await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
+            }
         case .timeline:
             if let timeline = payload.timeline { activityTimeline = timeline }
         case .approvalRequired:
@@ -2545,7 +2579,7 @@ final class AidenChatViewModel {
                 dedupeKey: "turn-terminal:\(streamID):error"
             )
         }
-        await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
+        await publishLiveActivityStatus(streamID: streamID, state: status.state)
     }
 
     func restorePendingApproval(
@@ -2636,11 +2670,7 @@ final class AidenChatViewModel {
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling
-                await liveActivities.updateStatus(
-                    instanceID: instanceId,
-                    streamID: streamID,
-                    state: .reconciling
-                )
+                await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
             }
             return
         }
@@ -2662,16 +2692,13 @@ final class AidenChatViewModel {
                 pendingQuestion = nil
                 if reconcilesOnNil && pendingApproval == nil {
                     streamState = .reconciling
-                    await liveActivities.updateStatus(
-                        instanceID: instanceId,
-                        streamID: streamID,
-                        state: .reconciling
-                    )
+                    await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
                 }
                 return
             }
             pendingQuestion = question
             streamState = .waitingForApproval
+            await publishLiveActivityStatus(streamID: streamID, state: .waitingForApproval)
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -2690,11 +2717,7 @@ final class AidenChatViewModel {
                 if marksStaleOnFailure {
                     await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
                 } else {
-                    await liveActivities.updateStatus(
-                        instanceID: instanceId,
-                        streamID: streamID,
-                        state: .reconciling
-                    )
+                    await publishLiveActivityStatus(streamID: streamID, state: .reconciling)
                 }
             }
         }
@@ -3227,6 +3250,7 @@ struct AidenChatDetailView: View {
         }
         .onAppear {
             model.setHapticsActive(true)
+            model.setChatForegrounded(true)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -3237,6 +3261,7 @@ struct AidenChatDetailView: View {
         }
         .onDisappear {
             model.setHapticsActive(false)
+            model.setChatForegrounded(false)
             model.stopProgressObservation()
             attachmentPicker.reset()
         }

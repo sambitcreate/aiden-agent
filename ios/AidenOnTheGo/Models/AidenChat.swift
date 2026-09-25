@@ -1973,3 +1973,30 @@ struct AidenLiveTool: Identifiable, Equatable, Sendable {
     let name: String
     var status: String?
 }
+
+/// Quiet Open Chat policy: while a conversation is on screen, its ambient
+/// surfaces (Live Activity, progress notifications) stay quiet — the user is
+/// already watching the live transcript. Blocking kinds that need attention
+/// (approvals, questions, errors) and terminal cleanup always publish.
+enum AidenQuietOpenChat {
+    /// Stream-state updates that merely report progress churn are suppressed
+    /// while the chat is foregrounded; waiting/terminal states always publish.
+    static func publishesStatus(
+        _ state: AidenStreamState,
+        isChatForegrounded: Bool
+    ) -> Bool {
+        guard isChatForegrounded else { return true }
+        switch state {
+        case .queued, .reconciling, .running:
+            return false
+        case .waitingForApproval, .done, .cancelled, .error, .interrupted:
+            return true
+        }
+    }
+
+    /// Token/tool progress events are ambient churn — suppressed while the
+    /// chat is foregrounded.
+    static func publishesAmbientProgress(isChatForegrounded: Bool) -> Bool {
+        !isChatForegrounded
+    }
+}

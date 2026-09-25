@@ -4801,3 +4801,39 @@ extension AidenChatTests {
         }
     }
 }
+
+final class AidenQuietOpenChatTests: XCTestCase {
+    func testBackgroundChatPublishesEveryStatus() {
+        for state in [
+            AidenStreamState.queued, .running, .waitingForApproval, .reconciling,
+            .done, .error, .cancelled, .interrupted,
+        ] {
+            XCTAssertTrue(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: false),
+                "\(state) must publish while the chat is not foregrounded"
+            )
+        }
+        XCTAssertTrue(AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: false))
+    }
+
+    func testForegroundChatSuppressesAmbientProgress() {
+        for state in [AidenStreamState.queued, .reconciling, .running] {
+            XCTAssertFalse(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: true),
+                "\(state) is ambient churn and must be suppressed"
+            )
+        }
+        XCTAssertFalse(AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: true))
+    }
+
+    func testForegroundChatStillPublishesBlockingAndTerminalStates() {
+        for state in [
+            AidenStreamState.waitingForApproval, .done, .cancelled, .error, .interrupted,
+        ] {
+            XCTAssertTrue(
+                AidenQuietOpenChat.publishesStatus(state, isChatForegrounded: true),
+                "\(state) needs attention or clears the surface and must publish"
+            )
+        }
+    }
+}

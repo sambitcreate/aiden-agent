@@ -92,3 +92,23 @@ and reconcile-instead-of-resurrect after an ambiguous write. The
 `waiting_for_approval` status is disambiguated by fetching the approval
 snapshot first, then the question snapshot, then reconciling when neither
 resolves.
+
+On The Go slice E (2026-09-24, same branch): Quiet Open Chat ships client-side
+on both platforms — no Remote contract change. `AidenQuietOpenChat` (iOS
+Models/AidenChat.swift, Android notifications/AidenQuietOpenChat.kt) is the
+shared decision table: while a conversation is foregrounded, ambient progress
+kinds (starting/thinking/tool/responding, queued/reconciling/running) are
+suppressed for that chat, blocking kinds (waiting-for-approval, failed) still
+publish, and terminal kinds (complete/cancelled) clear the surface quietly.
+iOS gates Live Activity update churn in AidenChatViewModel
+(publishLiveActivityStatus + per-event ambient guards); start/finish/
+markStale/endAll/reconcile/approvalRequired stay ungated, and the flag is set
+from AidenChatDetailView appear/disappear plus the active application state.
+Android gates publishLiveNotification through the same table; the detail
+screen's LifecycleEventObserver drives setChatForegrounded on
+RESUME/PAUSE/dispose, foregrounding dismisses the posted shade entry, and
+SUPPRESS/DISMISS both clear lingering entries so a resolved approval
+notification never goes stale. Push pairing (APNs/FCM via Mac-mediated or
+sealed relay, mute-safe titles, LA pushType token) is documented as deferred
+E.2 in docs/plans/aiden-on-the-go-plan.md; the shipped decision table is the
+hook real notifications will reuse.

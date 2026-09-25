@@ -889,3 +889,32 @@ The Remote contract adds authenticated status/model-management/transcription rou
 iOS, Android, the shared Remote contracts, and the completed Bot companion-vision implementation are consolidated on one review branch based directly on `main`. Create Images/Banana, Gemini Live, and the Pi inline proposal remain intentionally separate so this pull request has one mobile-companion release boundary.
 
 Pull-request CI now gives Android its own Java 21/SDK 36 job. Pull requests run the complete debug JVM tests, lint, Android-test Kotlin compilation, and Compose UI verification without publishing an installable artifact. Relevant pushes to main additionally assemble and publish the debug APK plus its SHA-256 checksum as a 14-day workflow artifact. Hosted CI continues to compile the iOS app and test bundle for generic physical hardware without using a simulator; signed XCTest acceptance remains a recorded physical-device gate.
+
+## Quiet Open Chat and push foundation — 2026-09-24
+
+Quiet Open Chat ships on both clients: while a conversation is on screen, its
+ambient surfaces stay quiet instead of re-reporting progress the user is
+already watching. A shared decision table classifies every run-status kind —
+ambient progress churn (starting/thinking/tool/responding and
+queued/reconciling/running stream states) is suppressed for the foregrounded
+chat, blocking kinds (waiting-for-approval and failure) always publish, and
+terminal kinds (complete/cancelled) clear the surface quietly rather than
+posting a redundant banner. iOS applies the policy to Live Activity update
+churn (`pushType` stays `nil`; start, blocking updates, finish, stale marking,
+and reconcile are never gated). Android applies the same table to the
+low-importance agent-run notification: foregrounding a chat dismisses its
+posted progress entry, suppressed updates are skipped, and terminal states
+dismiss instead of posting. Opening a chat mid-run therefore quiets it on both
+platforms; leaving the chat or backgrounding the app resumes normal ambient
+updates. Pending approvals, `ask_user_question` prompts, and errors surface in
+app or through the blocking notification path unchanged.
+
+**E.2 — push foundation (documented, not shipped).** Cloud push pairing is
+deferred: APNs (iOS) + FCM (Android) would need a Mac-mediated or sealed-relay
+path with content-available or mute-safe titles so plaintext agent content
+never leaves the Remote trust boundary. When pairing lands, Live Activity
+APNs updates (`pushType: .token`) become possible; the current local-only LA
+must not be broken in the meantime. The shipped Quiet Open Chat policy is the
+hook real notifications will consult: notification kinds are already
+classified blocking vs ambient, so a future push pipeline can reuse the same
+decision table server- and client-side.
