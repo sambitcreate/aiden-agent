@@ -1020,3 +1020,10 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - `openapi.json` mixes inline and expanded arrays, so `json.dumps` rewrote about 2,600 lines. Edit it by inserting text at object boundaries.
 - `PeerTransport` maps 401/403 to `authentication_required`, not `request_failed` with a status. Tests that fake an auth failure must use that code.
 - Raw-socket WebSocket tests can read the refusal status line directly. `createAidenRemoteUpgradeHandler` writes `HTTP/1.1 403 Refused`, not `Forbidden`.
+
+## 2026-09-25 — Simulator devices Phase 6 (3D frames)
+
+- three.js geometry, `Texture`, `Raycaster` and `PerspectiveCamera` all run under Node, so projection and UV tests need no WebGL. Only `WebGLRenderer` needs a browser; keep it in `phone-viewer.ts`, which is loaded lazily.
+- `fitCamera` returns the same distance at aspects 0.5 and 2 for a 1:2 device, because both are height-bound in one direction and width-bound in the other. Pick test aspects that differ in the binding axis.
+- Touch projection returns points in the displayed frame (visual up is `y < 0.5`) in every orientation, not raw framebuffer coordinates. Assert that invariant rather than per-orientation formulas.
+- The worktree guard refuses running a scratchpad `.ts` file that imports worktree files by absolute path. Put short probes inside the worktree and delete them.

@@ -487,6 +487,7 @@
         "renderer/lib/composer-placeholder.test.ts",
         "renderer/lib/computer-use-control.test.ts",
         "renderer/lib/computer-use-notice.test.ts",
+        "renderer/lib/device-3d/device-3d.test.ts",
         "renderer/lib/device-controls.test.ts",
         "renderer/lib/device-duo-control.test.ts",
         "renderer/lib/device-foreground.test.ts",

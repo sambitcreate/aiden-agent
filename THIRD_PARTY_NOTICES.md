@@ -131,9 +131,20 @@ SOFTWARE.
 
 The experimental Simulator tab's device host, toolchain installer, hub proxy,
 agent device tools, and agent-device PATH shim (`main/services/devices/`), and
-its stream client and simulator controls (`renderer/`), are adapted from T3 Code at commit
+its stream client, simulator controls, and procedural 3D device frame
+(`renderer/lib/device-3d/`), are adapted from T3 Code at commit
 `1c127066`, under the same MIT license as the T3 Code browser entry above.
-Copyright (c) 2026 T3 Tools Inc. T3's device frame models are not included.
+Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
+not included; the device-motion spring is Aiden's own.
+
+## three.js
+
+Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is
+first shown.
+
+Copyright (c) 2010-2026 three.js authors
+
+MIT License. https://github.com/mrdoob/three.js/blob/dev/LICENSE
 
 ## expo-device-hub and agent-device (installed on request)
 

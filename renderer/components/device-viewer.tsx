@@ -1,5 +1,18 @@
 import * as React from "react";
-import { ALargeSmall, Camera, House, Lock, Moon, Power, RotateCw, SlidersHorizontal, Sun, X } from "lucide-react";
+import {
+  ALargeSmall,
+  Box,
+  Camera,
+  House,
+  Lock,
+  Moon,
+  Power,
+  Rotate3d,
+  RotateCw,
+  SlidersHorizontal,
+  Sun,
+  X,
+} from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -12,6 +25,7 @@ import {
 } from "./ui";
 import { devicesApi } from "../lib/ipc";
 import {
+  createCanvasFrameSink,
   createDeviceStreamClient,
   type DeviceScreenSize,
   type DeviceStreamClient,
@@ -20,7 +34,16 @@ import {
 import type { DuoControlState } from "../lib/device-duo-control";
 import { useDeviceControls } from "../lib/device-controls";
 import { COMPOSER_IMAGE_UNAVAILABLE, composerImageAttach } from "../lib/composer-attach";
+import {
+  frameBlocker,
+  frameBlockerLabel,
+  readFramePreference,
+  writeFramePreference,
+  type DeviceFramePreference,
+} from "../lib/device-3d/frame-mode";
+import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
+import { DevicePhoneViewport } from "./device-phone-viewport";
 import { DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
 import type { DeviceSession, DeviceStreamGrant, DeviceSummary } from "../shared/devices";
 
@@ -72,6 +95,10 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const [attempt, setAttempt] = React.useState(0);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = React.useState(false);
+  const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() => readFramePreference());
+  const [webglUnavailable, setWebglUnavailable] = React.useState(false);
+  const frameListenerRef = React.useRef<(() => void) | null>(null);
+  const [resetPose, setResetPose] = React.useState<(() => void) | null>(null);
   const [duoState, setDuoState] = React.useState<DuoControlState>({
     pending: false,
     requested: null,
@@ -115,9 +142,17 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     if (!active || !grant) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Frames always land in the flat canvas; a mounted 3D frame samples it as a texture.
+    const canvasSink = createCanvasFrameSink(canvas);
     const client = createDeviceStreamClient(
       { hostId: session.hostId, deviceId: session.deviceId, grant },
-      canvas,
+      {
+        present(source, width, height) {
+          const presented = canvasSink.present(source, width, height);
+          if (presented) frameListenerRef.current?.();
+          return presented;
+        },
+      },
       {
         onStatus: (next, message) => {
           setStatus(next);
@@ -204,6 +239,56 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   };
 
   const aspect = screen ? screen.width / screen.height : defaultAspect(device);
+  const blocker = frameBlocker({
+    mjpeg: Boolean(mjpegUrl),
+    hinged: Boolean(screen?.supportsHingeAngle),
+    webglUnavailable,
+  });
+  const frame3d = active && framePreference === "3d" && blocker === null;
+  const profile = React.useMemo(
+    () =>
+      resolveDeviceShape(
+        device.kind,
+        screen ? Math.min(screen.width, screen.height) / Math.max(1, Math.max(screen.width, screen.height)) : NaN,
+      ),
+    [device.kind, screen],
+  );
+  const onFrameListener = React.useCallback((listener: (() => void) | null) => {
+    frameListenerRef.current = listener;
+  }, []);
+  const onResetReady = React.useCallback((reset: (() => void) | null) => {
+    setResetPose(() => reset);
+  }, []);
+  const onFrameUnavailable = React.useCallback(() => {
+    setWebglUnavailable(true);
+    toast.info("The 3D frame is unavailable, so the flat screen is shown.");
+  }, []);
+  const touch3d = React.useCallback((phase: "begin" | "move" | "end", point: { x: number; y: number }) => {
+    clientRef.current?.sendTouch(phase, point.x, point.y);
+  }, []);
+  const errorOverlay =
+    status === "error" ? (
+      <div className="device-viewer-overlay">
+        <Text variant="small" color="secondary">
+          {detail ?? "The simulator stream stopped."}
+        </Text>
+        <Button
+          size="small"
+          variant="muted"
+          onClick={() => {
+            renewalsRef.current = [];
+            setAttempt((value) => value + 1);
+          }}
+        >
+          Reconnect
+        </Button>
+      </div>
+    ) : null;
+  const toggleFrame = () => {
+    const next = framePreference === "3d" ? "flat" : "3d";
+    setFramePreference(next);
+    writeFramePreference(next);
+  };
   const label = deviceStatusLabel(status, inputConnected);
   const railButton = (
     name: string,
@@ -239,9 +324,32 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           {label}
         </span>
       </header>
-      <div className="device-viewer-stage">
+      <div className="device-viewer-stage" data-frame={frame3d ? "3d" : "flat"}>
+        {frame3d ? (
+          <div
+            className="device-viewer-3d"
+            tabIndex={0}
+            role="application"
+            aria-roledescription="simulator"
+            aria-label={`${device.name} in a 3D frame. Drag the screen to touch, or drag around the device to turn it; type to send keys while focused.`}
+            onKeyDown={key("down")}
+            onKeyUp={key("up")}
+          >
+            <DevicePhoneViewport
+              source={canvasRef}
+              screen={screen}
+              profile={profile}
+              onFrameListener={onFrameListener}
+              onResetReady={onResetReady}
+              touch={touch3d}
+              onUnavailable={onFrameUnavailable}
+            />
+            {errorOverlay}
+          </div>
+        ) : null}
         <div
           className="device-viewer-screen"
+          hidden={frame3d}
           style={{ aspectRatio: String(aspect) }}
           tabIndex={0}
           role="application"
@@ -257,23 +365,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         >
           <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} aria-hidden />
           {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} /> : null}
-          {status === "error" ? (
-            <div className="device-viewer-overlay">
-              <Text variant="small" color="secondary">
-                {detail ?? "The simulator stream stopped."}
-              </Text>
-              <Button
-                size="small"
-                variant="muted"
-                onClick={() => {
-                  renewalsRef.current = [];
-                  setAttempt((value) => value + 1);
-                }}
-              >
-                Reconnect
-              </Button>
-            </div>
-          ) : null}
+          {frame3d ? null : errorOverlay}
         </div>
         {screen?.supportsHingeAngle ? (
           <DeviceDuoControls
@@ -324,6 +416,18 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           </DropdownMenuContent>
         </DropdownMenu>
         {railButton("Screenshot to chat", <Camera aria-hidden />, screenshotToChat, busy !== null)}
+        <Button
+          variant={framePreference === "3d" && blocker === null ? "muted" : "transparent"}
+          size="small"
+          aria-label="3D frame"
+          title={frameBlockerLabel(blocker)}
+          aria-pressed={framePreference === "3d" && blocker === null}
+          disabled={blocker !== null}
+          onClick={toggleFrame}
+        >
+          <Box aria-hidden />
+        </Button>
+        {frame3d && resetPose ? railButton("Reset 3D view", <Rotate3d aria-hidden />, resetPose) : null}
         <Button
           variant={toolsOpen ? "muted" : "transparent"}
           size="small"
