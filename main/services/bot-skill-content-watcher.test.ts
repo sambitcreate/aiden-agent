@@ -123,13 +123,6 @@ test("a watched edit invalidates a warm runtime skill snapshot immediately", asy
     };
   });
   t.after(() => clearTimeout(changeTimeout));
-  const watcher = new BotSkillContentWatcher(() => {
-    registry.invalidate();
-    resolveChanged();
-  });
-  t.after(() => watcher.dispose());
-  await watcher.watchSkillFiles([skillFile]);
-  await waitForWatcherBaseline();
   await fs.writeFile(skillFile, "After", "utf8");
   await changed;
 

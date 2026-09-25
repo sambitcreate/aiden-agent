@@ -17,6 +17,8 @@ function needsFor(decisions = allTrue, overrides = {}) {
     changes: { result: "success" },
     e2e: { result: "success" },
     ios: { result: "success" },
+    linux: { result: "success" },
+    "linux-rpm": { result: "success" },
     policy: { result: "success" },
     static: { result: "success" },
     unit: { result: "success" },

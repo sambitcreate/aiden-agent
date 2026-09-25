@@ -32,7 +32,6 @@ function dependencies(
     editors: async () => [cursor],
     openPath: async () => "",
     launchApplication: async () => {},
-    launchExecutable: async () => {},
     ...overrides,
   };
 }
@@ -265,12 +264,18 @@ test("Linux launches a discovered editor with a single absolute workspace argume
 test("executable launch failures are reported and leading-option paths become absolute", async () => {
   await assert.rejects(launchEditorExecutable("/nonexistent/aiden-editor", "/tmp/workspace"), /ENOENT/);
   let launchPath = "";
-  const linuxEditor = { ...cursor, bundleId: "", executablePath: "/usr/bin/cursor" };
+  const linuxEditor = {
+    ...cursor,
+    launch: { kind: "executable" as const, executablePath: "/usr/bin/cursor" },
+  };
   await assert.rejects(openFolderInExternalEditor("--workspace with spaces", "cursor", dependencies({
     editors: async () => [linuxEditor],
-    launchApplication: async () => assert.fail("Linux must not call macOS open"),
-    launchExecutable: async (executable, folder) => {
-      assert.equal(executable, linuxEditor.executablePath);
+    launchApplication: async (editor, folder) => {
+      assert.equal(editor.launch.kind, "executable");
+      assert.equal(
+        editor.launch.kind === "executable" ? editor.launch.executablePath : "",
+        linuxEditor.launch.executablePath,
+      );
       launchPath = folder;
       throw new Error("EACCES");
     },
@@ -280,13 +285,12 @@ test("executable launch failures are reported and leading-option paths become ab
 
 test("file manager preserves shell.openPath and uses its returned platform label in errors", async () => {
   for (const label of ["Finder", "File Manager"]) {
-    const fileManager = { ...cursor, id: "finder", label };
+    const fileManager = { ...cursor, id: "finder", label, launch: { kind: "file-manager" as const } };
     let opened = "";
     await openFolderInExternalEditor("/tmp/workspace", "finder", dependencies({
       editors: async () => [fileManager],
       openPath: async (folder) => { opened = folder; return ""; },
       launchApplication: async () => assert.fail("file manager uses Electron"),
-      launchExecutable: async () => assert.fail("file manager uses Electron"),
     }));
     assert.equal(opened, "/tmp/workspace");
     await assert.rejects(openFolderInExternalEditor("/tmp/workspace", "finder", dependencies({

@@ -261,12 +261,13 @@ const APPLICATION_ROOTS = [
   path.join(os.homedir(), "Applications"),
 ] as const;
 
+// Cursor is intentionally excluded on Linux: its editor-window routing varies by
+// build and AppImage/CLI launcher, so neither bare cursor nor --classic is reliable.
 const LINUX_EXECUTABLES: Readonly<Record<string, readonly string[]>> = {
-  cursor: ["cursor"],
   vscode: ["code"],
   "vscode-insiders": ["code-insiders"],
   vscodium: ["codium"],
-  zed: ["zed"],
+  zed: ["zed", "zeditor"],
   windsurf: ["windsurf"],
   kiro: ["kiro"],
   trae: ["trae"],
@@ -318,6 +319,12 @@ function runFile(file: string, args: readonly string[]): Promise<string> {
       else resolve(stdout);
     });
   });
+}
+
+export function launchEditorExecutable(executablePath: string, folderPath: string): Promise<void> {
+  // Absolute paths cannot become CLI options. Detached GUI launchers may live until the
+  // editor closes; do not keep the workspace operation or Aiden shutdown waiting on them.
+  return launchDetached(executablePath, [path.resolve(folderPath)]);
 }
 
 function launchDetached(file: string, args: readonly string[]): Promise<void> {
@@ -686,7 +693,7 @@ const defaultOpenDependencies: OpenFolderInEditorDependencies = {
       return;
     }
     if (editor.launch.kind === "executable") {
-      await launchDetached(editor.launch.executablePath, [folderPath]);
+      await launchEditorExecutable(editor.launch.executablePath, folderPath);
       return;
     }
     if (editor.launch.kind === "flatpak") {
@@ -709,6 +716,7 @@ export async function openFolderInExternalEditor(
   const definition = getExternalEditorDefinition(editorId);
   if (!definition) throw new Error(`Unknown editor: ${editorId}`);
 
+  folderPath = path.resolve(folderPath);
   let stats: { isDirectory(): boolean };
   try {
     stats = await dependencies.stat(folderPath);

@@ -103,13 +103,13 @@ export async function shareProfilePng(
   // Reserve admission before the first await, including cleanup after failure.
   preparingShare = true;
   try {
-    await prepareProfileShare(dataUrl, parent);
+    return await prepareProfileShare(dataUrl, parent);
   } finally {
     preparingShare = false;
   }
 }
 
-async function prepareProfileShare(dataUrl: unknown, parent: BrowserWindow): Promise<void> {
+async function prepareProfileShare(dataUrl: unknown, parent: BrowserWindow): Promise<boolean> {
   await beginStaleCleanup();
   if (parent.isDestroyed()) {
     throw new Error("The profile window is no longer available for sharing.");
