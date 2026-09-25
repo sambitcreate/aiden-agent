@@ -13,6 +13,7 @@ test("native helper builds retain the universal macOS contract", async () => {
     testing: false,
   });
   assert.equal(invocation.executable, "/usr/bin/xcrun");
+  assert.deepEqual(invocation.args.slice(0, 3), ["--sdk", "macosx", "clang"]);
   assert.deepEqual(
     invocation.args.filter((value) => value === "arm64" || value === "x86_64"),
     ["arm64", "x86_64"],
