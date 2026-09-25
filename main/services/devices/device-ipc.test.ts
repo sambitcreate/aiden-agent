@@ -16,6 +16,9 @@ const CHANNELS = [
   "devices:action",
   "devices:settings",
   "devices:screenshot",
+  "devices:toolchain",
+  "devices:prune-tools",
+  "devices:remove-tools",
 ];
 
 const STATE: DeviceServiceState = {
@@ -64,6 +67,9 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     settings: record("settings", {}),
     screenshot: record("screenshot", Buffer.from([0x89, 0x50])),
     streamGrant: record("streamGrant", { origin: "http://127.0.0.1:1", token: "t", expiresAt: 1 }),
+    toolchain: record("toolchain", { tools: [] }),
+    pruneTools: record("pruneTools", { tools: [] }),
+    removeTools: record("removeTools"),
     onState: (listener: (state: DeviceServiceState) => void) => {
       stateListener = listener;
       return () => undefined;

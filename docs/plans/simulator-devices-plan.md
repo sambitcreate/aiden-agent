@@ -796,6 +796,19 @@ This phase also gets its own plan, `docs/plans/simulator-devices-phase-6-3d.md`.
 - Docs: `docs/devices.md` (user) and an internals section adapted from T3 `docs/internals/devices.md`.
 - `THIRD_PARTY_NOTICES.md`: T3 Code (MIT), expo-device-hub (MIT), and agent-device (MIT). Keep the index row in `docs/plans/README.md` and `.memory/simulator-devices.md` current.
 
+### Phase 7 as built
+
+- Settings → **Simulator** (`renderer/components/settings/simulator-settings.tsx`) appears only with the `devices` capability. It has:
+  - three consent switches; agent access and sharing are disabled until streaming is on
+  - an `AlertDialog` before either npm-downloading grant
+  - pinned and installed versions per helper
+  - **Prune** (enabled only when a non-pinned version is on disk)
+  - a destructive-confirmed **Remove…**
+- New IPC: `devices:toolchain` (disk read only), `devices:prune-tools` and `devices:remove-tools`. `removeTools()` runs a streaming revoke first, waits for any in-flight grant or start, then deletes `tools`, `bin`, `agent-state`, `hosts`, `screenshots` and `hub.json`. A grant waits for a removal in progress.
+- Race fix found while building this: a streaming revoke during the first install could still start the hub. `start()` now rechecks the consent epoch after `ensureReady` and stops the host.
+- The setup copy moved to `DEVICE_SETUP_NOTICE` in `renderer/shared/devices.ts`, so the panel and Settings share it.
+- `docs/devices.md` covers the user guide and internals, and README has an Upcoming entry. Onboarding was skipped at the user's request and stays skipped while the flag defaults off.
+
 ## Risks
 
 | Risk | Mitigation |

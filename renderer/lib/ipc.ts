@@ -174,12 +174,14 @@ import {
   parseDeviceServiceState,
   parseDeviceSettings,
   parseDeviceStreamGrant,
+  parseDeviceToolchainState,
   type DeviceActionInput,
   type DeviceConsentKind,
   type DeviceServiceState,
   type DeviceSession,
   type DeviceSettings,
   type DeviceStreamGrant,
+  type DeviceToolchainState,
 } from "../shared/devices";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
@@ -755,6 +757,12 @@ export const browserApi = {
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
+async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
+  const toolchain = parseDeviceToolchainState(await invoke<unknown>(channel));
+  if (!toolchain) throw new Error("The simulator tool versions were invalid.");
+  return toolchain;
+}
+
 async function invokeDeviceState(channel: string, ...args: unknown[]): Promise<DeviceServiceState> {
   const state = parseDeviceServiceState(await invoke<unknown>(channel, ...args));
   if (!state) throw new Error("The simulator state response was invalid.");
@@ -795,6 +803,11 @@ export const devicesApi = {
     if (!grant) throw new Error("The simulator stream grant was invalid.");
     return grant;
   },
+  /** Installed helper versions, read from disk only. */
+  toolchain: () => invokeDeviceToolchain("devices:toolchain"),
+  pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
+  /** Turns every simulator permission off and deletes the installed helpers. */
+  removeTools: () => invokeDeviceState("devices:remove-tools"),
   onState: (handler: (state: DeviceServiceState) => void) =>
     onNotification<unknown>("devices:state", (payload) => {
       const state = parseDeviceServiceState(payload);

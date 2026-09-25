@@ -23,6 +23,7 @@ import {
   type DeviceSettings,
   type DeviceStreamGrant,
   type DeviceSummary,
+  type DeviceToolchainState,
 } from "../../../renderer/shared/devices.js";
 import {
   DeviceHostUnavailableError,
@@ -34,7 +35,7 @@ import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import type { AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
 import type { DevicePeerPort } from "./peer-devices.js";
-import { AGENT_DEVICE, DEVICE_HUB } from "./device-toolchain.js";
+import { AGENT_DEVICE, DEVICE_HUB, installedToolVersions, pruneOldToolVersions } from "./device-toolchain.js";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
@@ -100,6 +101,15 @@ export interface DeviceService {
   settings(input: { hostId: string; deviceId: string }): Promise<DeviceSettings>;
   screenshot(input: { hostId: string; deviceId: string }): Promise<Buffer>;
   streamGrant(): Promise<DeviceStreamGrant>;
+  /** The pinned helpers and what is installed on disk. Reads files only; never starts or installs. */
+  toolchain(): Promise<DeviceToolchainState>;
+  /** Deletes every installed helper version except the pinned ones. */
+  pruneTools(): Promise<DeviceToolchainState>;
+  /**
+   * Turns every simulator permission off, stops both helpers, and deletes the
+   * installs, the agent shim, and their state. The next grant installs again.
+   */
+  removeTools(): Promise<DeviceServiceState>;
   /**
    * Starts agent-device and pins it to one chat's device. Needs agent access;
    * never installs, since installing happens only when the user grants access.
@@ -234,6 +244,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let consentEpoch = 0;
   let saving: Promise<void> = Promise.resolve();
   let granting: Promise<unknown> = Promise.resolve();
+  /** A running "Remove installed tools"; grants wait for it so nothing reinstalls mid-delete. */
+  let removing: Promise<DeviceServiceState> | null = null;
 
   const hostList = (): DeviceHostInfo[] => [
     { id: host.id, kind: "local", name: "This Mac", ...hostState },
@@ -320,6 +332,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     const running = host.current();
     if (running) return Promise.resolve(running);
     starting ??= (async () => {
+      const epoch = consentEpoch;
       try {
         if (!allowInstall && !(await host.hubInstalled())) {
           setHost(await idleStatus());
@@ -329,6 +342,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           (phase, detail) => setHost({ status: phase, ...(detail ? { detail } : {}) }),
           { allowInstall },
         );
+        if (epoch !== consentEpoch || !consent.streaming) {
+          // Streaming was turned off while the hub installed or started; the revoke wins.
+          await host.stop();
+          setHost(await idleStatus());
+          return null;
+        }
         setHost({ status: "ready" });
         return ready;
       } catch (error) {
@@ -612,6 +631,42 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     return { ready, shim };
   }
 
+  async function revoke(kind: DeviceConsentKind): Promise<DeviceServiceState> {
+    await load();
+    consentEpoch += 1;
+    if (kind === "peerSharing") {
+      consent = { ...consent, peerSharing: false };
+      await saveConsent();
+      emit();
+      return snapshot();
+    }
+    consent = kind === "streaming" ? { ...NO_CONSENT } : { ...consent, agentAccess: false };
+    if (kind === "streaming") forgetPeers();
+    shimDir = null;
+    await saveConsent();
+    // Sharing ends before the hub stops, so relays close first.
+    emit();
+    if (kind === "streaming") await stopHost();
+    else await host.stopAgent();
+    // The per-host configs hold the daemon token.
+    await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(() => undefined);
+    setHost(await idleStatus());
+    return snapshot();
+  }
+
+  async function readToolchain(): Promise<DeviceToolchainState> {
+    const [hub, agent] = await Promise.all([
+      installedToolVersions(deps.baseDir, DEVICE_HUB),
+      installedToolVersions(deps.baseDir, AGENT_DEVICE),
+    ]);
+    return {
+      tools: [
+        { id: "hub", name: DEVICE_HUB.name, pinned: DEVICE_HUB.version, installed: hub },
+        { id: "agent", name: AGENT_DEVICE.name, pinned: AGENT_DEVICE.version, installed: agent },
+      ],
+    };
+  }
+
   async function stopHost(): Promise<void> {
     await host.stop();
     devices = [];
@@ -633,6 +688,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async grantConsent(kind) {
       await load();
+      await removing?.catch(() => undefined);
       if (kind === "agentAccess" && !consent.streaming) {
         throw new Error("Set up simulator streaming before allowing agent access.");
       }
@@ -654,7 +710,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
             throw error instanceof DeviceHostUnavailableError ? new Error(error.reason) : error;
           }
           if (epoch !== consentEpoch || !consent.streaming) {
-            await host.stopAgent();
+            // A streaming revoke also stops the hub this grant may have started.
+            if (consent.streaming) await host.stopAgent();
+            else await stopHost();
             setHost(await idleStatus());
             throw new Error("Agent access was turned off while it was being set up.");
           }
@@ -676,27 +734,36 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       return snapshot();
     },
-    async revokeConsent(kind) {
-      await load();
-      consentEpoch += 1;
-      if (kind === "peerSharing") {
-        consent = { ...consent, peerSharing: false };
-        await saveConsent();
-        emit();
-        return snapshot();
-      }
-      consent = kind === "streaming" ? { ...NO_CONSENT } : { ...consent, agentAccess: false };
-      if (kind === "streaming") forgetPeers();
-      shimDir = null;
-      await saveConsent();
-      // Sharing ends before the hub stops, so relays close first.
-      emit();
-      if (kind === "streaming") await stopHost();
-      else await host.stopAgent();
-      // The per-host configs hold the daemon token.
-      await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(() => undefined);
-      setHost(await idleStatus());
-      return snapshot();
+    revokeConsent: revoke,
+    toolchain: readToolchain,
+    async pruneTools() {
+      await Promise.all([
+        pruneOldToolVersions(deps.baseDir, DEVICE_HUB),
+        pruneOldToolVersions(deps.baseDir, AGENT_DEVICE),
+      ]);
+      return readToolchain();
+    },
+    removeTools() {
+      removing ??= (async () => {
+        try {
+          await revoke("streaming");
+          // Any install or start already under way finishes, and loses to the revoke, before deleting.
+          await granting;
+          await starting?.catch(() => undefined);
+          await stopHost();
+          await Promise.all(
+            ["tools", "bin", "agent-state", "hosts", "screenshots", "hub.json"].map((entry) =>
+              rm(path.join(deps.baseDir, entry), { recursive: true, force: true }),
+            ),
+          );
+          shimDir = null;
+          setHost(await idleStatus());
+          return snapshot();
+        } finally {
+          removing = null;
+        }
+      })();
+      return removing;
     },
     async refresh() {
       await load();

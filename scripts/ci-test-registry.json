@@ -460,6 +460,7 @@
         "renderer/components/settings/memory-settings.test.tsx",
         "renderer/components/settings/remote-access-settings.test.tsx",
         "renderer/components/settings/settings-design.test.tsx",
+        "renderer/components/settings/simulator-settings.test.tsx",
         "renderer/components/settings/skills-settings.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
         "renderer/components/subagent-shell-approval.test.tsx",

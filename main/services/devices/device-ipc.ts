@@ -184,4 +184,19 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     "devices:stream-grant",
     guarded(async (service) => service.streamGrant()),
   );
+  deps.handle(
+    "devices:toolchain",
+    guarded(async (service) => service.toolchain()),
+  );
+  deps.handle(
+    "devices:prune-tools",
+    guarded(async (service) => service.pruneTools()),
+  );
+  deps.handle(
+    "devices:remove-tools",
+    guarded(async (service, owner) => {
+      subscribe(owner, service);
+      return service.removeTools();
+    }),
+  );
 }

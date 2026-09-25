@@ -69,6 +69,8 @@ interface FakeHostOptions {
   agentFails?: string;
   /** Holds `ensureAgentReady` until the returned release runs, to race revokes against it. */
   agentGate?: Promise<void>;
+  /** Holds `ensureReady` the same way, as a slow first install would. */
+  hubGate?: Promise<void>;
 }
 
 function fakeHost(options: FakeHostOptions = {}) {
@@ -99,6 +101,7 @@ function fakeHost(options: FakeHostOptions = {}) {
         if (!start?.allowInstall) throw new DeviceToolsMissingError("expo-device-hub");
         onPhase?.("installing", "expo-device-hub@0.12.0");
       }
+      if (options.hubGate) await options.hubGate;
       onPhase?.("starting");
       ready = makeReady();
       return ready;
@@ -537,6 +540,122 @@ test("a revoke during an agent tool call wins, and revoking removes the token co
       assert.equal(host.calls.filter((call) => call === "stopAgent").length, 2);
     },
     { agentGate, consent: { streaming: true, agentAccess: true } },
+  );
+});
+
+test("a streaming revoke during the first install stops the hub it would have started", async () => {
+  let release!: () => void;
+  const hubGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ service, host }) => {
+      const grant = service.grantConsent("streaming");
+      await waitForCall(host.calls, "ensureReady");
+      await service.revokeConsent("streaming");
+      release();
+      const state = await grant;
+      assert.equal(host.host.current(), null);
+      assert.equal(state.hostStatus, "needs-consent");
+      assert.equal(state.consent.streaming, false);
+      assert.deepEqual(state.devices, []);
+      assert.deepEqual(host.commands, [], "simulators are never listed after the revoke");
+    },
+    { installed: false, hubGate },
+  );
+});
+
+const ENTRIES: Record<string, string[]> = {
+  "expo-device-hub": ["dist", "server", "cli.mjs"],
+  "agent-device": ["bin", "agent-device.mjs"],
+};
+
+async function seedInstall(baseDir: string, name: string, version: string) {
+  const dir = path.join(baseDir, "tools", name, version);
+  const entry = path.join(dir, "node_modules", name, ...ENTRIES[name]!);
+  await mkdir(path.dirname(entry), { recursive: true });
+  await writeFile(entry, "");
+  await writeFile(path.join(dir, ".install-complete"), `${version}\n`);
+}
+
+test("tool versions are read from disk, and pruning keeps only the pinned installs", async () => {
+  await withService(async ({ baseDir, service, host }) => {
+    assert.deepEqual(await service.toolchain(), {
+      tools: [
+        { id: "hub", name: "expo-device-hub", pinned: "0.12.0", installed: [] },
+        { id: "agent", name: "agent-device", pinned: "0.21.12", installed: [] },
+      ],
+    });
+    await seedInstall(baseDir, "expo-device-hub", "0.11.0");
+    await seedInstall(baseDir, "expo-device-hub", "0.12.0");
+    await seedInstall(baseDir, "agent-device", "0.20.0");
+    await mkdir(path.join(baseDir, "tools", "expo-device-hub", ".staging-abc"), { recursive: true });
+    const before = await service.toolchain();
+    assert.deepEqual(before.tools.map((tool) => tool.installed), [["0.11.0", "0.12.0"], ["0.20.0"]]);
+    const after = await service.pruneTools();
+    assert.deepEqual(after.tools.map((tool) => tool.installed), [["0.12.0"], []]);
+    // An install staging beside the pinned version is left alone.
+    assert.ok((await readdir(path.join(baseDir, "tools", "expo-device-hub"))).includes(".staging-abc"));
+    assert.deepEqual(host.calls, [], "reading and pruning never start anything");
+  });
+});
+
+test("removing installed tools turns everything off, stops both helpers, and deletes their files", async () => {
+  await withService(
+    async ({ baseDir, service, host }) => {
+      await service.grantConsent("streaming");
+      await service.grantConsent("agentAccess");
+      await service.grantConsent("peerSharing");
+      await seedInstall(baseDir, "expo-device-hub", "0.12.0");
+      await mkdir(path.join(baseDir, "agent-state"), { recursive: true });
+      await mkdir(path.join(baseDir, "screenshots", "x"), { recursive: true });
+      await writeFile(path.join(baseDir, "hub.json"), "{}");
+      assert.ok(service.agentShimDir());
+      const state = await service.removeTools();
+      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
+      assert.equal(state.hostStatus, "needs-consent");
+      assert.equal(service.agentShimDir(), null);
+      assert.equal(host.host.current(), null);
+      assert.ok(host.calls.includes("stop"));
+      for (const entry of ["tools", "bin", "agent-state", "hosts", "screenshots", "hub.json"]) {
+        await assert.rejects(access(path.join(baseDir, entry)), /ENOENT/u, entry);
+      }
+      assert.deepEqual(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")), {
+        version: 1,
+        streaming: false,
+        agentAccess: false,
+        peerSharing: false,
+      });
+    },
+    { agentInstalled: false },
+  );
+});
+
+test("removal waits out an agent install in flight, and a grant waits for the removal", async () => {
+  let release!: () => void;
+  const agentGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ baseDir, service, host }) => {
+      await service.grantConsent("streaming");
+      const grant = service.grantConsent("agentAccess");
+      await waitForCall(host.calls, "ensureAgentReady");
+      const removal = service.removeTools();
+      const regrant = service.grantConsent("streaming");
+      await seedInstall(baseDir, "agent-device", "0.21.12");
+      release();
+      await assert.rejects(grant, /turned off while it was being set up/u);
+      const removed = await removal;
+      assert.equal(removed.consent.agentAccess, false);
+      assert.equal(service.agentShimDir(), null);
+      // The late install's files are gone too: removal deleted after it settled.
+      const regranted = await regrant;
+      assert.equal(regranted.consent.streaming, true);
+      assert.equal(regranted.consent.agentAccess, false);
+      assert.deepEqual((await service.toolchain()).tools.map((tool) => tool.installed), [[], []]);
+    },
+    { agentGate },
   );
 });
 

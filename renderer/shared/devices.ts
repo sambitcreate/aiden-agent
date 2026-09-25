@@ -61,6 +61,25 @@ export interface DeviceServiceState {
   /** A user-readable reason the host cannot run, e.g. missing Xcode or npm. */
   unavailableReason?: string;
 }
+/** Shown before anything is downloaded from npm, in the panel and in Settings. */
+export const DEVICE_SETUP_NOTICE =
+  "Setup downloads two pinned helper tools, expo-device-hub and agent-device, from npm into Aiden's app data. " +
+  "Installing them also lets node-datachannel download its prebuilt native binary. " +
+  "Nothing is sent about your chats, and the simulators stay on this Mac.";
+export type DeviceToolId = "hub" | "agent";
+/** One pinned helper and the completed installs of it on this Mac. */
+export interface DeviceToolInfo {
+  id: DeviceToolId;
+  name: string;
+  pinned: string;
+  installed: string[];
+}
+export interface DeviceToolchainState {
+  tools: DeviceToolInfo[];
+}
+const TOOL_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
+const TOOL_NAME_PATTERN = /^[a-z0-9@/._-]{1,120}$/u;
+
 /** A short-lived credential for the main-owned loopback proxy; never the hub origin itself. */
 export interface DeviceStreamGrant {
   origin: string;
@@ -184,6 +203,27 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
       ? {}
       : { unavailableReason: value.unavailableReason }),
   };
+}
+
+function parseToolInfo(value: unknown): DeviceToolInfo | null {
+  if (!isRecord(value)) return null;
+  const { id, name, pinned, installed } = value;
+  if (id !== "hub" && id !== "agent") return null;
+  if (typeof name !== "string" || !TOOL_NAME_PATTERN.test(name)) return null;
+  if (typeof pinned !== "string" || !TOOL_VERSION_PATTERN.test(pinned)) return null;
+  if (!Array.isArray(installed) || installed.length > 64) return null;
+  const versions: string[] = [];
+  for (const version of installed) {
+    if (typeof version !== "string" || !TOOL_VERSION_PATTERN.test(version)) return null;
+    versions.push(version);
+  }
+  return { id, name, pinned, installed: versions };
+}
+
+export function parseDeviceToolchainState(value: unknown): DeviceToolchainState | null {
+  if (!isRecord(value)) return null;
+  const tools = parseList(value.tools, parseToolInfo);
+  return tools ? { tools } : null;
 }
 
 /** Rejects anything that is not a live grant for a loopback proxy. */

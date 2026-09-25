@@ -4,6 +4,7 @@ import { Button, Switch, Text, toast } from "./ui";
 import { DeviceViewer } from "./device-viewer";
 import { devicesApi } from "../lib/ipc";
 import {
+  DEVICE_SETUP_NOTICE,
   LOCAL_DEVICE_HOST_ID,
   type DeviceHostInfo,
   type DeviceServiceState,
@@ -42,10 +43,6 @@ export interface DevicesPanelViewProps {
   viewer?: (session: DeviceSession, device: DeviceSummary) => React.ReactNode;
 }
 
-const SETUP_COPY =
-  "Setup downloads two pinned helper tools, expo-device-hub and agent-device, from npm into Aiden's app data. " +
-  "Installing them also lets node-datachannel download its prebuilt native binary. " +
-  "Nothing is sent about your chats, and the simulators stay on this Mac.";
 
 function Empty({ icon, title, children }: { icon: React.ReactNode; title: string; children?: React.ReactNode }) {
   return (
@@ -318,7 +315,7 @@ export function DevicesPanelView({
           <p className={explain}>
             Watch and control Xcode simulators here, and let Aiden drive them while you watch.
           </p>
-          <p className={explain}>{detail ?? SETUP_COPY}</p>
+          <p className={explain}>{detail ?? DEVICE_SETUP_NOTICE}</p>
           {errorLine}
           <Button
             variant="muted"
