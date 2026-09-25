@@ -4,6 +4,13 @@ import test from "node:test";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
+test("Live device pickers keep chevrons on one line and truncate long device names", () => {
+  const css = read("../../styles.css");
+  assert.match(css, /settings-field-control > \.live-audio-device-select\s*\{\s*flex-wrap: nowrap;/);
+  assert.match(css, /\.live-audio-device-select > span:first-child\s*\{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
+  assert.match(read("./live-audio-settings.tsx"), /title=\{selectedLabel\}/);
+});
+
 test("every settings destination uses the shared page and grouped row system", () => {
   const view = read("../../main/settings-view.tsx");
   assert.match(view, /<SettingsPage[\s\S]*<ActiveSection \/>[\s\S]*<\/SettingsPage>/u);

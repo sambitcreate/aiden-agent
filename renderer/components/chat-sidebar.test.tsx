@@ -157,6 +157,58 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
   assert.doesNotMatch(pane, /\bnewChat\b/u);
 });
 
+test("workspace pull request indicators surface checks without owning GitHub secrets", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const queries = source("../lib/queries.ts");
+  const ipc = source("../lib/ipc.ts");
+  const indicator = between(
+    sidebar,
+    "function WorkspacePullRequestIndicator",
+    "\n}\n\nfunction updateRestartError",
+  );
+  const pullRequestTrigger = between(
+    indicator,
+    "const remainingChecks",
+    '<PopoverContent className="w-80 p-3"',
+  );
+
+  assert.match(sidebar, /function WorkspacePullRequestIndicator/u);
+  assert.match(sidebar, /useGitPullRequestStatus\(workspace\.id, enabled\)/u);
+  assert.match(sidebar, /workspace\.folderPath && workspace\.permission !== "none"/u);
+  assert.match(sidebar, /Some checks were not successful/u);
+  assert.match(sidebar, /Some checks haven’t completed yet/u);
+  assert.match(sidebar, /All checks have passed/u);
+  assert.match(sidebar, /Checks did not run/u);
+  assert.match(sidebar, /GitHub status unavailable/u);
+  assert.match(sidebar, /availability === "not-github"/u);
+  assert.match(sidebar, /Merged/u);
+  assert.match(sidebar, /Closed/u);
+  assert.match(sidebar, /Draft/u);
+  assert.match(sidebar, /PopoverContent className="w-80 p-3"/u);
+  assert.match(sidebar, /aria-label=\{`Pull request #\$\{pullRequest\.number\} checks`\}/u);
+  assert.match(pullRequestTrigger, /<Button[\s\S]*variant="transparent"[\s\S]*iconOnly/u);
+  assert.match(
+    pullRequestTrigger,
+    /className=\{pullRequestChecksIconTone\(displayChecksState\)\}/u,
+  );
+  assert.match(pullRequestTrigger, /<GitPullRequest aria-hidden="true" \/>/u);
+  assert.doesNotMatch(pullRequestTrigger, /<span[^>]*>#\{pullRequest\.number\}<\/span>/u);
+  assert.doesNotMatch(pullRequestTrigger, /checksIcon\(displayChecksState\)/u);
+  assert.doesNotMatch(indicator, /<span className="truncate">GitHub<\/span>/u);
+  assert.match(sidebar, /window\.open\(url, "_blank", "noopener,noreferrer"\)/u);
+  assert.match(
+    sidebar,
+    /const explicitlyExpanded = expandedWorkspaceIds\.has\(group\.workspace\.id\)/u,
+  );
+  assert.match(
+    sidebar,
+    /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{group\.workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*group\.workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
+  );
+  assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
+  assert.match(queries, /refetchInterval: enabled \? 30_000 : false/u);
+  assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
+});
+
 test("workspace outline and recent view are alternate projections, not duplicate lists", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
@@ -208,7 +260,7 @@ test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   const overflowMenu = between(
     sidebar,
     "function SidebarOverflowMenu",
-    "\n}\n\nfunction updateRestartError",
+    "\n}\n\nfunction pullRequestChecksLabel",
   );
 
   assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
@@ -275,22 +327,12 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden settings uses the canonical sidebar logo", () => {
+test("Aiden Live settings has a dedicated destination and the dock restores the app logo", () => {
   const settings = source("../main/settings-view.tsx");
-  const rendererLogo = readFileSync(
-    new URL("../../resources/aiden-sidebar-logo.png", import.meta.url),
-  );
-  const canonicalLogo = readFileSync(
-    new URL(
-      "../../ios/AidenOnTheGo/Resources/Assets.xcassets/AidenSidebarLogo.imageset/aiden-sidebar-logo.png",
-      import.meta.url,
-    ),
-  );
-
-  assert.match(settings, /assistant: <AidenSidebarLogo\s*\/>/u);
-  assert.match(settings, /resources\/aiden-sidebar-logo\.png/u);
-  assert.doesNotMatch(settings, /assistant: <Sparkles/u);
-  assert.deepEqual(rendererLogo, canonicalLogo);
+  const dock = source("./assistant/assistant-dock.tsx");
+  assert.match(settings, /geminiLive: <AudioWaveform/u);
+  assert.match(dock, /resources\/app-icon\.png/u);
+  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
 });
 
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {

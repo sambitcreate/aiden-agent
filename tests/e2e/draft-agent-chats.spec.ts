@@ -64,6 +64,8 @@ test("startup migration removes legacy empty chats once and keeps sent conversat
   const promotedPath = path.join(journalRoot, "promoted-empty.jsonl");
   let promotedReceiptPath!: string;
   const reopened = await aiden.relaunch(async () => {
+    // Seed only after Electron has closed so shutdown cannot flush a stale
+    // in-memory chat index over the migration fixture.
     await mkdir(journalRoot, { recursive: true });
     for (const id of ["legacy-empty", "private-empty", "header-only-empty", "promoted-empty"]) await seed(id);
     await writeFile(journalPath, privateJournal);

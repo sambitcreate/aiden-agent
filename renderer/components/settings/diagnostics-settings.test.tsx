@@ -40,5 +40,9 @@ test("diagnostic IPC surface does not retain the arbitrary devlog writer", () =>
   const index = source("main/handlers/index.ts");
   assert.match(handlers, /parseRendererReport/u);
   assert.match(handlers, /uploadToServer: false/u);
+  assert.doesNotMatch(handlers, /renderer-crashed/u);
+  assert.match(handlers, /rendererDiagnosticClassification\(report\.errorType, report\.suppressed\)/u);
+  assert.match(handlers, /failurePhase:/u);
+  assert.match(source("main/index.ts"), /code: "renderer-crashed"/u);
   assert.doesNotMatch(index, /devlog:write|String\(message\)/u);
 });

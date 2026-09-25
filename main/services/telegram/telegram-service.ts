@@ -42,6 +42,7 @@ import type { TelegramModelChoice } from "./telegram-controls.js";
 import {
   TELEGRAM_COMMANDS,
   visibleTelegramModelChoices,
+  telegramModelChoice,
 } from "./telegram-controls.js";
 import { getTelegramExtensions } from "./telegram-extension-registry.js";
 import {
@@ -216,17 +217,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
     });
   }
   const models = [...byId.values()].flatMap((provider) =>
-    provider.models.map((model) => {
-      const metadata = provider.modelMetadata?.[model];
-      return {
-        providerId: provider.id,
-        providerLabel: provider.label,
-        model,
-        modelLabel: metadata?.name,
-        reasoning: metadata?.reasoning ?? false,
-        thinkingLevels: metadata?.thinkingLevels,
-      };
-    }),
+    provider.models.map((model) => telegramModelChoice(provider, model)),
   );
   return visibleTelegramModelChoices(models, settings.hiddenModelsByProvider);
 }
@@ -636,7 +627,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       );
       if (!workspaceId) return extensionCommands;
       const snapshot = await skillRegistry.snapshot(workspaceId);
-      const skillCommands = snapshot.available.flatMap((skill) => {
+      const skillCommands = snapshot.catalog.flatMap((skill) => {
+        if (!skill.available) return [];
         const command = skill.name
           .toLowerCase()
           .replace(/[^a-z0-9_]+/gu, "_")

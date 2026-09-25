@@ -17,12 +17,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Rebuild from the current Pi branch only. Once a todo tool result is found it
- * must be a fully valid Aiden snapshot; a malformed newer result never falls
- * back to older state because that could silently regress completed work.
+ * Rebuild from the current Pi branch only, in oldest-to-newest branch order.
+ * Every checkpoint is a full snapshot, so validate only the newest non-error
+ * todo result. A malformed newest result never falls back to older state
+ * because that could silently regress completed work.
  */
 export async function replayTodoState(session: TodoReplaySession): Promise<TodoState> {
-  let latest: TodoState | undefined;
+  let latest: Record<string, unknown> | undefined;
   for (const entryValue of await session.getBranch()) {
     const entry = record(entryValue);
     if (entry?.type !== "message") continue;
@@ -32,10 +33,11 @@ export async function replayTodoState(session: TodoReplaySession): Promise<TodoS
     // details before this extension can mutate its generation-local state.
     // They are durable evidence for the model, but never todo checkpoints.
     if (message.isError === true) continue;
-    const details = parseTodoToolDetails(message.details);
-    latest = { tasks: details.tasks, nextId: details.nextId };
+    latest = message;
   }
-  return latest ?? { tasks: [...EMPTY_TODO_STATE.tasks], nextId: EMPTY_TODO_STATE.nextId };
+  if (!latest) return { tasks: [...EMPTY_TODO_STATE.tasks], nextId: EMPTY_TODO_STATE.nextId };
+  const details = parseTodoToolDetails(latest.details);
+  return { tasks: details.tasks, nextId: details.nextId };
 }
 
 export function isTodoSnapshotFailure(error: unknown): error is TodoSnapshotError {

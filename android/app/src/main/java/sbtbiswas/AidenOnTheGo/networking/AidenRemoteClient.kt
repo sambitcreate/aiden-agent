@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.networking
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
@@ -83,7 +86,18 @@ class AidenRemoteClient(
     )
 
     companion object {
-        private val jsonParser = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        // Null optional pairing fields must be omitted. Older Macs reject the
+        // additive keys (and even explicit nulls) as an unknown payload shape.
+        private val jsonParser = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            explicitNulls = false
+        }
+        private val strictJsonParser = Json {
+            ignoreUnknownKeys = false
+            encodeDefaults = true
+            explicitNulls = true
+        }
 
         fun createOkHttpClient(
             serverSpkiSha256: String,
@@ -143,6 +157,7 @@ class AidenRemoteClient(
             deviceType: AidenDeviceType,
             clientVersion: String = "0.1.0",
             acceptsBotCapabilities: Boolean = true,
+            acceptsProgressCapabilities: Boolean? = null,
             customOkHttpClient: OkHttpClient? = null
         ): AidenPairingExchange = withContext(Dispatchers.IO) {
             val bootstrap = payload.bootstrap
@@ -168,7 +183,8 @@ class AidenRemoteClient(
                 deviceType = deviceType.wireValue,
                 clientVersion = clientVersion,
                 acceptsDisplayName = true,
-                acceptsBotCapabilities = acceptsBotCapabilities
+                acceptsBotCapabilities = acceptsBotCapabilities,
+                acceptsProgressCapabilities = acceptsProgressCapabilities
             )
             val bodyJson = jsonParser.encodeToString(requestObj)
 
@@ -192,7 +208,8 @@ class AidenRemoteClient(
                         deviceType = deviceType.wireValue,
                         clientVersion = clientVersion,
                         acceptsDisplayName = null,
-                        acceptsBotCapabilities = null
+                        acceptsBotCapabilities = null,
+                        acceptsProgressCapabilities = null
                     )
                     val legacyBodyJson = jsonParser.encodeToString(legacyRequestObj)
                     val retryRequest = Request.Builder()
@@ -224,6 +241,7 @@ class AidenRemoteClient(
             deviceType: AidenDeviceType,
             clientVersion: String = "0.1.0",
             acceptsBotCapabilities: Boolean = true,
+            acceptsProgressCapabilities: Boolean? = null,
             customOkHttpClient: OkHttpClient? = null
         ): PairResult = withContext(Dispatchers.IO) {
             val payload = manualPairingPayload(manualCode, endpoint, customOkHttpClient)
@@ -233,6 +251,7 @@ class AidenRemoteClient(
                 deviceType = deviceType,
                 clientVersion = clientVersion,
                 acceptsBotCapabilities = acceptsBotCapabilities,
+                acceptsProgressCapabilities = acceptsProgressCapabilities,
                 customOkHttpClient = customOkHttpClient
             )
             PairResult(payload, exchange)
@@ -362,6 +381,7 @@ class AidenRemoteClient(
         botScope: AidenBotPrivateResponseScope? = null,
         requestTimeoutSeconds: Long? = null,
         maximumResponseBytes: Int? = null,
+        retryConnectionFailure: Boolean = true,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -398,26 +418,17 @@ class AidenRemoteClient(
             "DELETE" -> if (requestBody != null) requestBuilder.delete(requestBody) else requestBuilder.delete()
         }
 
-        val callClient = requestTimeoutSeconds?.let {
-            httpClient.newBuilder()
-                .readTimeout(it, TimeUnit.SECONDS)
-                .callTimeout(it, TimeUnit.SECONDS)
-                .build()
-        } ?: httpClient
+        val callClient = if (requestTimeoutSeconds != null || !retryConnectionFailure) {
+            httpClient.newBuilder().apply {
+                if (requestTimeoutSeconds != null) {
+                    readTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                    callTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                }
+                if (!retryConnectionFailure) retryOnConnectionFailure(false)
+            }.build()
+        } else httpClient
         val response = try {
-            callClient.newCall(requestBuilder.build()).await()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
-            throw error
-        }
-        val bytes = try {
-            if (maximumResponseBytes != null) {
-                response.body.readBounded(maximumResponseBytes)
-            } else {
-                response.body?.bytes() ?: ByteArray(0)
-            }
+            callClient.newCall(requestBuilder.build()).awaitBody(maximumResponseBytes)
         } catch (error: CancellationException) {
             throw error
         } catch (_: ResponseBodyLimitExceededException) {
@@ -427,6 +438,8 @@ class AidenRemoteClient(
             AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.NETWORK)
             throw error
         }
+
+        val bytes = response.bytes
 
         if (!acceptedStatus.contains(response.code)) {
             val errorBody = parseError(response.code, bytes)
@@ -464,6 +477,41 @@ class AidenRemoteClient(
             throw AidenRemoteContractException.InvalidProtocolVersion
         }
         s
+    }
+
+    /**
+     * Opt an already paired device into the additive chat progress grants.
+     * The Mac returns the complete capability list, so callers replace their
+     * local grant projection instead of merging an untrusted response.
+     */
+    suspend fun updateDeviceCapabilities(
+        accepts: List<AidenRemoteCapability>
+    ): List<AidenRemoteCapability> {
+        val allowed = AidenRemoteCapability.PROGRESS.toSet()
+        if (accepts.isEmpty() || accepts.toSet().size != accepts.size || accepts.any { it !in allowed }) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid progress capability request.")
+        }
+        return executeRequest(
+            "/device/capabilities",
+            method = "POST",
+            bodyJson = json.encodeToString(DeviceCapabilitiesUpdateRequest(accepts)),
+            botScope = null,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val response = strictJsonParser.decodeFromString<DeviceCapabilitiesUpdateResponse>(String(bytes, Charsets.UTF_8))
+            if (response.capabilities.size > AidenRemoteCapability.V1_KNOWN.size ||
+                response.capabilities.toSet().size != response.capabilities.size ||
+                response.capabilities.any { capability ->
+                    AidenRemoteCapability.V1_KNOWN.none { it == capability }
+                } ||
+                (response.capabilities.contains(AidenRemoteCapability.BOT_WRITE) &&
+                    !response.capabilities.contains(AidenRemoteCapability.BOT_READ)) ||
+                !response.capabilities.containsAll(accepts)
+            ) {
+                throw AidenRemoteContractException.InvalidJson("Invalid device capabilities response")
+            }
+            response.capabilities
+        }
     }
 
     suspend fun updateDeviceIdentity(name: String) {
@@ -642,6 +690,41 @@ class AidenRemoteClient(
         c
     }
 
+    suspend fun chatTasks(id: String): AidenChatTaskProgress = executeRequest(
+        "/chats/$id/tasks",
+        botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
+        maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+    ) { bytes ->
+        val progress = AidenChatProgressCodec.decodeTaskProgress(bytes)
+        if (progress.chatId != id) throw AidenRemoteClientException.InvalidResponse("Task progress belongs to another chat.")
+        progress
+    }
+
+    suspend fun chatAgents(id: String, turnId: String? = null): AidenChatAgentRoster {
+        val encodedTurnId = turnId?.let {
+            if (!it.matches(Regex("^[A-Za-z0-9._:-]{1,128}$"))) {
+                throw AidenRemoteClientException.InvalidResponse("Invalid agent roster turn.")
+            }
+            URLEncoder.encode(it, Charsets.UTF_8.name()).replace("+", "%20")
+        }
+        val path = buildString {
+            append("/chats/")
+            append(id)
+            append("/agents")
+            if (encodedTurnId != null) append("?turnId=").append(encodedTurnId)
+        }
+        return executeRequest(
+            path,
+            botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val roster = AidenChatProgressCodec.decodeAgentRoster(bytes)
+            if (roster.chatId != id) throw AidenRemoteClientException.InvalidResponse("Agent roster belongs to another chat.")
+            if (turnId != null && roster.turnId != turnId) throw AidenRemoteClientException.InvalidResponse("Agent roster belongs to another turn.")
+            roster
+        }
+    }
+
     suspend fun createChat(
         workspaceId: String,
         providerId: String? = null,
@@ -807,6 +890,7 @@ class AidenRemoteClient(
     ): AidenStreamStatus = executeRequest(
         "/streams/$id/cancel",
         method = "POST",
+        retryConnectionFailure = false,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
@@ -824,6 +908,7 @@ class AidenRemoteClient(
     ): AidenApprovalResponse = executeRequest(
         "/approvals/$id/respond",
         method = "POST",
+        retryConnectionFailure = false,
         bodyJson = json.encodeToString(ApprovalRequest(decision = decision)),
         idempotencyKey = idempotencyKey
     ) { bytes ->
@@ -840,6 +925,29 @@ class AidenRemoteClient(
     fun streamEvents(
         id: String,
         after: Int = 0
+    ): Flow<AidenRemoteStreamEvent> = sseEvents(
+        path = "/streams/$id/events",
+        expectedStreamId = id,
+        after = after,
+        expectedChannel = AidenSSEParser.ExpectedChannel.PARENT_STREAM
+    )
+
+    /** Standalone chat-scoped progress journal; it never mirrors parent turns. */
+    fun progressEvents(
+        chatId: String,
+        after: Int = 0
+    ): Flow<AidenRemoteStreamEvent> = sseEvents(
+        path = "/chats/$chatId/progress/events",
+        expectedStreamId = chatId,
+        after = after,
+        expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
+    )
+
+    private fun sseEvents(
+        path: String,
+        expectedStreamId: String,
+        after: Int,
+        expectedChannel: AidenSSEParser.ExpectedChannel
     ): Flow<AidenRemoteStreamEvent> = callbackFlow {
         if (credential.isNullOrEmpty()) {
             AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
@@ -847,7 +955,7 @@ class AidenRemoteClient(
             return@callbackFlow
         }
         val query = if (after > 0) "?after=$after" else ""
-        val url = "$endpoint/streams/$id/events$query"
+        val url = "$endpoint$path$query"
         val requestBuilder = Request.Builder()
             .url(url)
             .addHeader("Aiden-Protocol-Version", "1")
@@ -871,7 +979,12 @@ class AidenRemoteClient(
                     }
                     val stream = response.body?.byteStream()
                         ?: throw AidenRemoteClientException.InvalidResponse()
-                    AidenSSEParser.parseStream(stream, expectedStreamId = id, startSequence = after)
+                    AidenSSEParser.parseStream(
+                        stream,
+                        expectedStreamId = expectedStreamId,
+                        startSequence = after,
+                        expectedChannel = expectedChannel
+                    )
                         .collect { event -> send(event) }
                 }
                 close()
@@ -1619,7 +1732,18 @@ class AidenRemoteClient(
         val deviceType: String,
         val clientVersion: String,
         val acceptsDisplayName: Boolean? = null,
-        val acceptsBotCapabilities: Boolean? = null
+        val acceptsBotCapabilities: Boolean? = null,
+        val acceptsProgressCapabilities: Boolean? = null
+    )
+
+    @Serializable
+    private data class DeviceCapabilitiesUpdateRequest(
+        val accepts: List<AidenRemoteCapability>
+    )
+
+    @Serializable
+    private data class DeviceCapabilitiesUpdateResponse(
+        val capabilities: List<AidenRemoteCapability>
     )
 
     @Serializable
@@ -1756,6 +1880,47 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
             continuation.resumeWithException(e)
         }
     })
+}
+
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray)
+
+/** Keep cancellation connected to the socket until the body is consumed and closed. */
+@OptIn(DelicateCoroutinesApi::class)
+private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = coroutineScope {
+    val readerScope = this
+    suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { this@awaitBody.cancel() }
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                // Return the OkHttp per-host slot at headers, not after a slow
+                // body. ATOMIC guarantees use/close even if cancellation wins
+                // before the IO worker starts; the scope owns its completion.
+                readerScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+                    val result = try {
+                        response.use {
+                            if (!continuation.isActive) return@launch
+                            val bytes = if (maximumBytes != null) {
+                                it.body.readBounded(maximumBytes)
+                            } else {
+                                it.body?.bytes() ?: ByteArray(0)
+                            }
+                            BufferedHttpResponse(it.code, bytes)
+                        }
+                    } catch (error: Exception) {
+                        continuation.resumeWithException(error)
+                        return@launch
+                    }
+                    // Only plain data crosses the dispatch boundary: cancellation
+                    // cannot discard an open response before the caller receives it.
+                    continuation.resume(result)
+                }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWithException(e)
+            }
+        })
+    }
 }
 
 private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")

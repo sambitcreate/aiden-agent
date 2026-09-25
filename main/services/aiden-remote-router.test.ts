@@ -21,6 +21,8 @@ async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
+  acceptsProgressCapabilities?: boolean;
+  progressAvailable?: boolean;
   authorizationBlocked?: () => boolean;
   botChat?: boolean;
   botArchived?: boolean;
@@ -133,6 +135,8 @@ async function fixture(options: {
           name: "iPhone",
           revoked: options.authenticate === "revoked",
           acceptsBotCapabilities: options.acceptsBotCapabilities === true,
+          acceptsProgressCapabilities:
+            options.acceptsProgressCapabilities === true,
           capabilities: new Set(
             options.authenticate === "denied"
               ? []
@@ -148,6 +152,30 @@ async function fixture(options: {
           type: "iphone" as const,
           clientVersion: "1.0",
           capabilities: options.capabilities ?? ["server:read" as const],
+          createdAt: 500,
+          lastSeenAt: 1_000,
+        };
+      },
+      upgradeDeviceCapabilities: async (deviceId, accepts) => {
+        calls.push(`device-capabilities:${deviceId}:${accepts.join(",")}`);
+        if (options.authenticate === "revoked") return null;
+        if (
+          accepts.some(
+            (capability) =>
+              capability !== "tasks:read" && capability !== "agents:read",
+          )
+        ) {
+          return null;
+        }
+        return {
+          id: deviceId,
+          name: "iPhone",
+          type: "iphone" as const,
+          clientVersion: "1.0",
+          capabilities: [
+            ...(options.capabilities ?? ["server:read" as const]),
+            ...accepts,
+          ] as AidenRemoteCapability[],
           createdAt: 500,
           lastSeenAt: 1_000,
         };
@@ -308,6 +336,40 @@ async function fixture(options: {
         return { bytes: Buffer.from("fixture"), mimeType: "image/png" };
       },
     },
+    chatProgress: options.progressAvailable === false
+      ? undefined
+      : {
+          taskSnapshot: async (_deviceId, chatId) => {
+            calls.push(`task-snapshot:${chatId}`);
+            return {
+              version: 1,
+              chatId,
+              availability: "ready" as const,
+              epoch: "epoch_fixture_01",
+              revision: 3,
+              updatedAt: new Date(4_000).toISOString(),
+              tasks: [],
+            };
+          },
+          agentRoster: async (_deviceId, chatId, turnId) => {
+            calls.push(`agent-roster:${chatId}:${turnId ?? ""}`);
+            return {
+              version: 1,
+              chatId,
+              ...(turnId === undefined ? {} : { turnId }),
+              availability: "ready" as const,
+              epoch: "epoch_fixture_01",
+              revision: 2,
+              updatedAt: new Date(4_000).toISOString(),
+              agents: [],
+            };
+          },
+          openEvents: async (_deviceId, chatId, grants, after, response) => {
+            calls.push(`progress-events:${chatId}:${after}:${[...grants].join(",")}`);
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.end();
+          },
+        },
     models: {
       list: async () => ({
         providers: [{
@@ -765,9 +827,295 @@ test("Bot-aware server projection separates supported capabilities from device g
     assert.deepEqual(server.capabilities, ["server:read"]);
     assert.equal(server.serverCapabilities.includes("bot:read"), true);
     assert.equal(server.serverCapabilities.includes("bot:write"), true);
+    assert.equal(server.serverCapabilities.includes("tasks:read"), false);
+    assert.equal(server.serverCapabilities.includes("agents:read"), false);
     assert.notDeepEqual(server.serverCapabilities, server.capabilities);
   } finally {
     await app.close();
+  }
+});
+
+test("chat progress reads and its dedicated stream require negotiated grants", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  const legacy = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read"],
+  });
+  try {
+    const serverResponse = await fetch(`${legacy.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.deepEqual(server.capabilities, ["server:read", "chat:read"]);
+    assert.equal("serverCapabilities" in server, false);
+    assert.equal(server.features.includes("chat-tasks-v1"), true);
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+
+    const taskResponse = await fetch(`${legacy.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(taskResponse.status, 403);
+    const eventsResponse = await fetch(
+      `${legacy.base}/chats/chat-1/progress/events?after=0`,
+      { headers },
+    );
+    assert.equal(eventsResponse.status, 403);
+    assert.equal(legacy.calls.some((call) => call.startsWith("task-snapshot:")), false);
+    assert.equal(legacy.calls.some((call) => call.startsWith("progress-events:")), false);
+  } finally {
+    await legacy.close();
+  }
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const serverResponse = await fetch(`${negotiated.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.equal(server.serverCapabilities.includes("tasks:read"), true);
+    assert.equal(server.serverCapabilities.includes("agents:read"), true);
+    assert.equal(server.features.includes("chat-tasks-v1"), true);
+    assert.equal(server.features.includes("chat-agents-v1"), true);
+
+    const tasks = await fetch(`${negotiated.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 200);
+    assert.deepEqual(await tasks.json(), {
+      version: 1,
+      chatId: "chat-1",
+      availability: "ready",
+      epoch: "epoch_fixture_01",
+      revision: 3,
+      updatedAt: new Date(4_000).toISOString(),
+      tasks: [],
+    });
+
+    const agents = await fetch(`${negotiated.base}/chats/chat-1/agents`, { headers });
+    assert.equal(agents.status, 200);
+    assert.deepEqual(await agents.json(), {
+      version: 1,
+      chatId: "chat-1",
+      availability: "ready",
+      epoch: "epoch_fixture_01",
+      revision: 2,
+      updatedAt: new Date(4_000).toISOString(),
+      agents: [],
+    });
+
+    const historical = await fetch(
+      `${negotiated.base}/chats/chat-1/agents?turnId=turn-archive`,
+      { headers },
+    );
+    assert.equal(historical.status, 200);
+    assert.equal((await historical.json()).turnId, "turn-archive");
+    assert.equal(
+      negotiated.calls.includes("agent-roster:chat-1:turn-archive"),
+      true,
+    );
+
+    const duplicateQuery = await fetch(
+      `${negotiated.base}/chats/chat-1/agents?turnId=turn-1&turnId=turn-2`,
+      { headers },
+    );
+    assert.equal(duplicateQuery.status, 400);
+
+    const progressEvents = await fetch(
+      `${negotiated.base}/chats/chat-1/progress/events?after=7`,
+      { headers },
+    );
+    assert.equal(progressEvents.status, 200);
+    await progressEvents.text();
+    assert.equal(
+      negotiated.calls.includes(
+        "progress-events:chat-1:7:tasks:read,agents:read",
+      ),
+      true,
+    );
+  } finally {
+    await negotiated.close();
+  }
+});
+
+test("bot chats still require bot authority on progress reads and events", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  // A device with negotiated progress grants but no bot:read can never reach
+  // a retained bot chat's progress projections.
+  const withoutBotRead = await fixture({
+    botChat: true,
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${withoutBotRead.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      withoutBotRead.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await withoutBotRead.close();
+  }
+
+  // bot:read alone is not enough: the retained bot chat authorization must
+  // also pass before any progress projection or stream opens.
+  const unauthorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: () => false,
+  });
+  try {
+    for (const path of [
+      "/chats/chat-1/tasks",
+      "/chats/chat-1/agents",
+      "/chats/chat-1/progress/events?after=0",
+    ]) {
+      const denied = await fetch(`${unauthorized.base}${path}`, { headers });
+      assert.equal(denied.status, 404, path);
+      await denied.text();
+    }
+    assert.equal(
+      unauthorized.calls.some((call) =>
+        call.startsWith("task-snapshot:") ||
+        call.startsWith("agent-roster:") ||
+        call.startsWith("progress-events:")
+      ),
+      false,
+    );
+  } finally {
+    await unauthorized.close();
+  }
+
+  // A fully authorized bot chat serves progress projections through the same
+  // negotiated-grant path as a workspace chat.
+  const authorized = await fixture({
+    botChat: true,
+    acceptsBotCapabilities: true,
+    acceptsProgressCapabilities: true,
+    capabilities: [
+      "server:read",
+      "chat:read",
+      "bot:read",
+      "tasks:read",
+      "agents:read",
+    ],
+    botChatAuthorization: (request) =>
+      request.botId === "bot-1" && request.access === "read",
+  });
+  try {
+    const tasks = await fetch(`${authorized.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(tasks.status, 200);
+    await tasks.json();
+    const agents = await fetch(`${authorized.base}/chats/chat-1/agents`, { headers });
+    assert.equal(agents.status, 200);
+    await agents.json();
+    const events = await fetch(
+      `${authorized.base}/chats/chat-1/progress/events?after=0`,
+      { headers },
+    );
+    assert.equal(events.status, 200);
+    await events.text();
+    assert.equal(
+      authorized.calls.includes("task-snapshot:chat-1") &&
+        authorized.calls.includes("agent-roster:chat-1:") &&
+        authorized.calls.includes(
+          "progress-events:chat-1:0:tasks:read,agents:read",
+        ),
+      true,
+    );
+  } finally {
+    await authorized.close();
+  }
+});
+
+test("progress stream forwards only the granted progress projections", async () => {
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const response = await fetch(`${app.base}/chats/chat-1/progress/events`, {
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+      },
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    assert.equal(
+      app.calls.includes("progress-events:chat-1:0:tasks:read"),
+      true,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("progress support is advertised and upgraded only when the Mac can serve it", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  const unsupported = await fixture({
+    capabilities: ["server:read", "chat:read", "tasks:read", "agents:read"],
+    acceptsProgressCapabilities: true,
+    progressAvailable: false,
+  });
+  try {
+    const serverResponse = await fetch(`${unsupported.base}/server`, { headers });
+    assert.equal(serverResponse.status, 200);
+    const server = await serverResponse.json();
+    assert.deepEqual(server.serverCapabilities, [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "files:read",
+      "files:write",
+      "git:read",
+      "git:write",
+      "schedule:read",
+      "schedule:write",
+    ]);
+    assert.equal(server.features.includes("chat-tasks-v1"), false);
+    assert.equal(server.features.includes("chat-agents-v1"), false);
+
+    const read = await fetch(`${unsupported.base}/chats/chat-1/tasks`, { headers });
+    assert.equal(read.status, 404);
+    const upgrade = await fetch(`${unsupported.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(upgrade.status, 404);
+    assert.equal(unsupported.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await unsupported.close();
   }
 });
 
@@ -808,8 +1156,93 @@ test("an authenticated client can refresh only its own display identity", async 
   }
 });
 
+test("post-pairing capability upgrade accepts only the progress vocabulary", async () => {
+  const app = await fixture();
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  try {
+    const response = await fetch(`${app.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read", "agents:read"] }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      capabilities: ["server:read", "tasks:read", "agents:read"],
+    });
+    assert.deepEqual(app.calls, [
+      "device-capabilities:device-authorized-12345678:tasks:read,agents:read",
+    ]);
+
+    for (const accepts of [
+      ["bot:read"],
+      ["chat:write"],
+      ["server:read"],
+      ["tasks:read", "tasks:read"],
+      ["unknown:read"],
+      [],
+    ]) {
+      const rejected = await fetch(`${app.base}/device/capabilities`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ accepts }),
+      });
+      assert.equal(rejected.status, 400, JSON.stringify(accepts));
+    }
+
+    const unexpectedField = await fetch(`${app.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"], deviceId: "other" }),
+    });
+    assert.equal(unexpectedField.status, 400);
+    assert.deepEqual(app.calls, [
+      "device-capabilities:device-authorized-12345678:tasks:read,agents:read",
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("capability upgrade requires server:read and a live device", async () => {
+  const denied = await fixture({ authenticate: "denied" });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+  try {
+    const response = await fetch(`${denied.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await denied.close();
+  }
+
+  const revoked = await fixture({ authenticate: "revoked" });
+  try {
+    const response = await fetch(`${revoked.base}/device/capabilities`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ accepts: ["tasks:read"] }),
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await revoked.close();
+  }
+});
+
 test("paired devices explicitly acknowledge the one-time Bot notice under their stable device id", async () => {
-  const app = await fixture({ capabilities: ["bot:read", "bot:write"] });
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+  });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
     "aiden-protocol-version": "1",
@@ -856,7 +1289,10 @@ test("paired devices explicitly acknowledge the one-time Bot notice under their 
 });
 
 test("Bot notice acknowledgement requires both Bot grants and exact foreground disclosure", async () => {
-  const app = await fixture({ capabilities: ["bot:write"] });
+  const app = await fixture({
+    capabilities: ["bot:write"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(
       `${app.base}/bot-access-notice/acknowledgement`,
@@ -913,7 +1349,7 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
     });
     assert.equal(response.status, 200);
     const server = await response.json();
-    assert.deepEqual(server.capabilities, ["server:read", "bot:read"]);
+    assert.deepEqual(server.capabilities, ["server:read"]);
     assert.equal("serverCapabilities" in server, false);
   } finally {
     await app.close();
@@ -923,6 +1359,7 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
 test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favorites contract", async () => {
   const app = await fixture({
     capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
   });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
@@ -1020,7 +1457,10 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
 });
 
 test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
-  const app = await fixture({ capabilities: ["bot:read"] });
+  const app = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+  });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
     "aiden-protocol-version": "1",
@@ -1069,6 +1509,7 @@ test("Bot capability catalogs strictly route optional authenticated Bot targets"
 test("Bot inbox and avatar routes preserve device grants, approval ownership, and binary headers", async () => {
   const app = await fixture({
     capabilities: ["bot:read", "bot:write", "chat:read"],
+    acceptsBotCapabilities: true,
   });
   const headers = {
     authorization: `Bearer ${"a".repeat(43)}`,
@@ -1128,7 +1569,10 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
     await app.close();
   }
 
-  const denied = await fixture({ capabilities: ["bot:read"] });
+  const denied = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(`${denied.base}/bot-conversations`, {
       headers,
@@ -1145,7 +1589,10 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
 });
 
 test("Bot mutations require every declared device grant before body effects", async () => {
-  const app = await fixture({ capabilities: ["bot:write", "chat:write"] });
+  const app = await fixture({
+    capabilities: ["bot:write", "chat:write"],
+    acceptsBotCapabilities: true,
+  });
   try {
     const response = await fetch(`${app.base}/bots`, {
       method: "POST",
@@ -1474,6 +1921,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const noAuthority = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
   });
   try {
     const chat = await fetch(`${noAuthority.base}/chats/chat-1`, { headers });
@@ -1502,6 +1950,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const writeOnly = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1519,6 +1968,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const readOnly = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1554,6 +2004,7 @@ test("Bot chat routes require both device grants and main-owned policy authority
   const allowed = await fixture({
     botChat: true,
     capabilities: [...baseCapabilities, "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1605,6 +2056,7 @@ test("Bot write authority is rechecked inside the mutation gate before effects",
   const app = await fixture({
     botChat: true,
     capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: (request) => {
       if (request.access !== "write") return true;
       writeChecks += 1;
@@ -1637,6 +2089,7 @@ test("ordinary move-to-workspace rejects authorized Bot chats", async () => {
   const app = await fixture({
     botChat: true,
     capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   try {
@@ -1673,6 +2126,7 @@ test("authorized archived Bot chats preserve reads and reject every retained mut
       "bot:read",
       "bot:write",
     ],
+    acceptsBotCapabilities: true,
     botChatAuthorization: () => true,
   });
   const headers = {
@@ -2239,6 +2693,7 @@ test("a stalled Bot mutation body is parsed before revocation admission", async 
   let blocked = false;
   const app = await fixture({
     capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
     authorizationBlocked: () => blocked,
   });
   try {

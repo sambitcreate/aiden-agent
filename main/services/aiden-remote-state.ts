@@ -9,6 +9,7 @@ import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
+  AIDEN_REMOTE_PROGRESS_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -40,6 +41,7 @@ interface StoredAidenRemoteDevice {
   credentialDigest: string;
   capabilities: AidenRemoteCapability[];
   acceptsBotCapabilities: boolean;
+  acceptsProgressCapabilities: boolean;
   createdAt: number;
   lastSeenAt: number;
   revokedAt?: number;
@@ -91,6 +93,7 @@ export interface AidenRemoteAuthenticatedDevice {
   name: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
   acceptsBotCapabilities: boolean;
+  acceptsProgressCapabilities: boolean;
   revoked: boolean;
 }
 
@@ -193,14 +196,28 @@ function isBotCapability(value: unknown): value is "bot:read" | "bot:write" {
   return value === "bot:read" || value === "bot:write";
 }
 
+function isProgressCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_PROGRESS_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
 function parsePersistedCapabilities(
   value: unknown,
   acceptsBotCapabilities: boolean,
+  acceptsProgressCapabilities: boolean,
 ): AidenRemoteCapability[] | null {
-  // Bot vocabulary is opt-in. Strip grants that an older or corrupt persisted
-  // record could not have negotiated before validating the remaining list.
-  const negotiatedValue = !acceptsBotCapabilities && Array.isArray(value)
-    ? value.filter((capability) => !isBotCapability(capability))
+  // Opt-in vocabularies are stripped before validation so an older or corrupt
+  // persisted record can never hold grants it could not have negotiated.
+  const negotiatedValue = Array.isArray(value)
+    ? value.filter(
+        (capability) =>
+          (acceptsBotCapabilities || !isBotCapability(capability)) &&
+          (acceptsProgressCapabilities || !isProgressCapability(capability)),
+      )
     : value;
   return parseCapabilities(negotiatedValue);
 }
@@ -221,12 +238,19 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   ] as const;
   if (
     !record ||
-    !exactKeys(record, required, ["acceptsBotCapabilities", "revokedAt"])
+    !exactKeys(record, required, [
+      "acceptsBotCapabilities",
+      "acceptsProgressCapabilities",
+      "revokedAt",
+    ])
   ) return null;
   const acceptsBotCapabilities = record.acceptsBotCapabilities === true;
+  const acceptsProgressCapabilities =
+    record.acceptsProgressCapabilities === true;
   const capabilities = parsePersistedCapabilities(
     record.capabilities,
     acceptsBotCapabilities,
+    acceptsProgressCapabilities,
   );
   if (
     !boundedString(record.id, 128) ||
@@ -239,6 +263,8 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     !capabilities ||
     (record.acceptsBotCapabilities !== undefined &&
       typeof record.acceptsBotCapabilities !== "boolean") ||
+    (record.acceptsProgressCapabilities !== undefined &&
+      typeof record.acceptsProgressCapabilities !== "boolean") ||
     !safeTimestamp(record.createdAt) ||
     !safeTimestamp(record.lastSeenAt) ||
     (record.revokedAt !== undefined && !safeTimestamp(record.revokedAt))
@@ -255,6 +281,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
     credentialDigest: record.credentialDigest,
     capabilities,
     acceptsBotCapabilities,
+    acceptsProgressCapabilities,
     createdAt: record.createdAt,
     lastSeenAt: record.lastSeenAt,
     ...(record.revokedAt === undefined ? {} : { revokedAt: record.revokedAt }),
@@ -552,6 +579,12 @@ export class AidenRemoteStateRegistry {
                 record.acceptsBotCapabilities !== true &&
                 Array.isArray(record.capabilities) &&
                 record.capabilities.some(isBotCapability)
+              ) ||
+              !Object.prototype.hasOwnProperty.call(record, "acceptsProgressCapabilities") ||
+              (
+                record.acceptsProgressCapabilities !== true &&
+                Array.isArray(record.capabilities) &&
+                record.capabilities.some(isProgressCapability)
               )
             );
         });
@@ -674,12 +707,55 @@ export class AidenRemoteStateRegistry {
     });
   }
 
+  /**
+   * Additive post-pairing capability negotiation. Only members of the
+   * progress vocabulary are upgradable; legacy and Bot grants remain
+   * pairing-bound. Negotiating any progress capability marks the device as
+   * progress-aware so new projections may be delivered to it.
+   */
+  async upgradeDeviceCapabilities(
+    deviceId: string,
+    accepts: readonly string[],
+  ): Promise<AidenRemoteDeviceProjection | null> {
+    if (
+      !boundedString(deviceId, 128) ||
+      !Array.isArray(accepts) ||
+      accepts.length < 1 ||
+      accepts.length > AIDEN_REMOTE_PROGRESS_CAPABILITIES.length ||
+      new Set(accepts).size !== accepts.length ||
+      accepts.some((capability) => !isProgressCapability(capability))
+    ) {
+      return null;
+    }
+    return this.mutateIfChanged((draft) => {
+      const device = draft.devices.find((candidate) => candidate.id === deviceId);
+      if (!device || device.revokedAt !== undefined) {
+        return { changed: false, value: null };
+      }
+      const granted = new Set(device.capabilities);
+      const additions = accepts.filter(
+        (capability): capability is AidenRemoteCapability =>
+          isProgressCapability(capability) &&
+          !granted.has(capability as AidenRemoteCapability),
+      );
+      if (additions.length === 0 && device.acceptsProgressCapabilities) {
+        return { changed: false, value: projectDevice(device) };
+      }
+      for (const capability of additions) {
+        device.capabilities.push(capability);
+      }
+      if (accepts.length > 0) device.acceptsProgressCapabilities = true;
+      return { changed: true, value: projectDevice(device) };
+    });
+  }
+
   async issueDevice(input: {
     name: string;
     type: AidenRemoteDeviceType;
     clientVersion: string;
     capabilities?: readonly AidenRemoteCapability[];
     acceptsBotCapabilities?: boolean;
+    acceptsProgressCapabilities?: boolean;
     authorizeCommit?: () => boolean;
   }): Promise<AidenRemoteIssuedCredential> {
     if (
@@ -687,7 +763,9 @@ export class AidenRemoteStateRegistry {
       (input.type !== "iphone" && input.type !== "ipad" && input.type !== "mac" && input.type !== "linux") ||
       !boundedString(input.clientVersion, 40) ||
       (input.acceptsBotCapabilities !== undefined &&
-        typeof input.acceptsBotCapabilities !== "boolean")
+        typeof input.acceptsBotCapabilities !== "boolean") ||
+      (input.acceptsProgressCapabilities !== undefined &&
+        typeof input.acceptsProgressCapabilities !== "boolean")
     ) {
       throw new Error("Invalid pairing device metadata.");
     }
@@ -697,6 +775,8 @@ export class AidenRemoteStateRegistry {
     if (
       !capabilities ||
       (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
+      (input.acceptsProgressCapabilities !== true &&
+        capabilities.some(isProgressCapability)) ||
       (!this.hostPolicy.botCapabilitiesSupported() &&
         (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
     ) {
@@ -722,6 +802,8 @@ export class AidenRemoteStateRegistry {
       credentialDigest: credentialDigest.toString("base64url"),
       capabilities,
       acceptsBotCapabilities: input.acceptsBotCapabilities === true,
+      acceptsProgressCapabilities:
+        input.acceptsProgressCapabilities === true,
       createdAt: now,
       // Credential issuance is not proof that the client persisted the
       // credential and successfully authenticated back to this Mac.
@@ -777,6 +859,7 @@ export class AidenRemoteStateRegistry {
       const capabilities = parsePersistedCapabilities(
         current.capabilities,
         acceptsBotCapabilities,
+        current.acceptsProgressCapabilities === true,
       );
       if (!capabilities) return { changed: false, value: null };
       const authenticated: AidenRemoteAuthenticatedDevice = {
@@ -784,6 +867,8 @@ export class AidenRemoteStateRegistry {
         name: current.name,
         capabilities: new Set(capabilities),
         acceptsBotCapabilities,
+        acceptsProgressCapabilities:
+          current.acceptsProgressCapabilities === true,
         revoked: current.revokedAt !== undefined,
       };
       const shouldPersistLastSeen =

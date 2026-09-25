@@ -22,6 +22,7 @@ import { currentRuntimeProfile } from "../runtime-profile.js";
 import { activeLinuxDictationHoldShortcut, linuxDictationHoldSetupAvailable, linuxDictationHoldTriggerDescription } from "../services/shortcut.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
+import { geminiLiveEnabled } from "../services/gemini-live/feature-flag.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -36,6 +37,7 @@ export const appHandlers = {
       capabilities: {
         platform: host.platform,
         subagents: subagentsEnabled(),
+        geminiLive: geminiLiveEnabled(),
         bots: host.bots,
         appUpdates: supportsAppUpdates(),
         computerUse: host.computerUse,

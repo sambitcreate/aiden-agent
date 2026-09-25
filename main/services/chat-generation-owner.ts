@@ -8,6 +8,8 @@ import { rendererDocumentOwner } from "./renderer-document-owner.js";
  * boundary without gaining each other's capabilities.
  */
 export interface ChatGenerationOwner {
+  /** Assigned only by the authenticated paired-device owner factory. */
+  kind?: "remote";
   /** Nonzero values identify renderer WebContents; headless owners use zero. */
   id: number;
   /** Stable turn-admission identity, independent of a network connection. */
@@ -54,6 +56,7 @@ export function createRemoteChatGenerationOwner(input: {
   let invalidated = false;
   const listeners = new Set<() => void>();
   const owner: ChatGenerationOwner = {
+    kind: "remote",
     id: 0,
     documentId: `remote:${identityDigest(deviceId)}:${identityDigest(streamId)}`,
     isDestroyed: () => invalidated,

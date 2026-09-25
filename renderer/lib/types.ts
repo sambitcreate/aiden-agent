@@ -1,3 +1,4 @@
+import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine } from "../shared/compaction";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
@@ -53,6 +54,8 @@ export type ProviderDeployment = "local" | "hosted";
 export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
+  overrides?: CustomModelOptions;
+  manuallyAdded?: boolean;
   source: "lmstudio" | "ollama" | "provider";
   name?: string;
   type?: ProviderModelType;
@@ -74,6 +77,8 @@ export interface Provider {
   baseUrl: string;
   models: string[];
   modelMetadata?: Record<string, ProviderModelMetadata>;
+  /** User-authored model intent, portable independently of discovery cache. */
+  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
   defaultModel?: string;
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
@@ -245,6 +250,62 @@ export interface ExternalEditor {
   iconDataUrl: string;
 }
 
+export type GitHubPullRequestCheckStatus =
+  | "pending"
+  | "action-required"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "neutral"
+  | "cancelled";
+
+export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
+
+export type GitHubPullRequestAvailability =
+  | "ready"
+  | "not-repo"
+  | "missing-tool"
+  | "unauthenticated"
+  | "no-pull-request"
+  | "not-github"
+  | "unsupported"
+  | "error";
+
+export interface GitHubPullRequestCheck {
+  name: string;
+  status: GitHubPullRequestCheckStatus;
+  description?: string;
+  url?: string;
+}
+
+export type GitHubPullRequestReviewDecision =
+  | "approved"
+  | "changes-requested"
+  | "review-required";
+
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  headBranch: string;
+  baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
+  checksState?: GitHubPullRequestChecksState | null;
+  checks: GitHubPullRequestCheck[];
+}
+
+export interface GitHubPullRequestStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequest?: GitHubPullRequestSummary;
+}
+
 export interface GitInfo {
   isRepo: boolean;
   branch?: string;
@@ -377,6 +438,8 @@ export interface GitPushInput {
 }
 
 export interface GitPushResult {
+  /** Credential-free repository captured from the reviewed push endpoint. */
+  pullRequestRepository?: string;
   branch: string;
   commit: string;
   destinationBranch: string;
@@ -494,6 +557,9 @@ export type ModelMetadataSource =
   | "fallback";
 
 export interface ModelInfo {
+  detectedCapabilities?: CustomModelOptions;
+  maxImages?: number;
+  video?: boolean;
   id: string;
   name?: string;
   vision?: boolean;
@@ -825,6 +891,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
+  formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
   /** Global skill discovery/invocation gate. Omitted means enabled. */
   skillsEnabled?: boolean;
@@ -889,8 +957,31 @@ export interface ComputerUseStatus {
   driverVersion?: string;
   permissions: {
     accessibility: boolean | null;
+
     screenRecording: boolean | null;
   };
+}
+
+export type FormFillArtifactState =
+  | "not-downloaded"
+  | "downloading"
+  | "preparing"
+  | "ready"
+  | "update-required"
+  | "unsupported"
+  | "error";
+
+export interface FormFillArtifactStatus {
+  state: FormFillArtifactState;
+  progress: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  error?: string;
+}
+
+export interface FormFillSettingsView {
+  enabled: boolean;
+  status: FormFillArtifactStatus;
 }
 
 export interface Profile {
@@ -974,14 +1065,7 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export interface McpStatus {
-  connected: boolean;
-  toolCount: number;
-  tools: string[];
-  error?: string;
-  /** For OAuth servers: whether valid tokens are stored. */
-  authorized?: boolean;
-}
+export type { McpStatus } from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;

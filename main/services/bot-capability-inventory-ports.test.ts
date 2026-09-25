@@ -18,8 +18,13 @@ test("inventory ports project safe exact facts and conservative unavailable conn
         kind: "openai",
         label: "Provider",
         baseUrl: "https://example.invalid/v1",
-        models: ["chat", "embed"],
-        modelMetadata: { embed: { source: "provider", type: "embedding" } },
+        models: ["chat", "embed", "zero", "disabled"],
+        modelMetadata: {
+          embed: { source: "provider", type: "embedding" },
+          chat: { source: "provider", vision: false, overrides: { vision: true } },
+          zero: { source: "provider", vision: true, overrides: { maxImages: 0 } },
+          disabled: { source: "provider", vision: true, overrides: { vision: false } },
+        },
         needsKey: true,
         hasKey: true,
       },
@@ -80,7 +85,8 @@ test("inventory ports project safe exact facts and conservative unavailable conn
     ports.inspectSkills(signal),
     ports.inspectOtherCapabilities(signal),
   ]);
-  assert.equal(providers[0]?.models.length, 1);
+  assert.equal(providers[0]?.models.length, 3);
+  assert.deepEqual(providers[0]?.models.map(model => model.supportsImages), [true, false, false]);
   assert.equal(files.fullMac.scopeFingerprint, HASH);
   assert.equal(files.approvedLocations[0]?.label, "Documents");
   assert.equal(shell.shellFingerprint, HASH);
@@ -92,6 +98,8 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "computer_use")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
+  assert.equal(other.find(({ kind }) => kind === "tasks")?.available, true);
+  assert.equal(other.find(({ kind }) => kind === "tasks")?.label, "Task tracking");
   assert.match(
     other.find(({ kind }) => kind === "schedules")?.description ?? "",
     /re-check this Bot's access/u,

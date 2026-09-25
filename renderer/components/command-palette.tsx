@@ -58,6 +58,13 @@ import {
   persistRecentCommands,
   recordRecentCommand,
 } from "../lib/command-palette-recent";
+import {
+  filterPaletteResult,
+  paletteResult,
+  reconcilePaletteResult,
+  staticPaletteResult,
+  type PaletteResult,
+} from "../lib/command-palette-results";
 
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
@@ -90,6 +97,23 @@ function ItemDetail({ children }: { children: React.ReactNode }) {
   return <span className="ml-auto min-w-0 truncate text-small text-tertiary">{children}</span>;
 }
 
+function PaletteResultItem({
+  result,
+  ...props
+}: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords" | "disabled" | "forceMount"> & {
+  result: PaletteResult;
+}) {
+  return (
+    <CommandItem
+      {...props}
+      value={result.value}
+      keywords={result.keywords}
+      disabled={result.disabled}
+      forceMount={result.forceMount}
+    />
+  );
+}
+
 export function AppCommandPalette({
   navigationBlockedReason,
 }: {
@@ -109,6 +133,7 @@ export function AppCommandPalette({
   );
   const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
+  const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const modelSelectionEpoch = React.useRef(0);
   const [recentCommands, setRecentCommands] = React.useState<CommandId[]>(() => {
@@ -142,6 +167,101 @@ export function AppCommandPalette({
         (order.get(right.id) ?? Number.POSITIVE_INFINITY),
     );
   }, [recentCommands]);
+  const chatResults = React.useMemo(
+    () => [...(chats.data ?? [])]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((chat) => ({
+        chat,
+        result: paletteResult(`chat:${chat.id}`, [
+          chat.title,
+          new Date(chat.updatedAt).toLocaleString(),
+        ]),
+      })),
+    [chats.data],
+  );
+  const modelResults = React.useMemo(
+    () => models.map((entry) => ({
+      entry,
+      result: {
+        ...paletteResult(`model:${entry.value}`, [entry.label, entry.model, entry.providerLabel]),
+        disabled: busy,
+      },
+    })),
+    [models, busy],
+  );
+  const unavailableResults = React.useMemo(
+    () => unavailableModelProviders.map((provider) => ({
+      provider,
+      result: paletteResult(`unavailable-provider:${provider.id}`, [
+        provider.label, ...provider.models, "unavailable setup provider",
+      ]),
+    })),
+    [unavailableModelProviders],
+  );
+  const providerResults = React.useMemo(
+    () => (providers.data ?? []).map((provider) => ({
+      provider,
+      result: paletteResult(`provider:${provider.id}`, [
+        provider.label, provider.id, "manage connection models",
+      ]),
+    })),
+    [providers.data],
+  );
+  const rootResults = rootCommands.map((definition) => ({
+    definition,
+    result: staticPaletteResult(
+      `${definition.title} ${definition.description} ${definition.keywords.join(" ")}`,
+      { disabled: !canExecute(definition.id) },
+    ),
+  }));
+  const newChatResult = staticPaletteResult("New chat conversation", {
+    disabled: !canExecute("chat.new"),
+  });
+  const chatRetryResult = staticPaletteResult("Retry loading chats", { forceMount: true });
+  const modelRetryResult = staticPaletteResult("Retry loading models", { forceMount: true });
+  const providerRetryResult = staticPaletteResult("Retry loading providers", { forceMount: true });
+  const refreshResult = staticPaletteResult("Refresh provider model catalogs update", {
+    disabled: busy,
+  });
+  const appearanceResults = [
+    { mode: "system" as const, title: "Follow system appearance", icon: Palette },
+    { mode: "light" as const, title: "Use light appearance", icon: Sun },
+    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
+  ].map((item) => ({
+    ...item,
+    result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
+  }));
+  const settingsResults = availableSettingsDestinations(capabilities).map((destination) => ({
+    destination,
+    result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")}`),
+  }));
+  // One inventory owns both rendering and selection, including static actions,
+  // disabled states and force-mounted retry rows in every palette mode.
+  const resultsByMode: Record<CommandPaletteMode, PaletteResult[]> = {
+    root: rootResults.map(({ result }) => result),
+    chats: [
+      newChatResult,
+      ...(chats.isError ? [chatRetryResult] : []),
+      ...chatResults.map(({ result }) => result),
+    ],
+    models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
+      : [...modelResults, ...unavailableResults].map(({ result }) => result),
+    providers: [
+      refreshResult,
+      ...(providers.isError ? [providerRetryResult] : []),
+      ...providerResults.map(({ result }) => result),
+    ],
+    settings: [...appearanceResults, ...settingsResults].map(({ result }) => result),
+  };
+  const currentResults = resultsByMode[palette.mode];
+  const selectedResultValue = reconcilePaletteResult(activeResult, currentResults, query);
+  React.useLayoutEffect(() => {
+    // Persist a fallback too, so a removed result cannot reclaim selection if it
+    // later reappears. Do not overwrite a newer keyboard/pointer selection.
+    if (selectedResultValue !== activeResult) {
+      setActiveResult((current) => current === activeResult ? selectedResultValue : current);
+    }
+  }, [activeResult, selectedResultValue]);
   const appearanceMode = normalizeAppearanceConfig(
     settings.data?.appearance ?? createDefaultAppearanceConfig(),
   ).mode;
@@ -366,7 +486,13 @@ export function AppCommandPalette({
           <DialogPrimitive.Title className="sr-only">
             {MODE_LABELS[palette.mode]}
           </DialogPrimitive.Title>
-          <Command className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control">
+          <Command
+            value={selectedResultValue}
+            onValueChange={setActiveResult}
+            className="min-h-[420px] [&_[cmdk-item][data-selected=true]]:bg-control"
+            // Dynamic values identify rows; search only their human-readable metadata.
+            filter={filterPaletteResult}
+          >
             <div className="flex h-10 items-center px-3">
               {palette.mode === "root" ? (
                 <span className="mr-2 flex size-6 items-center justify-center rounded-md bg-control text-secondary">
@@ -422,7 +548,7 @@ export function AppCommandPalette({
               </CommandEmpty>
 
               {palette.mode === "root"
-                ? rootCommands.map((definition) => {
+                ? rootResults.map(({ definition, result }) => {
                     const Icon = CATEGORY_ICON[definition.category];
                     const opensMode = [
                       "chat.search",
@@ -431,11 +557,10 @@ export function AppCommandPalette({
                       "settings.search",
                     ].includes(definition.id);
                     return (
-                      <CommandItem
+                      <PaletteResultItem
                         key={definition.id}
-                        value={`${definition.title} ${definition.description} ${definition.keywords.join(" ")}`}
+                        result={result}
                         onSelect={() => runCommand(definition.id)}
-                        disabled={!canExecute(definition.id)}
                         aria-keyshortcuts={ariaKeyShortcut(binding(definition.id))}
                         className="min-h-11 px-3"
                       >
@@ -446,17 +571,16 @@ export function AppCommandPalette({
                         ) : (
                           <Shortcut commandId={definition.id} />
                         )}
-                      </CommandItem>
+                      </PaletteResultItem>
                     );
                   })
                 : null}
 
               {palette.mode === "chats" ? (
                 <>
-                  <CommandItem
-                    value="New chat conversation"
+                  <PaletteResultItem
+                    result={newChatResult}
                     onSelect={() => runCommand("chat.new")}
-                    disabled={!canExecute("chat.new")}
                     aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
                     className="mb-1 min-h-11 px-3"
                   >
@@ -467,7 +591,7 @@ export function AppCommandPalette({
                     ) : (
                       <ItemDetail>Open a workspace first</ItemDetail>
                     )}
-                  </CommandItem>
+                  </PaletteResultItem>
                   {chats.isLoading ? (
                     <CommandItem
                       forceMount
@@ -480,30 +604,27 @@ export function AppCommandPalette({
                     </CommandItem>
                   ) : null}
                   {chats.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading chats"
+                    <PaletteResultItem
+                      result={chatRetryResult}
                       onSelect={() => void chats.refetch()}
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
                       <span>Chats could not be loaded</span>
                       <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
+                    </PaletteResultItem>
                   ) : null}
-                  {[...(chats.data ?? [])]
-                    .sort((left, right) => right.updatedAt - left.updatedAt)
-                    .map((chat) => (
-                      <CommandItem
+                  {chatResults.map(({ chat, result }) => (
+                      <PaletteResultItem
                         key={chat.id}
-                        value={`${chat.title} ${new Date(chat.updatedAt).toLocaleString()}`}
+                        result={result}
                         onSelect={() => void openChat(chat.id)}
                         className="min-h-11 px-3"
                       >
                         <Clock3 className="size-4 shrink-0 text-secondary" />
                         <span className="min-w-0 flex-1 truncate">{chat.title}</span>
                         <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
-                      </CommandItem>
+                      </PaletteResultItem>
                     ))}
                 </>
               ) : null}
@@ -515,28 +636,26 @@ export function AppCommandPalette({
                     <span>Loading models…</span>
                   </CommandItem>
                 ) : providers.isError ? (
-                  <CommandItem
-                    forceMount
-                    value="Retry loading models"
+                  <PaletteResultItem
+                    result={modelRetryResult}
                     onSelect={() => void providers.refetch()}
                     className="min-h-11 px-3"
                   >
                     <RefreshCw className="size-4 text-secondary" />
                     <span>Models could not be loaded</span>
                     <ItemDetail>Retry</ItemDetail>
-                  </CommandItem>
+                  </PaletteResultItem>
                 ) : (
-                  models
-                    .map((entry) => {
+                  modelResults
+                    .map(({ entry, result }) => {
                       const selected =
                         selection.providerId === entry.providerId &&
                         selection.model === entry.model;
                       return (
-                        <CommandItem
+                        <PaletteResultItem
                           key={entry.value}
-                          value={`${entry.label} ${entry.model} ${entry.providerLabel}`}
+                          result={result}
                           onSelect={() => void selectModel(entry.providerId, entry.model)}
-                          disabled={busy}
                           aria-current={selected ? "true" : undefined}
                           className="min-h-11 px-3"
                         >
@@ -549,14 +668,14 @@ export function AppCommandPalette({
                               <Check aria-hidden="true" className="size-4 shrink-0 text-accent" />
                             </>
                           ) : null}
-                        </CommandItem>
+                        </PaletteResultItem>
                       );
                     })
                     .concat(
-                      unavailableModelProviders.map((provider) => (
-                        <CommandItem
+                      unavailableResults.map(({ provider, result }) => (
+                        <PaletteResultItem
                           key={`unavailable-${provider.id}`}
-                          value={`${provider.label} ${provider.models.join(" ")} unavailable setup provider`}
+                          result={result}
                           onSelect={() => {
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
@@ -574,7 +693,7 @@ export function AppCommandPalette({
                             {provider.models.length > 0 ? "Setup needed" : "No models available"}
                           </ItemDetail>
                           <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                        </CommandItem>
+                        </PaletteResultItem>
                       )),
                     )
                 )
@@ -582,15 +701,14 @@ export function AppCommandPalette({
 
               {palette.mode === "providers" ? (
                 <>
-                  <CommandItem
-                    value="Refresh provider model catalogs update"
+                  <PaletteResultItem
+                    result={refreshResult}
                     onSelect={() => void refreshProviders()}
-                    disabled={busy}
                     className="mb-1 min-h-11 px-3"
                   >
                     <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
                     <span>{busy ? "Refreshing providers…" : "Refresh provider catalogs"}</span>
-                  </CommandItem>
+                  </PaletteResultItem>
                   {providers.isLoading ? (
                     <CommandItem
                       forceMount
@@ -603,21 +721,20 @@ export function AppCommandPalette({
                     </CommandItem>
                   ) : null}
                   {providers.isError ? (
-                    <CommandItem
-                      forceMount
-                      value="Retry loading providers"
+                    <PaletteResultItem
+                      result={providerRetryResult}
                       onSelect={() => void providers.refetch()}
                       className="min-h-11 px-3"
                     >
                       <RefreshCw className="size-4 text-secondary" />
                       <span>Providers could not be loaded</span>
                       <ItemDetail>Retry</ItemDetail>
-                    </CommandItem>
+                    </PaletteResultItem>
                   ) : null}
-                  {(providers.data ?? []).map((provider) => (
-                    <CommandItem
+                  {providerResults.map(({ provider, result }) => (
+                    <PaletteResultItem
                       key={provider.id}
-                      value={`${provider.label} ${provider.id} manage connection models`}
+                      result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
@@ -634,23 +751,18 @@ export function AppCommandPalette({
                         {provider.hasKey || !provider.needsKey ? "Connected" : "Setup needed"}
                       </ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
                 </>
               ) : null}
 
               {palette.mode === "settings" ? (
                 <>
-                  {[
-                    { mode: "system" as const, title: "Follow system appearance", icon: Palette },
-                    { mode: "light" as const, title: "Use light appearance", icon: Sun },
-                    { mode: "dark" as const, title: "Use dark appearance", icon: Moon },
-                  ].map((item, index) => (
-                    <CommandItem
+                  {appearanceResults.map((item, index) => (
+                    <PaletteResultItem
                       key={item.mode}
-                      value={`${item.title} theme appearance`}
+                      result={item.result}
                       onSelect={() => void setAppearance(item.mode)}
-                      disabled={busy}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
                       className={cn("min-h-11 px-3", index === 2 && "mb-1")}
                     >
@@ -662,12 +774,12 @@ export function AppCommandPalette({
                           <Check aria-hidden="true" className="ml-auto size-4 text-accent" />
                         </>
                       ) : null}
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
-                  {availableSettingsDestinations(capabilities).map((destination) => (
-                    <CommandItem
+                  {settingsResults.map(({ destination, result }) => (
+                    <PaletteResultItem
                       key={destination.id}
-                      value={`${destination.title} ${destination.keywords.join(" ")}`}
+                      result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
@@ -682,7 +794,7 @@ export function AppCommandPalette({
                       <span className="min-w-0 flex-1 truncate">{destination.title}</span>
                       <ItemDetail>{destination.group}</ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
-                    </CommandItem>
+                    </PaletteResultItem>
                   ))}
                 </>
               ) : null}

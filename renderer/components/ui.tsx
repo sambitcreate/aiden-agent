@@ -842,14 +842,17 @@ export function ScrollArea({
   const [atScrollEnd, setAtScrollEnd] = React.useState(true);
   const [atTop, setAtTop] = React.useState(true);
   const atBottomRef = React.useRef(true);
+  const followFrameRef = React.useRef(0);
+  const autoScrollRef = React.useRef(autoScrollToBottom);
   const split = React.useContext(SplitContext);
 
-  atBottomRef.current = atBottom;
+  autoScrollRef.current = autoScrollToBottom;
 
   const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = viewport.current;
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior });
+    atBottomRef.current = true;
     setAtBottom(true);
     setAtScrollEnd(true);
     setAtTop(element.scrollHeight <= element.clientHeight);
@@ -859,9 +862,21 @@ export function ScrollArea({
     if (!element) return;
     setAtTop(element.scrollTop < 2);
     const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
-    setAtBottom(remaining < 24);
+    atBottomRef.current = remaining < 24;
+    setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
   }, []);
+
+  const scheduleFollowBottom = React.useCallback(() => {
+    if (followFrameRef.current) return;
+    followFrameRef.current = requestAnimationFrame(() => {
+      followFrameRef.current = 0;
+      const element = viewport.current;
+      if (!element) return;
+      if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
+      else updateScrollEdges(element);
+    });
+  }, [scrollToBottom, updateScrollEdges]);
 
   React.useLayoutEffect(() => {
     const measure = () => {
@@ -870,7 +885,7 @@ export function ScrollArea({
       if (nextFooterHeight !== footerHeightRef.current) {
         footerHeightRef.current = nextFooterHeight;
         setFooterHeight(nextFooterHeight);
-        if (atBottomRef.current) requestAnimationFrame(() => scrollToBottom("auto"));
+        scheduleFollowBottom();
       }
     };
     measure();
@@ -878,22 +893,20 @@ export function ScrollArea({
     if (toolbarRef.current) observer.observe(toolbarRef.current);
     if (footerRef.current) observer.observe(footerRef.current);
     return () => observer.disconnect();
-  }, [toolbar, footer, title, leading, actions, scrollToBottom]);
+  }, [toolbar, footer, title, leading, actions, scheduleFollowBottom]);
 
   React.useEffect(() => {
-    if (autoScrollToBottom && atBottom) scrollToBottom("auto");
+    scheduleFollowBottom();
   }, [autoScrollToBottom, ...autoScrollDeps]);
 
   React.useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const update = () => {
-      if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
-      else updateScrollEdges(element);
-    };
+    const update = scheduleFollowBottom;
     // Settle synchronously first so the viewport never paints at scrollTop 0 and
     // then jumps; the frame after still catches late layout (fonts, images).
-    update();
+    if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
+    else updateScrollEdges(element);
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
@@ -910,10 +923,12 @@ export function ScrollArea({
     mutationObserver.observe(element, { childList: true, subtree: true });
     return () => {
       cancelAnimationFrame(frame);
+      if (followFrameRef.current) cancelAnimationFrame(followFrameRef.current);
+      followFrameRef.current = 0;
       resizeObserver.disconnect();
       mutationObserver.disconnect();
     };
-  }, [autoScrollToBottom, scrollToBottom, updateScrollEdges]);
+  }, [autoScrollToBottom, scheduleFollowBottom, scrollToBottom, updateScrollEdges]);
 
   const resolvedToolbar =
     toolbar ??
@@ -983,6 +998,10 @@ type DialogProps = React.PropsWithChildren<{
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
   cancelDisabled?: boolean;
+  cancelLabel?: string;
+  onCancel?: () => void | Promise<void>;
+  allowCancelWhileBusy?: boolean;
+  actionClassName?: string;
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
@@ -1001,6 +1020,10 @@ export function Dialog({
   cancelRef,
   dismissDisabled,
   cancelDisabled,
+  cancelLabel,
+  onCancel,
+  allowCancelWhileBusy,
+  actionClassName,
   busy,
   onConfirm,
   returnFocus,
@@ -1008,7 +1031,9 @@ export function Dialog({
   layer = "default",
   children,
 }: DialogProps) {
-  const dismissBlocked = Boolean(dismissDisabled || cancelDisabled || busy);
+  const dismissBlocked = Boolean(
+    dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
+  );
 
   return (
     <DialogPrimitive.Root
@@ -1051,13 +1076,20 @@ export function Dialog({
           <div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div>
           <div className="mt-5 flex shrink-0 justify-end gap-2">
             <DialogPrimitive.Close asChild>
-              <Button ref={cancelRef} variant="filled" disabled={dismissBlocked}>
-                {confirmHidden ? "Close" : "Cancel"}
+              <Button
+                ref={cancelRef}
+                variant="filled"
+                className={actionClassName}
+                disabled={dismissBlocked}
+                onClick={() => void onCancel?.()}
+              >
+                {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
               </Button>
             </DialogPrimitive.Close>
             {confirmHidden ? null : (
               <Button
                 variant="accent"
+                className={actionClassName}
                 disabled={confirmDisabled || busy}
                 onClick={() => void onConfirm?.()}
               >

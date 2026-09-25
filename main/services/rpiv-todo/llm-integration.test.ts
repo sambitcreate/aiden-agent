@@ -12,9 +12,11 @@ test("llm todo admission fails closed without an explicit chat usage source", ()
   assert.doesNotMatch(admission, /\?\?\s*["']chat["']/u);
 });
 
-test("corrupt todo replay immediately publishes only a content-free unavailable projection", () => {
+test("todo generation uses only durable sessions and publishes the same snapshot as chat-open", () => {
   assert.match(
     source,
-    /if \(!isTodoSnapshotFailure\(error\)\) throw error;[\s\S]*?sendGeneration\(streamId, "chat:todo", \{[\s\S]*?snapshot: unavailableTodoSnapshot\(params\.chatId\),[\s\S]*?\}\);/u,
+    /loadDurableTodoSnapshot\([\s\S]*?piJournalless \? undefined : piSession/u,
   );
+  assert.match(source, /if \(todo\.state\) \{[\s\S]*?createTodoExtension/u);
+  assert.match(source, /sendGeneration\(streamId, "chat:todo", \{ streamId, snapshot: todo\.snapshot \}\)/u);
 });

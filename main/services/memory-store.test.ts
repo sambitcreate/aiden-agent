@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { MemoryStore, normalizeMemoryText, type MemoryScope } from "./memory-store.js";
 
-async function fixture(t: TestContext, now = 1_000) {
+async function fixture(t: TestContext, now: number | (() => number) = 1_000) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-"));
-  const store = new MemoryStore({ root: () => root, now: () => now });
+  const store = new MemoryStore({ root: () => root, now: () => typeof now === "number" ? now : now() });
   t.after(async () => {
     await store.close();
     await rm(root, { recursive: true, force: true });
@@ -271,4 +272,290 @@ test("bounded transcript and artifact metadata recall is scoped and source-cited
   assert.equal(recalled.some(({ text }) => text.includes("only to the Bot")), false);
   await store.deleteSourceChat("chat-a");
   assert.deepEqual(await store.recall(workspace, "cobalt release"), []);
+});
+
+test("re-approving expired text stores fresh metadata and restores recall at the expiry boundary", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const original = await store.put({
+    id: "expired",
+    scope: workspace,
+    text: "Prefer concise release notes.",
+    provenance: { kind: "chat_message", chatId: "old-chat", messageId: "old-message" },
+    expiresAt: 2_000,
+    alwaysOn: true,
+  });
+  const foreign = await store.put({
+    id: "foreign",
+    scope: bot,
+    text: original.text,
+    provenance: { kind: "user_edit", sourceId: "bot-editor" },
+    expiresAt: 2_000,
+  });
+  now = 2_000;
+  assert.deepEqual(await store.search(workspace, "release"), []);
+  assert.deepEqual(await store.alwaysOn(workspace), []);
+  const renewed = await store.put({
+    id: "renewed",
+    scope: workspace,
+    text: "  Prefer   concise release notes. ",
+    provenance: { kind: "model_proposal", chatId: "new-chat", turnId: "new-turn", anchorMessageId: "new-message" },
+    confidence: 0.8,
+    expiresAt: 4_000,
+    alwaysOn: true,
+  });
+  assert.equal(renewed.id, "renewed");
+  assert.equal(renewed.createdAt, now);
+  assert.equal(renewed.expiresAt, 4_000);
+  assert.equal(renewed.confidence, 0.8);
+  assert.deepEqual(renewed.provenance, {
+    kind: "model_proposal", chatId: "new-chat", turnId: "new-turn", anchorMessageId: "new-message",
+  });
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), [renewed.id]);
+  assert.deepEqual((await store.alwaysOn(workspace)).map(({ id }) => id), [renewed.id]);
+  assert.deepEqual((await store.recall(workspace, "release")).map(({ citation }) => citation), ["memory:renewed"]);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === original.id), {
+    ...original, state: "superseded", updatedAt: now,
+  });
+  assert.deepEqual(await store.list(bot), [foreign]);
+
+  // Reopening preserves the renewal; deleting old provenance cannot remove it.
+  await store.close();
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), [renewed.id]);
+  assert.equal(await store.deleteSourceChat("old-chat"), 1);
+  assert.deepEqual(await store.list(workspace), [renewed]);
+  now = 4_000;
+  assert.deepEqual(await store.recall(workspace, "release"), []);
+});
+
+test("unexpired duplicates remain idempotent and an expired fact can be renewed without expiry", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const original = await store.put({ ...input, id: "original", expiresAt: 2_000 });
+  now = 1_999;
+  assert.deepEqual(await store.put({ ...input, id: "duplicate" }), original);
+  now = 2_001;
+  const renewed = await store.put({ ...input, id: "renewed" });
+  assert.equal(renewed.id, "renewed");
+  assert.equal(renewed.expiresAt, undefined);
+  assert.deepEqual(await store.put({ ...input, id: "duplicate-again" }), renewed);
+});
+
+test("expired text collisions permit explicit replacement and roll back on insertion failure", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const expired = await store.put({ ...input, id: "expired", text: "Deploy on Wednesday.", expiresAt: 2_000 });
+  const prior = await store.put({ ...input, id: "prior", text: "Deploy on Tuesday." });
+  now = 3_000;
+  await assert.rejects(store.put({
+    ...input, id: prior.id, text: expired.text, supersedesId: prior.id,
+  }), /UNIQUE constraint failed/u);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === prior.id), prior);
+  assert.deepEqual((await store.search(workspace, "Deploy")).map(({ id }) => id), [prior.id]);
+
+  const replacement = await store.put({
+    ...input, id: "replacement", text: expired.text, supersedesId: prior.id,
+  });
+  assert.equal(replacement.supersedesId, prior.id);
+  const facts = await store.list(workspace);
+  assert.equal(facts.find(({ id }) => id === expired.id)?.state, "superseded");
+  assert.equal(facts.find(({ id }) => id === prior.id)?.state, "superseded");
+  assert.deepEqual((await store.search(workspace, "Deploy")).map(({ id }) => id), [replacement.id]);
+});
+
+test("renewing expired text cannot bypass the always-on quota", async (t) => {
+  let now = 1_000;
+  const { store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    text: "Keep release notes concise.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+    alwaysOn: true,
+  };
+  const expired = await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+  now = 3_000;
+  for (let index = 0; index < 12; index += 1) {
+    await store.put({ ...input, id: `current-${index}`, text: `Current preference number ${index}.` });
+  }
+  await assert.rejects(store.put({ ...input, id: "renewed" }), /maximum always-on facts/u);
+  assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+  assert.deepEqual(await store.search(workspace, "concise"), []);
+  await store.remove(workspace, "current-0");
+  assert.equal((await store.put({ ...input, id: "renewed" })).id, "renewed");
+  assert.equal((await store.alwaysOn(workspace, 12)).length, 12);
+});
+
+// Commit a real second-connection write at the exact lock-acquisition boundary,
+// without timing sleeps or a production test hook. This models shared-store
+// integration; today's Electron topology uses one main-process store owner.
+async function withCompetingWrite<T>(
+  t: TestContext,
+  root: string,
+  mutate: (writer: DatabaseSync) => void,
+  action: () => Promise<T>,
+): Promise<T> {
+  const writer = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  const exec = DatabaseSync.prototype.exec;
+  let interleaved = false;
+  const mocked = t.mock.method(DatabaseSync.prototype, "exec", function (this: DatabaseSync, sql: string) {
+    if (this !== writer && sql === "BEGIN IMMEDIATE" && !interleaved) {
+      interleaved = true;
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        mutate(writer);
+        writer.exec("COMMIT");
+      } catch (error) {
+        writer.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    return exec.call(this, sql);
+  });
+  try {
+    return await action();
+  } finally {
+    mocked.mock.restore();
+    writer.close();
+    assert.equal(interleaved, true, "the competing writer must commit before lock acquisition");
+  }
+}
+
+function insertCompetingFact(writer: DatabaseSync, id: string, scope: MemoryScope, text: string, alwaysOn = true) {
+  writer.prepare(`
+    INSERT INTO memory_facts (
+      id, scope_kind, scope_id, normalized_text, provenance_kind, source_id,
+      created_at, updated_at, confidence, review_state, state, always_on
+    ) VALUES (?, ?, ?, ?, 'user_edit', 'competing-editor', 3000, 3000, 1, 'approved', 'active', ?)
+  `).run(id, scope.kind, scope.id, text, alwaysOn ? 1 : 0);
+}
+
+test("renewal does not retire an expired ID reused by a competing writer in another scope", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  await store.put({
+    id: "reused-id", scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit", sourceId: "editor" }, expiresAt: 2_000,
+  });
+  now = 3_000;
+  await withCompetingWrite(t, root, (writer) => {
+    writer.prepare("DELETE FROM memory_facts WHERE id = ?").run("reused-id");
+    insertCompetingFact(writer, "reused-id", bot, "Prefer concise release notes.");
+  }, () => store.put({
+    id: "renewed", scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit", sourceId: "new-editor" },
+  }));
+  assert.equal((await store.list(bot))[0]?.state, "active");
+  assert.deepEqual((await store.search(bot, "release")).map(({ id }) => id), ["reused-id"]);
+  assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), ["renewed"]);
+});
+
+test("renewal deduplicates against a competing writer's fresh fact and releases the transaction", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace, text: "Prefer concise release notes.",
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+  now = 3_000;
+  const renewed = await withCompetingWrite(t, root, (writer) => {
+    writer.prepare("UPDATE memory_facts SET state = 'superseded' WHERE id = ?").run("expired");
+    insertCompetingFact(writer, "competing-renewal", workspace, input.text);
+  }, () => store.put({ ...input, id: "losing-renewal" }));
+  assert.equal(renewed.id, "competing-renewal");
+  assert.equal((await store.list(workspace)).length, 2);
+  // A forgotten COMMIT on the idempotent return would reject this next write.
+  await store.put({ ...input, id: "next", text: "Deploy on Wednesday." });
+});
+
+test("renewal rechecks capacity filled by a competing writer and preserves expired history", async (t) => {
+  for (const { limit, alwaysOn, error } of [
+    { limit: 12, alwaysOn: true, error: /maximum always-on facts/u },
+    { limit: 2_000, alwaysOn: false, error: /scope is full/u },
+  ]) {
+    await t.test(alwaysOn ? "always-on quota" : "scope quota", async (t) => {
+      let now = 1_000;
+      const { root, store } = await fixture(t, () => now);
+      const input = {
+        scope: workspace, text: "Prefer concise release notes.", alwaysOn,
+        provenance: { kind: "user_edit" as const, sourceId: "editor" },
+      };
+      const expired = await store.put({ ...input, id: "expired", expiresAt: 2_000 });
+      now = 3_000;
+      for (let index = 0; index < limit - 1; index += 1) {
+        await store.put({ ...input, id: `seed-${index}`, text: `Current preference ${index}.` });
+      }
+      await assert.rejects(withCompetingWrite(t, root, (writer) => {
+        insertCompetingFact(writer, "last-slot", workspace, "The last preference.", alwaysOn);
+      }, () => store.put({ ...input, id: "over-quota" })), error);
+      assert.deepEqual((await store.list(workspace)).find(({ id }) => id === expired.id), expired);
+      assert.equal((await store.list(workspace)).length, limit + 1);
+      // Rejection must roll back its transaction so a subsequent write can proceed.
+      await store.remove(workspace, "last-slot");
+      assert.equal((await store.put({ ...input, id: "renewed" })).id, "renewed");
+    });
+  }
+});
+
+test("renewal samples time after admission when collisions and quota entries expire before BEGIN", async (t) => {
+  for (const { limit, alwaysOn } of [
+    { limit: 12, alwaysOn: true },
+    { limit: 2_000, alwaysOn: false },
+  ]) {
+    await t.test(alwaysOn ? "always-on quota" : "scope quota", async (t) => {
+      let now = 1_000;
+      const { root, store } = await fixture(t, () => now);
+      const input = {
+        scope: workspace, alwaysOn,
+        provenance: { kind: "user_edit" as const, sourceId: "editor" },
+      };
+      for (let index = 0; index < limit; index += 1) {
+        await store.put({ ...input, id: `old-${index}`, text: `Preference ${index}.`, expiresAt: 2_000 });
+      }
+      // Advance the injected clock in the other writer's transaction, which
+      // commits before the target BEGIN. This tests timestamp ordering after
+      // admission; it does not make SQLite block waiting for a held lock.
+      const renewed = await withCompetingWrite(t, root, () => { now = 2_000; }, () => store.put({
+        ...input, id: "renewed", text: "Preference 0.", expiresAt: 4_000,
+        provenance: { kind: "user_edit", sourceId: "new-editor" },
+      }));
+      assert.equal(renewed.id, "renewed");
+      assert.equal(renewed.createdAt, 2_000);
+      assert.equal(renewed.updatedAt, 2_000);
+      assert.equal(renewed.expiresAt, 4_000);
+      assert.deepEqual(renewed.provenance, { kind: "user_edit", sourceId: "new-editor" });
+      const retired = (await store.list(workspace)).find(({ id }) => id === "old-0");
+      assert.equal(retired?.state, "superseded");
+      assert.equal(retired?.updatedAt, 2_000);
+      assert.deepEqual((await store.search(workspace, "Preference")).map(({ id }) => id), [renewed.id]);
+    });
+  }
+});
+
+test("requested expiry elapsed before BEGIN rejects without superseding the prior fact", async (t) => {
+  let now = 1_000;
+  const { root, store } = await fixture(t, () => now);
+  const input = {
+    scope: workspace,
+    provenance: { kind: "user_edit" as const, sourceId: "editor" },
+  };
+  const prior = await store.put({ ...input, id: "prior", text: "Deploy on Tuesday." });
+  await assert.rejects(withCompetingWrite(t, root, () => { now = 2_000; }, () => store.put({
+    ...input, id: "elapsed", text: "Deploy on Wednesday.", expiresAt: 2_000, supersedesId: prior.id,
+  })), /future millisecond timestamp/u);
+  assert.deepEqual(await store.list(workspace), [prior]);
+  const replacement = await store.put({
+    ...input, id: "valid", text: "Deploy on Wednesday.", expiresAt: 3_000, supersedesId: prior.id,
+  });
+  assert.equal(replacement.createdAt, 2_000);
 });

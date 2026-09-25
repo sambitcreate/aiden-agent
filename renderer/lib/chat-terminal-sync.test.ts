@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  captureDetachedLifecycleChat,
+  clearInactiveDetachedLifecycleChat,
   detachedLifecycleChatProjection,
   detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
   isDetachedLifecycleChatDraining,
   parseChatReadResponse,
   parseChatSettlementNotification,
+  pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
   rememberChatReadReconciliation,
@@ -72,6 +75,7 @@ function subagent(
 
 test("a revisited chat retains and advances its detached answer and subagent projection", async () => {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  let cachedTerminalChat: Chat | undefined;
   let settleCache!: () => void;
   const cacheSettlement = new Promise<void>((resolve) => {
     settleCache = resolve;
@@ -83,7 +87,10 @@ test("a revisited chat retains and advances its detached answer and subagent pro
       listeners.set(channel, handlers);
       return () => handlers.delete(handler);
     },
-    () => cacheSettlement,
+    (updated) => {
+      cachedTerminalChat = updated;
+      return cacheSettlement;
+    },
   );
   const owner = detached("stream-projection");
   rememberDetachedLifecycleStream(owner, {
@@ -114,10 +121,21 @@ test("a revisited chat retains and advances its detached answer and subagent pro
     detachedLifecycleChatProjection("chat-a", "workspace-1")?.subagents[0]?.state,
     "completed",
   );
+  for (const handler of listeners.get("chat:reasoning-delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: " more" });
+  }
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning, "Initial reasoning more");
+  for (const handler of listeners.get("chat:delta") ?? []) {
+    handler({ streamId: owner.streamId, delta: "", reset: true });
+  }
+  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning, "");
 
   for (const handler of listeners.get("chat:done") ?? []) {
     handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });
   }
+  assert.equal(cachedTerminalChat?.messages[cachedTerminalChat.messages.length - 1]?.role, "assistant");
+  // The pane must mask Stop/steer using the durable cache while this raw
+  // projection remains retained until terminal reconciliation finishes.
   assert.notEqual(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
   settleCache();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -494,6 +512,57 @@ test("a provisional stale read survives a missed settlement event until authorit
   assert.equal(listReads, 1);
   assert.equal(isDetachedLifecycleChatDraining(stale.id, stale.workspaceId), false);
   unsubscribe();
+});
+
+test("an inactive snapshot repairs a missed terminal without clearing active work", () => {
+  const staleOwner = detached("missed-terminal", "chat-missed-terminal", "workspace-1");
+  const activeOwner = detached("still-running", "chat-still-running", "workspace-1");
+  rememberDetachedLifecycleStream(staleOwner, {
+    content: "Durable response that outlived the route",
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+  });
+  rememberDetachedLifecycleStream(activeOwner);
+
+  assert.deepEqual(pendingDetachedLifecycleChats(), [
+    { chatId: staleOwner.chatId, workspaceId: staleOwner.workspaceId, streamIds: [staleOwner.streamId] },
+    { chatId: activeOwner.chatId, workspaceId: activeOwner.workspaceId, streamIds: [activeOwner.streamId] },
+  ]);
+  const staleTarget = captureDetachedLifecycleChat(staleOwner);
+  const activeTarget = captureDetachedLifecycleChat(activeOwner);
+  assert.ok(staleTarget);
+  assert.ok(activeTarget);
+  const activeChatIds = new Set([activeOwner.chatId]);
+  assert.equal(clearInactiveDetachedLifecycleChat(activeTarget, activeChatIds), false);
+  assert.equal(isDetachedLifecycleChatDraining(activeOwner.chatId, activeOwner.workspaceId), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(staleTarget, activeChatIds), true);
+  assert.equal(detachedLifecycleChatProjection(staleOwner.chatId, staleOwner.workspaceId), null);
+  assert.equal(isDetachedLifecycleChatDraining(staleOwner.chatId, staleOwner.workspaceId), false);
+  assert.equal(clearInactiveDetachedLifecycleChat(activeTarget, new Set()), true);
+});
+
+test("authoritative recovery is stream-exact when newer work starts in the same chat", () => {
+  const owner = detached("fallback-missed", "chat-fallback-missed", "workspace-1");
+  rememberDetachedLifecycleStream(owner);
+  assert.equal(fallbackDetachedLifecycleStream(owner.streamId), true);
+  const captured = captureDetachedLifecycleChat(owner);
+  assert.ok(captured);
+
+  const newerOwner = detached("newer-detached-work", owner.chatId, owner.workspaceId);
+  rememberDetachedLifecycleStream(newerOwner);
+  rememberDetachedLifecycleStream(detached("other-workspace", owner.chatId, "workspace-2"));
+  assert.equal(clearInactiveDetachedLifecycleChat(captured, new Set()), true);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), true);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, "workspace-2"), true);
+
+  const newerTarget = captureDetachedLifecycleChat(newerOwner);
+  const otherTarget = captureDetachedLifecycleChat({ chatId: owner.chatId, workspaceId: "workspace-2" });
+  assert.ok(newerTarget);
+  assert.ok(otherTarget);
+  assert.equal(clearInactiveDetachedLifecycleChat(newerTarget, new Set()), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(otherTarget, new Set()), true);
 });
 
 test("chat read reconciliation metadata is bounded, content-free, and owner-bound", () => {

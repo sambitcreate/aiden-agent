@@ -17,9 +17,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createTelegramServiceCore } from "./telegram-service-core.js";
+import { createTelegramServiceCore, telegramCompactionCallback } from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import { telegramChatId } from "./telegram-turn.js";
+import { TelegramApiError } from "./telegram-bot-api.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -89,6 +90,7 @@ interface SentMessage {
   text: string;
   parseMode?: "HTML" | "MarkdownV2";
   disablePreview?: boolean;
+  replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
 }
 
 function createMockApi(opts: MockApiOptions) {
@@ -96,6 +98,7 @@ function createMockApi(opts: MockApiOptions) {
   const sentMessages: SentMessage[] = [];
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
+  const editedMessages: Array<Parameters<TelegramBotApi["editMessageText"]>[0]> = [];
   const calls: string[] = [];
   const commandRegistrations: Array<readonly { command: string; description: string }[]> = [];
   let getMeCalls = 0;
@@ -105,6 +108,7 @@ function createMockApi(opts: MockApiOptions) {
 
   const api = {
     sentMessages,
+    editedMessages,
     commandRegistrations,
     async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
@@ -145,6 +149,7 @@ function createMockApi(opts: MockApiOptions) {
       text: string;
       parseMode?: "HTML" | "MarkdownV2";
       disablePreview?: boolean;
+      replyMarkup?: import("./telegram-bot-api.js").TelegramInlineKeyboardMarkup;
     }): Promise<TelegramMessage> {
       sentMessages.push({
         chatId: p.chatId,
@@ -152,6 +157,7 @@ function createMockApi(opts: MockApiOptions) {
         text: p.text,
         parseMode: p.parseMode,
         disablePreview: p.disablePreview,
+        ...(p.replyMarkup ? { replyMarkup: p.replyMarkup } : {}),
       });
       return {
         message_id: sentMessages.length,
@@ -190,7 +196,9 @@ function createMockApi(opts: MockApiOptions) {
         bytes: new Uint8Array([1, 2, 3]),
       };
     },
-    async editMessageText(): Promise<void> {},
+    async editMessageText(params: Parameters<TelegramBotApi["editMessageText"]>[0]): Promise<void> {
+      editedMessages.push(params);
+    },
     async answerCallbackQuery(): Promise<void> {
       answerCallbackQueryCalls += 1;
     },
@@ -207,6 +215,7 @@ interface MockConfigState {
   hasToken: boolean;
   allowedUserId?: number;
   telegramWorkspaceId?: string;
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
@@ -226,6 +235,7 @@ function createMockConfig(state: MockConfigState) {
     // Preserve the legacy delivery assertions in this compatibility fixture.
     // Native rich delivery has dedicated coverage below.
     telegramRendering: state.telegramRendering ?? "html",
+    telegramDraftPreviews: state.telegramDraftPreviews,
     telegramVoiceMode: state.telegramVoiceMode,
     telegramThreadedMode: state.telegramThreadedMode,
   });
@@ -283,6 +293,7 @@ function createMockConfig(state: MockConfigState) {
 // ---------------------------------------------------------------------------
 
 interface MockTurnOptions {
+  draft?: string;
   reply?: string;
   /** Never resolve llmClient.start so the turn stays "active". */
   pending?: boolean;
@@ -358,6 +369,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         owner.send("chat:error", { streamId, message: opts.failMessage });
         return true;
       }
+      if (opts.draft) owner.send("chat:delta", { streamId, delta: opts.draft });
       owner.send("chat:done", { streamId, content: opts.reply ?? "Mock reply" });
       return true;
     },
@@ -492,6 +504,7 @@ interface HarnessOptions {
   me?: TelegramUser;
   batches?: TelegramUpdate[][];
   autoStop?: boolean;
+  draft?: string;
   reply?: string;
   pendingTurn?: boolean;
   busyTurn?: boolean;
@@ -500,6 +513,7 @@ interface HarnessOptions {
   workspaces?: Array<{ id: string; name: string; folderPath: string }>;
   telegramWorkspaceId?: string;
   workspaceResolver?: MockTurnOptions["workspaceResolver"];
+  telegramDraftPreviews?: boolean;
   telegramRendering?: "rich" | "html";
   telegramVoiceMode?: "hidden" | "mirror" | "always";
   telegramThreadedMode?: boolean;
@@ -530,10 +544,12 @@ function harness(o: HarnessOptions = {}) {
     allowedUserId: o.allowedUserId,
     telegramWorkspaceId: o.telegramWorkspaceId,
     telegramRendering: o.telegramRendering,
+    telegramDraftPreviews: o.telegramDraftPreviews,
     telegramVoiceMode: o.telegramVoiceMode,
     telegramThreadedMode: o.telegramThreadedMode,
   });
   const turnMock = createMockTurn({
+    draft: o.draft,
     reply: o.reply,
     pending: o.pendingTurn,
     busy: o.busyTurn,
@@ -1704,7 +1720,7 @@ test("bound Bot compaction callback targets the immutable canonical backing chat
             id: "compact-bound-bot",
             from: owner,
             message: makeMessage(20, BOT, "session menu"),
-            data: "compact:yes",
+            data: telegramCompactionCallback(binding),
           },
         },
       ],
@@ -1794,3 +1810,372 @@ test("a skill queued before global disable is rejected at dispatch and command r
   assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
   h.service.stop();
 });
+
+
+test("unchanged final HTML draft still delivers remaining chunks and voice actions once", async () => {
+  const reply = "a".repeat(5_000);
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramDraftPreviews: true,
+    draft: reply,
+    reply: `${reply}\n<!-- telegram_voice {"text":"Done"} -->`,
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+  });
+  h.api.editMessageText = async (params) => {
+    h.api.editedMessages.push(params);
+    assert.equal(params.text, h.api.sentMessages[0]?.text, "final edit matches the persisted preview");
+    throw new TelegramApiError("Bad Request: message is not modified: specified new message content is exactly the same", 400);
+  };
+  try {
+    await h.service.start();
+    await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+    assert.deepEqual(h.logs.errors, []);
+    assert.equal(h.api.editedMessages.length, 1);
+    assert.equal(h.api.sentMessages.length, 2, "preview and remaining chunk without a duplicate first chunk");
+    assert.equal(h.api.sentMessages.map(({ text }) => text).join(""), reply);
+    assert.equal(h.api.voiceMessages.length, 1, "final delivery continues to outbound actions");
+  } finally {
+    h.service.stop();
+  }
+});
+
+for (const description of ["message to edit not found", "message can't be edited"]) {
+  test(`final HTML reply replaces an unavailable preview: ${description}`, async () => {
+    const inbound = { ...makeMessage(10, person(42), "hello", 123), message_thread_id: 17 };
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: 'Final answer\n<!-- telegram_button {"label":"Next","prompt":"Continue"} -->',
+      batches: [[makeUpdate(1, inbound)]],
+    });
+    h.api.editMessageText = async (params) => {
+      h.api.editedMessages.push(params);
+      throw new TelegramApiError(`Bad Request: ${description}`, 400);
+    };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.deepEqual(h.logs.errors, []);
+      assert.equal(h.api.editedMessages.length, 1);
+      assert.equal(h.api.sentMessages.length, 2, "one replacement for the unavailable preview");
+      const replacement = h.api.sentMessages[1]!;
+      assert.equal(replacement.text, "Final answer");
+      assert.equal(replacement.chatId, 123);
+      assert.equal(replacement.threadId, 17);
+      assert.equal(replacement.parseMode, "HTML");
+      assert.equal(replacement.disablePreview, true);
+      assert.deepEqual(replacement.replyMarkup, h.api.editedMessages[0]?.replyMarkup);
+      assert.equal(replacement.replyMarkup?.inline_keyboard[0]?.[0]?.text, "Next");
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+for (const failure of [
+  new TelegramApiError("Too Many Requests: retry after 10", 429, 10),
+  new TelegramApiError("Bad Request: can't parse entities", 400),
+  new TelegramApiError("Internal Server Error", 500),
+  new TelegramApiError("message is not modified", 403),
+  new Error("message to edit not found"),
+]) {
+  test(`final HTML edit does not mask or resend on ${failure.message} (${failure instanceof TelegramApiError ? failure.code : "transport"})`, async () => {
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      telegramDraftPreviews: true,
+      draft: "Final answer",
+      reply: "Final answer",
+      batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
+    });
+    h.api.editMessageText = async () => { throw failure; };
+    try {
+      await h.service.start();
+      await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
+      assert.equal(h.logs.errors.length, 1);
+      assert.equal(h.logs.errors[0]?.cause, failure);
+      assert.equal(h.api.sentMessages.filter(({ text }) => text === "Final answer").length, 1, "no speculative resend after uncertain edit failure");
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+
+test("duplicate Telegram updates admit one prompt", async () => {
+  const update = makeUpdate(1, makeMessage(1, person(42), "one prompt"));
+  const h = harness({ enabled: true, allowedUserId: 42, batches: [[update, update]], autoStop: false });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(h.turnMock.appendCalls(), 1);
+  h.service.stop();
+});
+
+test("Stop cancels a prompt still resolving its workspace", async () => {
+  let release!: (value: { kind: "assistant" }) => void;
+  const waiting = new Promise<{ kind: "assistant" }>((resolve) => { release = resolve; });
+  const owner = person(42);
+  const h = harness({
+    enabled: true, allowedUserId: 42, autoStop: false, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "work"))], [makeUpdate(2, makeMessage(2, owner, "/stop"))]],
+  });
+  h.turnMock.turn.resolveWorkspace = async () => waiting;
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")));
+  release({ kind: "assistant" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(h.turnMock.startCalls(), 0);
+  assert.equal(h.turnMock.appendCalls(), 0);
+  h.service.stop();
+});
+
+test("Bot /new offers compaction without creating or replacing a chat", async () => {
+  const binding = { botId: "bot", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "forever" };
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
+    resolveBotBinding: async () => binding, validateBotBinding: () => true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "/new"))]],
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("one permanent conversation")));
+  assert.equal(h.turnMock.createCalls(), 0);
+  assert.equal(h.turnMock.startCalls(), 0);
+  h.service.stop();
+});
+
+
+test("busy admission acknowledges once and bounds a flood without blocking Stop", async () => {
+  const owner = person(42);
+  let h!: ReturnType<typeof harness>;
+  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))],
+      Array.from({ length: 21 }, (_, i) => makeUpdate(i + 2, makeMessage(i + 2, owner, `queued-${i}`))),
+      [makeUpdate(30, makeMessage(30, owner, "/stop"))]],
+    abortChat: async () => h.turnMock.completePendingTurn(),
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Cleared 20 queued")));
+  assert.equal(h.api.sentMessages.filter(({ text }) => text.includes("queue is full")).length, 1);
+  assert.equal(h.turnMock.startCalls(), 1);
+  assert.equal(h.service.queueSize, 0);
+  h.service.stop();
+});
+
+test("Interrupt runs an accepted replacement after the active turn settles", async () => {
+  const owner = person(42);
+  let h!: ReturnType<typeof harness>;
+  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/interrupt replacement"))]],
+    abortChat: async () => h.turnMock.completePendingTurn(),
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 2);
+  assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "replacement"]);
+  h.turnMock.completePendingTurn();
+  h.service.stop();
+});
+
+test("unbound topic Stop cannot clear or abort another topic", async () => {
+  const owner = person(42);
+  const topic = (id: number, thread: number, text: string) => makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
+  let aborts = 0;
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[topic(1, 10, "active"), topic(2, 10, "pending")], [topic(3, 20, "/stop")]],
+    abortChat: async () => { aborts++; },
+  });
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("No messages were queued")));
+  assert.equal(aborts, 0);
+  assert.equal(h.service.queueSize, 1);
+  h.service.stop();
+  h.turnMock.completePendingTurn();
+});
+
+test("stale Bot compaction confirmation cannot target a replacement binding", async () => {
+  const binding = { botId: "old", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "old-chat" };
+  let compactions = 0;
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
+    resolveBotBinding: async () => ({ ...binding, botId: "new", backingChatId: "new-chat" }), validateBotBinding: () => true,
+    compactChat: async () => { compactions++; return { compacted: true }; },
+    batches: [[{ update_id: 1, callback_query: { id: "stale", from: person(42), message: makeMessage(1, BOT, "confirm"), data: telegramCompactionCallback(binding) } }]],
+  });
+  await h.service.start();
+  await waitFor(() => h.api.answerCallbackQueryCalls() > 0);
+  assert.equal(compactions, 0);
+  h.service.stop();
+});
+
+test("dispatch waits for durable polling offset before executing admitted work", async () => {
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))]],
+  });
+  let release!: () => void;
+  const persisted = new Promise<void>((resolve) => { release = resolve; });
+  let persisting = false;
+  h.config.persistOffset = async () => { persisting = true; await persisted; };
+  await h.service.start();
+  await waitFor(() => persisting);
+  assert.equal(h.turnMock.startCalls(), 0);
+  release();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+  h.service.stop();
+});
+
+test("a failed update is retried before later updates advance the offset", async () => {
+  const first = makeUpdate(1, makeMessage(1, person(42), "one"));
+  const second = makeUpdate(2, makeMessage(2, person(42), "two"));
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
+    batches: [[first, second], [first, second]],
+  });
+  const settings = h.config.getSettings;
+  let failed = false;
+  h.config.getSettings = async () => {
+    if (h.api.getUpdatesCalls() > 0 && !failed) { failed = true; throw new Error("temporary read failure"); }
+    return settings();
+  };
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 2);
+  assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["one", "two"]);
+  h.service.stop();
+});
+
+test("pairing reset aborts an already running bound Bot turn", async () => {
+  const binding = { botId: "bot", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "forever" };
+  const aborted: string[] = [];
+  let h!: ReturnType<typeof harness>;
+  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true,
+    resolveBotBinding: async () => binding, validateBotBinding: () => true,
+    existingChats: [{ id: "forever", workspaceId: "home", botId: "bot" }],
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))]],
+    abortChat: async (chatId) => { aborted.push(chatId); h.turnMock.completePendingTurn(); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+  await h.service.resetPairing();
+  assert.deepEqual(aborted, ["forever"]);
+  h.service.stop();
+});
+
+test("offset storage failure stops active work before polling waits for recovery", async () => {
+  let h!: ReturnType<typeof harness>;
+  let aborts = 0;
+  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), "queued"))]],
+    abortChat: async () => { aborts++; h.turnMock.completePendingTurn(); },
+  });
+  const persist = h.config.persistOffset;
+  let failed = false;
+  h.config.persistOffset = async (offset) => {
+    if (offset === 3 && !failed) { failed = true; throw new Error("storage unavailable"); }
+    await persist(offset);
+  };
+  await h.service.start();
+  await waitFor(() => aborts === 1 && h.turnMock.startCalls() === 2);
+  h.turnMock.completePendingTurn();
+  h.service.stop();
+});
+
+test("a cancelled dispatch rejection does not send a late error reply", async () => {
+  let reject!: (cause: Error) => void;
+  const waiting = new Promise<{ kind: "assistant" }>((_resolve, fail) => { reject = fail; });
+  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))], [makeUpdate(2, makeMessage(2, person(42), "/stop"))]],
+  });
+  h.turnMock.turn.resolveWorkspace = async () => waiting;
+  await h.service.start();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")));
+  reject(new Error("late preparation failure"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("late preparation failure")), false);
+  assert.equal(h.turnMock.startCalls(), 0);
+  h.service.stop();
+});
+
+
+for (const command of ["/queue follow-up", "/continue follow-up"]) {
+  for (const preparing of [false, true]) {
+    test(`${command} sends one confirmation while ${preparing ? "preparing" : "running"}`, async () => {
+      let release!: () => void;
+      const preparation = new Promise<{ kind: "assistant" }>((resolve) => { release = () => resolve({ kind: "assistant" }); });
+      const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+        batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), command))]],
+      });
+      if (preparing) h.turnMock.turn.resolveWorkspace = async () => preparation;
+      await h.service.start();
+      await waitFor(() => h.config.persistOffsetCalls() === 2);
+      const confirmations = h.api.sentMessages.filter(({ text }) => /Queued for the next turn|Follow-up accepted|Continuation queued/u.test(text));
+      assert.equal(confirmations.length, 1);
+      assert.equal(h.service.queueSize, 1);
+      h.service.stop(); release(); h.turnMock.completePendingTurn();
+    });
+  }
+
+  test(`${command} acknowledgment failure cannot replay admission`, async () => {
+    const update = makeUpdate(2, makeMessage(2, person(42), command));
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [update], [update]],
+    });
+    const send = h.api.sendMessage;
+    let confirmations = 0;
+    h.api.sendMessage = async (params) => {
+      if (/Follow-up accepted|Continuation queued/u.test(params.text)) {
+        confirmations++;
+        throw new Error("Telegram acknowledgment outcome unknown");
+      }
+      return send(params);
+    };
+    await h.service.start();
+    await waitFor(() => h.api.getUpdatesCalls() >= 3);
+    assert.equal(confirmations, 1);
+    assert.equal(h.config.persistOffsetCalls(), 2, "accepted command advances offset despite acknowledgment failure");
+    assert.equal(h.service.queueSize, 1);
+    h.turnMock.completePendingTurn();
+    await waitFor(() => h.turnMock.startCalls() === 2);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "follow-up"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}
+
+
+for (const command of ["/queue", "/continue"]) {
+  test(`editing queued ${command} reports unchanged text without contradictory success`, async () => {
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [
+        makeUpdate(2, makeMessage(2, person(42), `${command} original`)),
+        { update_id: 3, edited_message: makeMessage(2, person(42), `${command} edited`) },
+      ]],
+    });
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 3);
+    assert.equal(h.service.queueSize, 1);
+    assert.equal(h.api.sentMessages.filter(({ text }) => /Follow-up accepted|Continuation queued/u.test(text)).length, 1);
+    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This message is already queued; its saved text is unchanged. Use /queue to manage it.").length, 1);
+    h.turnMock.completePendingTurn();
+    await waitFor(() => h.turnMock.startCalls() === 2);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "original"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}
+
+
+for (const command of ["/queue", "/continue", "/interrupt"]) {
+  test(`editing dequeued ${command} cannot start or interrupt another turn`, async () => {
+    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+      batches: [[makeUpdate(1, makeMessage(1, person(42), `${command} original`))], [
+        { update_id: 2, edited_message: makeMessage(1, person(42), `${command} edited`) },
+      ]],
+      abortChat: async () => assert.fail("a command edit must not abort the active turn"),
+    });
+    await h.service.start();
+    await waitFor(() => h.config.persistOffsetCalls() === 2);
+    assert.equal(h.turnMock.startCalls(), 1);
+    assert.equal(h.service.queueSize, 0);
+    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This command edit was not sent because the original message is not queued.").length, 1);
+    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["original"]);
+    h.service.stop(); h.turnMock.completePendingTurn();
+  });
+}

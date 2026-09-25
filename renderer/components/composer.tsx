@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { ComposerContextBar } from "./composer-context-bar";
+import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -58,6 +59,10 @@ import {
   shouldShowComputerUseNotice,
   useComputerUseNoticeDismissed,
 } from "../lib/computer-use-notice";
+import {
+  ComposerAttachmentOperation,
+  acceptComposerAttachments,
+} from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
@@ -122,6 +127,8 @@ interface ComposerProps {
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
+  /** Initial text for an explicitly seeded renderer-only chat draft. */
+  initialText?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
@@ -277,6 +284,7 @@ export function Composer({
   readinessSettingsSection,
   hasMessages,
   chatId,
+  initialText = "",
   onSend,
   onStop,
   onQueue,
@@ -329,8 +337,8 @@ export function Composer({
   slashActionBusy = false,
 }: ComposerProps) {
   const [draft, dispatchDraft] = React.useReducer(composerDraftReducer, {
-    text: "",
-    slashTracker: { epoch: 0, active: false },
+    text: initialText,
+    slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, initialText),
   });
   const { text, slashTracker } = draft;
   const draftRef = React.useRef(draft);
@@ -383,7 +391,7 @@ export function Composer({
       return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
     };
     const receive = (annotation: BrowserAnnotation) => {
-      if (firstSendPendingRef.current || !available()) return false;
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
       const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
@@ -403,7 +411,15 @@ export function Composer({
     });
     return () => { unregister(); unsubscribe(); };
   }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
-  const attachmentOperationRef = React.useRef(false);
+  const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
+  const attachmentVisionRef = React.useRef(visionSupported);
+  React.useLayoutEffect(() => {
+    attachmentVisionRef.current = visionSupported;
+  }, [visionSupported]);
+  React.useLayoutEffect(() => {
+    const operation = attachmentOperationRef.current;
+    return () => operation.cancel();
+  }, []);
   const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
@@ -1107,33 +1123,44 @@ export function Composer({
     }
   }, [onRenameChat, renameTitle, renaming]);
 
-  const beginAttachmentRead = (status: string): boolean => {
-    if (firstSendPendingRef.current) return false;
+  const beginAttachmentRead = (status: string): number | null => {
+    if (firstSendPendingRef.current) return null;
+    if (sendPendingRef.current) {
+      toast.info("Wait for the current message to finish sending before attaching files.");
+      return null;
+    }
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
-      return false;
+      return null;
     }
-    if (attachmentOperationRef.current) {
+    if (attachmentOperationRef.current.isBusy) {
       toast.info("Wait for the current attachments to finish loading.");
-      return false;
+      return null;
     }
-    attachmentOperationRef.current = true;
+    const token = attachmentOperationRef.current.begin();
     setAttaching(true);
     setAttachmentStatus(status);
-    return true;
+    return token;
   };
 
-  const finishAttachmentRead = () => {
-    attachmentOperationRef.current = false;
+  const finishAttachmentRead = (token: number) => {
+    if (!attachmentOperationRef.current.isCurrent(token)) return;
+    attachmentOperationRef.current.finish(token);
     setAttaching(false);
-    requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      if (attachmentOperationRef.current.isCurrent(token)) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+    });
   };
 
   const acceptReadAttachments = (added: Attachment[], emptyStatus: string): number => {
-    if (visionSupported === false && added.some((attachment) => attachment.kind === "image")) {
-      added = added.filter((attachment) => attachment.kind !== "image");
-      toast.info("The selected model can't read images — image attachments were skipped.");
-    }
+    const accepted = acceptComposerAttachments(
+      attachmentsRef.current,
+      added,
+      attachmentVisionRef.current !== false,
+    );
+    added = accepted;
     if (added.length === 0) {
       setAttachmentStatus(emptyStatus);
       return 0;
@@ -1147,17 +1174,18 @@ export function Composer({
   };
 
   const handleAttach = async () => {
-    if (!beginAttachmentRead("Attachment picker open. Selected files will load before sending.")) {
-      return;
-    }
+    const token = beginAttachmentRead(
+      "Attachment picker open. Selected files will load before sending.",
+    );
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
       if (remainingSlots <= 0) {
         setAttachmentStatus("The attachment count limit has been reached.");
         toast.info(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`);
         return;
       }
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingInlineBytes <= 0) {
         setAttachmentStatus("The attachment data limit has been reached.");
         toast.info("This message has reached the attachment data limit.");
@@ -1168,25 +1196,32 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
-      if (picked.skipped > 0) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
+      const accepted = acceptReadAttachments(
+        picked.attachments,
+        "No compatible attachments were added.",
+      );
+      const skipped = picked.skipped + picked.attachments.length - accepted;
+      if (skipped > 0) {
         toast.info(
-          `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+          `${skipped} selected ${skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
         );
       }
-      acceptReadAttachments(picked.attachments, "No compatible attachments were added.");
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Attachments could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readDroppedAttachments = async (files: File[]) => {
-    if (!beginAttachmentRead("Dropped files are loading before sending.")) return;
+    const token = beginAttachmentRead("Dropped files are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       if (remainingSlots <= 0 || remainingInlineBytes <= 0) {
         toast.info("This message has reached its attachment limit.");
         setAttachmentStatus("The attachment limit has been reached.");
@@ -1198,6 +1233,7 @@ export function Composer({
         visionSupported !== false,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No compatible dropped files were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1205,18 +1241,20 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Dropped files could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that dropped file.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
   const readClipboardImages = async (files: File[]) => {
-    if (!beginAttachmentRead("Clipboard images are loading before sending.")) return;
+    const token = beginAttachmentRead("Clipboard images are loading before sending.");
+    if (token === null) return;
     try {
-      const remainingSlots = attachmentSlotsRemaining(attachments.length);
-      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const remainingSlots = attachmentSlotsRemaining(attachmentsRef.current.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachmentsRef.current);
       const eligible: File[] = [];
       let plannedBytes = 0;
       for (const file of files) {
@@ -1243,11 +1281,13 @@ export function Composer({
           bytes: new Uint8Array(await file.arrayBuffer()),
         })),
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const added = await attachmentsApi.readClipboardImages(
         payload,
         remainingSlots,
         remainingInlineBytes,
       );
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       const accepted = acceptReadAttachments(added, "No clipboard images were added.");
       if (accepted < files.length) {
         toast.info(
@@ -1255,10 +1295,11 @@ export function Composer({
         );
       }
     } catch (error) {
+      if (!attachmentOperationRef.current.isCurrent(token)) return;
       setAttachmentStatus("Clipboard images could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that clipboard image.");
     } finally {
-      finishAttachmentRead();
+      finishAttachmentRead(token);
     }
   };
 
@@ -1308,7 +1349,7 @@ export function Composer({
 
   const submit = async () => {
     if (sendPendingRef.current || composing) return;
-    if (attachmentOperationRef.current || attaching) {
+    if (attachmentOperationRef.current.isBusy || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
     }
@@ -1622,6 +1663,7 @@ export function Composer({
                 programmaticReturnFocusRef={inputRef}
               />
             ) : null}
+            <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
           <div

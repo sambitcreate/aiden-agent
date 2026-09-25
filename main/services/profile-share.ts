@@ -26,6 +26,7 @@ interface ShareSession {
 const activeShareSessions = new Set<ShareSession>();
 const ownedShareDirectories = new Set<string>();
 let staleCleanupPromise: Promise<void> | null = null;
+let preparingShare = false;
 
 async function removeShareDirectory(directory: string): Promise<void> {
   try {
@@ -83,6 +84,24 @@ export async function shareProfilePng(
   if (!parent || parent.isDestroyed()) {
     throw new Error("The profile window is no longer available for sharing.");
   }
+  if (preparingShare || activeShareSessions.size > 0) {
+    throw new Error("Close the current share menu before opening another one.");
+  }
+
+  // Reserve admission before the first await, including cleanup after failure.
+  preparingShare = true;
+  try {
+    return await prepareProfileShare(dataUrl, parent);
+  } finally {
+    preparingShare = false;
+  }
+}
+
+async function prepareProfileShare(dataUrl: unknown, parent: BrowserWindow): Promise<boolean> {
+  await beginStaleCleanup();
+  if (parent.isDestroyed()) {
+    throw new Error("The profile window is no longer available for sharing.");
+  }
   const image = canonicalProfileSharePng(dataUrl);
   if (process.platform !== "darwin") {
     const result = await dialog.showSaveDialog(parent, {
@@ -95,16 +114,16 @@ export async function shareProfilePng(
     await writeProfileShareExport(result.filePath, image);
     return true;
   }
-  if (activeShareSessions.size > 0) {
-    throw new Error("Close the current share menu before opening another one.");
-  }
-
-  await beginStaleCleanup();
   const { directory, filePath } = await createProfileShareFile(image);
   ownedShareDirectories.add(directory);
   let session: ShareSession | null = null;
 
   try {
+    // Electron falls back to another live window if the supplied owner closed
+    // during file creation. Never present a stale share on that replacement.
+    if (parent.isDestroyed()) {
+      throw new Error("The profile window is no longer available for sharing.");
+    }
     const menu = new ShareMenu({ filePaths: [filePath] });
     session = {
       directory,

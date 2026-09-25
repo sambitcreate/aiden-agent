@@ -1,8 +1,8 @@
 # Linux macOS parity reconciliation
 
-Status: Active — phases 1–3c implemented and reviewed; phase 4 hosted validation running; Fedora Computer Use prerequisites in progress, 2026-09-12.
+Status: Active — phases 1–3c implemented and reviewed; phase 4 hosted validation running; main 0.43.0 reconciliation merge in progress; Fedora Computer Use prerequisites in progress.
 
-Baseline: Linux `6a397578` (0.36.1), macOS main `a4c85c6d` (0.40.0).
+Baseline: Linux `4747cf95`, macOS main `origin/main` (0.43.0).
 
 ## Phases and gates
 
@@ -418,3 +418,12 @@ helper preserves a non-default label. A separate denied file-capability case
 returns an I/O failure while preserving the original bytes and capability.
 Hosted exact-head validation and automated-review thread closure remain the
 final pull-request delivery gate.
+
+## Main 0.43.0 reconciliation merge
+
+- Merged current `origin/main` (~246 commits ahead of the phase-2 baseline) into `feature/linux-desktop-support`; ~42 conflicted files resolved by ownership.
+- Kept main's newer shared implementations: approval UI (form-fill, workspace-write, MCP mutation, shell), model catalog and Gemini Live surfaces, CI change-detection lanes/shards/timings/required gate, native helper build abstraction shared with Linux, remote progress capability negotiation, iOS remote error specificity.
+- Preserved Linux platform behavior: full host capability projection plus `geminiLive`, AppImage update pinning and atomic replacement, external-editor launch union (bundle/executable/flatpak/file-manager) with Linux executable+Flatpak discovery, Secret Service authority, dictation portal, Linux CI jobs (`linux`, `linux-rpm`), platform-neutral wording, fail-closed Computer Use gating.
+- Linux editor discovery adopted main's reviewed semantics: absolute PATH roots only (a workspace must not supply its own launcher), regular-file requirement, PATH-directory-major ordering with alias tie-break, `zeditor` alias, and Cursor exclusion pending a reliable editor-surface contract.
+- TypeScript, e2e type-check, ESLint on merged files, Vite renderer build, Electron main bundle, and focused suites (external editors, app updater core/Linux, remote state/pairing, host capabilities, onboarding, chat sidebar, handlers) pass. Native helper binaries cannot link on this host's macOS 27 beta SDK/CLT mismatch; CI covers them.
+- Review-loop remediation continues until the merge is committed; native Linux acceptance and Computer Use admission remain gated as before.

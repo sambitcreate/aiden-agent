@@ -1,6 +1,7 @@
+import { applyCustomModelToolPolicy } from "../../renderer/shared/custom-model-options.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
@@ -34,6 +35,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
+import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -75,6 +77,7 @@ async function managedTestHarness(
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
+    initialSystemPrompt?: string;
     contextWindow?: number;
     retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
@@ -134,7 +137,7 @@ async function managedTestHarness(
       ? {
           transformContext: createGenerationContextTransform({
             contextWindow: model.contextWindow,
-            systemPrompt: "Managed prompt",
+            systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
             tools: options.tools ?? [],
             supportsImages: model.input.includes("image"),
             providerId: model.provider,
@@ -143,7 +146,7 @@ async function managedTestHarness(
         }
       : {}),
     initialState: {
-      systemPrompt: "Managed prompt",
+      systemPrompt: options.initialSystemPrompt ?? "Managed prompt",
       thinkingLevel: "off",
       tools: options.tools ?? [],
       messages: [],
@@ -2716,4 +2719,95 @@ test("disclosed browser tools remain executable and budgeted after managed provi
   assert.match(projection.systemPrompt, /untrusted website content/);
   const journal = await session.buildContext();
   assert.equal(journal.messages.filter((message) => message.role === "toolResult" && message.toolName === "browser_status").length, 2);
+});
+
+
+test("custom tool disabling removes base and extension tools from a frozen runtime snapshot", async () => {
+  const tool: AgentTool = {
+    name: "base-tool", label: "Base", description: "Base", parameters: Type.Object({}),
+    execute: async () => { throw new Error("Disabled tool must never execute"); },
+  };
+  const snapshot = resolvePiAgentRuntimeContributionSnapshot("base", [tool], {}, [{ id: "extension", tools: [{ ...tool, name: "extension-tool" }] }]);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(snapshot.tools.length, 2);
+  for (const setting of [undefined, { toolCall: true }]) {
+    const { harness } = testHarness([fauxAssistantMessage("ok")], { contributions: applyCustomModelToolPolicy(snapshot, setting) });
+    assert.equal(harness.state.tools.length, 2);
+  }
+  const { harness } = testHarness([fauxAssistantMessage("ok")], {
+    contributions: applyCustomModelToolPolicy(snapshot, { toolCall: false }),
+    // The final contribution policy must win over the unfiltered initial tools.
+    initialState: { tools: [tool] },
+  });
+  assert.deepEqual(harness.state.tools, []);
+  await harness.prompt("Respond without tools");
+  assert.deepEqual(harness.state.tools, []);
+  assert.equal(snapshot.tools.length, 2, "the shared frozen snapshot stays intact");
+});
+
+test("provider diagnostics classify before outcome redaction without exporting the raw error", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-provider-diagnostics-"));
+  t.after(async () => { await flushDiagnosticJournal(); await rm(root, { recursive: true, force: true }); });
+  const target = join(root, "aiden.log");
+  initDiagnosticJournal({ targetPath: target, profile: "production", sessionId: "session-test" });
+  const { harness } = await managedTestHarness([
+    fauxAssistantMessage("", { stopReason: "error", errorMessage: "model not found PRIVATE_MODEL_CANARY" }),
+  ]);
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: {
+    role: "user", content: "PRIVATE_PROMPT_CANARY", timestamp: 1,
+  } });
+  assert.equal(outcome.kind, "provider_failed");
+  assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_MODEL_CANARY/u);
+  await flushDiagnosticJournal();
+  const bytes = await readFile(target, "utf8");
+  const entries = bytes.trim().split("\n").map((line) => JSON.parse(line));
+  const failures = entries.filter((entry) => entry.event === "provider-failed");
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].fields.providerCategory, "model_unavailable");
+  assert.equal(failures[0].fields.failurePhase, "provider-request");
+  assert.doesNotMatch(bytes, /PRIVATE_MODEL_CANARY|PRIVATE_PROMPT_CANARY|errorMessage/u);
+});
+
+test("AGENTS edits enter only the next logical model request and preserve the tool snapshot", async (t) => {
+  const { createAgentsInstructionRefresher } = await import("./agents-instructions.js");
+  const root = await mkdtemp(join(tmpdir(), "aiden-agents-harness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "AGENTS.md");
+  await writeFile(file, "INITIAL_GUIDANCE");
+  const instructions = await createAgentsInstructionRefresher({
+    globalRoot: root,
+    revalidate: async () => {},
+    read: async () => readFile(file, "utf8"),
+  });
+  const initial = await instructions.apply({ systemPrompt: "HOST" });
+  const tool = declarePiRuntimeReplay({
+    name: "update_guidance", label: "Update guidance", description: "Fixture edit", parameters: Type.Object({}),
+    execute: async () => {
+      await writeFile(file, "NEXT_GUIDANCE");
+      return { content: [{ type: "text" as const, text: "edited" }], details: null };
+    },
+  }, "safe");
+  const prompts: string[] = [];
+  const toolSets: string[][] = [];
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const { core, harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    initialSystemPrompt: initial.systemPrompt,
+    tools: [tool],
+    streamFn: (model, context, options) => {
+      prompts.push(context.systemPrompt ?? "");
+      toolSets.push((context.tools ?? []).map(({ name }) => name));
+      return providerCore.streamSimple(model, context, options);
+    },
+    prepareNextTurnWithContext: async ({ context }, signal) => ({ context: await instructions.apply(context, signal) }),
+  });
+  providerCore = core;
+  const result = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run the edit", timestamp: 1 } });
+  assert.equal(result.kind, "completed");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
+  assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
+  assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
 });

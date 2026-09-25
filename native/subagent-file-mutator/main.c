@@ -1207,8 +1207,10 @@ static int read_html_file(int root_fd, const char *root_path,
   struct stat after;
   unsigned char *contents = NULL;
   int result = RESULT_CONFLICT;
-  if (fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) ||
+  if (fstat(descriptor, &before) != 0 || !exclusive_regular(&before) ||
       before.st_size < 1 || before.st_size > MAX_HTML_CONTENT_BYTES)
+    goto cleanup;
+  if (test_pause("AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_AFTER_HTML_OPEN") != 0)
     goto cleanup;
   contents = calloc((size_t)before.st_size + 1, sizeof(unsigned char));
   if (contents == NULL ||

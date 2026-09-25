@@ -273,22 +273,13 @@ export function PillApp() {
                 await dictationApi.reportProgress(operationId, "fallback");
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = settings.voiceProvider ?? "openai";
-                const batchDeadline = new DictationDeadline(
-                  transcriptionBudgetMs(active.batchProvider),
-                );
-                text = await batchDeadline.run(
-                  transcribeBlob(blob, {
-                    provider: active.batchProvider,
-                    localModel: settings.localVoiceModel,
-                    model: settings.voiceModel,
-                    operationId: active.batchOperationId,
-                    signal: active.transcriptionController.signal,
-                  }),
-                  () =>
-                    active.batchOperationId
-                      ? cancelTranscription(active.batchProvider!, active.batchOperationId)
-                      : undefined,
-                );
+                text = await transcribeBlob(blob, {
+                  provider: active.batchProvider,
+                  localModel: settings.localVoiceModel,
+                  model: settings.voiceModel,
+                  operationId: active.batchOperationId,
+                  signal: active.transcriptionController.signal,
+                });
               }
               if (!operationGateRef.current.isCurrent(token)) return;
               await dictationApi.reportResult(operationId, text);

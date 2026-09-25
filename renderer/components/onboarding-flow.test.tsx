@@ -13,7 +13,7 @@ const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 const featureAssetPaths = [
   "aiden-workspace.png",
-  "features/aiden-assistant.png",
+  "features/gemini-live.png",
   "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
@@ -325,7 +325,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(source, /Use Ctrl-K or \/ for app commands/u);
   assert.match(
     source,
-    /Create reusable instructions, then type \$ to attach one\. Turn all skills off anytime in Settings → Skills\./u,
+    /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
     source,
@@ -361,7 +361,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Web Search",
     "Reusable Skills",
     "MCP Connectors",
-    "Aiden Assistant",
+    "Aiden Live",
     "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
@@ -423,7 +423,6 @@ test("project guidance keeps the feature bento current as Aiden evolves", () => 
   assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
 });
 
-
 test("primary AI choices include custom setup without opening advanced providers", () => {
   assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
   for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
@@ -435,4 +434,21 @@ test("primary AI choices include custom setup without opening advanced providers
   assert.match(editor, /models.length === 0/u);
   assert.match(editor, /defaultModelIsHidden/u);
   assert.match(editor, /await onSaved\(\)/u);
+});
+
+
+test("MCP onboarding discloses service-supplied tool guidance", () => {
+  assert.match(source, /Connected services may also provide guidance for using those tools\./u);
+});
+
+test("MCP tour explains connected-service resource reads", () => {
+  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+});
+
+test("blocked form filling is not advertised as a shipped tour feature", () => {
+  assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
+});
+
+test("workspace tour discloses AGENTS instruction loading and refresh", () => {
+  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
 });

@@ -2,6 +2,8 @@ import { AudioLines, KeyRound, Mic2, ShieldCheck } from "lucide-react";
 
 import { Button, Dialog, RadioGroup, RadioGroupItem, Text, type DialogLayer } from "../ui";
 import type { GeminiUsageScope } from "../../lib/types";
+import type { Provider } from "../../lib/types";
+import { ProviderModelVisibility } from "./provider-model-visibility";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 
 interface GeminiVoiceSetupDialogProps {
@@ -12,6 +14,7 @@ interface GeminiVoiceSetupDialogProps {
   busy?: boolean;
   error?: string | null;
   layer?: DialogLayer;
+  provider?: Provider;
   onScopeChange: (scope: GeminiUsageScope) => void;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void | Promise<void>;
@@ -49,6 +52,7 @@ export function GeminiVoiceSetupDialog({
   busy = false,
   error,
   layer,
+  provider,
   onScopeChange,
   onOpenChange,
   onConfirm,
@@ -123,6 +127,10 @@ export function GeminiVoiceSetupDialog({
             );
           })}
         </RadioGroup>
+
+        {hasKey && provider && scope === "models_and_transcription" ? (
+          <ProviderModelVisibility provider={provider} policyHidden={false} />
+        ) : null}
 
         <section className="rounded-card bg-well p-3" aria-labelledby="gemini-privacy-title">
           <Text id="gemini-privacy-title" as="h3" variant="small-strong">
