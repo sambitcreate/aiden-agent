@@ -2952,6 +2952,14 @@ struct AidenChatDetailView: View {
             ScrollView {
                 messageList
             }
+            .defaultScrollAnchor(
+                AidenChatScrollPolicy.initialTranscriptAnchor,
+                for: .initialOffset
+            )
+            .defaultScrollAnchor(
+                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromLatest),
+                for: .sizeChanges
+            )
             .scrollDismissesKeyboard(.interactively)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 aidenChatIsScrolledAwayFromLatest(
@@ -2977,9 +2985,17 @@ struct AidenChatDetailView: View {
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
+            .onAppear {
+                isScrolledAwayFromLatest = false
+                scrollToBottom(proxy, animated: false)
+            }
+            .onChange(of: model.chat.id) { _, _ in
+                isScrolledAwayFromLatest = false
+                scrollToBottom(proxy, animated: false)
+            }
             .onChange(of: model.chat.messages.count) { _, _ in
                 guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy)
+                scrollToBottom(proxy, animated: false)
             }
             .onChange(of: model.liveText) { _, _ in
                 guard !isScrolledAwayFromLatest else { return }
@@ -3009,7 +3025,7 @@ struct AidenChatDetailView: View {
             Color.clear
                 .frame(height: max(96, composerHeight + 12))
                 .accessibilityHidden(true)
-            Color.clear.frame(height: 1).id("chat-bottom")
+            Color.clear.frame(height: 1).id(AidenChatScrollPolicy.transcriptBottomAnchorID)
         }
         .padding(.horizontal)
         .padding(.top, 20)
@@ -3318,9 +3334,14 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            proxy.scrollTo("chat-bottom", anchor: .bottom)
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        let scroll = {
+            proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
+        }
+        if animated {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2), scroll)
+        } else {
+            scroll()
         }
     }
 }

@@ -274,20 +274,29 @@ struct AidenChatProgressSheet: View {
         if !model.canReadTaskProgress {
             AidenProgressUnavailableView(text: "Task progress is unavailable for this connection.")
         } else if let progress = model.taskProgress, progress.isAvailable {
-            List {
-                Section {
-                    ForEach(AidenProgressPresentation.visibleTasks(progress)) { task in
-                        AidenTaskProgressRow(task: task)
+            let tasks = AidenProgressPresentation.visibleTasks(progress)
+            ScrollViewReader { proxy in
+                List {
+                    Section {
+                        ForEach(tasks) { task in
+                            AidenTaskProgressRow(task: task)
+                                .id(task.id)
+                        }
+                    } header: {
+                        Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(tasks.count) completed")
+                    } footer: {
+                        if model.isTaskProgressStale {
+                            Text("Last known progress")
+                        }
                     }
-                } header: {
-                    Text("\(AidenProgressPresentation.completedTaskCount(progress)) of \(AidenProgressPresentation.visibleTasks(progress).count) completed")
-                } footer: {
-                    if model.isTaskProgressStale {
-                        Text("Last known progress")
+                }
+                .listStyle(.insetGrouped)
+                .onAppear {
+                    if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
+                        proxy.scrollTo(anchorID, anchor: .bottom)
                     }
                 }
             }
-            .listStyle(.insetGrouped)
         } else {
             AidenProgressUnavailableView(text: taskUnavailableMessage)
         }
