@@ -56,6 +56,8 @@ test("chat rich links keep anchor navigation and work in every assistant render 
   assert.match(richLink, /<a[\s\S]*href=\{href\}/u);
   assert.doesNotMatch(richLink, /onClick=/u);
   assert.match(richLink, /event\.key === "Escape"/u);
+  assert.match(richLink, /dismissedWhileFocusedRef\.current = true/u);
+  assert.match(richLink, /if \(nextOpen && dismissedWhileFocusedRef\.current\) return/u);
   assert.match(richLink, /onFocus=/u);
   assert.match(richLink, /onBlur=/u);
   assert.doesNotMatch(richLink, /\b(?:fetch|window\.api|ipcRenderer)\b/u);

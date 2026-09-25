@@ -28,6 +28,8 @@ export interface MessageBubbleProps {
   /** Split assistant prose renders one whole-response copy action on its tail. */
   showCopy?: boolean;
   copyText?: string;
+  /** Disable rich previews for a duplicate transcript copy during handoff. */
+  richLinks?: boolean;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -52,6 +54,7 @@ export function MessageBubble({
   onStreamHandoffComplete,
   showCopy = true,
   copyText,
+  richLinks = true,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
@@ -104,10 +107,10 @@ export function MessageBubble({
             content={content}
             complete={streamComplete}
             onHandoffComplete={onStreamHandoffComplete}
-            richLinks
+            richLinks={richLinks}
           />
         ) : (
-          <Markdown content={content} richLinks />
+          <Markdown content={content} richLinks={richLinks} />
         )}
         {content && showCopy ? (
           <div

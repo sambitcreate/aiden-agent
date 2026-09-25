@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
-import { MessageList } from "./message-list.js";
+import { MessageList, richLinkHandoffDuplicateMessageId } from "./message-list.js";
 import { Markdown } from "./markdown.js";
 import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
@@ -97,6 +97,30 @@ test("one message renders at most fifty rich preview triggers", () => {
   const markup = renderToStaticMarkup(<MessageBubble role="assistant" content={content} />);
   assert.equal(markup.match(/data-rich-link-provider="github"/gu)?.length, 50);
   assert.equal(markup.match(/href="https:\/\/github\.com\/openai\/codex\/pull\//gu)?.length, 51);
+});
+
+test("the persisted handoff duplicate yields rich previews to the streaming copy", () => {
+  const messages = [
+    { id: "assistant-old", role: "assistant" as const, content: "Earlier", createdAt: 1 },
+    {
+      id: "assistant-final",
+      role: "assistant" as const,
+      content: "[PR](https://github.com/openai/codex/pull/247)",
+      createdAt: 2,
+    },
+  ];
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true),
+    "assistant-final",
+  );
+  assert.equal(richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false), null);
+  assert.equal(richLinkHandoffDuplicateMessageId(messages, "Different", true), null);
+
+  const duplicateMarkup = renderToStaticMarkup(
+    <MessageBubble role="assistant" content={messages[1]!.content} richLinks={false} />,
+  );
+  assert.match(duplicateMarkup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
+  assert.doesNotMatch(duplicateMarkup, /data-rich-link-provider/u);
 });
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {

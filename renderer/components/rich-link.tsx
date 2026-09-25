@@ -127,9 +127,11 @@ function RichLinkPreview({
   onBlur,
   onFocus,
   onKeyDown,
+  onPointerEnter,
   ...anchorProps
 }: Omit<RichLinkProps, "descriptor"> & { descriptor: RichLinkDescriptor }) {
   const [open, setOpen] = React.useState(false);
+  const dismissedWhileFocusedRef = React.useRef(false);
   const descriptionId = React.useId();
 
   const ProviderIcon = PROVIDER_ICONS[descriptor.provider];
@@ -137,7 +139,15 @@ function RichLinkPreview({
   const accessibleContext = `${descriptor.providerLabel} ${descriptor.resourceLabel}`;
 
   return (
-    <HoverCard open={open} onOpenChange={setOpen} openDelay={160} closeDelay={120}>
+    <HoverCard
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen && dismissedWhileFocusedRef.current) return;
+        setOpen(nextOpen);
+      }}
+      openDelay={160}
+      closeDelay={120}
+    >
       <HoverCardTrigger asChild>
         <a
           href={href}
@@ -151,15 +161,28 @@ function RichLinkPreview({
           data-rich-link-resource={descriptor.resourceKind}
           onFocus={(event) => {
             onFocus?.(event);
-            if (!event.defaultPrevented) setOpen(true);
+            if (!event.defaultPrevented) {
+              dismissedWhileFocusedRef.current = false;
+              setOpen(true);
+            }
           }}
           onBlur={(event) => {
             onBlur?.(event);
-            if (!event.defaultPrevented) setOpen(false);
+            if (!event.defaultPrevented) {
+              dismissedWhileFocusedRef.current = false;
+              setOpen(false);
+            }
           }}
           onKeyDown={(event) => {
             onKeyDown?.(event);
-            if (!event.defaultPrevented && event.key === "Escape") setOpen(false);
+            if (!event.defaultPrevented && event.key === "Escape") {
+              dismissedWhileFocusedRef.current = true;
+              setOpen(false);
+            }
+          }}
+          onPointerEnter={(event) => {
+            onPointerEnter?.(event);
+            if (!event.defaultPrevented) dismissedWhileFocusedRef.current = false;
           }}
         >
           <ProviderIcon

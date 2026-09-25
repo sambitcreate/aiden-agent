@@ -67,6 +67,7 @@ interface AssistantResponseProps {
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
+  richLinks?: boolean;
 }
 
 function AssistantResponse({
@@ -78,6 +79,7 @@ function AssistantResponse({
   streaming = false,
   streamComplete,
   onStreamHandoffComplete,
+  richLinks = true,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
@@ -108,6 +110,7 @@ function AssistantResponse({
             streaming={streaming}
             streamComplete={streamComplete}
             onStreamHandoffComplete={onStreamHandoffComplete}
+            richLinks={richLinks}
           />
         ) : null}
         {attachments?.length ? (
@@ -165,6 +168,7 @@ function AssistantResponse({
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}
+            richLinks={richLinks}
           />
         );
       })}
@@ -187,6 +191,19 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
       </Text>
     </Callout>
   );
+}
+
+export function richLinkHandoffDuplicateMessageId(
+  messages: readonly ChatMessage[],
+  streamingText: string | null,
+  streamComplete: boolean,
+): string | null {
+  if (!streamComplete || streamingText === null) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "assistant" && message.content === streamingText) return message.id;
+  }
+  return null;
 }
 
 export function MessageList({
@@ -237,6 +254,11 @@ export function MessageList({
       streamingText ||
       liveAttachments.length > 0 ||
       liveHtmlArtifacts.length > 0,
+  );
+  const richLinkHandoffDuplicateId = richLinkHandoffDuplicateMessageId(
+    messages,
+    streamingText,
+    Boolean(streamComplete),
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -325,6 +347,7 @@ export function MessageList({
               timeline={message.timeline}
               reasoning={message.reasoning}
               attachments={message.attachments}
+              richLinks={message.id !== richLinkHandoffDuplicateId}
               subagentChips={
                 subagentsEnabled && message.subagents ? (
                   <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
