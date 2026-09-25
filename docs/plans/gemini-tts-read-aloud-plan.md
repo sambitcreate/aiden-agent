@@ -215,3 +215,21 @@ Fresh CI/Hermes results for this correction commit must be checked after push.
 An additional local subagent review was not admitted (tree deadline); no new
 local reviewer sign-off is claimed. PR is ready for review, not draft; full
 Voice Studio/streaming scope remains partial.
+
+
+### Follow-up: preflight rejection retryability
+
+Pullfrog's review of `911a4218` confirmed the original five findings were fixed
+and identified a new P2: preflight rejections incorrectly persisted source
+expiry markers after session reclamation. Remote ledgers now distinguish pending
+reservations from retained accepted/uncertain work. Known unbilled `TtsStartError`
+rejections release their reservation; reference counts preserve concurrent work
+and earlier accepted identities. Unknown and possibly-billed failures still fail
+closed. Added regressions for reclaim/retry, both concurrent settlement orders,
+and unknown/possibly-billed failures across reclamation.
+
+Verification: TTS 131 passed, full Remote suite passed (17 + 441 + 7, one skip),
+TypeScript/scoped lint/diff checks passed. Native consumer regression runs:
+Android chat/client 70 passed; iOS simulator 227 passed, 5 skipped (232 total).
+Logs: `/tmp/aiden-pr245-preflight*`. No new provider requests were made outside
+mock tests. Fresh CI/review must target the forthcoming correction commit.

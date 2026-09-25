@@ -973,3 +973,79 @@ test("provider success is accounted even if local retention fails, while preflig
   await assert.rejects(disabled.service.start(disabled.owner(), startRequest(disabled)));
   assert.equal(reports.length, 1);
 });
+
+
+test("remote preflight rejection stays retryable after session reclamation", async () => {
+  const h = harness({ enabled: false }); let now = 0;
+  const remote = new AidenRemoteTtsService(h.service, () => now);
+  const authority = (i: number) => ({ deviceId: `preflight-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  try {
+    for (let i = 0; i < 256; i++) await assert.rejects(remote.start(authority(i), startRequest(h)), /not set up/u);
+    assert.equal(h.provider.calls.length, 0); assert.equal(h.usage.length, 0);
+    now = 120_001;
+    await assert.rejects(remote.start(authority(256), startRequest(h)), /not set up/u);
+    h.settings.enabled = true;
+    await remote.start(authority(0), { ...startRequest(h), requestId: "corrected-setup" }); await flush();
+    assert.equal(h.provider.calls.length, 1); assert.equal(h.usage.length, 1);
+  } finally { remote.close(); }
+});
+
+test("a preflight rejection cannot erase a concurrent accepted source tombstone", async () => {
+  for (const rejectFirst of [true, false]) {
+    const h = harness(); let now = 0;
+    const original = h.service.start.bind(h.service);
+    let reject!: (error: Error) => void;
+    let releaseAccepted!: () => void;
+    const acceptance = new Promise<void>(resolve => { releaseAccepted = resolve; });
+    h.service.start = (owner, request) => request.requestId === "preflight" ?
+      new Promise((_, fail) => { reject = fail; }) : original(owner, request).then(async job => {
+        await acceptance; return job;
+      });
+    const remote = new AidenRemoteTtsService(h.service, () => now);
+    const authority = (i: number) => ({ deviceId: `concurrent-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+    const preflightError = new TtsStartError({ code: "setup_required", message: "preflight rejected", retryable: false, generationMayHaveBeenBilled: false });
+    try {
+      const rejected = assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "preflight" }), /preflight rejected/u);
+      await flush();
+      const accepted = remote.start(authority(0), startRequest(h));
+      await flush();
+      if (rejectFirst) { reject(preflightError); await rejected; }
+      releaseAccepted();
+      await accepted; await flush();
+      if (!rejectFirst) reject(preflightError);
+      await rejected;
+      remote.stop(authority(0), { requestId: "req-1" });
+      h.settings.enabled = false;
+      for (let i = 1; i < 256; i++) await assert.rejects(remote.start(authority(i), startRequest(h)));
+      now = 120_001;
+      await assert.rejects(remote.start(authority(256), startRequest(h)));
+      h.settings.enabled = true;
+      await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "after-eviction" }), /expired/u);
+      assert.equal(h.provider.calls.length, 1);
+    } finally { remote.close(); }
+  }
+});
+
+
+test("uncertain start failures keep their anti-rebilling fence after reclamation", async () => {
+  const h = harness(); let now = 0;
+  const original = h.service.start.bind(h.service);
+  const errors = [new Error("uncertain dispatch"), new TtsStartError({ code: "network", message: "possibly billed", retryable: false, generationMayHaveBeenBilled: true })];
+  h.service.start = (owner, request) => {
+    const index = ["unknown", "billed"].indexOf(request.requestId);
+    return index < 0 ? original(owner, request) : Promise.reject(errors[index]);
+  };
+  const remote = new AidenRemoteTtsService(h.service, () => now);
+  const authority = (i: number) => ({ deviceId: `uncertain-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  try {
+    await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "unknown" }));
+    await assert.rejects(remote.start(authority(1), { ...startRequest(h), requestId: "billed" }));
+    h.settings.enabled = false;
+    for (let i = 2; i < 256; i++) await assert.rejects(remote.start(authority(i), startRequest(h)));
+    now = 120_001;
+    await assert.rejects(remote.start(authority(256), startRequest(h)));
+    h.settings.enabled = true;
+    for (const i of [0, 1]) await assert.rejects(remote.start(authority(i), { ...startRequest(h), requestId: "new-request" }), /expired/u);
+    assert.equal(h.provider.calls.length, 0);
+  } finally { remote.close(); }
+});

@@ -436,6 +436,10 @@ session map is capped at 256; capacity pressure reclaims sessions idle for more
 than two minutes, and revocation immediately releases its records/audio. Separate
 bounded SHA-256 intent ledgers (16,384 entries each for sources, requests and
 cancellations) preserve anti-rebilling protection across reclamation. A previously
-attempted source from a reclaimed session returns unavailable, conservatively
-even if speech settings changed. Ledger exhaustion fails closed for new intents;
-it never forgets a billed attempt merely to admit another one.
+accepted or uncertain source from a reclaimed session returns unavailable,
+conservatively even if speech settings changed. Known unbilled preflight
+rejections release their reservations, allowing a corrected request after
+reclamation. Reservations are reference-counted: one rejected concurrent start
+cannot erase another pending or accepted start's protection. Ledger exhaustion
+fails closed for new intents; it never forgets a billed attempt merely to admit
+another one.

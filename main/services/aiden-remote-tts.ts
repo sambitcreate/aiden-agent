@@ -11,6 +11,8 @@ export interface RemoteTtsAuthority {
   current(): boolean;
   authorize(): Promise<void>;
 }
+interface IntentEntry { pending: number; retained: boolean }
+
 interface Session {
   owner: TtsOwner;
   authority: RemoteTtsAuthority;
@@ -31,9 +33,24 @@ export class AidenRemoteTtsService {
   private closed = false;
   private readonly revokedDevices = new Set<string>();
   // Compact, bounded anti-rebilling ledgers outlive evictable playback sessions.
-  private readonly sourceIntents = new Set<string>();
-  private readonly requestIntents = new Set<string>();
+  private readonly sourceIntents = new Map<string, IntentEntry>();
+  private readonly requestIntents = new Map<string, IntentEntry>();
   private readonly cancelledIntents = new Set<string>();
+  private reserveIntent(ledger: Map<string, IntentEntry>, local: Set<string>, key: string) {
+    const entry = ledger.get(key) ?? { pending: 0, retained: false };
+    entry.pending += 1;
+    ledger.set(key, entry);
+    local.add(key);
+    return (retain: boolean) => {
+      entry.pending -= 1;
+      entry.retained ||= retain;
+      // One preflight rejection must not erase a concurrent or accepted start.
+      if (entry.pending === 0 && !entry.retained && ledger.get(key) === entry) {
+        ledger.delete(key);
+        local.delete(key);
+      }
+    };
+  }
   private intent(authority: RemoteTtsAuthority, value: unknown): string {
     return createHash("sha256").update(JSON.stringify([authority.deviceId, authority.chatId, value])).digest("hex");
   }
@@ -138,16 +155,23 @@ export class AidenRemoteTtsService {
       (!this.requestIntents.has(requestIntent) && this.requestIntents.size >= 16_384)) {
       throw new AidenRemoteServiceError("rate_limited", "The Read Aloud intent limit was reached on the desktop.", 429);
     }
-    this.sourceIntents.add(sourceIntent); session.sourceIntents.add(sourceIntent);
-    this.requestIntents.add(requestIntent); session.requestIntents.add(requestIntent);
+    const settleSource = this.reserveIntent(this.sourceIntents, session.sourceIntents, sourceIntent);
+    const settleRequest = this.reserveIntent(this.requestIntents, session.requestIntents, requestIntent);
+    let retain = true; // Accepted or uncertain work remains fenced after eviction.
     session.requestId = request.requestId;
     try {
       const job = await this.service.start(session.owner, request);
       if (session.requestId === request.requestId) { session.jobId = job.jobId; session.source = request.source; }
       return job;
     } catch (error) {
-      if (error instanceof TtsStartError) throw new AidenRemoteServiceError("invalid_request", error.safe.message, 409, false);
+      if (error instanceof TtsStartError) {
+        retain = error.safe.generationMayHaveBeenBilled;
+        throw new AidenRemoteServiceError("invalid_request", error.safe.message, 409, false);
+      }
       throw error;
+    } finally {
+      settleSource(retain);
+      settleRequest(retain);
     }
   }
 
