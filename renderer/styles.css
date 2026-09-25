@@ -57,6 +57,9 @@
 .devices-agent-access { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 1px solid var(--border-separator); border-radius: var(--radius-control); background: var(--surface-control); }
 .devices-agent-access > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-tertiary); }
 .devices-list-rows { margin: 0; padding: 0; list-style: none; }
+.devices-host-group + .devices-host-group { margin-top: 10px; }
+.devices-host-header { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 5px; }
+.devices-host-header > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-tertiary); }
 .devices-list-row { display: flex; align-items: center; gap: 9px; padding: 8px 5px; border-bottom: 1px solid var(--border-separator); }
 .devices-list-row > svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-tertiary); }
 .device-viewer { display: flex; height: 100%; min-height: 0; flex-direction: column; }

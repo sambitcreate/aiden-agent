@@ -48,7 +48,8 @@ function fakePort(initial: Partial<DeviceServiceState> = {}) {
   let state: DeviceServiceState = {
     hostStatus: "ready",
     hostStatuses: { local: { status: "ready" } },
-    consent: { streaming: true, agentAccess: true },
+    hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready" }],
+    consent: { streaming: true, agentAccess: true, peerSharing: false },
     devices: [IPHONE, BOOTED],
     sessions: [],
     toolVersions: { hub: "0.12.0", agent: "0.21.12" },
@@ -56,7 +57,7 @@ function fakePort(initial: Partial<DeviceServiceState> = {}) {
   };
   const calls: string[] = [];
   const port: DeviceToolPort = {
-    refresh: async () => {
+    refreshLocal: async () => {
       calls.push("refresh");
       return state;
     },
@@ -112,7 +113,7 @@ test("the gate needs the flag, agent access, an interactive owner, and a tool pe
   assert.equal(canUseDeviceTools({ ...base, permission: "full" }), true);
   for (const change of [
     { enabled: false },
-    { agentAccess: false },
+    { agentAccess: false, peerSharing: false },
     { permission: "none" },
     { permission: "read" },
     { rendererOwner: false },
@@ -214,9 +215,9 @@ test("models without vision get a saved screenshot path", async () => {
 });
 
 test("tools refuse when streaming or agent access is off, and reject unknown arguments", async () => {
-  const off = tools(fakePort({ hostStatus: "needs-consent", consent: { streaming: false, agentAccess: false } }).port);
+  const off = tools(fakePort({ hostStatus: "needs-consent", consent: { streaming: false, agentAccess: false, peerSharing: false } }).port);
   await assert.rejects(off("device_list"), /Device support is off/u);
-  const noAgent = tools(fakePort({ consent: { streaming: true, agentAccess: false } }).port);
+  const noAgent = tools(fakePort({ consent: { streaming: true, agentAccess: false, peerSharing: false } }).port);
   await assert.rejects(noAgent("device_open"), /Agent access to simulators is off/u);
   await assert.rejects(tools(fakePort().port)("device_open", { chatId: "other" }));
   await assert.rejects(tools(fakePort().port)("device_open", { deviceId: "../../etc" }));

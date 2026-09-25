@@ -13,7 +13,8 @@ function state(overrides: Record<string, unknown> = {}) {
   return {
     hostStatus: "ready",
     hostStatuses: { local: { status: "ready" } },
-    consent: { streaming: true, agentAccess: false },
+    hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready" }],
+    consent: { streaming: true, agentAccess: false, peerSharing: false },
     devices: [
       {
         hostId: "local",

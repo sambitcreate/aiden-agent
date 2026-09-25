@@ -15,6 +15,7 @@ import {
   type DeviceConsent,
   type DeviceActionInput,
   type DeviceConsentKind,
+  type DeviceHostInfo,
   type DeviceHostState,
   type DeviceKind,
   type DeviceServiceState,
@@ -30,7 +31,9 @@ import {
   type DeviceHostReady,
 } from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
-import type { DeviceHubProxy } from "./device-hub-proxy.js";
+import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
+import type { AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
+import type { DevicePeerPort } from "./peer-devices.js";
 import { AGENT_DEVICE, DEVICE_HUB } from "./device-toolchain.js";
 import {
   agentDeviceConfigPath,
@@ -48,8 +51,12 @@ export interface DeviceServiceDeps {
   /** `userData/devices`, where `consent.json` lives beside the tool installs. */
   baseDir: string;
   host: DeviceHost;
+  /** Paired desktops sharing their simulators. Absent in tests and when peers are unavailable. */
+  peers?: DevicePeerPort;
   /** Starts the renderer-facing proxy lazily, the first time a stream grant is requested. */
-  startProxy(resolveHub: (hostId: string) => string | null): Promise<DeviceHubProxy>;
+  startProxy(
+    resolveHub: (hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>,
+  ): Promise<DeviceHubProxy>;
   fetch(
     url: string,
     init: { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal },
@@ -77,7 +84,12 @@ export interface DeviceService {
   onState(listener: (state: DeviceServiceState) => void): () => void;
   grantConsent(kind: DeviceConsentKind): Promise<DeviceServiceState>;
   revokeConsent(kind: DeviceConsentKind): Promise<DeviceServiceState>;
+  /** Refreshes this Mac and every paired Mac. */
   refresh(): Promise<DeviceServiceState>;
+  /** Refreshes this Mac only; never contacts paired Macs. */
+  refreshLocal(): Promise<DeviceServiceState>;
+  /** Contacts paired Macs only; never starts or installs anything locally. */
+  refreshPeers(): Promise<DeviceServiceState>;
   open(input: DeviceOpenInput): Promise<DeviceSession>;
   close(input: DeviceCloseInput): Promise<void>;
   /** Drops every session a removed chat held. Simulators keep running. */
@@ -100,7 +112,15 @@ export interface DeviceService {
   /** Asks the renderer to show the Simulator tab for a chat. */
   reveal(chatId: string): void;
   onReveal(listener: (chatId: string) => void): () => void;
+  /** What paired desktops may reach while the owner shares this Mac's simulators. */
+  shareHost(): AidenRemoteSimulatorHost;
   stop(): Promise<void>;
+}
+
+interface PeerEntry {
+  name: string;
+  state: DeviceHostState;
+  devices: DeviceSummary[];
 }
 
 interface SimctlDevice {
@@ -164,17 +184,24 @@ export function parseSimctlDevices(stdout: string, hostId: string = LOCAL_DEVICE
   return devices.map(({ sortVersion: _sortVersion, ...device }) => device);
 }
 
+const NO_CONSENT: DeviceConsent = { streaming: false, agentAccess: false, peerSharing: false };
+
 function parseConsent(text: string): DeviceConsent {
   try {
     const value = JSON.parse(text) as Partial<DeviceConsent>;
     const streaming = value.streaming === true;
-    // Agent access builds on streaming, so it never survives without it.
-    return { streaming, agentAccess: streaming && value.agentAccess === true };
+    // Agent access and sharing build on streaming, so neither survives without it.
+    return {
+      streaming,
+      agentAccess: streaming && value.agentAccess === true,
+      peerSharing: streaming && value.peerSharing === true,
+    };
   } catch {
-    return { streaming: false, agentAccess: false };
+    return { ...NO_CONSENT };
   }
 }
 
+const STREAMING_OFF = "Set up simulator streaming first.";
 const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
 const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
 
@@ -188,10 +215,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   const listeners = new Set<(state: DeviceServiceState) => void>();
   const revealListeners = new Set<(chatId: string) => void>();
   let shimDir: string | null = null;
-  let consent: DeviceConsent = { streaming: false, agentAccess: false };
+  let consent: DeviceConsent = { ...NO_CONSENT };
   let hostState: DeviceHostState = { status: "needs-consent" };
   let unavailableReason: string | undefined;
+  /** This Mac's simulators. Paired Macs' simulators live in `peers`. */
   let devices: DeviceSummary[] = [];
+  const peers = new Map<string, PeerEntry>();
+  let peerRefresh: Promise<void> | null = null;
+  const sharingListeners = new Set<(sharing: boolean) => void>();
+  let sharingWas = false;
   let sessions: DeviceSession[] = [];
   let loaded: Promise<void> | null = null;
   let starting: Promise<DeviceHostReady | null> | null = null;
@@ -201,19 +233,33 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let saving: Promise<void> = Promise.resolve();
   let granting: Promise<unknown> = Promise.resolve();
 
+  const hostList = (): DeviceHostInfo[] => [
+    { id: host.id, kind: "local", name: "This Mac", ...hostState },
+    ...[...peers].map(([id, entry]): DeviceHostInfo => ({ id, kind: "peer", name: entry.name, ...entry.state })),
+  ];
+  const allDevices = (): DeviceSummary[] => [...devices, ...[...peers.values()].flatMap((entry) => entry.devices)];
+
   const snapshot = (): DeviceServiceState => ({
     hostStatus: hostState.status,
-    hostStatuses: { [host.id]: { ...hostState } },
+    hostStatuses: Object.fromEntries(hostList().map(({ id, status, detail }) => [id, detail ? { status, detail } : { status }])),
+    hosts: hostList(),
     consent: { ...consent },
-    devices: devices.map((device) => ({ ...device })),
+    devices: allDevices().map((device) => ({ ...device })),
     sessions: sessions.map((session) => ({ ...session })),
     toolVersions: { hub: DEVICE_HUB.version, agent: AGENT_DEVICE.version },
     ...(unavailableReason === undefined ? {} : { unavailableReason }),
   });
 
+  const sharing = () => consent.streaming && consent.peerSharing;
+
   const emit = () => {
     const state = snapshot();
     for (const listener of listeners) listener(state);
+    const now = sharing();
+    if (now !== sharingWas) {
+      sharingWas = now;
+      for (const listener of sharingListeners) listener(now);
+    }
   };
 
   const setHost = (next: DeviceHostState, reason?: string) => {
@@ -240,6 +286,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   function load(): Promise<void> {
     loaded ??= (async () => {
       consent = parseConsent(await readFile(consentPath, "utf8").catch(() => ""));
+      sharingWas = sharing();
       hostState = await idleStatus();
       // After a relaunch the shim from the earlier grant still pins agent-device for run_command.
       const shim = path.join(deps.baseDir, "bin");
@@ -302,16 +349,199 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       throw new Error("Could not list simulators. Open Xcode once to finish its setup, then try again.");
     }
     devices = parseSimctlDevices(result.stdout, host.id);
-    const known = new Set(devices.map((device) => `${device.hostId}\0${device.id}`));
-    sessions = sessions.filter((session) => known.has(`${session.hostId}\0${session.deviceId}`));
+    const known = new Set(devices.map((device) => device.id));
+    sessions = sessions.filter((session) => session.hostId !== host.id || known.has(session.deviceId));
     emit();
   }
+
+  function peerPort(): DevicePeerPort {
+    if (!deps.peers) throw new Error("Paired Macs are unavailable.");
+    return deps.peers;
+  }
+
+  function requirePeer(hostId: string): PeerEntry {
+    // Paired Macs are part of simulator streaming; revoking it disconnects them too.
+    if (!consent.streaming) throw new Error(STREAMING_OFF);
+    const entry = peers.get(hostId);
+    if (!entry) throw new Error(`Unknown device host ${hostId}.`);
+    if (entry.state.status !== "ready") {
+      throw new Error(entry.state.detail ?? `${entry.name} is not sharing simulators right now.`);
+    }
+    return entry;
+  }
+
+  function setPeerDevices(hostId: string, entry: PeerEntry, next: DeviceSummary[]): void {
+    entry.devices = next;
+    const known = new Set(next.map((device) => device.id));
+    sessions = sessions.filter((session) => session.hostId !== hostId || known.has(session.deviceId));
+  }
+
+  async function refreshLocalHost(): Promise<void> {
+    if (consent.streaming) {
+      const ready = host.current() ?? (await start(false));
+      if (ready) {
+        try {
+          await listDevices(ready);
+        } catch (error) {
+          setHost({ status: "error", detail: errorMessage(error) });
+        }
+      }
+    }
+  }
+
+  function forgetPeers(): void {
+    peers.clear();
+    sessions = sessions.filter((session) => session.hostId === host.id);
+  }
+
+  /** Lists every enabled paired Mac. Hosts whose Aiden cannot share simulators are left out. */
+  function refreshPeerHosts(): Promise<void> {
+    if (!deps.peers) return Promise.resolve();
+    if (!consent.streaming) {
+      forgetPeers();
+      return Promise.resolve();
+    }
+    const port = deps.peers;
+    peerRefresh ??= (async () => {
+      try {
+        const hosts = await port.hosts().catch(() => []);
+        const present = new Set(hosts.map((peer) => peer.id));
+        for (const id of [...peers.keys()]) {
+          if (!present.has(id)) {
+            peers.delete(id);
+            sessions = sessions.filter((session) => session.hostId !== id);
+          }
+        }
+        await Promise.all(
+          hosts.map(async (peer) => {
+            const entry = peers.get(peer.id) ?? { name: peer.name, state: { status: "starting" }, devices: [] };
+            entry.name = peer.name;
+            try {
+              const listing = await port.list(peer.id);
+              if (!listing) {
+                peers.delete(peer.id);
+                sessions = sessions.filter((session) => session.hostId !== peer.id);
+                return;
+              }
+              peers.set(peer.id, entry);
+              if (!listing.sharing) {
+                entry.state = { status: "needs-consent", detail: `Simulator sharing is off on ${peer.name}.` };
+                setPeerDevices(peer.id, entry, []);
+                return;
+              }
+              entry.state = listing.detail ? { status: listing.status, detail: listing.detail } : { status: listing.status };
+              setPeerDevices(
+                peer.id,
+                entry,
+                listing.devices.map((device) => ({ ...device, hostId: peer.id, platform: "ios" as const })),
+              );
+            } catch {
+              peers.set(peer.id, entry);
+              entry.state = { status: "unavailable", detail: `Could not reach ${peer.name}.` };
+              setPeerDevices(peer.id, entry, []);
+            }
+          }),
+        );
+      } finally {
+        peerRefresh = null;
+        emit();
+      }
+    })();
+    return peerRefresh;
+  }
+
+  /** Boots the simulator if needed and attaches the stream helper. */
+  async function attach(ready: DeviceHostReady, device: DeviceSummary): Promise<DeviceSummary> {
+    let attached = device;
+    if (!device.booted) {
+      await postHubJson(
+        ready,
+        "/api/devices/boot",
+        { platform: "ios", id: device.id, name: device.name },
+        DEVICE_BOOT_TIMEOUT_MS,
+      );
+      attached = { ...device, booted: true };
+      devices = devices.map((candidate) => (candidate.id === device.id ? attached : candidate));
+    }
+    // The stream helper must be attached even when the simulator was already booted.
+    await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: device.id }, HUB_REQUEST_TIMEOUT_MS);
+    return attached;
+  }
+
+  async function shutdownLocal(ready: DeviceHostReady, deviceId: string): Promise<void> {
+    const result = await ready.run("xcrun", ["simctl", "shutdown", deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
+    if (result.code !== 0) throw new Error("The simulator did not shut down.");
+    devices = devices.map((device) => (device.id === deviceId ? { ...device, booted: false } : device));
+  }
+
+  function requireSharing(): DeviceHostReady {
+    if (!sharing()) throw new Error("Simulator sharing is off.");
+    const ready = host.current();
+    if (!ready) throw new Error("The simulator hub is not running.");
+    return ready;
+  }
+
+  const share: AidenRemoteSimulatorHost = {
+    sharing,
+    async list() {
+      await load();
+      if (!sharing()) return { sharing: false, status: hostState.status, devices: [] };
+      const ready = host.current() ?? (await start(false));
+      if (ready) {
+        await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+      }
+      return {
+        sharing: sharing(),
+        status: hostState.status,
+        devices: sharing() ? devices.map(({ hostId: _hostId, ...device }) => device) : [],
+      };
+    },
+    async open(deviceId) {
+      const ready = requireSharing();
+      const device = devices.find((candidate) => candidate.id === deviceId);
+      if (!device) throw new Error("That simulator is no longer available.");
+      const { hostId: _hostId, ...attached } = await attach(ready, device);
+      emit();
+      return attached;
+    },
+    async shutdown(deviceId) {
+      const ready = requireSharing();
+      if (!devices.some((device) => device.id === deviceId)) throw new Error("That simulator is no longer available.");
+      await shutdownLocal(ready, deviceId);
+      emit();
+    },
+    async settings(deviceId) {
+      const ready = requireSharing();
+      requireKnownDevice(host.id, deviceId);
+      return readDeviceSettings(ready, deviceId);
+    },
+    async action(input) {
+      const ready = requireSharing();
+      const local = { ...input, hostId: host.id };
+      requireKnownDevice(host.id, local.deviceId);
+      await runDeviceAction(ready, local);
+      return readDeviceSettings(ready, local.deviceId);
+    },
+    hubOrigin: () => (sharing() ? (host.current()?.hub.origin ?? null) : null),
+    isKnownDevice: (deviceId) => sharing() && devices.some((device) => device.id === deviceId),
+    onSharingChanged(listener) {
+      sharingListeners.add(listener);
+      return () => sharingListeners.delete(listener);
+    },
+  };
 
   function requireReady(hostId: string): DeviceHostReady {
     if (hostId !== host.id) throw new Error(`Unknown device host ${hostId}.`);
     const ready = host.current();
     if (!consent.streaming || !ready) throw new Error("Set up simulator streaming first.");
     return ready;
+  }
+
+  function requirePeerDevice(hostId: string, deviceId: string): DeviceSummary {
+    const device = requirePeer(hostId).devices.find((candidate) => candidate.id === deviceId);
+    if (!device) throw new Error("That simulator is no longer available.");
+    if (!device.booted) throw new Error("Open the simulator before changing its settings.");
+    return device;
   }
 
   /** Actions only reach simulators the last listing reported, and only booted ones. */
@@ -380,6 +610,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (kind === "agentAccess" && !consent.streaming) {
         throw new Error("Set up simulator streaming before allowing agent access.");
       }
+      if (kind === "peerSharing" && !consent.streaming) {
+        throw new Error("Set up simulator streaming before sharing with paired Macs.");
+      }
       if (kind === "agentAccess") {
         // The only path that installs agent-device: an explicit grant from the Simulator tab.
         // Grants run one at a time, and a revoke that lands mid-grant wins.
@@ -420,10 +653,18 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async revokeConsent(kind) {
       await load();
       consentEpoch += 1;
-      consent =
-        kind === "streaming" ? { streaming: false, agentAccess: false } : { ...consent, agentAccess: false };
+      if (kind === "peerSharing") {
+        consent = { ...consent, peerSharing: false };
+        await saveConsent();
+        emit();
+        return snapshot();
+      }
+      consent = kind === "streaming" ? { ...NO_CONSENT } : { ...consent, agentAccess: false };
+      if (kind === "streaming") forgetPeers();
       shimDir = null;
       await saveConsent();
+      // Sharing ends before the hub stops, so relays close first.
+      emit();
       if (kind === "streaming") await stopHost();
       else await host.stopAgent();
       // The per-host configs hold the daemon token.
@@ -433,19 +674,45 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async refresh() {
       await load();
-      if (!consent.streaming) return snapshot();
-      const ready = host.current() ?? (await start(false));
-      if (!ready) return snapshot();
-      try {
-        await listDevices(ready);
-      } catch (error) {
-        setHost({ status: "error", detail: errorMessage(error) });
-      }
+      const peersDone = refreshPeerHosts();
+      await refreshLocalHost();
+      await peersDone;
+      return snapshot();
+    },
+    async refreshLocal() {
+      await load();
+      await refreshLocalHost();
+      return snapshot();
+    },
+    async refreshPeers() {
+      await load();
+      await refreshPeerHosts();
       return snapshot();
     },
     async open(input) {
       await load();
       const hostId = input.hostId ?? host.id;
+      if (hostId !== host.id) {
+        const entry = requirePeer(hostId);
+        if (!entry.devices.some((device) => device.id === input.deviceId)) {
+          throw new Error("That simulator is no longer available.");
+        }
+        const opened = await peerPort().open(hostId, input.deviceId);
+        entry.devices = entry.devices.map((device) =>
+          device.id === opened.id ? { ...opened, hostId, platform: "ios" } : device,
+        );
+        const existing = sessions.find(
+          (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === opened.id,
+        );
+        if (existing) {
+          emit();
+          return { ...existing };
+        }
+        const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: opened.id, openedBy: input.openedBy };
+        sessions = [...sessions, session];
+        emit();
+        return { ...session };
+      }
       const ready = requireReady(hostId);
       const existing = sessions.find(
         (session) =>
@@ -457,17 +724,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
       }
       if (!device) throw new Error("That simulator is no longer available.");
-      if (!device.booted) {
-        await postHubJson(
-          ready,
-          "/api/devices/boot",
-          { platform: "ios", id: device.id, name: device.name },
-          DEVICE_BOOT_TIMEOUT_MS,
-        );
-        devices = devices.map((candidate) => (candidate === device ? { ...candidate, booted: true } : candidate));
-      }
-      // The stream helper must be attached even when the simulator was already booted.
-      await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: device.id }, HUB_REQUEST_TIMEOUT_MS);
+      await attach(ready, device);
       if (existing) {
         emit();
         return { ...existing };
@@ -483,7 +740,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         (session) =>
           !(session.chatId === input.chatId && session.hostId === input.hostId && session.deviceId === input.deviceId),
       );
-      if (input.shutdown) {
+      if (input.shutdown && input.hostId !== host.id) {
+        const entry = requirePeer(input.hostId);
+        await peerPort().shutdown(input.hostId, input.deviceId);
+        entry.devices = entry.devices.map((device) =>
+          device.id === input.deviceId ? { ...device, booted: false } : device,
+        );
+      } else if (input.shutdown) {
         const ready = requireReady(input.hostId);
         await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
         devices = devices.map((device) =>
@@ -503,6 +766,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async action(input) {
       await load();
+      if (input.hostId !== host.id) {
+        requirePeerDevice(input.hostId, input.deviceId);
+        return peerPort().action(input.hostId, input);
+      }
       const ready = requireReady(input.hostId);
       requireKnownDevice(input.hostId, input.deviceId);
       await runDeviceAction(ready, input);
@@ -510,6 +777,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async settings(input) {
       await load();
+      if (input.hostId !== host.id) {
+        requirePeerDevice(input.hostId, input.deviceId);
+        return peerPort().settings(input.hostId, input.deviceId);
+      }
       const ready = requireReady(input.hostId);
       requireKnownDevice(input.hostId, input.deviceId);
       return readDeviceSettings(ready, input.deviceId);
@@ -518,6 +789,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       sessions.filter((session) => session.chatId === chatId).map((session) => ({ ...session })),
     async screenshot(input) {
       await load();
+      if (input.hostId !== host.id) {
+        requirePeer(input.hostId);
+        return peerPort().screenshot(input.hostId, input.deviceId);
+      }
       const ready = requireReady(input.hostId);
       const response = await postHub(
         ready,
@@ -532,8 +807,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async streamGrant() {
       await load();
-      requireReady(host.id);
-      proxy ??= deps.startProxy((hostId) => (hostId === host.id ? (host.current()?.hub.origin ?? null) : null));
+      const localReady = consent.streaming && host.current() !== null;
+      const peerReady = consent.streaming && [...peers.values()].some((entry) => entry.state.status === "ready");
+      if (!localReady && !peerReady) requireReady(host.id);
+      proxy ??= deps.startProxy((hostId) => {
+        if (hostId === host.id) return consent.streaming ? (host.current()?.hub.origin ?? null) : null;
+        // A paired Mac is reachable only after a refresh reported it ready.
+        if (!consent.streaming || peers.get(hostId)?.state.status !== "ready" || !deps.peers) return null;
+        return deps.peers.upstream(hostId);
+      });
       try {
         return (await proxy).mintGrant();
       } catch (error) {
@@ -583,9 +865,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       revealListeners.add(listener);
       return () => revealListeners.delete(listener);
     },
+    shareHost: () => share,
     async stop() {
+      for (const listener of sharingListeners) listener(false);
+      sharingListeners.clear();
       await stopHost();
       shimDir = null;
+      peers.clear();
       listeners.clear();
       revealListeners.clear();
     },

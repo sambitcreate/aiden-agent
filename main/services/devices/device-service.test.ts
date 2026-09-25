@@ -10,7 +10,8 @@ import {
   type DeviceHost,
   type DeviceHostReady,
 } from "./device-host.js";
-import type { DeviceHubProxy } from "./device-hub-proxy.js";
+import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
+import type { DevicePeerPort, PeerSimulatorListing } from "./peer-devices.js";
 import { createDeviceService, parseSimctlDevices, type DeviceServiceDeps } from "./device-service.js";
 
 const IPHONE = "5C1E4B7A-0000-4000-8000-000000000001";
@@ -228,7 +229,7 @@ test("loading never starts or installs anything", async () => {
   await withService(async ({ service, host }) => {
     const state = await service.load();
     assert.equal(state.hostStatus, "needs-consent");
-    assert.deepEqual(state.consent, { streaming: false, agentAccess: false });
+    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
     assert.deepEqual(state.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
     assert.equal((await service.refresh()).hostStatus, "needs-consent");
     assert.deepEqual(host.calls, []);
@@ -252,6 +253,7 @@ test("streaming consent persists, installs, starts, and lists simulators", async
         version: 1,
         streaming: true,
         agentAccess: false,
+        peerSharing: false,
       });
       const statuses = states.map((entry) => entry.hostStatus);
       assert.deepEqual([...new Set(statuses)], ["needs-consent", "installing", "starting", "ready"]);
@@ -428,12 +430,13 @@ test("revoking agent access stops only the agent; revoking streaming stops the h
         version: 1,
         streaming: false,
         agentAccess: false,
+        peerSharing: false,
       });
     },
   );
   await withService(
     async ({ service }) => {
-      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false });
+      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false });
     },
     { consent: { streaming: false, agentAccess: true } },
   );
@@ -584,6 +587,7 @@ test("concurrent consent saves never collide on a temp file", async () => {
         version: 1,
         streaming: false,
         agentAccess: false,
+        peerSharing: false,
       });
       assert.deepEqual((await readdir(baseDir)).filter((name) => name.endsWith(".tmp")), []);
     },
@@ -634,4 +638,192 @@ test("a failing simulator listing reports an error instead of throwing", async (
     },
     { consent: { streaming: true }, listCode: 1 },
   );
+});
+
+const PEER_PHONE = "5C1E4B7A-0000-4000-8000-0000000000AA";
+
+function fakePeers(listings: Record<string, PeerSimulatorListing | null | Error>) {
+  const calls: string[] = [];
+  const port: DevicePeerPort = {
+    hosts: async () => {
+      calls.push("hosts");
+      return Object.keys(listings).map((id) => ({ id, name: `Mac ${id}` }));
+    },
+    list: async (hostId) => {
+      calls.push(`list:${hostId}`);
+      const listing = listings[hostId];
+      if (listing instanceof Error) throw listing;
+      return listing ?? null;
+    },
+    open: async (hostId, deviceId) => {
+      calls.push(`open:${hostId}:${deviceId}`);
+      return { id: deviceId, name: "iPhone 17", version: "iOS 27.0", booted: true, kind: "iphone" };
+    },
+    shutdown: async (hostId, deviceId) => {
+      calls.push(`shutdown:${hostId}:${deviceId}`);
+    },
+    settings: async () => ({}),
+    action: async () => ({}),
+    screenshot: async () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    upstream: async (hostId) => ({
+      origin: `https://${hostId}.local:47831`,
+      basePath: "/simulators/hub",
+      headers: { authorization: "Bearer secret" },
+      tls: { rejectUnauthorized: true, checkServerIdentity: () => undefined },
+    }),
+  };
+  return { port, calls };
+}
+
+async function withPeers(
+  listings: Record<string, PeerSimulatorListing | null | Error>,
+  consent: object,
+  run: (context: {
+    service: ReturnType<typeof createDeviceService>;
+    peers: ReturnType<typeof fakePeers>;
+    resolve: () => (hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>;
+  }) => Promise<void>,
+) {
+  const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-peers-"));
+  await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(consent));
+  const peers = fakePeers(listings);
+  let resolver: ((hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>) | null = null;
+  const service = createDeviceService({
+    baseDir,
+    host: fakeHost().host,
+    fetch: fakeFetch().fetch,
+    peers: peers.port,
+    startProxy: async (resolveHub) => {
+      resolver = resolveHub;
+      return {
+        origin: "http://127.0.0.1:53000",
+        mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        close: async () => undefined,
+      } satisfies DeviceHubProxy;
+    },
+  });
+  try {
+    await run({
+      service,
+      peers,
+      resolve: () => {
+        assert.ok(resolver, "the proxy started");
+        return resolver;
+      },
+    });
+  } finally {
+    await service.stop();
+    await rm(baseDir, { recursive: true, force: true });
+  }
+}
+
+const READY_LISTING: PeerSimulatorListing = {
+  sharing: true,
+  status: "ready",
+  devices: [{ id: PEER_PHONE, name: "iPhone 17", version: "iOS 27.0", booted: false, kind: "iphone" }],
+};
+
+test("a refresh lists paired Macs after this Mac, and reports why a Mac has no devices", async () => {
+  await withPeers(
+    {
+      studio: READY_LISTING,
+      laptop: { sharing: false, status: "ready", devices: [] },
+      office: new Error("ECONNREFUSED 10.0.0.4"),
+      old: null,
+    },
+    { streaming: true },
+    async ({ service, peers }) => {
+      const state = await service.refresh();
+      assert.deepEqual(
+        state.hosts.map((host) => [host.id, host.kind, host.status]),
+        [
+          ["local", "local", "ready"],
+          ["studio", "peer", "ready"],
+          ["laptop", "peer", "needs-consent"],
+          ["office", "peer", "unavailable"],
+        ],
+      );
+      assert.equal(state.hosts.find((host) => host.id === "office")?.detail, "Could not reach Mac office.");
+      assert.match(state.hosts.find((host) => host.id === "laptop")?.detail ?? "", /sharing is off on Mac laptop/u);
+      assert.deepEqual(
+        state.devices.filter((device) => device.hostId === "studio").map((device) => device.id),
+        [PEER_PHONE],
+      );
+      assert.ok(peers.calls.includes("list:old"));
+    },
+  );
+});
+
+test("paired Macs are never contacted without streaming consent or from a local refresh", async () => {
+  await withPeers({ studio: READY_LISTING }, {}, async ({ service, peers }) => {
+    await service.refresh();
+    await service.refreshPeers();
+    assert.deepEqual(peers.calls, []);
+    await assert.rejects(service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" }));
+  });
+  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
+    const state = await service.refreshLocal();
+    assert.deepEqual(peers.calls, []);
+    assert.deepEqual(state.hosts.map((host) => host.id), ["local"]);
+  });
+});
+
+test("opening a paired Mac's simulator goes through the peer, and revoking streaming forgets it", async () => {
+  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers, resolve }) => {
+    await service.refreshPeers();
+    await assert.rejects(
+      service.open({ chatId: "c", hostId: "studio", deviceId: IPHONE, openedBy: "user" }),
+      /no longer available/u,
+    );
+    const session = await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+    assert.deepEqual(session, { chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+    assert.ok(peers.calls.includes(`open:studio:${PEER_PHONE}`));
+    assert.equal(service.state().devices.find((device) => device.id === PEER_PHONE)?.booted, true);
+
+    await service.streamGrant();
+    const upstream = (await resolve()("studio")) as { origin: string } | null;
+    assert.equal(upstream?.origin, "https://studio.local:47831");
+    assert.equal(await resolve()("unknown"), null);
+
+    await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, shutdown: true });
+    assert.ok(peers.calls.includes(`shutdown:studio:${PEER_PHONE}`));
+    await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+
+    const state = await service.revokeConsent("streaming");
+    assert.deepEqual(state.hosts.map((host) => host.id), ["local"]);
+    assert.deepEqual(state.sessions, []);
+    assert.equal(await resolve()("studio"), null);
+  });
+});
+
+test("paired Macs reach this Mac's simulators only while streaming and sharing are both on", async () => {
+  await withPeers({}, { streaming: true }, async ({ service }) => {
+    const share = service.shareHost();
+    const changes: boolean[] = [];
+    share.onSharingChanged((sharing) => changes.push(sharing));
+    await service.refresh();
+    assert.equal(share.sharing(), false);
+    assert.deepEqual(await share.list(), { sharing: false, status: "ready", devices: [] });
+    assert.equal(share.hubOrigin(), null);
+    assert.equal(share.isKnownDevice(IPHONE), false);
+    await assert.rejects(share.open(IPHONE), /sharing is off/u);
+
+    await service.grantConsent("peerSharing");
+    assert.equal(share.sharing(), true);
+    const listing = await share.list();
+    assert.equal(listing.sharing, true);
+    assert.ok(listing.devices.some((device) => device.id === IPHONE));
+    assert.ok(listing.devices.every((device) => !("hostId" in device)));
+    assert.equal(share.hubOrigin(), "http://127.0.0.1:52000");
+    assert.equal(share.isKnownDevice(IPHONE), true);
+    assert.equal(share.isKnownDevice("NOT-LISTED"), false);
+
+    await service.revokeConsent("peerSharing");
+    assert.equal(share.sharing(), false);
+    await service.grantConsent("peerSharing");
+    await service.revokeConsent("streaming");
+    assert.deepEqual(changes, [true, false, true, false]);
+    assert.equal(service.state().consent.peerSharing, false);
+    await assert.rejects(service.grantConsent("peerSharing"), /Set up simulator streaming/u);
+  });
 });

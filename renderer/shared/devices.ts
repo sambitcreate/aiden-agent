@@ -1,7 +1,10 @@
 /** Simulator devices cross the renderer ↔ main boundary only through these fail-closed shapes. */
 export type DevicePlatform = "ios";
-export type DeviceHostKind = "local" | "ssh";
+/** `peer` is a paired Aiden desktop sharing its simulators (Phase 5). */
+export type DeviceHostKind = "local" | "peer" | "ssh";
 export const LOCAL_DEVICE_HOST_ID = "local";
+/** Local is `local`; a paired desktop uses its Aiden Remote instance ID. */
+export const DEVICE_HOST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
 export type DeviceKind = "iphone" | "ipad" | "other";
 export interface DeviceSummary {
   hostId: string;
@@ -24,10 +27,12 @@ export const DEVICE_HOST_STATUSES = [
   "error",
 ] as const;
 export type DeviceHostStatus = (typeof DEVICE_HOST_STATUSES)[number];
-export type DeviceConsentKind = "streaming" | "agentAccess";
+export type DeviceConsentKind = "streaming" | "agentAccess" | "peerSharing";
 export interface DeviceConsent {
   streaming: boolean;
   agentAccess: boolean;
+  /** Lets paired desktops holding `simulators:control` watch and control this Mac's simulators. */
+  peerSharing: boolean;
 }
 export interface DeviceSession {
   chatId: string;
@@ -39,9 +44,16 @@ export interface DeviceHostState {
   status: DeviceHostStatus;
   detail?: string;
 }
+/** One device host the Simulator tab can show, local first. */
+export interface DeviceHostInfo extends DeviceHostState {
+  id: string;
+  kind: DeviceHostKind;
+  name: string;
+}
 export interface DeviceServiceState {
   hostStatus: DeviceHostStatus;
   hostStatuses: Record<string, DeviceHostState>;
+  hosts: DeviceHostInfo[];
   consent: DeviceConsent;
   devices: DeviceSummary[];
   sessions: DeviceSession[];
@@ -81,10 +93,23 @@ function parseHostState(value: unknown): DeviceHostState | null {
   return value.detail === undefined ? { status } : { status, detail: value.detail };
 }
 
+function isHostId(value: unknown): value is string {
+  return typeof value === "string" && DEVICE_HOST_ID_PATTERN.test(value);
+}
+
+function parseHostInfo(value: unknown): DeviceHostInfo | null {
+  if (!isRecord(value)) return null;
+  const state = parseHostState(value);
+  const { id, kind, name } = value;
+  if (!state || !isHostId(id) || !nonEmptyString(name)) return null;
+  if (kind !== "local" && kind !== "peer" && kind !== "ssh") return null;
+  return { id, kind, name, ...state };
+}
+
 function parseDevice(value: unknown): DeviceSummary | null {
   if (!isRecord(value)) return null;
   const { hostId, id, name, platform, version, booted, kind } = value;
-  if (!nonEmptyString(hostId) || !nonEmptyString(id) || !nonEmptyString(name)) return null;
+  if (!isHostId(hostId) || !nonEmptyString(id) || !nonEmptyString(name)) return null;
   if (platform !== "ios" || typeof version !== "string" || typeof booted !== "boolean") return null;
   if (kind !== "iphone" && kind !== "ipad" && kind !== "other") return null;
   return { hostId, id, name, platform, version, booted, kind };
@@ -93,7 +118,7 @@ function parseDevice(value: unknown): DeviceSummary | null {
 function parseSession(value: unknown): DeviceSession | null {
   if (!isRecord(value)) return null;
   const { chatId, hostId, deviceId, openedBy } = value;
-  if (!nonEmptyString(chatId) || !nonEmptyString(hostId) || !nonEmptyString(deviceId)) return null;
+  if (!nonEmptyString(chatId) || !isHostId(hostId) || !nonEmptyString(deviceId)) return null;
   if (openedBy !== "user" && openedBy !== "agent") return null;
   return { chatId, hostId, deviceId, openedBy };
 }
@@ -123,13 +148,15 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
   if (
     !isRecord(consent) ||
     typeof consent.streaming !== "boolean" ||
-    typeof consent.agentAccess !== "boolean"
+    typeof consent.agentAccess !== "boolean" ||
+    typeof consent.peerSharing !== "boolean"
   ) {
     return null;
   }
+  const hosts = parseList(value.hosts, parseHostInfo);
   const devices = parseList(value.devices, parseDevice);
   const sessions = parseList(value.sessions, parseSession);
-  if (!devices || !sessions) return null;
+  if (!hosts || !devices || !sessions) return null;
   const toolVersions = value.toolVersions;
   if (
     !isRecord(toolVersions) ||
@@ -144,7 +171,12 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
   return {
     hostStatus,
     hostStatuses,
-    consent: { streaming: consent.streaming, agentAccess: consent.agentAccess },
+    hosts,
+    consent: {
+      streaming: consent.streaming,
+      agentAccess: consent.agentAccess,
+      peerSharing: consent.peerSharing,
+    },
     devices,
     sessions,
     toolVersions: { hub: toolVersions.hub, agent: toolVersions.agent },
@@ -289,7 +321,7 @@ function inRange(value: unknown, limit: number): value is number {
 export function parseDeviceActionInput(value: unknown): DeviceActionInput | null {
   if (!isRecord(value)) return null;
   const { hostId, deviceId, type } = value;
-  if (typeof hostId !== "string" || !DEVICE_ID_PATTERN.test(hostId)) return null;
+  if (!isHostId(hostId)) return null;
   if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) return null;
   const target = { hostId, deviceId };
   switch (type) {

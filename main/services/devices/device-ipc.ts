@@ -7,6 +7,7 @@
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import type { DeviceService } from "./device-service.js";
 import {
+  DEVICE_HOST_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
   parseDeviceActionInput,
   type DeviceConsentKind,
@@ -32,6 +33,13 @@ function requireId(value: unknown, label: string): string {
   return value;
 }
 
+function requireHostId(value: unknown): string {
+  if (typeof value !== "string" || !DEVICE_HOST_ID_PATTERN.test(value)) {
+    throw new Error("A valid device host is required.");
+  }
+  return value;
+}
+
 function requireChatId(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > CHAT_ID_MAX_LENGTH) {
     throw new Error("A valid chat is required for a simulator session.");
@@ -40,7 +48,9 @@ function requireChatId(value: unknown): string {
 }
 
 function requireConsentKind(value: unknown): DeviceConsentKind {
-  if (value !== "streaming" && value !== "agentAccess") throw new Error("Unknown simulator consent.");
+  if (value !== "streaming" && value !== "agentAccess" && value !== "peerSharing") {
+    throw new Error("Unknown simulator consent.");
+  }
   return value;
 }
 
@@ -99,9 +109,18 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
   );
   deps.handle(
     "devices:refresh",
+    guarded(async (service, owner, [scope]) => {
+      // Opening the tab refreshes this Mac only; paired Macs are contacted from an explicit refresh.
+      if (scope !== undefined && scope !== "local") throw new Error("Invalid simulator request.");
+      subscribe(owner, service);
+      return scope === "local" ? service.refreshLocal() : service.refresh();
+    }),
+  );
+  deps.handle(
+    "devices:refresh-peers",
     guarded(async (service, owner) => {
       subscribe(owner, service);
-      return service.refresh();
+      return service.refreshPeers();
     }),
   );
   deps.handle(
@@ -110,7 +129,7 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
       const request = requireRecord(input);
       return service.open({
         chatId: requireChatId(request.chatId),
-        hostId: request.hostId === undefined ? LOCAL_DEVICE_HOST_ID : requireId(request.hostId, "device host"),
+        hostId: request.hostId === undefined ? LOCAL_DEVICE_HOST_ID : requireHostId(request.hostId),
         deviceId: requireId(request.deviceId, "simulator"),
         openedBy: "user",
       });
@@ -125,7 +144,7 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
       }
       await service.close({
         chatId: requireChatId(request.chatId),
-        hostId: requireId(request.hostId, "device host"),
+        hostId: requireHostId(request.hostId),
         deviceId: requireId(request.deviceId, "simulator"),
         shutdown: request.shutdown === true,
       });
@@ -144,7 +163,7 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     guarded(async (service, _owner, [input]) => {
       const request = requireRecord(input);
       return service.settings({
-        hostId: requireId(request.hostId, "device host"),
+        hostId: requireHostId(request.hostId),
         deviceId: requireId(request.deviceId, "simulator"),
       });
     }),
@@ -154,7 +173,7 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
     guarded(async (service, _owner, [input]) => {
       const request = requireRecord(input);
       const png = await service.screenshot({
-        hostId: requireId(request.hostId, "device host"),
+        hostId: requireHostId(request.hostId),
         deviceId: requireId(request.deviceId, "simulator"),
       });
       // A plain Uint8Array survives structured clone without Buffer's pooled backing store.

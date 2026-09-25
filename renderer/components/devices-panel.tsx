@@ -1,9 +1,15 @@
 import * as React from "react";
-import { LoaderCircle, RefreshCw, Smartphone, Tablet, TriangleAlert } from "lucide-react";
+import { LoaderCircle, Monitor, RefreshCw, Smartphone, Tablet, TriangleAlert } from "lucide-react";
 import { Button, Switch, Text, toast } from "./ui";
 import { DeviceViewer } from "./device-viewer";
 import { devicesApi } from "../lib/ipc";
-import type { DeviceServiceState, DeviceSession, DeviceSummary } from "../shared/devices";
+import {
+  LOCAL_DEVICE_HOST_ID,
+  type DeviceHostInfo,
+  type DeviceServiceState,
+  type DeviceSession,
+  type DeviceSummary,
+} from "../shared/devices";
 
 export interface DevicesPanelProps {
   workspaceId: string;
@@ -23,10 +29,15 @@ export interface DevicesPanelViewProps {
   error: string | null;
   onSetup(): void;
   onStart(): void;
+  /** Refreshes this Mac and every paired Mac. */
   onRefresh(): void;
+  /** Contacts paired Macs only. */
+  onRefreshPeers(): void;
   onOpen(device: DeviceSummary): void;
   /** Grants or revokes agent access. Granting installs agent-device from npm. */
   onAgentAccess(granted: boolean): void;
+  /** Lets paired Macs that were granted simulator control view and drive this Mac's simulators. */
+  onPeerSharing(granted: boolean): void;
   /** Renders the live viewer for the open session. */
   viewer?: (session: DeviceSession, device: DeviceSummary) => React.ReactNode;
 }
@@ -48,12 +59,20 @@ function Empty({ icon, title, children }: { icon: React.ReactNode; title: string
   );
 }
 
-function AgentAccessRow({
+function ConsentRow({
+  id,
+  label,
+  description,
+  pendingKey,
   granted,
   pending,
   compact,
   onChange,
 }: {
+  id: string;
+  label: string;
+  description: string;
+  pendingKey: string;
   granted: boolean;
   pending: string | null;
   compact: boolean;
@@ -62,46 +81,153 @@ function AgentAccessRow({
   return (
     <div className="devices-agent-access">
       <span className="min-w-0 flex-1">
-        <Text id="devices-agent-access-label" variant="small-strong" className="block">
-          Let Aiden use simulators
+        <Text id={`${id}-label`} variant="small-strong" className="block">
+          {label}
         </Text>
-        <Text
-          id="devices-agent-access-description"
-          variant="small"
-          color="secondary"
-          className={compact ? "sr-only" : "block"}
-        >
-          In chats, Aiden can open a simulator here and tap, type, and install apps with agent-device while you
-          watch. Turning this on installs agent-device from npm.
+        <Text id={`${id}-description`} variant="small" color="secondary" className={compact ? "sr-only" : "block"}>
+          {description}
         </Text>
       </span>
-      {pending === "agent" ? (
+      {pending === pendingKey ? (
         <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
       ) : null}
       <Switch
         checked={granted}
         disabled={pending !== null}
-        aria-labelledby="devices-agent-access-label"
-        aria-describedby="devices-agent-access-description"
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-description`}
         onCheckedChange={onChange}
       />
     </div>
   );
 }
 
-function DeviceList({
+const LOCAL_STATUS_NOTES: Partial<Record<DeviceHostInfo["status"], string>> = {
+  "needs-consent": "Simulator streaming is not set up on this Mac.",
+  installing: "Installing simulator helpers…",
+  starting: "Starting simulator helpers…",
+  stopped: "The simulator helpers are installed but not running.",
+  unavailable: "Simulators are unavailable on this Mac.",
+  error: "The simulator helpers stopped.",
+};
+
+/** Why a host lists no devices right now, or null when it is ready. */
+function hostNote(host: DeviceHostInfo): string | null {
+  if (host.status === "ready") return null;
+  if (host.detail) return host.detail;
+  if (host.kind === "local") return LOCAL_STATUS_NOTES[host.status] ?? null;
+  return `${host.name} is not sharing simulators right now.`;
+}
+
+function DeviceRows({
   devices,
   chatId,
   pending,
   onOpen,
-  onRefresh,
 }: {
   devices: DeviceSummary[];
   chatId?: string;
   pending: string | null;
   onOpen(device: DeviceSummary): void;
-  onRefresh(): void;
 }) {
+  return (
+    <ul className="devices-list-rows">
+      {devices.map((device) => {
+        const opening = pending === `${device.hostId}:${device.id}`;
+        return (
+          <li key={`${device.hostId}:${device.id}`} className="devices-list-row">
+            {device.kind === "ipad" ? <Tablet aria-hidden /> : <Smartphone aria-hidden />}
+            <span className="min-w-0 flex-1">
+              <Text variant="small-strong" className="block truncate">
+                {device.name}
+              </Text>
+              <Text variant="small" color="secondary" className="block truncate">
+                {device.version}
+                {device.booted ? " · Booted" : ""}
+              </Text>
+            </span>
+            <Button
+              variant="muted"
+              size="small"
+              disabled={!chatId || pending !== null}
+              aria-label={`${device.booted ? "Open" : "Boot and open"} ${device.name}`}
+              onClick={() => onOpen(device)}
+            >
+              {opening ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+              {device.booted ? "Open" : "Boot & open"}
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function HostGroup({
+  host,
+  devices,
+  chatId,
+  pending,
+  onOpen,
+  onRefreshPeers,
+}: {
+  host: DeviceHostInfo;
+  devices: DeviceSummary[];
+  chatId?: string;
+  pending: string | null;
+  onOpen(device: DeviceSummary): void;
+  onRefreshPeers(): void;
+}) {
+  const titleId = `devices-host-${host.id.replace(/[^A-Za-z0-9_-]/gu, "-")}`;
+  const note = hostNote(host);
+  return (
+    <section aria-labelledby={titleId} className="devices-host-group">
+      <header className="devices-host-header">
+        <Monitor aria-hidden />
+        <Text id={titleId} variant="small-strong" className="min-w-0 flex-1 truncate">
+          {host.name}
+        </Text>
+        {host.kind === "peer" && host.status !== "ready" ? (
+          <Button variant="transparent" size="small" disabled={pending !== null} onClick={onRefreshPeers}>
+            {pending === "peers" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+            Try again
+          </Button>
+        ) : null}
+      </header>
+      {note ? (
+        <Text variant="small" color="secondary" className="devices-list-note">
+          {note}
+        </Text>
+      ) : devices.length === 0 ? (
+        <Text variant="small" color="secondary" className="devices-list-note">
+          No iOS simulators found on {host.kind === "local" ? "this Mac" : host.name}.
+        </Text>
+      ) : (
+        <DeviceRows devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
+      )}
+    </section>
+  );
+}
+
+function DeviceList({
+  hosts,
+  devices,
+  chatId,
+  pending,
+  onOpen,
+  onRefresh,
+  onRefreshPeers,
+}: {
+  hosts: DeviceHostInfo[];
+  devices: DeviceSummary[];
+  chatId?: string;
+  pending: string | null;
+  onOpen(device: DeviceSummary): void;
+  onRefresh(): void;
+  onRefreshPeers(): void;
+}) {
+  // A lone Mac keeps the flat list; paired Macs add one group per host, this Mac first.
+  const grouped = hosts.some((host) => host.kind === "peer");
   return (
     <section aria-labelledby="devices-list-title" className="devices-list">
       <header className="devices-list-header">
@@ -112,7 +238,7 @@ function DeviceList({
           variant="transparent"
           size="small"
           aria-label="Refresh simulators"
-          title="Refresh simulators"
+          title="Refresh simulators on this Mac and paired Macs"
           disabled={pending !== null}
           onClick={onRefresh}
         >
@@ -124,42 +250,24 @@ function DeviceList({
           Open a chat to attach a simulator to it.
         </Text>
       ) : null}
-      {devices.length === 0 ? (
+      {grouped ? (
+        hosts.map((host) => (
+          <HostGroup
+            key={host.id}
+            host={host}
+            devices={devices.filter((device) => device.hostId === host.id)}
+            chatId={chatId}
+            pending={pending}
+            onOpen={onOpen}
+            onRefreshPeers={onRefreshPeers}
+          />
+        ))
+      ) : devices.length === 0 ? (
         <Text variant="small" color="secondary" className="devices-list-note">
           No iOS simulators found. Add one in Xcode under Window → Devices and Simulators.
         </Text>
       ) : (
-        <ul className="devices-list-rows">
-          {devices.map((device) => {
-            const opening = pending === device.id;
-            return (
-              <li key={`${device.hostId}:${device.id}`} className="devices-list-row">
-                {device.kind === "ipad" ? <Tablet aria-hidden /> : <Smartphone aria-hidden />}
-                <span className="min-w-0 flex-1">
-                  <Text variant="small-strong" className="block truncate">
-                    {device.name}
-                  </Text>
-                  <Text variant="small" color="secondary" className="block truncate">
-                    {device.version}
-                    {device.booted ? " · Booted" : ""}
-                  </Text>
-                </span>
-                <Button
-                  variant="muted"
-                  size="small"
-                  disabled={!chatId || pending !== null}
-                  aria-label={`${device.booted ? "Open" : "Boot and open"} ${device.name}`}
-                  onClick={() => onOpen(device)}
-                >
-                  {opening ? (
-                    <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
-                  ) : null}
-                  {device.booted ? "Open" : "Boot & open"}
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
+        <DeviceRows devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
       )}
     </section>
   );
@@ -175,8 +283,10 @@ export function DevicesPanelView({
   onSetup,
   onStart,
   onRefresh,
+  onRefreshPeers,
   onOpen,
   onAgentAccess,
+  onPeerSharing,
   viewer,
 }: DevicesPanelViewProps) {
   // A narrow panel keeps explanations for assistive technology only; status and errors stay visible.
@@ -189,15 +299,18 @@ export function DevicesPanelView({
       </Empty>
     );
   }
-  const host = state.hostStatuses[Object.keys(state.hostStatuses)[0] ?? ""];
-  const detail = host?.detail;
+  const detail = state.hostStatuses[LOCAL_DEVICE_HOST_ID]?.detail;
+  // Paired Macs stay usable while this Mac's own helpers are unavailable, e.g. without Xcode.
+  const peerReady =
+    state.consent.streaming && state.hosts.some((host) => host.kind === "peer" && host.status === "ready");
+  const status = peerReady ? "ready" : state.hostStatus;
   const errorLine = error ? (
     <Text variant="small" className="text-red" role="alert">
       {error}
     </Text>
   ) : null;
 
-  switch (state.hostStatus) {
+  switch (status) {
     case "disabled":
     case "needs-consent":
       return (
@@ -269,18 +382,36 @@ export function DevicesPanelView({
       return (
         <div className="flex h-full min-h-0 flex-col">
           {errorLine ? <div className="px-3 pt-3">{errorLine}</div> : null}
-          <AgentAccessRow
+          <ConsentRow
+            id="devices-agent-access"
+            label="Let Aiden use simulators"
+            description="In chats, Aiden can open a simulator on this Mac and tap, type, and install apps with agent-device while you watch. Turning this on installs agent-device from npm."
+            pendingKey="agent"
             granted={state.consent.agentAccess}
             pending={pending}
             compact={compact}
             onChange={onAgentAccess}
           />
+          {state.hostStatus === "ready" ? (
+            <ConsentRow
+              id="devices-peer-sharing"
+              label="Share with paired Macs"
+              description="Paired Macs you allowed to control simulators can watch and control this Mac's simulators while Aiden is open. Turning this off disconnects them."
+              pendingKey="peerSharing"
+              granted={state.consent.peerSharing}
+              pending={pending}
+              compact={compact}
+              onChange={onPeerSharing}
+            />
+          ) : null}
           <DeviceList
+            hosts={state.hosts}
             devices={state.devices}
             chatId={chatId}
             pending={pending}
             onOpen={onOpen}
             onRefresh={onRefresh}
+            onRefreshPeers={onRefreshPeers}
           />
         </div>
       );
@@ -321,7 +452,7 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
         // A running hub from earlier in this session lists simulators once, without starting anything.
         if (next.hostStatus === "ready" && !listedRef.current) {
           listedRef.current = true;
-          void devicesApi.refresh().catch(() => undefined);
+          void devicesApi.refresh("local").catch(() => undefined);
         }
       })
       .catch((reason: unknown) => {
@@ -361,12 +492,14 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
       pending={pending}
       error={error}
       onSetup={() => void run("setup", () => devicesApi.setConsent("streaming", true))}
-      onStart={() => void run("start", () => devicesApi.refresh())}
+      onStart={() => void run("start", () => devicesApi.refresh("local"))}
       onRefresh={() => void run("refresh", () => devicesApi.refresh())}
+      onRefreshPeers={() => void run("peers", () => devicesApi.refreshPeers())}
       onAgentAccess={(granted) => void run("agent", () => devicesApi.setConsent("agentAccess", granted))}
+      onPeerSharing={(granted) => void run("peerSharing", () => devicesApi.setConsent("peerSharing", granted))}
       onOpen={(device) =>
         chatId
-          ? void run(device.id, () =>
+          ? void run(`${device.hostId}:${device.id}`, () =>
               devicesApi.open({ chatId, hostId: device.hostId, deviceId: device.id }),
             )
           : undefined

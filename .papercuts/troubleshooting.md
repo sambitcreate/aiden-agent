@@ -1013,3 +1013,10 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - `String.prototype.replaceAll` also fails `tsc` under the old lib; use `split().join()`.
 - `assert.throws(fn, /regex/)` matches against `String(error)`, which includes `Error: `. Anchor as `/^Error: …$/u`, not `/^…$/u`.
 - A fixed `consent.json.<pid>.tmp` let two saves racing each other rename a partial file. Chain the saves and use a unique temp name.
+
+## 2026-09-25 — Simulator devices Phase 5 (paired Macs)
+
+- The desktop protocol test compared the shared mobile fixture with the full capability list. A desktop-only capability must stay out of that fixture, because iOS checks fixture capabilities against its `v1Known` list. Compare with the vocabulary minus the desktop-only members instead.
+- `openapi.json` mixes inline and expanded arrays, so `json.dumps` rewrote about 2,600 lines. Edit it by inserting text at object boundaries.
+- `PeerTransport` maps 401/403 to `authentication_required`, not `request_failed` with a status. Tests that fake an auth failure must use that code.
+- Raw-socket WebSocket tests can read the refusal status line directly. `createAidenRemoteUpgradeHandler` writes `HTTP/1.1 403 Refused`, not `Forbidden`.

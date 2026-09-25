@@ -771,7 +771,11 @@ export const devicesApi = {
   getState: () => invokeDeviceState("devices:get-state"),
   setConsent: (kind: DeviceConsentKind, granted: boolean) =>
     invokeDeviceState("devices:consent", kind, granted),
-  refresh: () => invokeDeviceState("devices:refresh"),
+  /** Refreshes this Mac and paired Macs; `"local"` never contacts paired Macs. */
+  refresh: (scope?: "local") =>
+    scope ? invokeDeviceState("devices:refresh", scope) : invokeDeviceState("devices:refresh"),
+  /** Contacts paired Macs only when the user asks. */
+  refreshPeers: () => invokeDeviceState("devices:refresh-peers"),
   open: (input: { chatId: string; deviceId: string; hostId?: string }) =>
     invoke<DeviceSession>("devices:open", input),
   close: (input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }) =>

@@ -14,6 +14,9 @@ import {
   resolveNpm,
 } from "../services/devices/device-toolchain.js";
 import { devicesEnabled } from "../services/devices/feature-flag.js";
+import { registerSimulatorShareHost } from "../services/devices/device-share.js";
+import { createPeerDevices } from "../services/devices/peer-devices.js";
+import { getPeerHostRegistry } from "../services/peer-host-service-main.js";
 import {
   createLocalDeviceHost,
   defaultLocalDeviceHostDeps,
@@ -49,6 +52,12 @@ function defaultDeviceService(): DeviceService {
   deviceService = createDeviceService({
     baseDir,
     host,
+    // The registry is created on first use, from a user-driven refresh.
+    peers: createPeerDevices({
+      list: () => getPeerHostRegistry().list(),
+      request: (id, input) => getPeerHostRegistry().request(id, input),
+      relayTarget: (id) => getPeerHostRegistry().relayTarget(id),
+    }),
     startProxy: (resolveHub) =>
       startDeviceHubProxy({ resolveHub, allowedOrigins: proxyAllowedOrigins() }),
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
@@ -75,6 +84,8 @@ export async function shutdownDevices(): Promise<void> {
 }
 
 export function registerDeviceHandlers(): void {
+  // Paired Macs reach this Mac's simulators only while the flag and the owner's sharing consent are on.
+  registerSimulatorShareHost(() => (devicesEnabled() ? defaultDeviceService().shareHost() : null));
   registerDeviceHandlersWith({
     handle: (channel, listener) =>
       ipcMain.handle(channel, (event, ...args) => listener(event, ...args)),

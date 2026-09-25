@@ -132,7 +132,8 @@ export function pickDevice(
 
 /** What the tools need from the device service. Main binds it; model input cannot retarget the chat. */
 export interface DeviceToolPort {
-  refresh(): Promise<DeviceServiceState>;
+  /** Refreshes this Mac only; agent tools never contact paired Macs. */
+  refreshLocal(): Promise<DeviceServiceState>;
   state(): DeviceServiceState;
   open(input: { chatId: string; hostId: string; deviceId: string; openedBy: "agent" }): Promise<DeviceSession>;
   close(input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }): Promise<void>;
@@ -164,10 +165,15 @@ const id = (description: string) =>
 const hostId = id("Device host. Defaults to this Mac (\"local\").");
 const deviceId = id("Simulator UDID from device_list.");
 
+/** Agents see and drive this Mac's simulators only; paired Macs stay user-driven. */
 function requireState(state: DeviceServiceState): DeviceServiceState {
   if (state.hostStatus === "needs-consent" || !state.consent.streaming) throw new Error(DEVICE_SUPPORT_OFF);
   if (!state.consent.agentAccess) throw new Error(DEVICE_ACCESS_OFF);
-  return state;
+  return {
+    ...state,
+    devices: state.devices.filter((device) => device.hostId === LOCAL_DEVICE_HOST_ID),
+    sessions: state.sessions.filter((session) => session.hostId === LOCAL_DEVICE_HOST_ID),
+  };
 }
 
 export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] {
@@ -211,7 +217,7 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     const requestedDevice = typeof args.deviceId === "string" ? args.deviceId : undefined;
 
     if (name === "device_list") {
-      const state = requireState(await port.refresh());
+      const state = requireState(await port.refreshLocal());
       return text({
         hostStatus: state.hostStatus,
         ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
@@ -233,14 +239,13 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
 
     if (name === "device_open") {
       let state = requireState(port.state());
-      if (state.devices.length === 0) state = requireState(await port.refresh());
+      if (state.devices.length === 0) state = requireState(await port.refreshLocal());
       live();
       const target = pickDevice(state.devices, { deviceId: requestedDevice, hostId: requestedHost });
       // Consent and agent readiness resolve before anything boots or a session registers.
       const agent = await port.agentTarget({ chatId, hostId: target.hostId, deviceId: target.id });
       live();
-      const alreadyOpen = port
-        .state()
+      const alreadyOpen = requireState(port.state())
         .sessions.some(
           (candidate) =>
             candidate.chatId === chatId && candidate.hostId === target.hostId && candidate.deviceId === target.id,

@@ -21,7 +21,8 @@ function state(hostStatus: DeviceHostStatus, extra: Partial<DeviceServiceState> 
   return {
     hostStatus,
     hostStatuses: { local: { status: hostStatus } },
-    consent: { streaming: hostStatus !== "needs-consent", agentAccess: false },
+    hosts: [{ id: "local", kind: "local", name: "This Mac", status: hostStatus }],
+    consent: { streaming: hostStatus !== "needs-consent", agentAccess: false, peerSharing: false },
     devices: [],
     sessions: [],
     toolVersions: { hub: "0.12.0", agent: "0.21.12" },
@@ -41,8 +42,10 @@ function view(props: Partial<DevicesPanelViewProps>) {
       onSetup={noop}
       onStart={noop}
       onRefresh={noop}
+      onRefreshPeers={noop}
       onOpen={noop}
       onAgentAccess={noop}
+      onPeerSharing={noop}
       {...props}
     />,
   );
@@ -108,12 +111,64 @@ test("agent access is an explicit, labelled switch that discloses the npm instal
   assert.match(off, /aria-labelledby="devices-agent-access-label"/u);
   assert.match(off, /installs agent-device from npm/u);
   const on = view({
-    state: state("ready", { devices: [IPHONE], consent: { streaming: true, agentAccess: true } }),
+    state: state("ready", { devices: [IPHONE], consent: { streaming: true, agentAccess: true, peerSharing: false } }),
     pending: "agent",
   });
   assert.match(on, /role="switch" aria-checked="true"/u);
   assert.match(on, /disabled=""[^>]*aria-labelledby="devices-agent-access-label"|aria-labelledby="devices-agent-access-label"[^>]*disabled=""/u);
   assert.match(view({ state: state("ready"), compact: true }), /class="[^"]*\bsr-only"[^>]*>In chats, Aiden can open/u);
+});
+
+const PEER_PHONE: DeviceSummary = { ...IPHONE, hostId: "peer:studio", name: "iPhone 17" };
+
+test("a lone Mac keeps the flat list while paired Macs group devices by host", () => {
+  const flat = view({ state: state("ready", { devices: [IPHONE] }) });
+  assert.doesNotMatch(flat, /devices-host-group/u);
+  const grouped = view({
+    state: state("ready", {
+      devices: [IPHONE, PEER_PHONE],
+      hosts: [
+        { id: "local", kind: "local", name: "This Mac", status: "ready" },
+        { id: "peer:studio", kind: "peer", name: "Studio", status: "ready" },
+        { id: "peer:laptop", kind: "peer", name: "Laptop", status: "unavailable", detail: "Could not reach Laptop." },
+      ],
+    }),
+  });
+  assert.equal(grouped.match(/class="devices-host-group"/gu)?.length, 3);
+  assert.ok(grouped.indexOf(">This Mac<") < grouped.indexOf(">Studio<"), "this Mac is listed first");
+  assert.match(grouped, /aria-labelledby="devices-host-peer-studio"/u);
+  assert.match(grouped, /Open iPhone 17/u);
+  assert.match(grouped, /Could not reach Laptop\./u);
+  assert.equal(grouped.match(/Try again/gu)?.length, 1, "only the unreachable Mac offers a retry");
+  assert.doesNotMatch(grouped, /border-(red|green|blue|accent)/u);
+});
+
+test("sharing with paired Macs is a labelled switch shown only while this Mac is ready", () => {
+  const html = view({ state: state("ready", { consent: { streaming: true, agentAccess: false, peerSharing: true } }) });
+  assert.match(html, /id="devices-peer-sharing-label"[^>]*>Share with paired Macs/u);
+  assert.match(html, /role="switch"[^>]*aria-checked="true"[^>]*aria-labelledby="devices-peer-sharing-label"/u);
+  assert.match(html, /Turning this off disconnects them/u);
+  assert.doesNotMatch(view({ state: state("stopped") }), /Share with paired Macs/u);
+});
+
+test("a ready paired Mac keeps the list usable when this Mac's helpers are unavailable", () => {
+  const hosts = [
+    { id: "local", kind: "local" as const, name: "This Mac", status: "unavailable" as const, detail: "Xcode is not installed." },
+    { id: "peer:studio", kind: "peer" as const, name: "Studio", status: "ready" as const },
+  ];
+  const html = view({ state: state("unavailable", { devices: [PEER_PHONE], hosts }) });
+  assert.match(html, /Open iPhone 17/u);
+  assert.match(html, /Xcode is not installed\./u);
+  assert.doesNotMatch(html, /Share with paired Macs/u);
+  // Without streaming consent nothing from a peer is shown.
+  const off = view({
+    state: state("unavailable", {
+      devices: [PEER_PHONE],
+      hosts,
+      consent: { streaming: false, agentAccess: false, peerSharing: false },
+    }),
+  });
+  assert.doesNotMatch(off, /Open iPhone 17/u);
 });
 
 test("the Environment panel brings the Simulator tab forward when an agent opens a device", () => {

@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createHttpsServer } from "node:https";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import type { Socket } from "node:net";
 import test from "node:test";
-import { startDeviceHubProxy, type DeviceHubProxy } from "./device-hub-proxy.js";
+import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
+import { peerTlsOptions } from "../peer-transport.js";
+import { startDeviceHubProxy, type DeviceHubProxy, type DeviceHubUpstream } from "./device-hub-proxy.js";
 
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
 
@@ -348,4 +354,85 @@ test("WebSocket upgrades on other paths are refused without reaching the hub", a
     }
     assert.equal(hub.records.length, 0);
   });
+});
+
+test("a paired Mac's hub is reached over pinned TLS with main's credential, never the renderer's parameters", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-hub-upstream-"));
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
+  const records: HubRecord[] = [];
+  const relay = createHttpsServer({ key: identity.privateKey, cert: identity.certificateChain }, (request, response) => {
+    records.push({ method: request.method!, url: request.url!, headers: request.headers, body: "", upgrade: false });
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json", "set-cookie": "relay=1" });
+    response.end('{"ok":true}');
+  });
+  const relaySockets: Socket[] = [];
+  relay.on("upgrade", (request, socket: Socket) => {
+    records.push({ method: request.method!, url: request.url!, headers: request.headers, body: "", upgrade: true });
+    relaySockets.push(socket);
+    const accept = createHash("sha1")
+      .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const message = Buffer.from("relay");
+    socket.write(Buffer.concat([Buffer.from([0x81, message.length]), message]));
+    socket.on("error", () => undefined);
+  });
+  await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const address = relay.address();
+  assert.ok(address && typeof address !== "string");
+  const trust = {
+    endpoint: `https://127.0.0.1:${address.port}/api/aiden/v1`,
+    serverSpkiSha256: identity.serverSpkiSha256,
+    caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64"),
+  };
+  const upstream = (pin: string): DeviceHubUpstream => ({
+    origin: `https://127.0.0.1:${address.port}`,
+    basePath: "/api/aiden/v1/simulators/hub",
+    headers: { authorization: `Bearer ${"s".repeat(43)}`, "aiden-protocol-version": "1" },
+    tls: peerTlsOptions({ ...trust, serverSpkiSha256: pin }),
+  });
+  const proxy = await startDeviceHubProxy({
+    resolveHub: async (hostId) =>
+      hostId === "studio"
+        ? upstream(trust.serverSpkiSha256)
+        : hostId === "impostor"
+          ? upstream(`sha256/${Buffer.alloc(32, 9).toString("base64")}`)
+          : null,
+    allowedOrigins: ["file://"],
+  });
+  try {
+    const { token } = proxy.mintGrant();
+    const response = await send(proxy, `/api/devices?host=studio&t=${token}`, {
+      headers: { origin: "file://", authorization: "Bearer renderer", cookie: "a=1" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["set-cookie"], undefined);
+    const [record] = records;
+    assert.equal(record?.url, "/api/aiden/v1/simulators/hub/api/devices");
+    assert.equal(record?.headers.authorization, `Bearer ${"s".repeat(43)}`);
+    assert.equal(record?.headers["aiden-protocol-version"], "1");
+    assert.equal(record?.headers.origin, undefined);
+    assert.equal(record?.headers.cookie, undefined);
+
+    const socket = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=UDID-1&host=studio&t=${token}`);
+    assert.equal(socket.status, 101);
+    assert.equal(await socket.firstFrame, "relay");
+    socket.socket?.destroy();
+    const upgraded = records.find((entry) => entry.upgrade);
+    assert.equal(upgraded?.url, "/api/aiden/v1/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1");
+    assert.equal(upgraded?.headers.authorization, `Bearer ${"s".repeat(43)}`);
+    assert.equal(upgraded?.headers.origin, undefined);
+
+    const before = records.length;
+    assert.equal((await send(proxy, `/api/devices?host=impostor&t=${token}`, { headers: { origin: "file://" } })).status, 502);
+    assert.equal((await send(proxy, `/api/devices?host=nobody&t=${token}`, { headers: { origin: "file://" } })).status, 503);
+    assert.equal(records.length, before);
+  } finally {
+    await proxy.close();
+    for (const socket of relaySockets) socket.destroy();
+    relay.closeAllConnections();
+    await new Promise((resolve) => relay.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
