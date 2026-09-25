@@ -1736,6 +1736,18 @@ test("chat skill catalog fails closed without a wired registry", async () => {
   );
 });
 
+test("chat skill catalog returns empty for chats without a real workspace", async () => {
+  const app = fixture(chat({ workspaceId: "assistant" }), {
+    skillCatalog: async () => {
+      throw new Error("assistant chats must not reach the workspace catalog");
+    },
+  });
+  assert.deepEqual(
+    await app.service.chatSkillCatalog("device-1", "chat-1"),
+    { skills: [] },
+  );
+});
+
 test("remote skill turn requires the negotiated grant and rides the desktop lease", async () => {
   const app = fixture(chat({ workspaceId: "workspace-9" }), {
     deviceSupportsSkillInvocation: async () => true,

@@ -1280,6 +1280,9 @@ export class AidenRemoteChatService {
     }
     const authoritative = await this.chat(chatId);
     const workspaceId = persistedChatWorkspaceId(authoritative.workspaceId);
+    if (workspaceId === ASSISTANT_WORKSPACE_ID) {
+      return { skills: [] };
+    }
     let skills: readonly SkillCatalogEntry[];
     try {
       skills = authoritative.botId
