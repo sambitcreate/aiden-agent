@@ -52,6 +52,9 @@ import {
 } from "./web-search-core.js";
 import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
 
+import { cancelWebSearchResponse, readBoundedWebSearchResponse } from "./web-search-response.js";
+export { readBoundedWebSearchResponse } from "./web-search-response.js";
+
 export type WebSearchFetch = (
   input: string | URL | Request,
   init?: RequestInit,
@@ -119,80 +122,6 @@ function isRedirectFailure(error: unknown): boolean {
   return (
     error instanceof Error && /\bredirect\b|redirect mode|maximum redirect/iu.test(error.message)
   );
-}
-
-function responseContentLength(response: Response): number | undefined {
-  const raw = response.headers.get("content-length");
-  if (raw === null || !/^\d+$/u.test(raw)) return undefined;
-  const length = Number(raw);
-  return Number.isSafeInteger(length) ? length : Number.POSITIVE_INFINITY;
-}
-
-async function raceReader<T>(
-  reader: ReadableStreamDefaultReader<T>,
-  signal: AbortSignal,
-): Promise<ReadableStreamReadResult<T>> {
-  if (signal.aborted) throw new DOMException("The request was aborted.", "AbortError");
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<ReadableStreamReadResult<T>>((_resolve, reject) => {
-        onAbort = () => reject(new DOMException("The request was aborted.", "AbortError"));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-  }
-}
-
-/** Read an HTTP body before parsing it; declared and streamed bytes are bounded. */
-export async function readBoundedWebSearchResponse(
-  response: Response,
-  signal: AbortSignal,
-  maximumBytes: number,
-  providerId: WebSearchProviderId = "exa",
-): Promise<Uint8Array> {
-  const declared = responseContentLength(response);
-  if (declared !== undefined && declared > maximumBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw webSearchError("invalid-response", providerId);
-  }
-  if (!response.body) throw webSearchError("invalid-response", providerId);
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const chunk = await raceReader(reader, signal);
-      if (chunk.done) break;
-      if (!(chunk.value instanceof Uint8Array)) {
-        await reader.cancel().catch(() => undefined);
-        throw webSearchError("invalid-response", providerId);
-      }
-      total += chunk.value.byteLength;
-      if (total > maximumBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw webSearchError("invalid-response", providerId);
-      }
-      chunks.push(chunk.value);
-    }
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
 }
 
 function mapExaTransportFailure(error: unknown, request: WebSearchAdapterRequest): WebSearchError {
@@ -367,7 +296,7 @@ async function runWave1AdapterSearch(
   }
 
   if (response.status < 200 || response.status >= 300) {
-    await response.body?.cancel().catch(() => undefined);
+    cancelWebSearchResponse(response.body);
     const parsed = parseResponse(
       { status: response.status, body: new Uint8Array(0) },
       request.numResults,

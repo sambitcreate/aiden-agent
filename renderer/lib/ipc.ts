@@ -14,6 +14,8 @@ import type {
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
+  FormFillArtifactStatus,
+  FormFillSettingsView,
   EngineStatus,
   ExternalEditor,
   GitBranches,
@@ -23,6 +25,7 @@ import type {
   GitComparisonDiffInput,
   GitDiffInput,
   GitFileDiff,
+  GitHubPullRequestStatus,
   GitInfo,
   GitPushCapability,
   GitPushInput,
@@ -128,6 +131,11 @@ import {
   type AppUpdateRestartResult,
   type AppUpdateSnapshot,
 } from "../shared/app-update";
+import type {
+  AssistantLiveRendererEvent,
+  AssistantLiveSnapshot,
+  AssistantLiveStartIntent,
+} from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
   parseChatReadResponse,
@@ -151,6 +159,16 @@ import {
 } from "../shared/chat-artifacts";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
+import type {
+  ChatPullRequestCandidatesResult,
+  ChatPullRequestCreateResult,
+  ChatPullRequestDetectResult,
+  ChatPullRequestLinkResult,
+  ChatPullRequestListResult,
+  ChatPullRequestPendingCreate,
+  ChatPullRequestRef,
+  ChatPullRequestView,
+} from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
@@ -179,7 +197,8 @@ export const peerHostsApi = {
   pair: (payload: string) => invoke<PeerHostView>("remote:peersPair", payload),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("remote:peersSetEnabled", id, enabled),
   remove: (id: string) => invoke<void>("remote:peersRemove", id),
-  operation: (hostId: string, operation: PeerOperation) => invoke<unknown>("remote:peerOperation", hostId, operation),
+  operation: (hostId: string, operation: PeerOperation) =>
+    invoke<unknown>("remote:peerOperation", hostId, operation),
   onChanged: (handler: () => void) => onNotification("remote:peers-changed", handler),
 };
 
@@ -301,6 +320,23 @@ export const assistantApi = {
     invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
 };
 
+export const assistantLiveApi = {
+  status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
+  authorizeComputerUse: () => invoke<string | null>("assistant-live:authorize-computer-use", {}),
+  start: (intent: AssistantLiveStartIntent) =>
+    invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
+  stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
+  sendAudio: (sessionId: string, pcm: Uint8Array) =>
+    invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
+  bindDisplay: () => invoke<string | null>("assistant-live:display-bind", {}),
+  releaseDisplay: (bindingId: string) =>
+    invoke<boolean>("assistant-live:display-release", { bindingId }),
+  sendFrame: (sessionId: string, frame: Uint8Array) =>
+    invoke<boolean>("assistant-live:frame", { sessionId, frame }),
+  onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
+    onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
+};
+
 export const modelInsightsApi = {
   status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
   connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
@@ -312,6 +348,16 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+};
+
+export const formFillApi = {
+  status: () => invoke<FormFillSettingsView>("formFill:status"),
+  setEnabled: (enabled: boolean) => invoke<FormFillSettingsView>("formFill:setEnabled", enabled),
+  download: () => invoke<FormFillArtifactStatus>("formFill:download"),
+  cancel: () => invoke<FormFillArtifactStatus>("formFill:cancel"),
+  remove: () => invoke<FormFillArtifactStatus>("formFill:remove"),
+  onProgress: (handler: (status: FormFillArtifactStatus) => void) =>
+    onNotification<FormFillArtifactStatus>("formFill:progress", handler),
 };
 
 export const titleProvidersApi = {
@@ -681,9 +727,16 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
-  getState: (workspaceId: string) => invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
-  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) => invoke<import("../shared/browser").BrowserCommandResult>("browser:command", workspaceId, command),
-  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) => onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  getState: (workspaceId: string) =>
+    invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
+    invoke<import("../shared/browser").BrowserCommandResult>(
+      "browser:command",
+      workspaceId,
+      command,
+    ),
+  onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
+    onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
 };
 
 export const terminalApi = {
@@ -714,11 +767,60 @@ export const gitApi = {
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
+  pullRequestStatus: (workspaceId: string) =>
+    invoke<GitHubPullRequestStatus>("git:pullRequestStatus", workspaceId),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
-  deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+  deleteManagedWorktree: (workspaceId: string, options?: { force?: boolean }) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId, options),
+  restoreManagedWorktree: (workspaceId: string, snapshotId: string, name?: string) =>
+    invoke<Workspace>("git:restoreManagedWorktree", workspaceId, snapshotId, name),
+};
+
+// ── Chat ↔ pull requests ──────────────────────────────────────────────
+// A chat durably links many PRs; the relationship is keyed by the canonical
+// (host, repository, number) — never by the workspace's current branch.
+export const pullRequestsApi = {
+  list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
+  current: (chatId: string) =>
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+      "pullRequests:current",
+      chatId,
+    ),
+  candidates: (chatId: string, workspaceId?: string) =>
+    invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
+  link: (chatId: string, input: { url: string }) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:link", chatId, input),
+  linkRef: (chatId: string, ref: ChatPullRequestRef, source?: "manual" | "branch-discovered") =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:linkRef", chatId, { ...ref, source }),
+  unlink: (chatId: string, ref: ChatPullRequestRef) =>
+    invoke<{ ok: boolean }>("pullRequests:unlink", chatId, ref),
+  refresh: (chatId: string, ref?: ChatPullRequestRef) =>
+    invoke<ChatPullRequestListResult>("pullRequests:refresh", chatId, ref),
+  detectAfterPush: (
+    chatId: string,
+    input: { workspaceId: string; headBranch: string; expectedHeadSha?: string; repository?: string },
+  ) => invoke<ChatPullRequestDetectResult>("pullRequests:detectAfterPush", chatId, input),
+  create: (
+    chatId: string,
+    input: {
+      workspaceId: string;
+      title: string;
+      body?: string;
+      baseBranch: string;
+      headBranch: string;
+      expectedHeadSha?: string;
+      repository?: string;
+      draft?: boolean;
+    },
+  ) => invoke<ChatPullRequestCreateResult>("pullRequests:create", chatId, input),
+  dismissPending: (chatId: string, operationId: string) =>
+    invoke<void>("pullRequests:dismissPending", chatId, operationId),
+  pending: (chatId: string) =>
+    invoke<ChatPullRequestPendingCreate[]>("pullRequests:pending", chatId),
+  adopt: (chatId: string, operationId: string, ref: ChatPullRequestRef) =>
+    invoke<ChatPullRequestLinkResult>("pullRequests:adopt", chatId, operationId, ref),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
@@ -857,8 +959,11 @@ export const chatsApi = {
       skillInvocation?: SkillInvocationV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
-  approve: (approvalId: string, decision: ApprovalDecision) =>
-    invoke<void>("chat:approve", approvalId, decision),
+  approve: (
+    approvalId: string,
+    decision: ApprovalDecision,
+    options?: { formFillExcludedOrders?: number[] },
+  ) => invoke<void>("chat:approve", approvalId, decision, options),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<void>("chat:answerQuestionnaire", promptId, response),
 };
@@ -890,7 +995,8 @@ export const botsApi = {
   cancelAvatarSuggestion: (requestId: string) =>
     invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
-  getCapabilityCatalog: (botId?: string) => invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
+  getCapabilityCatalog: (botId?: string) =>
+    invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
@@ -1033,6 +1139,11 @@ export interface GenerationHandle {
   streamId: string;
   started: Promise<GenerationStartResult>;
   cancel: (origin: "lifecycle" | "user_stop") => void;
+}
+
+/** Stop a same-document generation after its visible pane has released ownership. */
+export function stopDetachedGeneration(streamId: string): Promise<boolean> {
+  return invoke<boolean>("chat:cancel", streamId, "user_stop");
 }
 
 export type GenerationStartResult = { ok: true } | { ok: false; error: Error };

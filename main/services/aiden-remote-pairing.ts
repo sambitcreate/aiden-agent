@@ -6,8 +6,9 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import {
-  AIDEN_REMOTE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_CAPABILITIES,
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
+  AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   assertAidenRemoteEndpoint,
   type AidenRemoteCapability,
@@ -46,6 +47,7 @@ export interface AidenRemotePairingExchangeInput {
   clientVersion: string;
   acceptsDisplayName?: boolean;
   acceptsBotCapabilities?: boolean;
+  acceptsProgressCapabilities?: boolean;
 }
 
 export interface AidenRemotePairingExchangeResponse {
@@ -200,6 +202,7 @@ export function parseAidenRemotePairingExchangeInput(
     "clientVersion",
     "acceptsDisplayName",
     "acceptsBotCapabilities",
+    "acceptsProgressCapabilities",
   ]);
   if (
     Object.keys(record).length < 4 ||
@@ -211,7 +214,8 @@ export function parseAidenRemotePairingExchangeInput(
     (record.deviceType !== "iphone" && record.deviceType !== "ipad" && record.deviceType !== "mac" && record.deviceType !== "linux") ||
     !bounded(record.clientVersion, 40) ||
     (record.acceptsDisplayName !== undefined && typeof record.acceptsDisplayName !== "boolean") ||
-    (record.acceptsBotCapabilities !== undefined && typeof record.acceptsBotCapabilities !== "boolean")
+    (record.acceptsBotCapabilities !== undefined && typeof record.acceptsBotCapabilities !== "boolean") ||
+    (record.acceptsProgressCapabilities !== undefined && typeof record.acceptsProgressCapabilities !== "boolean")
   ) {
     throw new AidenRemoteServiceError(
       "invalid_request",
@@ -226,6 +230,9 @@ export function parseAidenRemotePairingExchangeInput(
     clientVersion: record.clientVersion,
     ...(record.acceptsDisplayName === true ? { acceptsDisplayName: true } : {}),
     ...(record.acceptsBotCapabilities === true ? { acceptsBotCapabilities: true } : {}),
+    ...(record.acceptsProgressCapabilities === true
+      ? { acceptsProgressCapabilities: true }
+      : {}),
   };
 }
 
@@ -483,10 +490,16 @@ export class AidenRemotePairingService {
         name: input.deviceName,
         type: input.deviceType,
         clientVersion: input.clientVersion,
-        capabilities: acceptsBotCapabilities
-          ? AIDEN_REMOTE_CAPABILITIES
-          : AIDEN_REMOTE_LEGACY_CAPABILITIES,
+        capabilities: [
+          ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
+          ...(acceptsBotCapabilities ? AIDEN_REMOTE_BOT_CAPABILITIES : []),
+          ...(input.acceptsProgressCapabilities
+            ? AIDEN_REMOTE_PROGRESS_CAPABILITIES
+            : []),
+        ],
         acceptsBotCapabilities,
+        acceptsProgressCapabilities:
+          input.acceptsProgressCapabilities === true,
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {

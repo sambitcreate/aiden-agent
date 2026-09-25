@@ -193,6 +193,13 @@ function log(event) {
   appendFileSync(logPath, `${JSON.stringify({ at: Date.now(), ...event })}\n`, "utf8");
 }
 
+// Hold before logging or driver setup to reproduce a host deadline that wins
+// the race against child initialization. The parent owns and terminates us.
+const initializationGate = option("--initialization-gate");
+while (initializationGate && !existsSync(initializationGate)) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 log({
   event: "spawn",
   pid: process.pid,

@@ -2,6 +2,39 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
+test("Live audio selectors keep long labels and chevrons inside their bounds", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.evaluate(() => {
+    localStorage.setItem("aiden.live.audio-devices.v1", JSON.stringify({ input: "fixture-mic", output: "fixture-speaker" }));
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", { configurable: true, value: async () => [
+      { kind: "audioinput", deviceId: "fixture-mic", label: "MacBook Pro Microphone (Built-in) with a deliberately very long device name" },
+      { kind: "audiooutput", deviceId: "fixture-speaker", label: "MacBook Pro Speakers (Built-in) with a deliberately very long device name" },
+    ] });
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Aiden Live", exact: true }).click();
+  for (const width of [1280, 600, 390]) {
+    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
+    for (const name of ["Live input device", "Live output device"]) {
+      const trigger = page.getByRole("combobox", { name });
+      await expect(trigger).toContainText("MacBook Pro");
+      await expect.poll(async () => trigger.evaluate((element) => {
+        const outer = element.getBoundingClientRect();
+        const label = element.firstElementChild!;
+        const icon = element.lastElementChild!;
+        const labelRect = label.getBoundingClientRect();
+        const iconRect = icon.getBoundingClientRect();
+        return getComputedStyle(element).flexWrap === "nowrap"
+          && getComputedStyle(label).textOverflow === "ellipsis"
+          && labelRect.right <= iconRect.left + 1
+          && iconRect.right <= outer.right + 1
+          && iconRect.bottom <= outer.bottom + 1;
+      })).toBe(true);
+    }
+  }
+});
+
 test("disabling Skills removes hidden instructions from the next provider request", async ({
   aiden,
 }) => {
@@ -120,22 +153,30 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
 }) => {
   test.setTimeout(180_000);
   const { page, app } = aiden;
-  const resize = async (width: number, height: number) => {
-    const contentWidth = await app.evaluate(({ BrowserWindow }, size) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.setSize(size.width, size.height);
-      return window.getContentBounds().width;
-    }, { width, height });
-    // Native setSize returns before the renderer receives its resize event.
-    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(contentWidth);
-  };
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const navigation = page.getByRole("navigation", { name: "Settings" });
+  const sidebar = page.locator("aside").filter({
+    has: page.getByRole("navigation", { name: "Settings", includeHidden: true }),
+  });
+  const resizeWindow = async (width: number, height: number) => {
+    await app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+      { width, height },
+    );
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+    if (width < 700) {
+      // Wait for React's resize handler and the sidebar collapse before another
+      // resize can make the one-shot Show sidebar check observe stale state.
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+      await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().width))
+        .toBe(0);
+    }
+  };
   const destinations = await navigation.getByRole("button").allTextContents();
   for (const destination of destinations) {
     // Navigate with the sidebar exposed, then test the compact content allocation.
-    await resize(1280, 800);
+    await resizeWindow(1280, 800);
     const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
     if (await showSidebar.isVisible()) await showSidebar.click();
     await navigation.getByRole("button", { name: destination.trim(), exact: true }).click();
@@ -146,7 +187,7 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
       await page.getByText("Advanced Telegram settings", { exact: true }).click();
     }
     for (const width of [1280, 600, 390]) {
-      await resize(width, 650);
+      await resizeWindow(width, 650);
       await expect
         .configure({ soft: true })
         .poll(

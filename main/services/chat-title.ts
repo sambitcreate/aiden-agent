@@ -76,6 +76,7 @@ function assistantText(content: AssistantMessage["content"]): string {
 }
 
 async function generateWithChatModel(input: {
+  chatId: string;
   firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & {
     attachments?: import("./types.js").Attachment[];
   };
@@ -86,6 +87,7 @@ async function generateWithChatModel(input: {
     input.selection.providerId,
     input.selection.model,
     input.signal,
+    input.chatId,
   );
   const promptContent: Array<TextContent | ImageContent> = [
     {
@@ -222,6 +224,7 @@ async function generateFirstTurnTitle(input: {
             abortController.signal,
           )
         : await generateWithChatModel({
+            chatId: input.chatId,
             firstMessage,
             selection: input.fallbackSelection,
             signal: abortController.signal,

@@ -162,12 +162,41 @@ export function isSubagentShellApprovalShell(value: unknown): value is SubagentS
   return value === "/bin/zsh -f -c" || value === "/bin/sh -c";
 }
 
+/** Renderer-safe facts for one Form Fill Specialist batch approval card. */
+export interface FormFillBatchApprovalDetails {
+  kind: "form-fill-batch";
+  planId: string;
+  /** Exact source document (attachment name). */
+  sourceDocument: string;
+  /** sha256 prefix of the source document text the plan was built from. */
+  sourceHashPrefix: string;
+  /** Exact bound target. */
+  targetApp: string;
+  targetTitle: string;
+  /** Every proposed fill — label, verbatim value, and provenance. */
+  rows: {
+    order: number;
+    elementIndex: number;
+    label: string;
+    value: string;
+    sourceLabel: string;
+    sourceLine: number;
+  }[];
+  /** Fields the model would not fill (needs review / left unchanged). */
+  skippedRows: { label: string; reason: string }[];
+  fillCount: number;
+  reviewCount: number;
+  /** Literal invariant: the batch never includes submission. */
+  submitExcluded: true;
+}
+
 export type ToolApprovalDetails =
   | AssistantAutomationApprovalDetails
   | ScheduledTaskApprovalDetails
   | SubagentWorkspaceWriteApprovalDetails
   | SubagentMcpMutationApprovalDetails
-  | SubagentShellApprovalDetails;
+  | SubagentShellApprovalDetails
+  | FormFillBatchApprovalDetails;
 
 function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean {
   const allowedWhitespace =
@@ -653,17 +682,79 @@ export function isScheduledTaskApprovalDetails(
   );
 }
 
-/**
- * Prompts offered in Aiden's empty state.
- *
- * Deliberately limited to questions Aiden can answer from what it knows about
- * the app. The live-state questions this feature is ultimately for — "Any
- * uncommitted changes?", "Summarize my settings" — need the get_settings and
- * list_projects tools, and offering them before those tools exist just invites
- * a confident wrong answer. Restore them with the tools.
- */
-export const ASSISTANT_SUGGESTED_PROMPTS = [
-  "What can you help me with?",
-  "How do scheduled tasks work?",
-  "Where do I add a provider?",
-] as const;
+/** Fail-closed renderer boundary for Form Fill Specialist batch approvals. */
+export function isFormFillBatchApprovalDetails(
+  value: unknown,
+): value is FormFillBatchApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  if (
+    !hasExactApprovalKeys(details, [
+      "kind",
+      "planId",
+      "sourceDocument",
+      "sourceHashPrefix",
+      "targetApp",
+      "targetTitle",
+      "rows",
+      "skippedRows",
+      "fillCount",
+      "reviewCount",
+      "submitExcluded",
+    ])
+  ) {
+    return false;
+  }
+  if (!Array.isArray(details.rows) || details.rows.length > 64) return false;
+  const rowsValid = details.rows.every((row: unknown) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    const record = row as Record<string, unknown>;
+    return (
+      hasExactApprovalKeys(record, [
+        "order",
+        "elementIndex",
+        "label",
+        "value",
+        "sourceLabel",
+        "sourceLine",
+      ]) &&
+      Number.isSafeInteger(record.order) &&
+      (record.order as number) >= 0 &&
+      Number.isSafeInteger(record.elementIndex) &&
+      (record.elementIndex as number) >= 0 &&
+      safeApprovalText(record.label, 256) &&
+      safeApprovalText(record.value, 2048, true) &&
+      !/\p{Cf}/u.test(record.value) &&
+      safeApprovalText(record.sourceLabel, 256) &&
+      Number.isSafeInteger(record.sourceLine) &&
+      (record.sourceLine as number) >= 1
+    );
+  });
+  if (!Array.isArray(details.skippedRows) || details.skippedRows.length > 64) return false;
+  const skippedValid = details.skippedRows.every((row: unknown) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    const record = row as Record<string, unknown>;
+    return (
+      hasExactApprovalKeys(record, ["label", "reason"]) &&
+      safeApprovalText(record.label, 256) &&
+      safeApprovalText(record.reason, 256)
+    );
+  });
+  return (
+    details.kind === "form-fill-batch" &&
+    safeApprovalText(details.planId, 64) &&
+    safeApprovalText(details.sourceDocument, 260) &&
+    typeof details.sourceHashPrefix === "string" &&
+    /^[a-f0-9]{12}$/u.test(details.sourceHashPrefix) &&
+    safeApprovalText(details.targetApp, 256) &&
+    safeApprovalText(details.targetTitle, 256) &&
+    rowsValid &&
+    skippedValid &&
+    Number.isSafeInteger(details.fillCount) &&
+    (details.fillCount as number) >= 0 &&
+    (details.fillCount as number) <= details.rows.length &&
+    Number.isSafeInteger(details.reviewCount) &&
+    (details.reviewCount as number) >= 0 &&
+    details.submitExcluded === true
+  );
+}

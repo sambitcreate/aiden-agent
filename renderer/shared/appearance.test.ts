@@ -326,10 +326,6 @@ test("composer context auto-hide defaults on and preserves explicit saved prefer
 test("the shared focus treatment separates text entry from non-text keyboard focus", () => {
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
-  const assistantBubble = readFileSync(
-    new URL("../components/assistant/assistant-bubble.tsx", import.meta.url),
-    "utf8",
-  );
   assert.match(
     styles,
     /:root :where\(input, textarea\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
@@ -359,23 +355,18 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
     ui,
     /SwitchPrimitive\.Root[\s\S]*inline-flex h-6 w-10 shrink-0 items-center overflow-visible[\s\S]*SwitchPrimitive\.Thumb className="[^"]*pointer-events-none[^"]*bg-white[^"]*data-\[state=checked\]:bg-accent-foreground[^"]*"/u,
   );
-  assert.match(assistantBubble, /bg-support-red[\s\S]*?text-support-red-foreground/u);
 });
 
 test("audited UI components retain semantic typography, radii, colors, and radio selection", () => {
   const readRenderer = (relativePath: string) =>
     readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
   const typographySources = [
-    "components/assistant/assistant-panel.tsx",
-    "components/assistant/assistant-bubble.tsx",
     "components/model-picker.tsx",
     "components/review-panel.tsx",
     "components/onboarding-flow.tsx",
     "components/ui.tsx",
     "components/settings/provider-model-visibility.tsx",
     "components/settings/model-pad-settings.tsx",
-    "components/assistant/assistant-recent.tsx",
-    "components/assistant/assistant-thread.tsx",
     "components/settings/telegram-settings.tsx",
   ].map(readRenderer);
   const radiusSources = [

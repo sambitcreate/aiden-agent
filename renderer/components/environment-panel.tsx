@@ -106,8 +106,16 @@ interface EnvironmentFileRequest {
   workspaceId: string;
 }
 
+interface EnvironmentActiveChat {
+  chatId: string | null;
+  workspaceId: string | null;
+}
+
 interface EnvironmentPanelContextValue {
   toolsOpen: boolean;
+  /** Chat currently presented in the main pane; drives chat-scoped PR actions. */
+  activeChat: EnvironmentActiveChat;
+  setActiveChat: (chatId: string | null, workspaceId: string | null) => void;
   quickViewOpen: boolean;
   frontSurface: EnvironmentSurface | null;
   surfaceMode: EnvironmentSurfaceMode;
@@ -178,6 +186,8 @@ const EMPTY_EDITOR_STATE: FilesEditorState = {
   dirty: false,
   saving: false,
 };
+const EMPTY_ACTIVE_CHAT: EnvironmentActiveChat = { chatId: null, workspaceId: null };
+
 const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   chatId: null,
   workspaceId: null,
@@ -257,6 +267,18 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [agentBusy, setAgentBusy] = React.useState(false);
   const [subagents, setRenderedSubagents] =
     React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
+  const [activeChat, setActiveChatState] =
+    React.useState<EnvironmentActiveChat>(EMPTY_ACTIVE_CHAT);
+  const setActiveChat = React.useCallback(
+    (chatId: string | null, workspaceId: string | null) => {
+      setActiveChatState((current) =>
+        current.chatId === chatId && current.workspaceId === workspaceId
+          ? current
+          : { chatId, workspaceId },
+      );
+    },
+    [],
+  );
   const subagentsRef = React.useRef<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
   const commitSubagents = React.useCallback(
     (
@@ -943,6 +965,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const value = React.useMemo(
     () => ({
       toolsOpen: surfaceState.toolsOpen,
+      activeChat,
+      setActiveChat,
       quickViewOpen: surfaceState.quickViewOpen,
       frontSurface: surfaceState.frontSurface,
       surfaceMode,
@@ -1008,6 +1032,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       setCreateWorktreeHandler,
     }),
     [
+      activeChat,
+      setActiveChat,
       activeEditorState,
       agentBusy,
       announceSubagentDetail,
@@ -1331,6 +1357,7 @@ function EnvironmentPanelSurface({
         >
           <ReviewPanel
             workspace={active}
+            chatId={panel.activeChat.chatId ?? undefined}
             active={presented && panel.tab === "review"}
             mode={panel.reviewMode}
             onModeChange={panel.openReview}
@@ -1422,6 +1449,7 @@ function QuickViewCard({
   const open = panel.quickViewOpen;
   const [present, setPresent] = React.useState(open);
   const menuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const menuDestinationRef = React.useRef<EnvironmentReviewMode | "files" | null>(null);
   const subagentCounts = panel.subagentCounts;
   const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
   const representativeSubagent =
@@ -1491,16 +1519,68 @@ function QuickViewCard({
                   <Plus />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onSelect={() => panel.openReview("changes")}>
+              <DropdownMenuContent
+                align="end"
+                className="w-52"
+                onCloseAutoFocus={(event) => {
+                  const destination = menuDestinationRef.current;
+                  menuDestinationRef.current = null;
+                  if (!destination) return;
+                  const trigger = menuButtonRef.current;
+                  const triggerAvailable =
+                    trigger?.isConnected &&
+                    !trigger.closest('[inert], [aria-hidden="true"]');
+                  if (!open || !presented || panel.gitOperationBusy || !triggerAvailable) {
+                    // Keep Radix's normal restoration when the trigger is usable. If
+                    // it disappeared or became inert, preserve newer focus or use the
+                    // application fallback instead of leaving focus in the removed menu.
+                    if (!triggerAvailable) {
+                      event.preventDefault();
+                      const focused = document.activeElement;
+                      if (
+                        !(focused instanceof HTMLElement) ||
+                        focused === document.body ||
+                        !focused.isConnected ||
+                        focused.closest('[inert], [aria-hidden="true"]')
+                      ) {
+                        document.querySelector<HTMLElement>("[data-app-focus-root]")?.focus();
+                      }
+                    }
+                    return;
+                  }
+                  event.preventDefault();
+                  // Finish the menu's focus scope before opening tools. Otherwise its
+                  // return focus reactivates Quick View and covers tools in narrow layouts.
+                  // Remember the durable trigger, not the menu item that just unmounted.
+                  trigger.focus();
+                  if (destination === "files") panel.showTools("files");
+                  else panel.openReview(destination);
+                }}
+              >
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "changes";
+                  }}
+                >
                   <GitCompareArrows className="size-4" aria-hidden="true" />
                   Review changes
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => panel.showTools("files")}>
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "files";
+                  }}
+                >
                   <Files className="size-4" aria-hidden="true" />
                   Browse files
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => panel.openReview("compare")}>
+                <DropdownMenuItem
+                  disabled={panel.gitOperationBusy}
+                  onSelect={() => {
+                    menuDestinationRef.current = "compare";
+                  }}
+                >
                   <GitCompareArrows className="size-4" aria-hidden="true" />
                   Compare branch
                 </DropdownMenuItem>
@@ -1511,6 +1591,7 @@ function QuickViewCard({
             <div className="min-h-0 flex-1">
               <EnvironmentOverview
                 workspace={active}
+                chatId={panel.activeChat.chatId ?? undefined}
                 active={open && presented}
                 presentation="card"
                 mutationBlockedReason={panel.gitMutationBlockedReason}

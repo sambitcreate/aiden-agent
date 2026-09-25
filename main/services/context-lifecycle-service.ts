@@ -43,7 +43,11 @@ export type CompactChatResult =
 
 export interface ContextLifecycleServiceDeps {
   getCompactionEngine?(): Promise<CompactionEngine>;
-  resolveLocalModel?(providerId: string, model: string): Promise<ResolvedModelRuntime["model"]>;
+  resolveLocalModel?(
+    providerId: string,
+    model: string,
+    conversationId?: string,
+  ): Promise<ResolvedModelRuntime["model"]>;
   compactionEnabled?(): boolean;
   compactionEligible?(chat: Chat): boolean | Promise<boolean>;
   skillsEnabled?(): Promise<boolean>;
@@ -60,6 +64,7 @@ export interface ContextLifecycleServiceDeps {
     providerId: string,
     model: string,
     signal?: AbortSignal,
+    conversationId?: string,
   ): Promise<ResolvedModelRuntime>;
   resolveThinkingLevel(
     chat: Chat,
@@ -148,12 +153,13 @@ export class ContextLifecycleService {
       try {
         if (engine === "vcc") {
           if (!this.deps.resolveLocalModel) throw new Error("Offline metadata is unavailable.");
-          model = await this.deps.resolveLocalModel(chat.providerId, chat.model);
+          model = await this.deps.resolveLocalModel(chat.providerId, chat.model, chat.id);
         } else {
           runtime = await this.deps.resolveRuntime(
             chat.providerId,
             chat.model,
             operationAbort.signal,
+            chat.id,
           );
           model = runtime.model;
         }

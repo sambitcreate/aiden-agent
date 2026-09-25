@@ -18,6 +18,18 @@ test("leaving an unsent draft drops its renderer-only state", async () => {
   assert.equal(getChatDraft(draft.chat.id), undefined);
 });
 
+test("an explicit entry point can seed only its new renderer draft", () => {
+  const seeded = createChatDraft("workspace-a", undefined, "Create an automation that ");
+  const releaseSeeded = retainChatDraft(seeded.chat.id);
+  const ordinary = createChatDraft("workspace-a");
+  assert.equal(seeded.initialText, "Create an automation that ");
+  assert.equal(ordinary.initialText, undefined);
+  assert.equal(beginChatDraftSend(seeded.chat.id).initialText, "Create an automation that ");
+  finishChatDraftSend(seeded.chat.id, true);
+  releaseSeeded();
+  discardChatDraft(ordinary.chat.id);
+});
+
 test("StrictMode release and reacquire does not discard the mounted draft", async () => {
   const { chat } = createChatDraft("workspace-a");
   const firstRelease = retainChatDraft(chat.id);

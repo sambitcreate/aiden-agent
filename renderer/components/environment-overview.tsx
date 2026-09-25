@@ -71,6 +71,7 @@ function RowSkeleton() {
 
 export function EnvironmentOverview({
   workspace,
+  chatId,
   active,
   presentation = "panel",
   mutationBlockedReason,
@@ -79,6 +80,8 @@ export function EnvironmentOverview({
   onCreateWorktree,
 }: {
   workspace: Workspace | undefined;
+  /** Chat presented for this workspace; binds post-push PR detection/linking. */
+  chatId?: string;
   active: boolean;
   presentation?: "panel" | "card";
   mutationBlockedReason: string | null;
@@ -344,6 +347,7 @@ export function EnvironmentOverview({
       />
       <GitPushDialog
         workspaceId={workspace.id}
+        chatId={chatId}
         capability={pushCapability}
         blockedReason={mutationBlockedReason}
         open={pushOpen}

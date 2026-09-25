@@ -14,6 +14,7 @@ export interface AppCapabilities {
   dictationHoldTrigger: string | null;
   nativeShare: boolean;
   appleFoundationModels: boolean;
+  geminiLive: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
@@ -29,6 +30,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   dictationHoldTrigger: null,
   nativeShare: false,
   appleFoundationModels: false,
+  geminiLive: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
@@ -50,6 +52,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     dictationHoldTrigger: typeof record.dictationHoldTrigger === "string" ? record.dictationHoldTrigger.slice(0, 128) : null,
     nativeShare: record.nativeShare === true,
     appleFoundationModels: record.appleFoundationModels === true,
+    geminiLive: record.geminiLive === true,
   };
 }
 

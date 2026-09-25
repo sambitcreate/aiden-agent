@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { EncryptedPiCredentialStore, type CredentialCipher } from "./pi-credential-store-core.js";
 
 const temporaryDirectories: string[] = [];
@@ -269,3 +269,146 @@ test("fails closed for unavailable secure storage, corrupt files, and bad cipher
     return true;
   });
 });
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const operation of ["modify", "delete"] as const) {
+  test(`cancelled queued ${operation} cannot replace or remove a newer credential`, async () => {
+    const { store, file } = await fixture();
+    const entered = deferred();
+    const release = deferred();
+    const first = store.modify("anthropic", async () => {
+      entered.resolve();
+      await release.promise;
+      return { type: "api_key", key: "current" };
+    });
+    await entered.promise;
+    const queued = deferred();
+    const other: CredentialStore = new EncryptedPiCredentialStore({
+      filePath: () => file,
+      cipher: cipher(),
+      onLockQueued: () => queued.resolve(),
+    });
+    const controller = new AbortController();
+    let modifierCalls = 0;
+    const pending = operation === "modify"
+      ? other.modify("anthropic", async () => {
+          modifierCalls += 1;
+          return { type: "api_key", key: "cancelled" };
+        }, { signal: controller.signal })
+      : other.delete("anthropic", { signal: controller.signal });
+    const rejected = assert.rejects(pending, { name: "AbortError" });
+    await queued.promise;
+    controller.abort();
+    release.resolve();
+    await Promise.all([first, rejected]);
+    // Drain the same lock so a detached cancelled operation cannot write later.
+    await other.modify("anthropic", async () => undefined);
+    assert.equal(modifierCalls, 0);
+    assert.deepEqual(await store.read("anthropic"), { type: "api_key", key: "current" });
+  });
+}
+
+test("cancelling an active refresh promptly rejects but retains its lock until cleanup settles", async () => {
+  const { store, makeStore } = await fixture();
+  await store.modify("anthropic", async () => ({ type: "api_key", key: "current" }));
+  const entered = deferred();
+  const release = deferred();
+  const controller = new AbortController();
+  const cancellable: CredentialStore = store;
+  const pending = cancellable.modify("anthropic", async () => {
+    entered.resolve();
+    await release.promise; // Simulate a provider that finishes after abort.
+    return { type: "api_key", key: "cancelled" };
+  }, { signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  let settled = false;
+  const rejected = assert.rejects(pending, { name: "AbortError" }).then(() => { settled = true; });
+  let followingStarted = false;
+  const following = makeStore().modify("anthropic", async (current) => {
+    followingStarted = true;
+    assert.deepEqual(current, { type: "api_key", key: "current" });
+    return { type: "api_key", key: "replacement" };
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, "cancellation must not wait for uncooperative provider cleanup");
+    assert.equal(followingStarted, false, "cleanup must keep exclusive provider ownership");
+  } finally {
+    release.resolve();
+    await Promise.all([rejected, following]);
+  }
+  assert.deepEqual(await store.read("anthropic"), { type: "api_key", key: "replacement" });
+});
+
+test("cancellation during encryption prevents publication and leaves the prior credential intact", async () => {
+  const { store, file } = await fixture();
+  await store.modify("anthropic", async () => ({ type: "api_key", key: "current" }));
+  const controller = new AbortController();
+  const cancellable: CredentialStore = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher({ encryptString: (value) => {
+      controller.abort();
+      return Buffer.from(`encrypted:${value}`, "utf8");
+    } }),
+  });
+  await assert.rejects(cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  await cancellable.modify("anthropic", async () => undefined);
+  assert.deepEqual(await store.read("anthropic"), { type: "api_key", key: "current" });
+});
+
+test("cancellation after file publication reports the committed credential", async () => {
+  const { file } = await fixture();
+  const controller = new AbortController();
+  const store: CredentialStore = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    afterWritePublish: () => controller.abort(),
+  });
+  const credential = { type: "api_key" as const, key: "committed" };
+  assert.deepEqual(await store.modify("anthropic", async () => credential, {
+    signal: controller.signal,
+  }), credential);
+  assert.deepEqual(await store.read("anthropic"), credential);
+});
+
+test("already aborted reads and metadata listings do not touch the credential file", async () => {
+  let reads = 0;
+  const store: CredentialStore = new EncryptedPiCredentialStore({
+    filePath: () => { reads += 1; throw new Error("must not access storage"); },
+    cipher: cipher(),
+  });
+  const signal = AbortSignal.abort();
+  await assert.rejects(store.read("anthropic", { signal }), { name: "AbortError" });
+  await assert.rejects(store.list({ signal }), { name: "AbortError" });
+  assert.equal(reads, 0);
+});
+
+for (const operation of ["modify", "delete"] as const) {
+  test(`cancelling ${operation} immediately before rename preserves the file and cleans staging`, async () => {
+    const { store, file } = await fixture();
+    const original = { type: "api_key" as const, key: "current" };
+    await store.modify("anthropic", async () => original);
+    const controller = new AbortController();
+    const cancellable = new EncryptedPiCredentialStore({
+      filePath: () => file,
+      cipher: cipher(),
+      beforeWritePublish: () => controller.abort(),
+    });
+    await assert.rejects(operation === "modify"
+      ? cancellable.modify("anthropic", async () => ({ type: "api_key", key: "cancelled" }), {
+          signal: controller.signal,
+        })
+      : cancellable.delete("anthropic", { signal: controller.signal }), { name: "AbortError" });
+    await store.modify("anthropic", async () => undefined); // Drain cleanup under the shared lock.
+    assert.deepEqual(await store.read("anthropic"), original);
+    assert.deepEqual(await fs.readdir(path.dirname(file)), [path.basename(file)]);
+  });
+}

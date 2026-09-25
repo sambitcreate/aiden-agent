@@ -133,6 +133,23 @@ packages and feeds, then confirm that modified bytes, a wrong source commit, and
 an attestation from a different workflow or ref are rejected. Local workflow tests
 cannot substitute for that hosted signing acceptance.
 
+## A signed app that never opens on macOS 27 beta
+
+On macOS 27 beta, a valid Developer ID app can be held before its first instruction executes.
+The visible symptoms are a Dock icon with no window, no new Aiden diagnostic events, a process
+sample containing only `_dyld_start`, and `vmmap -summary <pid>` reporting that the process is
+`launched-suspended`. `spctl`, strict deep code-sign verification, notarization, and stapling can
+all still pass. This is an operating-system launch-policy failure, not an Aiden profile migration;
+do not delete `~/Library/Application Support/Aiden Agent` or `~/.aiden` while diagnosing it.
+
+First stop every suspended Aiden and ShipIt process, restart the Mac, and install the newest DMG
+after moving the old application bundle aside rather than overwriting it. If newly installed
+Electron apps from other vendors also remain at `_dyld_start`, update to a newer macOS 27 beta or
+return to the current stable macOS release before judging the Aiden artifact. Keep the old bundle
+and `~/Library/Caches/com.sambitcreate.aiden-agent.ShipIt` logs until the replacement launches.
+Release acceptance must record this OS boundary separately from the hosted signing, notarization,
+package, and disposable-profile gates.
+
 ## Physical Mac acceptance on a personal Mac Studio
 
 A spare Mac is not required. For now, keep pull-request CI, release builds, signing,

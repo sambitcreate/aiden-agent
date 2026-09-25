@@ -13,10 +13,12 @@ for (const mutation of [
 ] as const) {
   test(`${mutation} publication aborts an active Bot inventory lease`, () => {
     const registry = new BotRuntimeInventoryLeaseRegistry();
+    const revision = registry.revision();
     const lease = registry.acquire();
     assert.equal(registry.activeCount(), 1);
 
     registry.invalidate(mutation);
+    assert.notEqual(registry.revision(), revision);
 
     assert.equal(lease.signal.aborted, true);
     assert.throws(() => lease.assertCurrent(), /capabilities changed/u);

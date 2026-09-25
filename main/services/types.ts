@@ -1,3 +1,4 @@
+import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
@@ -25,6 +26,8 @@ export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "au
 
 /** Metadata reported by the configured provider during explicit model discovery. */
 export interface ProviderModelMetadata {
+  overrides?: CustomModelOptions;
+  manuallyAdded?: boolean;
   source: "lmstudio" | "ollama" | "provider";
   name?: string;
   type?: ProviderModelType;
@@ -53,6 +56,8 @@ export interface StoredProvider {
   models: string[];
   /** Provider-reported metadata captured alongside the last explicit discovery. */
   modelMetadata?: Record<string, ProviderModelMetadata>;
+  /** User-authored model intent, portable independently of discovery cache. */
+  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
   defaultModel?: string;
   /** Whether this provider requires an API key (local backends often don't). */
   needsKey: boolean;
@@ -109,6 +114,12 @@ export interface ManagedWorktree {
   worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
+  /**
+   * Worktree-relative ignored paths Aiden provisioned at create time. This is
+   * the authoritative allowlist for snapshot/deletion classification; the
+   * `.worktreeinclude` file is never re-read for lifecycle decisions.
+   */
+  provisionedFiles?: string[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */
@@ -125,6 +136,99 @@ export interface Workspace {
   createdAt: number;
   updatedAt: number;
 }
+
+/** GitHub pull request and check status reported for a workspace branch. */
+export type GitHubPullRequestCheckStatus =
+  | "pending"
+  | "action-required"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "neutral"
+  | "cancelled";
+
+export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
+
+export type GitHubPullRequestAvailability =
+  | "ready"
+  | "not-repo"
+  | "missing-tool"
+  | "unauthenticated"
+  | "no-pull-request"
+  | "not-github"
+  | "unsupported"
+  | "error";
+
+export interface GitHubPullRequestCheck {
+  name: string;
+  status: GitHubPullRequestCheckStatus;
+  description?: string;
+  url?: string;
+}
+
+export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
+
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  headBranch: string;
+  baseBranch: string;
+  headSha?: string;
+  author?: string;
+  reviewDecision?: GitHubPullRequestReviewDecision | null;
+  mergeable?: boolean | null;
+  updatedAt?: number;
+  checksState?: GitHubPullRequestChecksState | null;
+  checks: GitHubPullRequestCheck[];
+}
+
+export interface GitHubPullRequestStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequest?: GitHubPullRequestSummary;
+}
+
+export interface GitHubPullRequestListStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  pullRequests?: GitHubPullRequestSummary[];
+}
+
+export interface GitHubRepositoryRef {
+  host: string;
+  /** Canonical `owner/repo` (lowercase, no `.git`). */
+  nameWithOwner: string;
+}
+
+export interface GitHubRepositoryStatus {
+  availability: GitHubPullRequestAvailability;
+  message?: string;
+  repository?: GitHubRepositoryRef;
+}
+
+export interface GitHubPullRequestCreateInput {
+  repository?: string;
+  title: string;
+  body?: string;
+  baseBranch?: string;
+  headBranch?: string;
+  draft?: boolean;
+}
+
+/**
+ * `gh pr create` triage. "failed" means the CLI demonstrably never reached a
+ * successful mutation (missing tool, auth, input rejected before the request).
+ * Anything where GitHub may have created the PR — timeouts, kills, network
+ * errors, even an exit code whose message is ambiguous — is "unknown" and must
+ * go through reconciliation before being retried or reported.
+ */
+export type GitHubPullRequestCreateResult =
+  | { kind: "created"; pullRequest: GitHubPullRequestSummary }
+  | { kind: "failed"; availability: GitHubPullRequestAvailability; message: string }
+  | { kind: "unknown"; message: string };
 
 /** Result of inspecting a folder for git status. */
 export interface GitInfo {
@@ -250,6 +354,9 @@ export type ModelMetadataSource =
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
+  detectedCapabilities?: CustomModelOptions;
+  maxImages?: number;
+  video?: boolean;
   id: string;
   name?: string;
   /** Accepts image input (vision). */
@@ -453,6 +560,9 @@ export interface Skill {
 
 /** An Agent Skill discovered on disk from a skill folder (read-only). */
 export interface DiscoveredSkill {
+  /** Omitted legacy metadata permits both invocation surfaces. */
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
   id: string;
   name: string;
   description: string;
@@ -575,6 +685,8 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
+  formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;

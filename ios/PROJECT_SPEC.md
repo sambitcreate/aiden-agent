@@ -14,6 +14,8 @@ The app is not a Hermes WebUI client, a hosted service, a web view, or an agent 
 
 The active product extension redesigns iPhone and iPad first around two areas, **Bots** and **Workspaces**, selected from the Aiden logo. Mac UX redesign is deferred. The paired Mac remains authoritative for bot identity, conversations, access policy, managed workspace, shell/tool execution, provider and capability catalogs, and the canonical bot photo.
 
+Task progress and delegated-agent inspection are separately negotiated, read-only chat projections. The phone may request `tasks:read` and `agents:read` only after the authenticated server advertises the matching feature, then renders bounded snapshots and the standalone chat-scoped progress stream. These projections never grant turn control or expose child prompts, transcripts, private run identifiers, paths, credentials, or raw diagnostics; a public agent turn ID is only a selector for a bounded historical roster read.
+
 ## 2. Confirmed scope
 
 The complete planned product includes:
@@ -45,6 +47,7 @@ Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insi
 - Pairing secrets are high entropy, short lived, single use, rate limited, and never logged. The reviewed manual path uses a uniformly random 100-bit Crockford code only as a local HKDF input for authenticated decryption of the existing certificate-pinned trust envelope; lower-entropy human-sized codes still require a reviewed PAKE/SAS or explicit fingerprint confirmation.
 - Device credentials are random, stored as digests on the desktop and in Keychain on iOS, capability scoped, revocable, and never placed in URLs, App Group data, App Intents, logs, or Live Activities.
 - DTOs are allowlists. Absolute paths, provider/MCP credentials, raw diagnostics, Git admin paths/tokens, schedule runtime internals, and private agent history never cross the API.
+- Task and agent progress DTOs remain read-only and separately authorized from the parent transcript. The app keeps only a bounded local roster history, refetches a selected public turn by opaque ID, and fences snapshots by projection epoch and revision. A progress reconnect starts at a fresh snapshot with no inherited SSE cursor.
 - Directory and file handles are opaque server-side capabilities bound to instance, device, workspace/root identity, policy revision, expiry, and snapshot. The client never submits a free-form desktop path.
 - Workspace selection consumption and workspace creation are atomic and idempotent. Filesystem identity and canonical root membership are revalidated immediately before mutation.
 - Workspace turns honor the workspace's saved `full`, `ask`, or `none` permission. Bot turns instead honor a main-owned, revisioned Full/Custom policy: Full is explicit after the current notice, Custom uses exact reductions, and corrupt, missing-after-migration, or future-version policy state fails closed. Neither transport can mint Assistant/unattended modes or silently enable Computer Use.
@@ -100,6 +103,7 @@ TypeScript and Swift tests must decode the same checked-in fixtures. Codable mod
 - The phone never retries turn creation solely because its stream disconnected.
 - Approval IDs are device/stream bound and responses are idempotent. Only `allow` and `deny` are supported initially.
 - Provider failure, cancellation, interruption, completion, and revocation are explicit terminal states.
+- Task and agent progress use a standalone chat-scoped SSE channel whose stream ID is the chat ID. The server sends authoritative full snapshots; the app resets its cursor on reconnect and treats transport loss as last-known state until a fresh snapshot arrives.
 
 ## 7. Apple identity
 

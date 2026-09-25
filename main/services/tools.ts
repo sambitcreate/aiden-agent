@@ -1,3 +1,4 @@
+import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // Assembles the pi agent tool set for a generation: Web Search + Agent Skills +
 // MCP server tools, based on current settings. Empty when nothing is enabled.
 //
@@ -14,6 +15,8 @@ import { skillRegistry } from "./skill-registry-main.js";
 import { buildSkillTools } from "./skill-tools.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import type { FormFillService } from "./form-fill/service.js";
+import { createFormFillAgentTool } from "./form-fill/tool.js";
 import {
   scheduleTaskToolsForContext,
   type AssistantScheduleModelSelection,
@@ -34,6 +37,8 @@ export { skillToolKey } from "./skill-registry-core.js";
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
+  /** Main-only generation sink, populated only by admitted MCP discovery. */
+  onMcpServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void;
   /** Workspace identity used as the default target for agent-created schedules. */
   workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
@@ -44,6 +49,8 @@ export interface ToolContext {
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Optional generation-scoped Form Fill Specialist. Present only when enabled and ready. */
+  formFill?: FormFillService;
   /** Main-created tools bound to this generation's workspace and browser host. */
   browserTools?: readonly AgentTool[];
   /** Background scheduled runs disable this to prevent recursive task creation. */
@@ -102,6 +109,7 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
   return collectMcpAgentTools(servers, {
     strict: ctx.mcpServerIds !== undefined,
+    onServerInstructions: ctx.onMcpServerInstructions,
   });
 }
 
@@ -160,6 +168,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
   if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.computerUse && ctx.formFill) tools.push(createFormFillAgentTool(ctx.formFill));
   if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
   if (ctx.allowScheduling !== false) {
     tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());

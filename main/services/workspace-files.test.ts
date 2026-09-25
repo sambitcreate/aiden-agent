@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -209,3 +211,93 @@ test(
     assert.equal(await linuxRecoveryUse(file), "clear");
   },
 );
+
+test("workspace editor rejects a file that grows after the pathname size check", async (t) => {
+  const root = await workspace(t);
+  const file = path.join(root, "growing.txt");
+  await fs.writeFile(file, "small");
+  const canonicalFile = await fs.realpath(file);
+  const originalStat = fsPromises.stat;
+  let grew = false;
+  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof originalStat>) => {
+    const info = await originalStat(...args);
+    if (args[0] === canonicalFile && !grew) {
+      grew = true;
+      await fs.writeFile(file, "x".repeat(1_500_001));
+    }
+    return info;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+
+  await assert.rejects(readWorkspaceFile(root, "growing.txt"), /too large to edit/);
+  assert.equal(grew, true);
+});
+
+test("workspace editor bounds bytes even when a file grows after descriptor stat", async (t) => {
+  const root = await workspace(t);
+  const file = path.join(root, "growing.txt");
+  await fs.writeFile(file, "small");
+  const canonicalFile = await fs.realpath(file);
+  const originalOpen = fsPromises.open;
+  let grew = false;
+  let bytesRead = 0;
+  let closed = false;
+  t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
+    const handle = await originalOpen(...args);
+    if (args[0] !== canonicalFile) return handle;
+    const originalStat = handle.stat.bind(handle);
+    t.mock.method(handle, "stat", async () => {
+      const info = await originalStat();
+      grew = true;
+      await fs.writeFile(file, "x".repeat(2_000_000));
+      return info;
+    });
+    const originalRead = handle.read.bind(handle);
+    t.mock.method(handle, "read", async (buffer: Buffer, offset: number, length: number, position: number) => {
+      const result = await originalRead(buffer, offset, length, position);
+      bytesRead += result.bytesRead;
+      return result;
+    });
+    const originalClose = handle.close.bind(handle);
+    t.mock.method(handle, "close", async () => {
+      await originalClose();
+      closed = true;
+    });
+    return handle;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+
+  await assert.rejects(readWorkspaceFile(root, "growing.txt"), /too large to edit/);
+  assert.equal(grew, true);
+  assert.equal(bytesRead, 1_500_001, "only the editor budget plus one overflow sentinel is read");
+  assert.equal(closed, true, "rejected reads close the opened descriptor");
+});
+
+test("workspace editor accepts the exact byte limit and rejects one byte over it", async (t) => {
+  const root = await workspace(t);
+  const file = path.join(root, "limit.txt");
+  const content = "é".repeat(750_000);
+  await fs.writeFile(file, content);
+  const document = await readWorkspaceFile(root, "limit.txt");
+  assert.equal(document.content, content);
+  assert.equal(document.size, 1_500_000);
+  await fs.appendFile(file, "x");
+  await assert.rejects(readWorkspaceFile(root, "limit.txt"), /too large to edit/);
+});
+
+test("workspace editor still follows a stable symlink to a file inside the workspace", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "target.txt"), "linked content\n");
+  await fs.symlink("target.txt", path.join(root, "linked.txt"));
+  const document = await readWorkspaceFile(root, "linked.txt");
+  assert.equal(document.path, "linked.txt");
+  assert.equal(document.content, "linked content\n");
+});
