@@ -3562,6 +3562,7 @@
           "name": "hubPath",
           "in": "path",
           "required": true,
+          "description": "An allowlisted hub path. It spans several segments, for example vendor/serve-sim/helper/{udid}/stream.avcc.",
           "schema": {
             "type": "string",
             "minLength": 1,
@@ -3572,7 +3573,7 @@
       "get": {
         "operationId": "relaySimulatorHub",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET), and the per-device helper WebSocket (GET with Upgrade). Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
         "responses": {
           "200": {
             "description": "Relayed hub content"

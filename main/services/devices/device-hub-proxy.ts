@@ -86,7 +86,14 @@ const WS_HANDSHAKE_HEADERS = [
   "sec-websocket-protocol",
 ];
 
-const DROPPED_RESPONSE_HEADERS = new Set(["content-encoding", "transfer-encoding", "connection", "keep-alive"]);
+/** `location` is dropped too: a redirect would point the caller at the hub or relay's own origin. */
+const DROPPED_RESPONSE_HEADERS = new Set([
+  "content-encoding",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "location",
+]);
 
 /** A paired Mac's simulator relay. Built in main from the pinned pairing; never sent to the renderer. */
 export interface DeviceHubUpstream {
@@ -115,6 +122,8 @@ export interface DeviceHubProxyOptions {
 export interface DeviceHubProxy {
   origin: string;
   mintGrant(): DeviceStreamGrant;
+  /** Closes every open response and socket for one host, e.g. a paired Mac that stopped sharing. */
+  closeHost(hostId: string): void;
   close(): Promise<void>;
 }
 
@@ -285,7 +294,18 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
   const ttl = options.grantTtlMs ?? DEVICE_STREAM_GRANT_TTL_MS;
   const grants = new Map<string, number>();
   const openSockets = new Set<Duplex>();
+  const byHost = new Map<string, Set<{ destroy(): void }>>();
   let port = 0;
+
+  const trackHost = (hostId: string, connection: { destroy(): void; once(event: "close", listener: () => void): unknown }) => {
+    const set = byHost.get(hostId) ?? new Set();
+    set.add(connection);
+    byHost.set(hostId, set);
+    connection.once("close", () => {
+      set.delete(connection);
+      if (set.size === 0 && byHost.get(hostId) === set) byHost.delete(hostId);
+    });
+  };
 
   const liveToken = (token: string | null): boolean => {
     const at = now();
@@ -359,6 +379,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     const target = await resolve(decision.hostId);
     if (response.destroyed) return;
     if (!target) return refuse(response, request, 503, "Device hub is not running");
+    trackHost(decision.hostId, response);
     const onResponse = (hubResponse: IncomingMessage) => {
       const headers = hubResponseHeaders(hubResponse.headers);
       Object.assign(headers, corsHeaders(origin));
@@ -399,6 +420,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     const target = await resolve(decision.hostId);
     if (client.destroyed) return;
     if (!target) return refuseUpgrade(client, 503, "Device hub is not running");
+    trackHost(decision.hostId, client);
     if (isUpstream(target)) {
       const url = new URL(target.origin);
       const hostname = url.hostname.replace(/^\[|\]$/gu, "");
@@ -458,6 +480,11 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       const expiresAt = now() + ttl;
       grants.set(token, expiresAt);
       return { origin, token, expiresAt };
+    },
+    closeHost(hostId) {
+      const connections = byHost.get(hostId);
+      byHost.delete(hostId);
+      for (const connection of connections ?? []) connection.destroy();
     },
     close: () =>
       new Promise<void>((resolveClose) => {

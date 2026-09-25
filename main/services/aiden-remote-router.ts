@@ -1175,10 +1175,11 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticateCredential(request, dependencies.devices, capability);
         // Every authenticated operation crosses the synchronous revocation
         // fence. Only mutations participate in the drain; SSE/read lifetimes
-        // must not postpone durable revocation or cleanup.
+        // must not postpone durable revocation or cleanup. Simulator controls
+        // can wait minutes on a boot and are closed by `revokeDevice` instead.
         releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
           device.id,
-          request.method !== "GET",
+          request.method !== "GET" && path !== "/simulators" && !path.startsWith("/simulators/"),
         );
         return device;
       };

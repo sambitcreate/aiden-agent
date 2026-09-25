@@ -222,6 +222,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let devices: DeviceSummary[] = [];
   const peers = new Map<string, PeerEntry>();
   let peerRefresh: Promise<void> | null = null;
+  /** Bumped whenever the peer list is forgotten, so an in-flight refresh or open cannot repopulate it. */
+  let peerEpoch = 0;
   const sharingListeners = new Set<(sharing: boolean) => void>();
   let sharingWas = false;
   let sessions: DeviceSession[] = [];
@@ -389,7 +391,18 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     }
   }
 
+  /** Closes the renderer's proxied streams to a paired Mac that is gone or no longer ready. */
+  function closePeerStreams(hostId: string): void {
+    void proxy?.then(
+      (running) => running.closeHost(hostId),
+      () => undefined,
+    );
+  }
+
   function forgetPeers(): void {
+    peerEpoch += 1;
+    peerRefresh = null;
+    for (const id of peers.keys()) closePeerStreams(id);
     peers.clear();
     sessions = sessions.filter((session) => session.hostId === host.id);
   }
@@ -402,9 +415,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       return Promise.resolve();
     }
     const port = deps.peers;
-    peerRefresh ??= (async () => {
+    if (peerRefresh) return peerRefresh;
+    const epoch = peerEpoch;
+    const current = () => epoch === peerEpoch && consent.streaming;
+    let run: Promise<void> | null = null;
+    run = (async () => {
+      const wasReady = new Set([...peers].filter(([, entry]) => entry.state.status === "ready").map(([id]) => id));
       try {
         const hosts = await port.hosts().catch(() => []);
+        if (!current()) return;
         const present = new Set(hosts.map((peer) => peer.id));
         for (const id of [...peers.keys()]) {
           if (!present.has(id)) {
@@ -418,6 +437,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
             entry.name = peer.name;
             try {
               const listing = await port.list(peer.id);
+              // A revoke while this Mac was answering must not bring it back.
+              if (!current()) return;
               if (!listing) {
                 peers.delete(peer.id);
                 sessions = sessions.filter((session) => session.hostId !== peer.id);
@@ -436,18 +457,23 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
                 listing.devices.map((device) => ({ ...device, hostId: peer.id, platform: "ios" as const })),
               );
             } catch {
+              if (!current()) return;
               peers.set(peer.id, entry);
               entry.state = { status: "unavailable", detail: `Could not reach ${peer.name}.` };
               setPeerDevices(peer.id, entry, []);
             }
           }),
         );
+        for (const id of wasReady) {
+          if (peers.get(id)?.state.status !== "ready") closePeerStreams(id);
+        }
       } finally {
-        peerRefresh = null;
+        if (peerRefresh === run) peerRefresh = null;
         emit();
       }
     })();
-    return peerRefresh;
+    peerRefresh = run;
+    return run;
   }
 
   /** Boots the simulator if needed and attaches the stream helper. */
@@ -697,7 +723,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (!entry.devices.some((device) => device.id === input.deviceId)) {
           throw new Error("That simulator is no longer available.");
         }
+        const epoch = peerEpoch;
         const opened = await peerPort().open(hostId, input.deviceId);
+        if (epoch !== peerEpoch || !consent.streaming || peers.get(hostId) !== entry) {
+          throw new Error("Simulator streaming was turned off while opening.");
+        }
         entry.devices = entry.devices.map((device) =>
           device.id === opened.id ? { ...opened, hostId, platform: "ios" } : device,
         );
@@ -871,6 +901,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       sharingListeners.clear();
       await stopHost();
       shimDir = null;
+      peerEpoch += 1;
+      peerRefresh = null;
       peers.clear();
       listeners.clear();
       revealListeners.clear();

@@ -187,6 +187,7 @@ async function withService(
       return {
         origin: "http://127.0.0.1:53000",
         mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        closeHost: () => undefined,
         close: async () => undefined,
       } satisfies DeviceHubProxy;
     },
@@ -682,8 +683,10 @@ async function withPeers(
     service: ReturnType<typeof createDeviceService>;
     peers: ReturnType<typeof fakePeers>;
     resolve: () => (hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>;
+    closed: string[];
   }) => Promise<void>,
 ) {
+  const closed: string[] = [];
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-peers-"));
   await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(consent));
   const peers = fakePeers(listings);
@@ -698,6 +701,7 @@ async function withPeers(
       return {
         origin: "http://127.0.0.1:53000",
         mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        closeHost: (hostId) => closed.push(hostId),
         close: async () => undefined,
       } satisfies DeviceHubProxy;
     },
@@ -706,6 +710,7 @@ async function withPeers(
     await run({
       service,
       peers,
+      closed,
       resolve: () => {
         assert.ok(resolver, "the proxy started");
         return resolver;
@@ -793,6 +798,49 @@ test("opening a paired Mac's simulator goes through the peer, and revoking strea
     assert.deepEqual(state.hosts.map((host) => host.id), ["local"]);
     assert.deepEqual(state.sessions, []);
     assert.equal(await resolve()("studio"), null);
+  });
+});
+
+test("a streaming revoke during a peer refresh or open is never undone", async () => {
+  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
+    let answer: (listing: PeerSimulatorListing) => void = () => undefined;
+    peers.port.list = () => new Promise((resolve) => (answer = resolve));
+    const refreshing = service.refreshPeers();
+    await new Promise((resolve) => setImmediate(resolve));
+    await service.revokeConsent("streaming");
+    answer(READY_LISTING);
+    await refreshing;
+    assert.deepEqual(service.state().hosts.map((host) => host.id), ["local"]);
+  });
+  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
+    await service.refreshPeers();
+    const open = peers.port.open;
+    let proceed: () => void = () => undefined;
+    peers.port.open = async (hostId, deviceId) => {
+      await new Promise<void>((resolve) => (proceed = resolve));
+      return open(hostId, deviceId);
+    };
+    const opening = service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+    await new Promise((resolve) => setImmediate(resolve));
+    await service.revokeConsent("streaming");
+    proceed();
+    await assert.rejects(opening, /turned off while opening/u);
+    assert.deepEqual(service.state().sessions, []);
+    assert.deepEqual(service.state().hosts.map((host) => host.id), ["local"]);
+  });
+});
+
+test("proxied streams to a paired Mac close when it stops being ready or streaming is revoked", async () => {
+  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers, closed }) => {
+    await service.refreshPeers();
+    await service.streamGrant();
+    peers.port.list = async () => ({ sharing: false, status: "ready", devices: [] });
+    await service.refreshPeers();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closed, ["studio"]);
+    await service.revokeConsent("streaming");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closed, ["studio", "studio"]);
   });
 });
 

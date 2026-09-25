@@ -3143,6 +3143,11 @@ test("hub WebSocket upgrades authenticate before reaching the relay", async () =
     assert.equal(await statusLine(mac.base, path, auth), "HTTP/1.1 404 Not Found");
     const logged = mac.logs.filter((entry) => (entry as { route?: string }).route === "simulatorHub");
     assert.equal(logged.length, 4);
+    // A relay refusal is logged with its real status, never as a switch.
+    assert.deepEqual(
+      logged.map((entry) => (entry as { status?: number }).status),
+      [400, 403, 404, 404],
+    );
     assert.ok(logged.every((entry) => !("routePath" in (entry as object))));
   } finally {
     await mac.close();

@@ -9,7 +9,12 @@ import type { Socket } from "node:net";
 import test from "node:test";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
 import { peerTlsOptions } from "../peer-transport.js";
-import { startDeviceHubProxy, type DeviceHubProxy, type DeviceHubUpstream } from "./device-hub-proxy.js";
+import {
+  hubResponseHeaders,
+  startDeviceHubProxy,
+  type DeviceHubProxy,
+  type DeviceHubUpstream,
+} from "./device-hub-proxy.js";
 
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
 
@@ -298,6 +303,31 @@ test("foreign origins and rebinding hosts are refused, and preflight is scoped",
     });
     assert.equal(readPreflight.headers["access-control-allow-methods"], "GET, HEAD");
     assert.equal(hub.records.length, 1);
+  });
+});
+
+test("redirects and hop-by-hop headers never reach the renderer", () => {
+  const headers = hubResponseHeaders({
+    location: "http://127.0.0.1:52000/elsewhere",
+    "content-type": "image/png",
+    connection: "keep-alive",
+  });
+  assert.equal(headers.location, undefined);
+  assert.equal(headers.connection, undefined);
+  assert.equal(headers["content-type"], "image/png");
+});
+
+test("closing a host ends its open sockets and leaves other hosts alone", async () => {
+  await withProxy(async ({ proxy }) => {
+    const { token } = proxy.mintGrant();
+    const connection = await upgrade(proxy, `/vendor/serve-sim/helper/ws?device=${UDID}&t=${token}`);
+    assert.equal(connection.status, 101);
+    await connection.firstFrame;
+    const closed = new Promise<void>((resolve) => connection.socket!.once("close", () => resolve()));
+    proxy.closeHost("studio");
+    assert.equal(connection.socket!.destroyed, false);
+    proxy.closeHost("local");
+    await closed;
   });
 });
 

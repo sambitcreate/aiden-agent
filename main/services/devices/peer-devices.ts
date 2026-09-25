@@ -22,7 +22,8 @@ import { peerTlsOptions, PeerTransportError } from "../peer-transport.js";
 import type { DeviceHubUpstream } from "./device-hub-proxy.js";
 
 /** Booting a simulator on the other Mac can take minutes. */
-const PEER_OPEN_TIMEOUT_MS = 200_000;
+/** Above the serving Mac's own boot wait, so the caller does not give up first. */
+const PEER_OPEN_TIMEOUT_MS = 220_000;
 const PEER_SCREENSHOT_TIMEOUT_MS = 30_000;
 const MAX_SCREENSHOT_BYTES = 32 * 1_048_576;
 const MAX_PEER_SIMULATORS = 256;
@@ -143,8 +144,14 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
             throw error;
           },
         );
-      // Only answers are remembered; a transport failure retries next time.
-      pending.catch(() => negotiated.delete(hostId));
+      // Only a grant is remembered: a transport failure or "not supported" asks again next time,
+      // so a Mac that turns the feature on or upgrades is found without restarting.
+      pending.then(
+        (granted) => {
+          if (!granted) negotiated.delete(hostId);
+        },
+        () => negotiated.delete(hostId),
+      );
       negotiated.set(hostId, pending);
     }
     return pending;

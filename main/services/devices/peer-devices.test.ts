@@ -102,7 +102,26 @@ test("a peer that stops offering simulators is renegotiated on the next refresh"
   offered = false;
   assert.equal(await peers.list("a"), null);
   assert.equal(await peers.list("a"), null);
-  assert.equal(port.requests.filter(([, input]) => input.path === "/device/capabilities").length, 2);
+  // "Not offered" is never remembered, so turning the feature back on is found without a restart.
+  offered = true;
+  assert.ok(await peers.list("a"));
+  assert.equal(port.requests.filter(([, input]) => input.path === "/device/capabilities").length, 3);
+});
+
+test("a Mac that answered not found is asked again after it upgrades", async () => {
+  let upgraded = false;
+  const peers = createPeerDevices(
+    registry((_id, input) => {
+      if (input.path === "/device/capabilities") {
+        if (!upgraded) throw new PeerTransportError("request_failed", 404);
+        return { capabilities: ["simulators:control"] };
+      }
+      return { sharing: true, status: "ready", devices: [] };
+    }),
+  );
+  assert.equal(await peers.list("a"), null);
+  upgraded = true;
+  assert.deepEqual(await peers.list("a"), { sharing: true, status: "ready", devices: [] });
 });
 
 test("controls send only the device id and validate the answer", async () => {
@@ -119,10 +138,10 @@ test("controls send only the device id and validate the answer", async () => {
   assert.deepEqual(
     port.requests.map(([, input]) => [input.path, input.body, input.timeoutMs]),
     [
-      ["/simulators/open", { deviceId: UDID }, 200_000],
-      ["/simulators/shutdown", { deviceId: UDID }, 200_000],
+      ["/simulators/open", { deviceId: UDID }, 220_000],
+      ["/simulators/shutdown", { deviceId: UDID }, 220_000],
       ["/simulators/settings", { deviceId: UDID }, undefined],
-      ["/simulators/action", { deviceId: UDID, type: "setAppearance", value: "dark" }, 200_000],
+      ["/simulators/action", { deviceId: UDID, type: "setAppearance", value: "dark" }, 220_000],
     ],
   );
   const wrong = createPeerDevices(registry(() => ({ device: { ...SIMULATOR, id: "OTHER-ID" } })));

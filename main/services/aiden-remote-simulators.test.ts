@@ -4,8 +4,10 @@ import { connect, type AddressInfo } from "node:net";
 import test from "node:test";
 import type { DeviceActionInput } from "../../renderer/shared/devices.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { refuseUpgrade } from "./devices/device-hub-proxy.js";
 import {
   AidenRemoteSimulatorRelay,
+  MAX_RELAYS_PER_DEVICE,
   type AidenRemoteSimulatorHost,
   type AidenRemoteSimulatorListing,
 } from "./aiden-remote-simulators.js";
@@ -103,7 +105,12 @@ async function front(relay: AidenRemoteSimulatorRelay) {
   });
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://front");
-    relay.upgrade({ request: req, socket, head, path: url.pathname, query: url.search.slice(1), deviceId: "peer-1" });
+    try {
+      relay.upgrade({ request: req, socket, head, path: url.pathname, query: url.search.slice(1), deviceId: "peer-1" });
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 500;
+      refuseUpgrade(socket, status, status === 404 ? "Not Found" : "Refused");
+    }
   });
   const origin = await listen(server);
   return { server, origin };
@@ -275,6 +282,52 @@ test("revoking a device or turning sharing off closes live relays", async (t) =>
   const second = await stream();
   fake.setSharing(false);
   await ended(second);
+});
+
+test("a paired device may hold only a bounded number of relays", async (t) => {
+  const hub = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "multipart/x-mixed-replace" });
+    res.write("frame");
+  });
+  const hubOrigin = await listen(hub);
+  t.after(() => {
+    hub.closeAllConnections();
+    hub.close();
+  });
+  const fake = fakeHost({ hub: hubOrigin });
+  const relay = new AidenRemoteSimulatorRelay(() => fake.host);
+  const { server, origin } = await front(relay);
+  t.after(() => {
+    relay.closeAll();
+    server.closeAllConnections();
+    server.close();
+  });
+  const stream = () =>
+    new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(`${origin}/simulators/hub/vendor/serve-sim/helper/${UDID}/stream.mjpeg`, resolve);
+      req.once("error", reject);
+      req.end();
+    });
+  const open: IncomingMessage[] = [];
+  for (let index = 0; index < MAX_RELAYS_PER_DEVICE; index += 1) {
+    const response = await stream();
+    assert.equal(response.statusCode, 200);
+    response.resume();
+    open.push(response);
+  }
+  const refused = await stream();
+  assert.equal(refused.statusCode, 429);
+  refused.resume();
+  const closed = new Promise<void>((resolve) => open[0]!.once("close", () => resolve()));
+  open[0]!.destroy();
+  await closed;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const next = await stream();
+    next.resume();
+    if (next.statusCode === 200) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("a freed relay slot was never reusable");
 });
 
 test("WebSocket upgrades relay only allowlisted sockets for listed devices", async (t) => {

@@ -25,13 +25,14 @@ import {
   hubRequestHeaders,
   hubResponseHeaders,
   pipeUpgrade,
-  refuseUpgrade,
   upgradeRequestHead,
 } from "./devices/device-hub-proxy.js";
 
 /** Relay routes live under this prefix, followed by the hub path. */
 export const AIDEN_REMOTE_SIMULATOR_HUB_PREFIX = "/simulators/hub";
 const MAX_SCREENSHOT_BODY_BYTES = 1_024;
+/** Open relays per paired device: a few simulators' frame and input streams, with headroom. */
+export const MAX_RELAYS_PER_DEVICE = 8;
 const UDID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 
 export type AidenRemoteSimulator = Omit<DeviceSummary, "hostId">;
@@ -135,6 +136,12 @@ export class AidenRemoteSimulatorRelay {
 
   closeAll(): void {
     for (const deviceId of [...this.live.keys()]) this.revokeDevice(deviceId);
+  }
+
+  private requireRelayCapacity(deviceId: string): void {
+    if ((this.live.get(deviceId)?.size ?? 0) >= MAX_RELAYS_PER_DEVICE) {
+      throw new AidenRemoteServiceError("handle_capacity", "Too many simulator streams are open.", 429, true);
+    }
   }
 
   private track(deviceId: string, connection: { destroy(): void; once(event: "close", listener: () => void): unknown }) {
@@ -256,6 +263,7 @@ export class AidenRemoteSimulatorRelay {
       throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
     }
     const target = this.hubTarget(method, context.path, context.query, false);
+    this.requireRelayCapacity(context.deviceId);
     let body: Buffer | undefined;
     if (method === "POST") {
       // The screenshot capture is the only body; it must name a listed simulator.
@@ -300,8 +308,9 @@ export class AidenRemoteSimulatorRelay {
   }
 
   /**
-   * Relays an authenticated WebSocket upgrade under the hub prefix. Refuses
-   * with a bare HTTP status line; the socket never reaches the hub on refusal.
+   * Relays an authenticated WebSocket upgrade under the hub prefix. Throws
+   * `AidenRemoteServiceError` on refusal, so the caller answers with a bare
+   * HTTP status line and logs it; the socket never reaches the hub then.
    */
   upgrade(input: {
     request: IncomingMessage;
@@ -312,17 +321,11 @@ export class AidenRemoteSimulatorRelay {
     deviceId: string;
   }): void {
     const { request, socket } = input;
-    let target: ReturnType<AidenRemoteSimulatorRelay["hubTarget"]>;
-    try {
-      if (!input.path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
-        throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
-      }
-      target = this.hubTarget(request.method ?? "GET", input.path, input.query, true);
-    } catch (error) {
-      const status = error instanceof AidenRemoteServiceError ? error.status : 500;
-      refuseUpgrade(socket, status, status === 404 ? "Not Found" : "Refused");
-      return;
+    if (!input.path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
     }
+    const target = this.hubTarget(request.method ?? "GET", input.path, input.query, true);
+    this.requireRelayCapacity(input.deviceId);
     const hub = new URL(target.hubOrigin);
     const upstream = connect({ host: hub.hostname, port: Number(hub.port) });
     this.track(input.deviceId, socket);
