@@ -111,6 +111,37 @@ test("plain-message tokenization falls back without changing invalid and non-web
   }
 });
 
+test("plain-message tokenization leaves URLs in backtick code literal", () => {
+  const content = [
+    "Run `curl https://github.com/acme/repo`.",
+    "``Use https://gitlab.com/group/project here``.",
+    "```sh\ncurl https://docs.google.com/document/d/private/edit\n```",
+    "Unclosed `https://workspace.slack.com/archives/C1/p1",
+  ].join("\n");
+  const segments = tokenizeWebLinks(content);
+  assert.equal(segments.map((segment) => segment.text).join(""), content);
+  assert.equal(segments.some((segment) => segment.kind === "link"), false);
+
+  const withOutsideLink = `${content}\nOpen https://github.com/openai/codex instead.`;
+  const outsideSegments = tokenizeWebLinks(withOutsideLink);
+  assert.equal(outsideSegments.map((segment) => segment.text).join(""), withOutsideLink);
+  assert.deepEqual(
+    outsideSegments
+      .filter((segment) => segment.kind === "link")
+      .map((segment) => segment.href),
+    [],
+    "an unclosed backtick span intentionally protects the remainder of the message",
+  );
+
+  const closedThenOutside = "`https://github.com/acme/repo` https://github.com/openai/codex";
+  assert.deepEqual(
+    tokenizeWebLinks(closedThenOutside)
+      .filter((segment) => segment.kind === "link")
+      .map((segment) => segment.href),
+    ["https://github.com/openai/codex"],
+  );
+});
+
 test("trailing delimiter trimming stays linear for long generated links", () => {
   const trailing = ")".repeat(20_000);
   const value = `https://example.com/path${trailing}`;

@@ -377,14 +377,55 @@ function isValidWebUrl(value: string): boolean {
   }
 }
 
+interface TextRange {
+  start: number;
+  end: number;
+}
+
+function backtickCodeRanges(content: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    const start = content.indexOf("`", cursor);
+    if (start < 0) break;
+    let delimiterEnd = start + 1;
+    while (content[delimiterEnd] === "`") delimiterEnd += 1;
+    const delimiter = content.slice(start, delimiterEnd);
+    let searchFrom = delimiterEnd;
+    let closingStart = -1;
+    while (searchFrom < content.length) {
+      const candidate = content.indexOf(delimiter, searchFrom);
+      if (candidate < 0) break;
+      const extendsBefore = content[candidate - 1] === "`";
+      const extendsAfter = content[candidate + delimiter.length] === "`";
+      if (!extendsBefore && !extendsAfter) {
+        closingStart = candidate;
+        break;
+      }
+      searchFrom = candidate + 1;
+    }
+    const end = closingStart < 0 ? content.length : closingStart + delimiter.length;
+    ranges.push({ start, end });
+    cursor = end;
+  }
+  return ranges;
+}
+
 export function tokenizeWebLinks(content: string): WebLinkSegment[] {
   const segments: WebLinkSegment[] = [];
+  const codeRanges = backtickCodeRanges(content);
+  let codeRangeIndex = 0;
   let cursor = 0;
   WEB_URL_PATTERN.lastIndex = 0;
   for (const match of content.matchAll(WEB_URL_PATTERN)) {
     const matchStart = match.index;
     const candidate = match[0];
     if (matchStart === undefined || !candidate) continue;
+    while (codeRanges[codeRangeIndex] && codeRanges[codeRangeIndex]!.end <= matchStart) {
+      codeRangeIndex += 1;
+    }
+    const codeRange = codeRanges[codeRangeIndex];
+    if (codeRange && matchStart >= codeRange.start && matchStart < codeRange.end) continue;
     const urlText = trimWebUrlCandidate(candidate);
     if (!urlText || !isValidWebUrl(urlText)) continue;
     if (matchStart > cursor) {
