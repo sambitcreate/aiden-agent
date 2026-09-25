@@ -899,6 +899,9 @@ final class AidenChatViewModel {
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
+    private var questionSnapshotGeneration: UInt64 = 0
+    private(set) var pendingQuestion: AidenPendingQuestion?
+    private(set) var isRespondingToQuestion = false
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
     private(set) var isSubmittingRunInput = false
@@ -1678,6 +1681,7 @@ final class AidenChatViewModel {
             tools = []
             activityTimeline = nil
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .queued
             coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
@@ -2180,6 +2184,55 @@ final class AidenChatViewModel {
         }
     }
 
+    /// Resolves the pending question prompt. A `cancelled` request dismisses
+    /// the whole prompt; otherwise `answers` carries one entry per addressed
+    /// question and unaddressed questions are recorded as skipped.
+    func respondToQuestion(
+        _ request: AidenQuestionRespondRequest,
+        promptID: String,
+        idempotencyKey: UUID
+    ) async {
+        guard !isReadOnlyPresentation, isConnected, !isRespondingToQuestion, !isStopping,
+              let question = pendingQuestion, question.id == promptID, question.canRespond else { return }
+        guard question.expiresAt > Date() else {
+            pendingQuestion = nil
+            return
+        }
+        guard let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        isRespondingToQuestion = true
+        defer { isRespondingToQuestion = false }
+        pendingQuestion = nil
+        if pendingApproval == nil { streamState = .running }
+        do {
+            let response = try await coordinator.remoteClient(for: context).respondToQuestion(
+                id: question.id,
+                request: request,
+                idempotencyKey: idempotencyKey
+            )
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            guard response.promptId == question.id else {
+                presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your Mac.")
+                if pendingQuestion == nil {
+                    await restorePendingQuestion(streamID: streamID, context: context)
+                }
+                return
+            }
+            coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "question-response:\(question.id)")
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  streamState?.isTerminal != true else { return }
+            presentedError = String(localized: "The question response was not confirmed. Refreshing the current prompt from your Mac.")
+            // Never resurrect the captured card or retry a possibly accepted answer.
+            if pendingQuestion == nil {
+                await restorePendingQuestion(streamID: streamID, context: context)
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+        }
+    }
+
     private func resolveModelSelection() {
         let selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
@@ -2347,8 +2400,16 @@ final class AidenChatViewModel {
     ) async {
         guard coordinator.isCurrent(context),
               activeStreamID == event.streamId,
-              event.shouldApply,
-              let payload = event.payload else { return }
+              event.shouldApply else { return }
+        if event.type == .questionRequired {
+            await restorePendingQuestion(
+                streamID: event.streamId,
+                context: context,
+                announce: feedbackPolicy.allowsFeedback
+            )
+            return
+        }
+        guard let payload = event.payload else { return }
         switch event.type {
         case .snapshot:
             streamState = .reconciling
@@ -2371,7 +2432,10 @@ final class AidenChatViewModel {
                     break
                 }
                 streamState = state
-                if state != .waitingForApproval { pendingApproval = nil }
+                if state != .waitingForApproval {
+                    pendingApproval = nil
+                    pendingQuestion = nil
+                }
                 await liveActivities.updateStatus(instanceID: instanceId, streamID: event.streamId, state: state)
             }
         case .textDelta:
@@ -2401,6 +2465,7 @@ final class AidenChatViewModel {
             )
         case .error:
             pendingApproval = nil
+            pendingQuestion = nil
             // The terminal chat reconciliation renders the durable, fixed-copy
             // outcome inline. Avoid covering that actionable state with a
             // second generic modal alert.
@@ -2423,6 +2488,7 @@ final class AidenChatViewModel {
             await finishStream(expectedStreamID: event.streamId, context: context)
         case .cancelled:
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .cancelled
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -2433,6 +2499,7 @@ final class AidenChatViewModel {
             await finishStream(expectedStreamID: event.streamId, context: context)
         case .done:
             pendingApproval = nil
+            pendingQuestion = nil
             streamState = .done
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -2468,6 +2535,7 @@ final class AidenChatViewModel {
             return
         }
         pendingApproval = nil
+        pendingQuestion = nil
         streamState = status.state
         if feedbackPolicy.allowsFeedback,
            status.state == .error || status.state == .interrupted {
@@ -2511,11 +2579,12 @@ final class AidenChatViewModel {
                 capabilities: approvalCapabilities(for: context)
             ) else {
                 pendingApproval = nil
-                streamState = .reconciling
-                await liveActivities.updateStatus(
-                    instanceID: instanceId,
+                // A pending question prompt shares the waiting_for_approval
+                // status; check its snapshot before declaring a reconcile gap.
+                await restorePendingQuestion(
                     streamID: streamID,
-                    state: .reconciling
+                    context: context,
+                    announce: announce
                 )
                 return
             }
@@ -2529,14 +2598,105 @@ final class AidenChatViewModel {
                 )
             }
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            // A question prompt may be pending alongside the approval; a nil
+            // snapshot simply clears stale card state without touching status.
+            await restorePendingQuestion(
+                streamID: streamID,
+                context: context,
+                reconcilesOnNil: false
+            )
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == streamID,
                   snapshotGeneration == approvalSnapshotGeneration,
                   pendingApproval == expectedApproval, streamState == expectedState else { return }
             pendingApproval = nil
-            streamState = .reconciling
-            await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+            await restorePendingQuestion(
+                streamID: streamID,
+                context: context,
+                reconcilesOnNil: true,
+                marksStaleOnFailure: true
+            )
+        }
+    }
+
+    /// Restores the pending `ask_user_question` prompt for this stream. The
+    /// Mac projects the wait as `waiting_for_approval`, so this is also the
+    /// fallback when the approval snapshot comes back empty.
+    func restorePendingQuestion(
+        streamID: String,
+        context: AidenRemoteRequestContext,
+        announce: Bool = false,
+        reconcilesOnNil: Bool = true,
+        marksStaleOnFailure: Bool = false
+    ) async {
+        guard coordinator.isCurrent(context), activeStreamID == streamID,
+              streamState?.isTerminal != true else { return }
+        guard supportsQuestionPrompts(for: context) else {
+            pendingQuestion = nil
+            if reconcilesOnNil && pendingApproval == nil {
+                streamState = .reconciling
+                await liveActivities.updateStatus(
+                    instanceID: instanceId,
+                    streamID: streamID,
+                    state: .reconciling
+                )
+            }
+            return
+        }
+        questionSnapshotGeneration &+= 1
+        let snapshotGeneration = questionSnapshotGeneration
+        let expectedQuestion = pendingQuestion
+        let expectedState = streamState
+        do {
+            let snapshot = try await coordinator.remoteClient(for: context).streamQuestion(id: streamID)
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == questionSnapshotGeneration,
+                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard let question = AidenPendingQuestionResolution.resolve(
+                snapshot.question,
+                streamId: streamID,
+                chatId: chat.id,
+                canRespond: canRespondToQuestions(for: context)
+            ) else {
+                pendingQuestion = nil
+                if reconcilesOnNil && pendingApproval == nil {
+                    streamState = .reconciling
+                    await liveActivities.updateStatus(
+                        instanceID: instanceId,
+                        streamID: streamID,
+                        state: .reconciling
+                    )
+                }
+                return
+            }
+            pendingQuestion = question
+            streamState = .waitingForApproval
+            if announce {
+                coordinator.haptics.play(
+                    .warning,
+                    scope: hapticScope,
+                    dedupeKey: "question-required:\(question.id)"
+                )
+            }
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID,
+                  snapshotGeneration == questionSnapshotGeneration,
+                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            pendingQuestion = nil
+            if reconcilesOnNil && pendingApproval == nil {
+                streamState = .reconciling
+                if marksStaleOnFailure {
+                    await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                } else {
+                    await liveActivities.updateStatus(
+                        instanceID: instanceId,
+                        streamID: streamID,
+                        state: .reconciling
+                    )
+                }
+            }
         }
     }
 
@@ -2555,6 +2715,29 @@ final class AidenChatViewModel {
                     && installation.hasNegotiatedAccess(to: .botWrite))),
             canWriteSchedules: installation.hasNegotiatedAccess(to: .scheduleWrite)
         )
+    }
+
+    /// The question snapshot route exists only when the Mac advertises the
+    /// feature; without it the stream stays approval-only and older snapshots
+    /// are never requested.
+    private func supportsQuestionPrompts(
+        for context: AidenRemoteRequestContext
+    ) -> Bool {
+        coordinator.isCurrent(context) && coordinator.server?.supportsQuestionPrompts == true
+    }
+
+    private func canRespondToQuestions(
+        for context: AidenRemoteRequestContext
+    ) -> Bool {
+        guard coordinator.isCurrent(context),
+              let installation = coordinator.installationStore.activeInstallation,
+              installation.instanceId == context.instanceId,
+              installation.deviceId == context.deviceId else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .questionsRespond)
+            && (chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
+                && installation.hasNegotiatedAccess(to: .botWrite)))
     }
 
     @discardableResult
@@ -2721,6 +2904,7 @@ final class AidenChatViewModel {
         tools = []
         activityTimeline = nil
         pendingApproval = nil
+        pendingQuestion = nil
         activeStreamID = nil
     }
 }
@@ -4890,6 +5074,23 @@ private struct AidenLiveResponseView: View {
                 .id(approval.id)
             }
 
+            if let question = model.pendingQuestion {
+                AidenQuestionCard(
+                    prompt: question,
+                    onSubmit: { request in
+                        Task {
+                            await model.respondToQuestion(
+                                request,
+                                promptID: question.id,
+                                idempotencyKey: UUID()
+                            )
+                        }
+                    }
+                )
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
+                .id(question.id)
+            }
+
             if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
@@ -5053,6 +5254,218 @@ private struct AidenApprovalCard: View {
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
                     }
+                }
+            }
+        }
+        .padding(12)
+        .background(palette.raised, in: shape)
+        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Interactive `ask_user_question` card. Each question offers its option list
+/// plus a custom-answer field; a non-empty custom draft wins over selections.
+/// Submit requires at least one addressed question; skipping the card resolves
+/// the whole prompt as cancelled.
+private struct AidenQuestionCard: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    let prompt: AidenPendingQuestion
+    let onSubmit: (AidenQuestionRespondRequest) -> Void
+
+    @State private var selections: [Int: Set<String>] = [:]
+    @State private var customDrafts: [Int: String] = [:]
+    @State private var customOpen: Set<Int> = []
+
+    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    private var answers: [AidenQuestionAnswer] {
+        AidenQuestionAnswerDraft.answers(
+            for: prompt.questions,
+            selections: selections,
+            customAnswers: customDrafts
+        )
+    }
+
+    private func toggle(_ label: String, questionIndex: Int, multiSelect: Bool) {
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections,
+            questionIndex: questionIndex,
+            label: label,
+            multiSelect: multiSelect
+        )
+    }
+
+    private func binding(for index: Int) -> Binding<String> {
+        Binding(
+            get: { customDrafts[index] ?? "" },
+            set: { customDrafts[index] = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 32, height: 32)
+                    .background(palette.accent.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Aiden needs your input")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+
+                    Text(prompt.questions.count > 1
+                         ? String(localized: "Answer what you can — unanswered questions are skipped.")
+                         : String(localized: "Choose an option or type your own answer."))
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text(question.header)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(palette.canvas, in: Capsule())
+                        if question.multiSelect {
+                            Text("Select all that apply")
+                                .font(.caption2)
+                                .foregroundStyle(palette.secondary)
+                        }
+                    }
+                    .accessibilityHidden(true)
+
+                    Text(question.question)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(question.options, id: \.label) { option in
+                        let selected = selections[index]?.contains(option.label) == true
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                                toggle(option.label, questionIndex: index, multiSelect: question.multiSelect)
+                            }
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: question.multiSelect
+                                      ? (selected ? "checkmark.square.fill" : "square")
+                                      : (selected ? "checkmark.circle.fill" : "circle"))
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(selected ? palette.accent : palette.secondary)
+                                    .frame(width: 20)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label)
+                                        .font(.callout)
+                                        .foregroundStyle(palette.foreground)
+                                    Text(option.description)
+                                        .font(.caption)
+                                        .foregroundStyle(palette.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selected ? palette.accent.opacity(0.10) : palette.canvas,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                        .accessibilityLabel(option.label)
+                        .accessibilityValue(selected
+                            ? String(localized: "Selected")
+                            : String(localized: "Not selected"))
+                        .accessibilityHint(option.description)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+
+                    if customOpen.contains(index) {
+                        TextField(
+                            String(localized: "Type your answer"),
+                            text: binding(for: index),
+                            axis: .vertical
+                        )
+                            .font(.callout)
+                            .lineLimit(1...4)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .accessibilityLabel(String(localized: "Custom answer"))
+                            .accessibilityHint(String(localized: "Overrides the selected options for this question"))
+                    } else {
+                        Button {
+                            customOpen.insert(index)
+                        } label: {
+                            Label("Type something.", systemImage: "text.cursor")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(palette.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint(String(localized: "Shows a field for a custom answer"))
+                    }
+                }
+                .accessibilityElement(children: .contain)
+            }
+
+            if !prompt.canRespond {
+                Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+
+                    Button {
+                        onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
+                    } label: {
+                        Text("Skip")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.foreground)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .aidenApprovalActionGlass()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 5)
+                    .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
+
+                    Button {
+                        onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
+                    } label: {
+                        Text("Submit")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.canvas)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .aidenApprovalActionGlass(tint: palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 5)
+                    .disabled(answers.isEmpty)
+                    .opacity(answers.isEmpty ? 0.5 : 1)
+                    .accessibilityHint(answers.isEmpty
+                        ? String(localized: "Select an option or type an answer first")
+                        : String(localized: "Sends your answers to your Mac"))
                 }
             }
         }

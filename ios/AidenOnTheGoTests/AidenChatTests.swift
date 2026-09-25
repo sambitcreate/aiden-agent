@@ -4667,3 +4667,137 @@ final class AidenAppearanceTests: XCTestCase {
         ))
     }
 }
+
+extension AidenChatTests {
+    private func questionFixture(
+        multiSelect: Bool = false,
+        options: [AidenRemoteQuestionOption]? = nil
+    ) -> AidenRemoteQuestion {
+        AidenRemoteQuestion(
+            question: "Which tolerance?",
+            header: "Chamfer",
+            multiSelect: multiSelect,
+            options: options ?? [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm", description: "Heavy."),
+            ]
+        )
+    }
+
+    func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
+        let questions = [questionFixture(), questionFixture(multiSelect: true)]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [0: ["0.5 mm"], 1: ["0.5 mm", "1.0 mm"]],
+            customAnswers: [:]
+        )
+        XCTAssertEqual(answers, [
+            .option(questionIndex: 0, answer: "0.5 mm"),
+            .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
+    }
+
+    func testQuestionAnswerDraftCustomTextWinsAndTrims() {
+        let questions = [questionFixture()]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [0: ["0.5 mm"]],
+            customAnswers: [0: "  make it 2 mm  "]
+        )
+        XCTAssertEqual(answers, [.custom(questionIndex: 0, answer: "make it 2 mm")])
+    }
+
+    func testQuestionAnswerDraftSkipsUnaddressedQuestions() {
+        let questions = [questionFixture(), questionFixture()]
+        let answers = AidenQuestionAnswerDraft.answers(
+            for: questions,
+            selections: [1: ["1.0 mm"]],
+            customAnswers: [0: "   "]
+        )
+        XCTAssertEqual(answers, [.option(questionIndex: 1, answer: "1.0 mm")])
+    }
+
+    func testQuestionToggleReplacesSingleSelectAndAccumulatesMulti() {
+        var selections = AidenQuestionAnswerDraft.toggled(
+            selections: [:], questionIndex: 0, label: "0.5 mm", multiSelect: false
+        )
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "1.0 mm", multiSelect: false
+        )
+        XCTAssertEqual(selections[0], ["1.0 mm"])
+
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "0.5 mm", multiSelect: true
+        )
+        XCTAssertEqual(selections[0], ["1.0 mm", "0.5 mm"])
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "1.0 mm", multiSelect: true
+        )
+        XCTAssertEqual(selections[0], ["0.5 mm"])
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: 0, label: "0.5 mm", multiSelect: true
+        )
+        XCTAssertNil(selections[0])
+    }
+
+    func testPendingQuestionResolutionBindsIdentityAndExpiry() throws {
+        let pending = try AidenRemoteJSONDecoder.decode(
+            AidenStreamPendingQuestion.self,
+            from: Data(#"""
+            {
+              "promptId": "q-1", "streamId": "stream-1", "chatId": "chat-1",
+              "toolCallId": "tool-1", "expiresAt": "2026-08-18T19:06:10.000Z",
+              "questions": [{
+                "question": "Which tolerance?", "header": "Chamfer",
+                "multiSelect": false,
+                "options": [
+                  {"label": "0.5 mm", "description": "Standard."},
+                  {"label": "1.0 mm", "description": "Heavy."}
+                ]
+              }]
+            }
+            """#.utf8)
+        )
+        let resolved = AidenPendingQuestionResolution.resolve(
+            pending, streamId: "stream-1", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+        )
+        XCTAssertEqual(resolved?.id, "q-1")
+        XCTAssertEqual(resolved?.questions.count, 1)
+        XCTAssertTrue(resolved?.canRespond == true)
+
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            pending, streamId: "other", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:00:00.000Z")!
+        ))
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            pending, streamId: "stream-1", chatId: "chat-1",
+            now: ISO8601DateFormatter().date(from: "2026-08-18T19:07:00.000Z")!
+        ))
+        XCTAssertNil(AidenPendingQuestionResolution.resolve(
+            nil, streamId: "stream-1", chatId: "chat-1"
+        ))
+    }
+
+    func testPendingQuestionDecodeFailsClosedOnGrammarViolations() {
+        let base = #"""
+        {
+          "promptId": "q-1", "streamId": "stream-1", "chatId": "chat-1",
+          "toolCallId": "tool-1", "expiresAt": "2026-08-18T19:06:10.000Z",
+          "questions": QUESTIONS
+        }
+        """#
+        let oneOption = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"A","description":"d"}]}]"#
+        let duplicateLabels = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"A","description":"d"},{"label":"A","description":"e"}]}]"#
+        let reservedLabel = #"[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"Other","description":"d"},{"label":"A","description":"e"}]}]"#
+        for questions in [oneOption, duplicateLabels, reservedLabel] {
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(
+                    AidenStreamPendingQuestion.self,
+                    from: Data(base.replacingOccurrences(of: "QUESTIONS", with: questions).utf8)
+                ),
+                "question grammar violation must fail closed"
+            )
+        }
+    }
+}

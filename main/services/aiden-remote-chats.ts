@@ -61,8 +61,12 @@ import {
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
+  ASK_USER_QUESTION_TOOL_NAME,
+]);
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 const SUMMARY_CURSOR = /^cur_([A-Za-z0-9_-]{1,384})\.([A-Za-z0-9_-]{43})$/u;
 const SUMMARY_CURSOR_TTL_MS = 5 * 60_000;
@@ -608,6 +612,7 @@ export class AidenRemoteChatService {
             usageSource: "chat";
             turnId: string;
             botAudienceId?: string;
+            excludeToolNames?: ReadonlySet<string>;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -626,6 +631,12 @@ export class AidenRemoteChatService {
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
+      /**
+       * Device-declared `questions:respond` grant lookup. When absent (or the
+       * device did not negotiate the capability) the ask_user_question tool is
+       * excluded from that device's turns so a prompt can never be stranded.
+       */
+      deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       notifyChanged?: (chatId?: string) => void;
       isTitlePending?: (chatId: string) => boolean;
       activeChatIds?: () => readonly string[];
@@ -1257,6 +1268,9 @@ export class AidenRemoteChatService {
             model: selection.modelId,
             thinkingLevel: parsed.thinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
+            ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
+              ? {}
+              : { excludeToolNames: QUESTION_PROMPT_EXCLUDED_TOOLS }),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);

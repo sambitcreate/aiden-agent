@@ -74,6 +74,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatTasksFeature = "chat-tasks-v1"
     static let chatAgentsFeature = "chat-agents-v1"
     static let chatRunInputFeature = "chat-run-input-v1"
+    static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -209,6 +210,10 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsChatRunInput: Bool {
         features.contains(Self.chatRunInputFeature)
+    }
+
+    var supportsQuestionPrompts: Bool {
+        features.contains(Self.chatQuestionPromptsFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -1742,6 +1747,27 @@ final class AidenRemoteClient: @unchecked Sendable {
             method: "POST",
             path: ["approvals", id, "respond"],
             body: ApprovalRequest(decision: decision),
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+    }
+
+    /// Aiden On The Go pending-question snapshot. The stream-level route is
+    /// additive; a `nil` question means the prompt resolved or expired.
+    func streamQuestion(id: String) async throws -> AidenStreamQuestionSnapshot {
+        try await send(method: "GET", path: ["streams", id, "question"])
+    }
+
+    /// Resolves one pending prompt owned by this device. Callers must pass a
+    /// stable request UUID so a transport retry replays the original outcome.
+    func respondToQuestion(
+        id: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenQuestionRespondResponse {
+        try await send(
+            method: "POST",
+            path: ["questions", id, "respond"],
+            body: request,
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
         )
     }

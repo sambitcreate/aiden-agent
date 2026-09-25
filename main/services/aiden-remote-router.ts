@@ -14,10 +14,13 @@ import {
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
   AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
+  AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
+  parseAidenRemoteQuestionRespondRequest,
   type AidenRemoteCapability,
+  type AidenRemoteProgressCapability,
   type AidenRemoteBotConversationQuery,
   type AidenRemoteChatAgentRoster,
   type AidenRemoteChatTaskProgress,
@@ -148,7 +151,10 @@ export interface AidenRemoteRouterDependencies {
     "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   > &
     Partial<
-      Pick<AidenRemoteStreamService, "submitInput" | "supportsRunInput">
+      Pick<
+        AidenRemoteStreamService,
+        "submitInput" | "supportsRunInput" | "pendingQuestion" | "questionChatId" | "respondQuestion" | "supportsQuestionPrompts"
+      >
     >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
@@ -252,7 +258,9 @@ export type AidenRemoteRouteLabel =
   | "streamEvents"
   | "streamCancel"
   | "streamInputs"
+  | "streamQuestion"
   | "approvalRespond"
+  | "questionRespond"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
@@ -310,10 +318,12 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   models: ["/models"],
   stream: ["/streams/:streamId"],
   streamApproval: ["/streams/:streamId/approval"],
+  streamQuestion: ["/streams/:streamId/question"],
   streamEvents: ["/streams/:streamId/events"],
   streamCancel: ["/streams/:streamId/cancel"],
   streamInputs: ["/streams/:streamId/inputs"],
   approvalRespond: ["/approvals/:approvalId/respond"],
+  questionRespond: ["/questions/:promptId/respond"],
   unknown: [],
 };
 
@@ -536,7 +546,7 @@ function negotiatedDeviceCapabilities(
     [...device.capabilities].filter((capability) =>
       (capability !== "bot:read" && capability !== "bot:write" ||
         device.acceptsBotCapabilities === true) &&
-      (capability !== "tasks:read" && capability !== "agents:read" ||
+      (!(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
         device.acceptsProgressCapabilities === true),
     ),
   );
@@ -1000,8 +1010,11 @@ function requireNegotiatedProgressCapability(
 
 function progressCapabilitySupported(
   dependencies: AidenRemoteRouterDependencies,
-  capability: "tasks:read" | "agents:read",
+  capability: AidenRemoteProgressCapability,
 ): boolean {
+  if (capability === "questions:respond") {
+    return dependencies.streams?.supportsQuestionPrompts?.() === true;
+  }
   if (!dependencies.chats || !dependencies.chatProgress?.openEvents) return false;
   return capability === "tasks:read"
     ? Boolean(dependencies.chatProgress.taskSnapshot)
@@ -1229,6 +1242,9 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(dependencies.streams?.supportsRunInput?.() === true
               ? [AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE]
+              : []),
+            ...(dependencies.streams?.supportsQuestionPrompts?.() === true
+              ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -2517,6 +2533,29 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, { approval });
         return;
       }
+      const streamQuestionMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/question$/u.exec(path);
+      if (streamQuestionMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "streamQuestion";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (
+          !dependencies.streams?.pendingQuestion ||
+          dependencies.streams.supportsQuestionPrompts?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = dependencies.streams.streamChatId(device.id, streamQuestionMatch[1]!);
+        await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
+        writeJson(response, 200, {
+          question: dependencies.streams.pendingQuestion(
+            device.id,
+            streamQuestionMatch[1]!,
+          ),
+        });
+        return;
+      }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);
       if (cancelMatch && request.method === "POST") {
         requireNoQuery(query);
@@ -2559,6 +2598,51 @@ export function createAidenRemoteRequestHandler(
             key,
             (chatId, action) =>
               runChatMutation(dependencies.chats!, device, chatId, "stream", action),
+          ),
+        );
+        return;
+      }
+      const questionMatch = /^\/questions\/([A-Za-z0-9._:-]{1,128})\/respond$/u.exec(path);
+      if (questionMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "questionRespond";
+        const body = await readJsonBody(request);
+        let input;
+        try {
+          input = parseAidenRemoteQuestionRespondRequest(body);
+        } catch {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The question response is invalid.",
+            400,
+          );
+        }
+        const device = await authenticate(request, dependencies.devices, "questions:respond");
+        deviceIdSuffix = device.id.slice(-8);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        if (
+          !dependencies.streams?.respondQuestion ||
+          dependencies.streams.supportsQuestionPrompts?.() !== true ||
+          !dependencies.chats
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = dependencies.streams.questionChatId!(device.id, questionMatch[1]!);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(
+            dependencies.chats,
+            device,
+            chatId,
+            "approval",
+            () =>
+              dependencies.streams!.respondQuestion!(
+                device.id,
+                questionMatch[1]!,
+                input,
+                key,
+              ),
           ),
         );
         return;

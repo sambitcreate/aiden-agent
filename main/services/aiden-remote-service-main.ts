@@ -435,6 +435,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             approve: (approvalId, decision, ownerDocumentId) =>
               llmClient.approve(approvalId, decision, ownerDocumentId),
             submitInput: (input) => llmClient.admitChatRunInput(input),
+            respondQuestion: (promptId, response, ownerDocumentId) =>
+              llmClient.answerQuestionnaire(promptId, response, ownerDocumentId),
             notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),
             notifyApprovalChanged: (chatId) =>
               ipcMain.broadcast("remote:approval-changed", { chatId }),
@@ -471,6 +473,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             botTurnAuthorityPreflight: preflightBotTurnAuthority,
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            deviceSupportsQuestionPrompts: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return (
+                device !== undefined &&
+                device.acceptsProgressCapabilities === true &&
+                device.capabilities.includes("questions:respond")
+              );
+            },
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,

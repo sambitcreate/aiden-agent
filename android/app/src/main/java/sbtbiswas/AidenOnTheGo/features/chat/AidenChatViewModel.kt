@@ -96,6 +96,12 @@ class AidenChatViewModel(
     private val _isRespondingToApproval = MutableStateFlow(false)
     val isRespondingToApproval: StateFlow<Boolean> = _isRespondingToApproval.asStateFlow()
 
+    private val _pendingQuestion = MutableStateFlow<AidenPendingQuestion?>(null)
+    val pendingQuestion: StateFlow<AidenPendingQuestion?> = _pendingQuestion.asStateFlow()
+
+    private val _isRespondingToQuestion = MutableStateFlow(false)
+    val isRespondingToQuestion: StateFlow<Boolean> = _isRespondingToQuestion.asStateFlow()
+
     private val _pendingAttachments = MutableStateFlow<List<AidenAttachmentReference>>(emptyList())
     val pendingAttachments: StateFlow<List<AidenAttachmentReference>> = _pendingAttachments.asStateFlow()
 
@@ -788,6 +794,7 @@ class AidenChatViewModel(
                 _tools.value = emptyList()
                 _activityTimeline.value = null
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.QUEUED
 
                 startStreaming(stream)
@@ -1005,6 +1012,7 @@ class AidenChatViewModel(
                     } else {
                         _streamState.value = state
                         _pendingApproval.value = null
+                        _pendingQuestion.value = null
                     }
                 }
             }
@@ -1039,19 +1047,25 @@ class AidenChatViewModel(
             AidenRemoteEventType.APPROVAL_REQUIRED -> {
                 restorePendingApproval(event.streamId)
             }
+            AidenRemoteEventType.QUESTION_REQUIRED -> {
+                restorePendingQuestion(event.streamId)
+            }
             AidenRemoteEventType.ERROR -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _presentedError.value = null
                 _streamState.value = AidenStreamState.ERROR
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.CANCELLED -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.CANCELLED
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.DONE -> {
                 _pendingApproval.value = null
+                _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.DONE
                 finishStream(event.streamId)
             }
@@ -1067,6 +1081,7 @@ class AidenChatViewModel(
             return
         }
         _pendingApproval.value = null
+        _pendingQuestion.value = null
         _streamState.value = status.state
     }
 
@@ -1100,19 +1115,89 @@ class AidenChatViewModel(
             if (approval != null) {
                 _pendingApproval.value = approval
                 _streamState.value = AidenStreamState.WAITING_FOR_APPROVAL
+                // A question prompt may be pending alongside the approval; a
+                // null snapshot only clears stale card state.
+                restorePendingQuestion(streamId, reconcilesOnNil = false)
             } else {
                 _pendingApproval.value = null
-                _streamState.value = AidenStreamState.RECONCILING
+                // A pending question shares waiting_for_approval; check its
+                // snapshot before declaring a reconcile gap.
+                restorePendingQuestion(streamId)
             }
         } catch (_: Exception) {
             if (activeClient() !== client || activeStreamId != streamId ||
                 snapshotGeneration != approvalSnapshotGeneration ||
                 _pendingApproval.value != expectedApproval || _streamState.value != expectedState) return
             _pendingApproval.value = null
-            _streamState.value = AidenStreamState.RECONCILING
+            restorePendingQuestion(streamId)
         } finally {
             if (snapshotGeneration == approvalSnapshotGeneration) approvalSnapshotInFlight = null
         }
+    }
+
+    private var questionSnapshotGeneration = 0L
+
+    // Restores the pending `ask_user_question` prompt for this stream. The
+    // Mac projects the wait as `waiting_for_approval`, so this is also the
+    // fallback when the approval snapshot comes back empty.
+    internal suspend fun restorePendingQuestion(streamId: String, reconcilesOnNil: Boolean = true) {
+        val client = activeClient() ?: return
+        if (activeStreamId != streamId || _streamState.value?.isTerminal == true) return
+        if (!supportsQuestionPrompts()) {
+            _pendingQuestion.value = null
+            if (reconcilesOnNil && _pendingApproval.value == null) {
+                _streamState.value = AidenStreamState.RECONCILING
+            }
+            return
+        }
+        val snapshotGeneration = ++questionSnapshotGeneration
+        val expectedQuestion = _pendingQuestion.value
+        val expectedState = _streamState.value
+        try {
+            val snapshot = client.streamQuestion(streamId)
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != questionSnapshotGeneration ||
+                _pendingQuestion.value != expectedQuestion || _streamState.value != expectedState) return
+            val question = AidenPendingQuestionResolution.resolve(
+                snapshot.question,
+                streamId = streamId,
+                chatId = chatId,
+                canRespond = canRespondToQuestions()
+            )
+            if (question != null) {
+                _pendingQuestion.value = question
+                _streamState.value = AidenStreamState.WAITING_FOR_APPROVAL
+            } else {
+                _pendingQuestion.value = null
+                if (reconcilesOnNil && _pendingApproval.value == null) {
+                    _streamState.value = AidenStreamState.RECONCILING
+                }
+            }
+        } catch (_: Exception) {
+            if (activeClient() !== client || activeStreamId != streamId ||
+                snapshotGeneration != questionSnapshotGeneration ||
+                _pendingQuestion.value != expectedQuestion || _streamState.value != expectedState) return
+            _pendingQuestion.value = null
+            if (reconcilesOnNil && _pendingApproval.value == null) {
+                _streamState.value = AidenStreamState.RECONCILING
+            }
+        }
+    }
+
+    private fun supportsQuestionPrompts(): Boolean =
+        coordinator.serverInfo.value?.supportsQuestionPrompts == true
+
+    private fun canRespondToQuestions(): Boolean {
+        val installation = coordinator.installationStore.activeInstallation
+        if (_chat.value == null || coordinator.activeInstanceId != instanceId ||
+            installation?.instanceId != instanceId || installation.deviceId != deviceId
+        ) {
+            return false
+        }
+        return installation.hasNegotiatedAccess(AidenRemoteCapability.QUESTIONS_RESPOND) &&
+            (_chat.value?.botId == null ||
+                (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+                 installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE)))
     }
 
     val canControlCurrentRun: Boolean
@@ -1346,6 +1431,66 @@ class AidenChatViewModel(
             } finally {
                 _isRespondingToApproval.value = false
             }
+        }
+    }
+
+    // Resolves the pending question prompt. A `cancelled` request dismisses
+    // the whole prompt; otherwise `answers` carries one entry per addressed
+    // question and unaddressed questions are recorded as skipped.
+    fun respondToQuestion(
+        request: AidenQuestionRespondRequest,
+        promptId: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ) {
+        if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
+            _isRespondingToQuestion.value || _isStopping.value) return
+        val question = _pendingQuestion.value ?: return
+        if (question.id != promptId || !question.canRespond) return
+        if (!question.expiresAt.isAfter(Instant.now())) {
+            _pendingQuestion.value = null
+            return
+        }
+        if (!canRespondToQuestions()) {
+            _presentedError.value = "This paired device can review prompts but cannot respond."
+            refreshQuestionAccess()
+            return
+        }
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        _isRespondingToQuestion.value = true
+        _pendingQuestion.value = null
+        if (_pendingApproval.value == null) _streamState.value = AidenStreamState.RUNNING
+
+        viewModelScope.launch {
+            try {
+                val response = client.respondToQuestion(question.id, request, idempotencyKey)
+                if (activeClient() !== client || activeStreamId != streamId ||
+                    _streamState.value?.isTerminal == true) return@launch
+                if (response.promptId != question.id) {
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
+                }
+            } catch (e: Exception) {
+                if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
+                    _streamState.value?.isTerminal != true) {
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    // An ambiguous write may have succeeded; only the Mac can restore a card.
+                    if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
+                }
+            } finally {
+                _isRespondingToQuestion.value = false
+            }
+        }
+    }
+
+    private fun refreshQuestionAccess() {
+        val streamId = activeStreamId ?: return
+        _isRespondingToQuestion.value = true
+        _pendingQuestion.value = null
+        if (_pendingApproval.value == null) _streamState.value = AidenStreamState.RECONCILING
+        viewModelScope.launch {
+            try { restorePendingQuestion(streamId) }
+            finally { _isRespondingToQuestion.value = false }
         }
     }
 

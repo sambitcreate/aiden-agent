@@ -49,6 +49,7 @@ function fixture(
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
+    deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -57,6 +58,7 @@ function fixture(
   let notifications = 0;
   let begins = 0;
   let starts = 0;
+  let lastGenerationOptions: Record<string, unknown> | null = null;
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
     now: () => 10_000,
@@ -152,6 +154,7 @@ function fixture(
       },
       start: async (streamId, _params, owner, generationOptions) => {
         starts += 1;
+        lastGenerationOptions = generationOptions as Record<string, unknown>;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
         owner.send("chat:delta", { streamId, delta: "Answer" });
@@ -201,6 +204,9 @@ function fixture(
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
+    ...(fixtureOptions.deviceSupportsQuestionPrompts
+      ? { deviceSupportsQuestionPrompts: fixtureOptions.deviceSupportsQuestionPrompts }
+      : {}),
   });
   return {
     service,
@@ -210,6 +216,7 @@ function fixture(
     notifications: () => notifications,
     begins: () => begins,
     starts: () => starts,
+    lastGenerationOptions: () => lastGenerationOptions,
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
   };
@@ -1585,4 +1592,40 @@ test("invalidated uploads remain bounded until their retained request bodies set
     lease.release();
   }
   store.beginUpload("device-2", "chat-2").release();
+});
+
+test("question tool is exposed only to devices granted the question capability", async () => {
+  const supported = fixture(chat(), {
+    deviceSupportsQuestionPrompts: async (deviceId) => deviceId === "device-1",
+  });
+  await supported.service.startTurn("device-1", "chat-1", "question-turn-001", {
+    text: "help me choose",
+  });
+  const supportedOptions = supported.lastGenerationOptions();
+  assert.equal(
+    supportedOptions?.excludeToolNames,
+    undefined,
+    "capable devices must keep ask_user_question available",
+  );
+
+  const unsupported = fixture(chat(), {
+    deviceSupportsQuestionPrompts: async () => false,
+  });
+  await unsupported.service.startTurn("device-1", "chat-1", "question-turn-002", {
+    text: "help me choose",
+  });
+  const excluded = unsupported.lastGenerationOptions()?.excludeToolNames;
+  assert.ok(excluded instanceof Set);
+  assert.ok((excluded as Set<string>).has("ask_user_question"));
+
+  const missingGate = fixture(chat());
+  await missingGate.service.startTurn("device-1", "chat-1", "question-turn-003", {
+    text: "help me choose",
+  });
+  const missingExcluded = missingGate.lastGenerationOptions()?.excludeToolNames;
+  assert.ok(missingExcluded instanceof Set);
+  assert.ok(
+    (missingExcluded as Set<string>).has("ask_user_question"),
+    "without a host capability lookup the question tool must stay excluded",
+  );
 });

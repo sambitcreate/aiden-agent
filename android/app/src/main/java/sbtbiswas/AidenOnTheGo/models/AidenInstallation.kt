@@ -83,6 +83,9 @@ data class AidenServer(
     val supportsChatRunInput: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_RUN_INPUT_FEATURE)
 
+    val supportsQuestionPrompts: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_QUESTION_PROMPTS_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

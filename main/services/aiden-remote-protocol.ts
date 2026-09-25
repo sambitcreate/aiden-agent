@@ -3,6 +3,15 @@ import type {
   ChatRunInputMode,
   ChatRunInputRejectionReason,
 } from "../../renderer/shared/chat-run-input.js";
+import {
+  ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
+  ASK_USER_MAX_LABEL_LENGTH,
+  ASK_USER_MAX_OPTIONS,
+  ASK_USER_MAX_QUESTIONS,
+  parseAskUserQuestions,
+  type AskUserQuestionAnswerV1,
+  type AskUserQuestionV1,
+} from "../../renderer/shared/ask-user-question.js";
 import type {
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
@@ -52,6 +61,7 @@ export const AIDEN_REMOTE_BOT_CAPABILITIES = [
 export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
   "tasks:read",
   "agents:read",
+  "questions:respond",
 ] as const;
 
 export type AidenRemoteProgressCapability =
@@ -80,6 +90,17 @@ export const AIDEN_REMOTE_PROGRESS_FEATURES = [
  */
 export const AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1" as const;
 
+/**
+ * Server feature token for the pending-question surface
+ * (`GET /streams/{streamId}/question`, `POST /questions/{promptId}/respond`,
+ * and the `question_required` stream event). The host advertises it only while
+ * a main-owned questionnaire path is wired, and it additionally requires the
+ * device-declared `questions:respond` capability before the tool is offered on
+ * that device's turns. Old servers omit it and clients must not render
+ * question cards.
+ */
+export const AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1" as const;
+
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
 export const AIDEN_REMOTE_RUN_INPUT_MAX_TEXT = 200_000;
@@ -93,6 +114,7 @@ export const AIDEN_REMOTE_EVENT_TYPES = [
   "tool_finished",
   "timeline",
   "approval_required",
+  "question_required",
   "task_update",
   "agents_update",
   "done",
@@ -136,6 +158,8 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "stream_gone",
   "approval_already_resolved",
   "approval_expired",
+  "question_already_resolved",
+  "question_expired",
   "operation_in_progress",
   "operation_stale",
   "git_capability_denied",
@@ -765,6 +789,11 @@ export interface AidenRemoteContractFixture {
     request: AidenRemoteStreamInputRequest;
     response: AidenRemoteStreamInputResult;
   };
+  question: {
+    pending: AidenRemotePendingQuestion;
+    respondRequest: AidenRemoteQuestionRespondRequest;
+    respondResponse: AidenRemoteQuestionRespondResponse;
+  };
   events: AidenRemoteStreamEvent[];
   fileIndex: unknown;
   fileDocument: unknown;
@@ -1328,6 +1357,7 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   tool_finished: ["toolId", "status"],
   timeline: ["timeline"],
   approval_required: ["approvalId", "summary", "expiresAt"],
+  question_required: ["promptId", "questions", "expiresAt"],
   task_update: [],
   agents_update: [],
   done: ["messageId"],
@@ -3469,6 +3499,138 @@ export function parseAidenRemoteStreamInputResult(
   };
 }
 
+export interface AidenRemotePendingQuestion {
+  promptId: string;
+  streamId: string;
+  chatId: string;
+  toolCallId: string;
+  questions: AskUserQuestionV1[];
+  expiresAt: string;
+}
+
+export interface AidenRemotePendingQuestionResponse {
+  question: AidenRemotePendingQuestion | null;
+}
+
+export type AidenRemoteQuestionAnswer = AskUserQuestionAnswerV1;
+
+export interface AidenRemoteQuestionRespondRequest {
+  cancelled: boolean;
+  answers: AidenRemoteQuestionAnswer[];
+}
+
+export interface AidenRemoteQuestionRespondResponse {
+  promptId: string;
+  resolvedAt: string;
+}
+
+export function parseAidenRemotePendingQuestion(
+  value: unknown,
+): AidenRemotePendingQuestion {
+  if (!isRecord(value)) {
+    throw new Error("Pending question must be an object.");
+  }
+  assertExactKeys(
+    value,
+    ["promptId", "streamId", "chatId", "toolCallId", "questions", "expiresAt"],
+    "Pending question",
+  );
+  const promptId = boundedText(value.promptId, "Pending question promptId", 128);
+  const streamId = boundedText(value.streamId, "Pending question streamId", 128);
+  const chatId = boundedText(value.chatId, "Pending question chatId", 128);
+  const toolCallId = boundedText(value.toolCallId, "Pending question toolCallId", 128);
+  const questions = parseAskUserQuestions(value.questions);
+  if (!questions) throw new Error("Pending question questions are invalid.");
+  const expiresAt = requiredString(value, "expiresAt");
+  parseStrictRfc3339(expiresAt, "Pending question expiry");
+  return { promptId, streamId, chatId, toolCallId, questions, expiresAt };
+}
+
+export function parseAidenRemotePendingQuestionResponse(
+  value: unknown,
+): AidenRemotePendingQuestionResponse {
+  if (!isRecord(value)) {
+    throw new Error("Pending question response must be an object.");
+  }
+  assertExactKeys(value, ["question"], "Pending question response");
+  return {
+    question:
+      value.question === null ? null : parseAidenRemotePendingQuestion(value.question),
+  };
+}
+
+function parseQuestionAnswer(value: unknown): AidenRemoteQuestionAnswer {
+  if (!isRecord(value)) {
+    throw new Error("Question answer must be an object.");
+  }
+  if (!Number.isSafeInteger(value.questionIndex) || (value.questionIndex as number) < 0) {
+    throw new Error("Question answer questionIndex must be a non-negative integer.");
+  }
+  const questionIndex = value.questionIndex as number;
+  if (value.kind === "option" || value.kind === "custom") {
+    assertExactKeys(value, ["questionIndex", "kind", "answer"], "Question answer");
+    const answer = boundedText(
+      value.answer,
+      "Question answer text",
+      value.kind === "custom" ? ASK_USER_MAX_CUSTOM_ANSWER_LENGTH : ASK_USER_MAX_LABEL_LENGTH,
+    );
+    return { questionIndex, kind: value.kind, answer };
+  }
+  if (value.kind === "multi") {
+    assertExactKeys(value, ["questionIndex", "kind", "selected"], "Question answer");
+    if (
+      !Array.isArray(value.selected) ||
+      value.selected.length < 1 ||
+      value.selected.length > ASK_USER_MAX_OPTIONS ||
+      new Set(value.selected).size !== value.selected.length
+    ) {
+      throw new Error("Question answer selected must list unique options.");
+    }
+    const selected = value.selected.map((entry) =>
+      boundedText(entry, "Question answer selected option", ASK_USER_MAX_LABEL_LENGTH),
+    );
+    return { questionIndex, kind: "multi", selected };
+  }
+  throw new Error("Question answer kind is invalid.");
+}
+
+/**
+ * Validate the structural request shape only. Answer semantics (question index
+ * range, option membership, multi-select rules) are validated against the
+ * stored prompt before the questionnaire is settled.
+ */
+export function parseAidenRemoteQuestionRespondRequest(
+  value: unknown,
+): AidenRemoteQuestionRespondRequest {
+  if (!isRecord(value)) {
+    throw new Error("Question respond request must be an object.");
+  }
+  assertExactKeys(value, ["cancelled", "answers"], "Question respond request");
+  if (typeof value.cancelled !== "boolean") {
+    throw new Error("Question respond request cancelled must be boolean.");
+  }
+  if (!Array.isArray(value.answers) || value.answers.length > ASK_USER_MAX_QUESTIONS) {
+    throw new Error("Question respond request answers are invalid.");
+  }
+  return {
+    cancelled: value.cancelled,
+    answers: value.answers.map(parseQuestionAnswer),
+  };
+}
+
+export function parseAidenRemoteQuestionRespondResponse(
+  value: unknown,
+): AidenRemoteQuestionRespondResponse {
+  if (!isRecord(value)) {
+    throw new Error("Question respond response must be an object.");
+  }
+  assertExactKeys(value, ["promptId", "resolvedAt"], "Question respond response");
+  const promptId = boundedText(value.promptId, "Question respond promptId", 128);
+  const resolvedAt = requiredString(value, "resolvedAt");
+  parseStrictRfc3339(resolvedAt, "Question respond resolvedAt");
+  return { promptId, resolvedAt };
+}
+
 export function parseAidenRemoteDeviceCapabilitiesUpdateRequest(
   value: unknown,
 ): AidenRemoteDeviceCapabilitiesUpdateRequest {
@@ -3658,6 +3820,12 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     assertBoundedString(payload, "approvalId", 128);
     assertBoundedString(payload, "summary", 2_000);
     parseStrictRfc3339(requiredString(payload, "expiresAt"), "Approval expiry");
+  } else if (type === "question_required") {
+    assertBoundedString(payload, "promptId", 128);
+    if (!parseAskUserQuestions(payload.questions)) {
+      throw new Error("question_required payload must contain valid questions.");
+    }
+    parseStrictRfc3339(requiredString(payload, "expiresAt"), "Question expiry");
   } else if (type === "done") {
     assertBoundedString(payload, "messageId", 128);
   } else if (type === "error") {
@@ -3961,6 +4129,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   }
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE)) {
     throw new Error("Fixture server must advertise chat run input.");
+  }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE)) {
+    throw new Error("Fixture server must advertise chat question prompts.");
   }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
@@ -4543,6 +4714,31 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   ) {
     throw new Error("Canonical stream input fixture must target the canonical turn.");
   }
+  const questionRecord = isRecord(value.question) ? value.question : null;
+  if (!questionRecord) throw new Error("Question fixture must be an object.");
+  assertExactKeys(
+    questionRecord,
+    ["pending", "respondRequest", "respondResponse"],
+    "Question fixture",
+  );
+  const question = {
+    pending: parseAidenRemotePendingQuestion(questionRecord.pending),
+    respondRequest: parseAidenRemoteQuestionRespondRequest(questionRecord.respondRequest),
+    respondResponse: parseAidenRemoteQuestionRespondResponse(questionRecord.respondResponse),
+  };
+  if (question.pending.chatId !== chat.id) {
+    throw new Error("Canonical question fixture must target the canonical Chat.");
+  }
+  if (
+    isRecord(value.turnStart) &&
+    typeof value.turnStart.streamId === "string" &&
+    question.pending.streamId !== value.turnStart.streamId
+  ) {
+    throw new Error("Canonical question fixture must target the canonical stream.");
+  }
+  if (question.respondResponse.promptId !== question.pending.promptId) {
+    throw new Error("Canonical question fixture must answer the pending prompt.");
+  }
   if (
     JSON.stringify(deviceCapabilitiesUpdate.response.capabilities) !==
       JSON.stringify(deviceCapabilities) ||
@@ -4658,6 +4854,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     streamStatus: value.streamStatus,
     streamApproval: value.streamApproval,
     streamInput,
+    question,
     fileIndex: value.fileIndex,
     fileDocument: value.fileDocument,
     git: value.git,

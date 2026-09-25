@@ -69,6 +69,26 @@ semantics. Implement a main-owned admission boundary before adding consumers:
 
 Do not advertise Steer/Queue server capability until the full path works.
 
+## Slice 3: pending `ask_user_question` prompts (shipped on feature/on-the-go-midflight-ops)
+
+> **Status (2026-09-25):** Implemented on `feature/on-the-go-midflight-ops`.
+> Remote `GET /streams/{streamId}/question` + `POST /questions/{promptId}/respond`
+> (feature `chat-question-prompts-v1`, capability `questions:respond`,
+> contract revision 13) project the Mac-owned `AskUserQuestionCoordinator`
+> prompt to the paired device that owns the stream. The non-terminal
+> `question_required` event keeps the closed `waiting_for_approval` state
+> vocabulary so legacy clients degrade safely. Remote generation excludes
+> `ask_user_question` unless the paired device negotiated the grant. iOS and
+> Android render the same stacked prompt card (option/multi/custom answers,
+> skip = `cancelled: true`), fetch the authoritative snapshot on the event
+> and on reconnect, submit with stable idempotency keys, and reconcile
+> instead of resurrecting an uncertain response.
+
+- Responses are bound to device, stream, prompt, and expiry; replayed
+  responses return the original `{promptId, resolvedAt}` outcome.
+- Invalid or uncertain operations fail closed; clients never auto-retry a
+  possibly accepted answer.
+
 ## Later dependencies assessed
 
 - Profile isolation: Aiden already owns Bot homes and permission boundaries. An

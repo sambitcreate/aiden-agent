@@ -14,6 +14,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseScope
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotPrivateResponseValidator
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
+import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
@@ -120,7 +121,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(12, fixture.contractRevision)
+        assertEquals(13, fixture.contractRevision)
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -175,6 +176,27 @@ class AidenBotContractTest {
         assertEquals(AidenStreamInputQueue.FOLLOW_UP, streamInput.response.queue)
         assertTrue(streamInput.response.committed)
         assertTrue(fixture.server.supportsChatRunInput)
+        val questionFixture = requireNotNull(fixture.question)
+        val pendingQuestion = AidenQuestionContractCodec.parsePendingQuestion(questionFixture.pending)
+        assertEquals("q-fixture-01", pendingQuestion.promptId)
+        assertEquals(requireNotNull(fixture.streamStatus).streamId, pendingQuestion.streamId)
+        assertEquals(fixture.chat.id, pendingQuestion.chatId)
+        assertEquals(1, pendingQuestion.questions.size)
+        assertEquals(2, pendingQuestion.questions.first().options.size)
+        val respondRequest = AidenQuestionContractCodec.parseRespondRequest(questionFixture.respondRequest)
+        assertFalse(respondRequest.cancelled)
+        assertEquals(
+            listOf(AidenQuestionAnswer.Option(questionIndex = 0, answer = "0.5 mm")),
+            respondRequest.answers
+        )
+        val respondResponse = AidenQuestionContractCodec.parseRespondResponse(questionFixture.respondResponse)
+        assertEquals(pendingQuestion.promptId, respondResponse.promptId)
+        assertTrue(fixture.server.supportsQuestionPrompts)
+        val decodedEvents = fixture.events.map { AidenSSEParser.decodeStreamEvent(it.toString().toByteArray(Charsets.UTF_8)) }
+        val questionEvent = decodedEvents.first { it.type == AidenRemoteEventType.QUESTION_REQUIRED }
+        assertEquals(pendingQuestion.promptId, questionEvent.payload?.questionPrompt?.promptId)
+        assertEquals(pendingQuestion.questions, questionEvent.payload?.questionPrompt?.questions)
+        assertFalse(questionEvent.terminal)
         assertFalse(fixture.legacyNonNegotiating.server.capabilities.contains(AidenRemoteCapability.BOT_READ))
     }
 

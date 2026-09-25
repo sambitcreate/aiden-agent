@@ -19,6 +19,14 @@ enum AidenRemoteProtocol {
     static let maxTimelineLabelLength = 500
     static let maxApprovalSummaryLength = 2_000
     static let maxErrorMessageLength = 2_000
+    static let maxQuestionCount = 4
+    static let minQuestionOptions = 2
+    static let maxQuestionOptions = 4
+    static let maxQuestionHeaderLength = 16
+    static let maxQuestionOptionLabelLength = 60
+    static let maxQuestionLength = 1_000
+    static let maxQuestionOptionDescriptionLength = 2_000
+    static let maxQuestionCustomAnswerLength = 4_000
     static let maxJSONBodyBytes = 1_048_576
     static let maxFileJSONBodyBytes = 6 * 1_048_576
     static let maxSSEFrameBytes = maxJSONBodyBytes
@@ -634,12 +642,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     static let botWrite = Self(rawValue: "bot:write")
     static let tasksRead = Self(rawValue: "tasks:read")
     static let agentsRead = Self(rawValue: "agents:read")
+    static let questionsRespond = Self(rawValue: "questions:respond")
 
     static let v1Known: [Self] = [
         .serverRead, .chatRead, .chatWrite, .approvalRespond,
         .workspaceRead, .workspaceBrowse, .workspaceManage,
         .filesRead, .filesWrite, .gitRead, .gitWrite,
         .scheduleRead, .scheduleWrite, .botRead, .botWrite, .tasksRead, .agentsRead,
+        .questionsRespond,
     ]
 
     init(from decoder: Decoder) throws {
@@ -677,11 +687,13 @@ struct AidenRemoteEventType: RawRepresentable, Codable, Hashable, Sendable {
     static let heartbeat = Self(rawValue: "heartbeat")
     static let taskUpdate = Self(rawValue: "task_update")
     static let agentsUpdate = Self(rawValue: "agents_update")
+    static let questionRequired = Self(rawValue: "question_required")
 
     static let v1Known: [Self] = [
         .snapshot, .status, .textDelta, .reasoningDelta,
         .toolStarted, .toolFinished, .timeline, .approvalRequired,
         .done, .error, .cancelled, .heartbeat, .taskUpdate, .agentsUpdate,
+        .questionRequired,
     ]
 
     var isTerminal: Bool {
@@ -728,6 +740,8 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "stream_gone"),
         Self(rawValue: "approval_already_resolved"),
         Self(rawValue: "approval_expired"),
+        Self(rawValue: "question_already_resolved"),
+        Self(rawValue: "question_expired"),
         Self(rawValue: "operation_in_progress"),
         Self(rawValue: "operation_stale"),
         Self(rawValue: "git_capability_denied"),
@@ -858,6 +872,287 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case error
     }
+}
+
+/// Aiden On The Go question prompts share the Mac-owned `ask_user_question`
+/// grammar. Wire decoders enforce the same bounds the host validates so a
+/// malformed prompt fails closed instead of reaching the card UI.
+struct AidenRemoteQuestionOption: Codable, Equatable, Sendable {
+    let label: String
+    let description: String
+
+    init(label: String, description: String) {
+        self.label = label
+        self.description = description
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        label = try boundedString(
+            values,
+            forKey: .label,
+            maxLength: AidenRemoteProtocol.maxQuestionOptionLabelLength,
+            field: "label",
+            required: true
+        )!
+        description = try boundedString(
+            values,
+            forKey: .description,
+            maxLength: AidenRemoteProtocol.maxQuestionOptionDescriptionLength,
+            field: "description",
+            required: true
+        )!
+        guard !AidenRemoteQuestionGrammar.reservedOptionLabels.contains(label) else {
+            throw AidenRemoteContractError.unsafePayloadField("label")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case label, description
+    }
+}
+
+enum AidenRemoteQuestionGrammar {
+    /// Labels the host reserves for its own composer affordances; a prompt
+    /// carrying one cannot be an authentic option.
+    static let reservedOptionLabels: Set<String> = ["Other", "Type something.", "Next"]
+
+    static func validate(_ questions: [AidenRemoteQuestion]) throws {
+        guard (1...AidenRemoteProtocol.maxQuestionCount).contains(questions.count),
+              Set(questions.map(\.question)).count == questions.count else {
+            throw AidenRemoteContractError.unsafePayloadField("questions")
+        }
+    }
+}
+
+struct AidenRemoteQuestion: Codable, Equatable, Sendable {
+    let question: String
+    let header: String
+    let multiSelect: Bool
+    let options: [AidenRemoteQuestionOption]
+
+    init(question: String, header: String, multiSelect: Bool, options: [AidenRemoteQuestionOption]) {
+        self.question = question
+        self.header = header
+        self.multiSelect = multiSelect
+        self.options = options
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        question = try boundedString(
+            values,
+            forKey: .question,
+            maxLength: AidenRemoteProtocol.maxQuestionLength,
+            field: "question",
+            required: true
+        )!
+        header = try boundedString(
+            values,
+            forKey: .header,
+            maxLength: AidenRemoteProtocol.maxQuestionHeaderLength,
+            field: "header",
+            required: true
+        )!
+        multiSelect = try values.decode(Bool.self, forKey: .multiSelect)
+        options = try values.decode([AidenRemoteQuestionOption].self, forKey: .options)
+        guard (AidenRemoteProtocol.minQuestionOptions...AidenRemoteProtocol.maxQuestionOptions)
+            .contains(options.count),
+              Set(options.map(\.label)).count == options.count else {
+            throw AidenRemoteContractError.unsafePayloadField("options")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case question, header, multiSelect, options
+    }
+}
+
+struct AidenStreamPendingQuestion: Codable, Equatable, Sendable {
+    let promptId: String
+    let streamId: String
+    let chatId: String
+    let toolCallId: String
+    let questions: [AidenRemoteQuestion]
+    let expiresAt: Date
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        promptId = try boundedString(
+            values,
+            forKey: .promptId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "promptId",
+            required: true
+        )!
+        streamId = try boundedString(
+            values,
+            forKey: .streamId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "streamId",
+            required: true
+        )!
+        chatId = try boundedString(
+            values,
+            forKey: .chatId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "chatId",
+            required: true
+        )!
+        toolCallId = try boundedString(
+            values,
+            forKey: .toolCallId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "toolCallId",
+            required: true
+        )!
+        questions = try values.decode([AidenRemoteQuestion].self, forKey: .questions)
+        try AidenRemoteQuestionGrammar.validate(questions)
+        expiresAt = try values.decode(Date.self, forKey: .expiresAt)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case promptId, streamId, chatId, toolCallId, questions, expiresAt
+    }
+}
+
+struct AidenStreamQuestionSnapshot: Codable, Equatable, Sendable {
+    let question: AidenStreamPendingQuestion?
+}
+
+/// The `question_required` journal payload carries the prompt identity and the
+/// bounded question list; stream/chat identity comes from the event envelope.
+struct AidenQuestionRequiredPayload: Codable, Equatable, Sendable {
+    let promptId: String
+    let questions: [AidenRemoteQuestion]
+    let expiresAt: Date
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        promptId = try boundedString(
+            values,
+            forKey: .promptId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "promptId",
+            required: true
+        )!
+        questions = try values.decode([AidenRemoteQuestion].self, forKey: .questions)
+        try AidenRemoteQuestionGrammar.validate(questions)
+        expiresAt = try values.decode(Date.self, forKey: .expiresAt)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case promptId, questions, expiresAt
+    }
+}
+
+/// One answer per addressed question index. `option` selects a single label,
+/// `multi` selects unique labels on a multi-select question, and `custom`
+/// carries bounded free text.
+enum AidenQuestionAnswer: Codable, Equatable, Sendable {
+    case option(questionIndex: Int, answer: String)
+    case custom(questionIndex: Int, answer: String)
+    case multi(questionIndex: Int, selected: [String])
+
+    var questionIndex: Int {
+        switch self {
+        case let .option(index, _), let .custom(index, _), let .multi(index, _):
+            index
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["questionIndex", "kind", "answer", "selected"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let index = try values.decode(Int.self, forKey: .questionIndex)
+        guard index >= 0 else {
+            throw AidenRemoteContractError.unsafePayloadField("questionIndex")
+        }
+        let kind = try values.decode(String.self, forKey: .kind)
+        let expectedKeys: Set<String>
+        switch kind {
+        case "option", "custom":
+            expectedKeys = ["questionIndex", "kind", "answer"]
+        case "multi":
+            expectedKeys = ["questionIndex", "kind", "selected"]
+        default:
+            throw AidenRemoteContractError.unsafePayloadField("kind")
+        }
+        guard Set(dynamic.allKeys.map(\.stringValue)) == expectedKeys else {
+            throw AidenRemoteContractError.unsafePayloadField("kind")
+        }
+        switch kind {
+        case "option":
+            let answer = try boundedString(
+                values,
+                forKey: .answer,
+                maxLength: AidenRemoteProtocol.maxQuestionOptionLabelLength,
+                field: "answer",
+                required: true
+            )!
+            self = .option(questionIndex: index, answer: answer)
+        case "custom":
+            let answer = try boundedString(
+                values,
+                forKey: .answer,
+                maxLength: AidenRemoteProtocol.maxQuestionCustomAnswerLength,
+                field: "answer",
+                required: true
+            )!
+            self = .custom(questionIndex: index, answer: answer)
+        default:
+            let selected = try values.decode([String].self, forKey: .selected)
+            guard !selected.isEmpty,
+                  selected.count <= AidenRemoteProtocol.maxQuestionOptions,
+                  Set(selected).count == selected.count,
+                  selected.allSatisfy({
+                      !$0.isEmpty
+                          && $0.unicodeScalars.count <= AidenRemoteProtocol.maxQuestionOptionLabelLength
+                  }) else {
+                throw AidenRemoteContractError.unsafePayloadField("selected")
+            }
+            self = .multi(questionIndex: index, selected: selected)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(questionIndex, forKey: .questionIndex)
+        switch self {
+        case let .option(_, answer):
+            try values.encode("option", forKey: .kind)
+            try values.encode(answer, forKey: .answer)
+        case let .custom(_, answer):
+            try values.encode("custom", forKey: .kind)
+            try values.encode(answer, forKey: .answer)
+        case let .multi(_, selected):
+            try values.encode("multi", forKey: .kind)
+            try values.encode(selected, forKey: .selected)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case questionIndex, kind, answer, selected
+    }
+}
+
+struct AidenQuestionRespondRequest: Codable, Equatable, Sendable {
+    let cancelled: Bool
+    let answers: [AidenQuestionAnswer]
+}
+
+struct AidenQuestionRespondResponse: Codable, Equatable, Sendable {
+    let promptId: String
+    let resolvedAt: Date
 }
 
 struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
@@ -1034,6 +1329,9 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
     /// They intentionally do not share the turn transcript payload envelope.
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
+    /// `question_required` carries the bounded prompt payload here rather than
+    /// the flat transcript payload envelope.
+    let questionPrompt: AidenQuestionRequiredPayload?
 
     var shouldApply: Bool { AidenRemoteEventType.v1Known.contains(type) }
 
@@ -1079,6 +1377,7 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             payload = nil
             taskProgress = nil
             agentRoster = nil
+            questionPrompt = nil
             return
         }
         guard terminal == type.isTerminal else {
@@ -1091,6 +1390,7 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             }
             taskProgress = progress
             agentRoster = nil
+            questionPrompt = nil
             payload = nil
             return
         }
@@ -1101,6 +1401,14 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
             }
             taskProgress = nil
             agentRoster = roster
+            questionPrompt = nil
+            payload = nil
+            return
+        }
+        if type == .questionRequired {
+            taskProgress = nil
+            agentRoster = nil
+            questionPrompt = try values.decode(AidenQuestionRequiredPayload.self, forKey: .payload)
             payload = nil
             return
         }
@@ -1149,6 +1457,7 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         payload = decodedPayload
         taskProgress = nil
         agentRoster = nil
+        questionPrompt = nil
     }
 }
 
@@ -2340,6 +2649,26 @@ struct AidenRemoteContractFixture: Decodable {
         private enum CodingKeys: String, CodingKey { case request, response }
     }
 
+    struct QuestionFixture: Decodable {
+        let pending: AidenStreamPendingQuestion
+        let respondRequest: AidenQuestionRespondRequest
+        let respondResponse: AidenQuestionRespondResponse
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["pending", "respondRequest", "respondResponse"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            pending = try values.decode(AidenStreamPendingQuestion.self, forKey: .pending)
+            respondRequest = try values.decode(AidenQuestionRespondRequest.self, forKey: .respondRequest)
+            respondResponse = try values.decode(
+                AidenQuestionRespondResponse.self,
+                forKey: .respondResponse
+            )
+        }
+
+        private enum CodingKeys: String, CodingKey { case pending, respondRequest, respondResponse }
+    }
+
     let contractRevision: Int
     let protocolVersion: Int
     let capabilities: [AidenRemoteCapability]
@@ -2380,6 +2709,7 @@ struct AidenRemoteContractFixture: Decodable {
     let streamStatus: AidenStreamStatus
     let streamApproval: AidenStreamApprovalSnapshot
     let streamInput: StreamInputFixture?
+    let question: QuestionFixture?
     let events: [AidenRemoteStreamEvent]
     let speechStatus: AidenSpeechStatus
     let speechTranscription: AidenSpeechTranscription
@@ -2452,6 +2782,7 @@ struct AidenRemoteContractFixture: Decodable {
         streamStatus = try values.decode(AidenStreamStatus.self, forKey: .streamStatus)
         streamApproval = try values.decode(AidenStreamApprovalSnapshot.self, forKey: .streamApproval)
         streamInput = try values.decodeIfPresent(StreamInputFixture.self, forKey: .streamInput)
+        question = try values.decodeIfPresent(QuestionFixture.self, forKey: .question)
         events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
         speechStatus = try values.decode(AidenSpeechStatus.self, forKey: .speechStatus)
         speechTranscription = try values.decode(AidenSpeechTranscription.self, forKey: .speechTranscription)
@@ -2659,7 +2990,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
         case taskProgress, agentRoster, deviceCapabilitiesUpdate, chatProgressEvents
-        case streamStatus, streamApproval, streamInput, events, speechStatus, speechTranscription, error
+        case streamStatus, streamApproval, streamInput, question, events, speechStatus, speechTranscription, error
     }
 }
 

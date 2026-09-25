@@ -41,6 +41,15 @@ object AidenRemoteProtocol {
     const val CHAT_TASKS_FEATURE = "chat-tasks-v1"
     const val CHAT_AGENTS_FEATURE = "chat-agents-v1"
     const val CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1"
+    const val CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1"
+    const val MAX_QUESTION_COUNT = 4
+    const val MIN_QUESTION_OPTIONS = 2
+    const val MAX_QUESTION_OPTIONS = 4
+    const val MAX_QUESTION_HEADER_LENGTH = 16
+    const val MAX_QUESTION_OPTION_LABEL_LENGTH = 60
+    const val MAX_QUESTION_LENGTH = 1_000
+    const val MAX_QUESTION_OPTION_DESCRIPTION_LENGTH = 2_000
+    const val MAX_QUESTION_CUSTOM_ANSWER_LENGTH = 4_000
     const val CHAT_PROGRESS_EPOCH_MAX_LENGTH = 64
     const val MAX_CHAT_PREVIOUS_TURNS = 16
     const val MAX_CHAT_TASKS = 256
@@ -428,15 +437,17 @@ data class AidenRemoteCapability(val rawValue: String) {
         val BOT_WRITE = AidenRemoteCapability("bot:write")
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
+        val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
             FILES_READ, FILES_WRITE, GIT_READ, GIT_WRITE,
-            SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ
+            SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ,
+            QUESTIONS_RESPOND
         )
 
-        val PROGRESS = listOf(TASKS_READ, AGENTS_READ)
+        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND)
     }
 }
 
@@ -486,6 +497,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val STREAM_GONE = AidenRemoteErrorCode("stream_gone")
         val APPROVAL_ALREADY_RESOLVED = AidenRemoteErrorCode("approval_already_resolved")
         val APPROVAL_EXPIRED = AidenRemoteErrorCode("approval_expired")
+        val QUESTION_ALREADY_RESOLVED = AidenRemoteErrorCode("question_already_resolved")
+        val QUESTION_EXPIRED = AidenRemoteErrorCode("question_expired")
         val OPERATION_IN_PROGRESS = AidenRemoteErrorCode("operation_in_progress")
         val OPERATION_STALE = AidenRemoteErrorCode("operation_stale")
         val GIT_CAPABILITY_DENIED = AidenRemoteErrorCode("git_capability_denied")
@@ -504,7 +517,7 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             FILESYSTEM_IDENTITY_CHANGED, PATH_OUTSIDE_ROOT, HANDLE_CAPACITY, TURN_ALREADY_ACTIVE,
             STREAM_GONE, APPROVAL_ALREADY_RESOLVED, APPROVAL_EXPIRED, OPERATION_IN_PROGRESS,
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
-            SERVER_INTERRUPTED, INTERNAL_ERROR
+            SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED
         )
     }
 }
@@ -538,6 +551,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val APPROVAL_REQUIRED = AidenRemoteEventType("approval_required")
         val TASK_UPDATE = AidenRemoteEventType("task_update")
         val AGENTS_UPDATE = AidenRemoteEventType("agents_update")
+        val QUESTION_REQUIRED = AidenRemoteEventType("question_required")
         val DONE = AidenRemoteEventType("done")
         val ERROR = AidenRemoteEventType("error")
         val CANCELLED = AidenRemoteEventType("cancelled")
@@ -546,7 +560,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val V1_KNOWN = listOf(
             SNAPSHOT, STATUS, TEXT_DELTA, REASONING_DELTA,
             TOOL_STARTED, TOOL_FINISHED, TIMELINE, APPROVAL_REQUIRED,
-            TASK_UPDATE, AGENTS_UPDATE,
+            TASK_UPDATE, AGENTS_UPDATE, QUESTION_REQUIRED,
             DONE, ERROR, CANCELLED, HEARTBEAT
         )
     }

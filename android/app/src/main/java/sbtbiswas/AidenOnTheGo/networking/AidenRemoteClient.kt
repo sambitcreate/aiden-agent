@@ -939,6 +939,35 @@ class AidenRemoteClient(
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenApprovalResponse = respondToApproval(approvalId, decision, idempotencyKey)
 
+    /** Authoritative pending-question snapshot for one stream. Returns
+     * `{question: null}` when no prompt is pending. */
+    suspend fun streamQuestion(id: String): AidenStreamQuestionSnapshot = executeRequest("/streams/$id/question") { bytes ->
+        AidenQuestionContractCodec.parseSnapshot(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
+    suspend fun pendingQuestion(chatId: String, streamId: String): AidenStreamPendingQuestion? =
+        streamQuestion(streamId).question
+
+    /** Question responses never auto-retry; the stable request UUID makes a
+     * manual retry replay the Mac's original outcome. */
+    suspend fun respondToQuestion(
+        id: String,
+        response: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenQuestionRespondResponse = executeRequest(
+        "/questions/$id/respond",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = response.toJson().toString(),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        AidenQuestionContractCodec.parseRespondResponse(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
     fun streamEvents(
         id: String,
         after: Int = 0

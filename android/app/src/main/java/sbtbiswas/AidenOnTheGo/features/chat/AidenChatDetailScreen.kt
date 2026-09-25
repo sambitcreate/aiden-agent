@@ -132,6 +132,8 @@ fun AidenChatDetailScreen(
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
     val runInputReceipt by viewModel.runInputReceipt.collectAsState()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
+    val pendingQuestion by viewModel.pendingQuestion.collectAsState()
+    val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
@@ -444,6 +446,26 @@ fun AidenChatDetailScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Pending Question Banner
+                AnimatedVisibility(
+                    visible = pendingQuestion != null,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
+                ) {
+                    pendingQuestion?.let { question ->
+                        key(question.id) {
+                            AidenQuestionCard(
+                                prompt = question,
+                                enabled = connectionState == AidenConnectionState.CONNECTED &&
+                                    !isRespondingToQuestion && !isStopping,
+                                onSubmit = { request ->
+                                    viewModel.respondToQuestion(request, question.id)
+                                }
+                            )
                         }
                     }
                 }

@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 12)
+        XCTAssertEqual(fixture.contractRevision, 13)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -153,11 +153,35 @@ final class AidenRemotePhase0Tests: XCTestCase {
         ])
         XCTAssertEqual(
             fixture.deviceCapabilitiesUpdate?.request.accepts,
-            [.tasksRead, .agentsRead]
+            [.tasksRead, .agentsRead, .questionsRespond]
         )
         XCTAssertTrue(fixture.server.supportsChatTasks)
         XCTAssertTrue(fixture.server.supportsChatAgents)
         XCTAssertTrue(fixture.server.supportsChatRunInput)
+        XCTAssertTrue(fixture.server.supportsQuestionPrompts)
+        XCTAssertEqual(fixture.question?.pending.promptId, "q-fixture-01")
+        XCTAssertEqual(fixture.question?.pending.streamId, fixture.streamStatus.streamId)
+        XCTAssertEqual(fixture.question?.pending.chatId, fixture.chat.id)
+        XCTAssertEqual(fixture.question?.pending.questions.count, 1)
+        XCTAssertEqual(fixture.question?.pending.questions.first?.options.count, 2)
+        XCTAssertEqual(fixture.question?.respondRequest.cancelled, false)
+        XCTAssertEqual(
+            fixture.question?.respondRequest.answers,
+            [.option(questionIndex: 0, answer: "0.5 mm")]
+        )
+        XCTAssertEqual(
+            fixture.question?.respondResponse.promptId,
+            fixture.question?.pending.promptId
+        )
+        let questionEvent = fixture.events.first { $0.type == .questionRequired }
+        XCTAssertEqual(
+            questionEvent?.questionPrompt?.promptId,
+            fixture.question?.pending.promptId
+        )
+        XCTAssertEqual(
+            questionEvent?.questionPrompt?.questions,
+            fixture.question?.pending.questions
+        )
         XCTAssertEqual(fixture.streamInput?.request.mode, .queue)
         XCTAssertEqual(fixture.streamInput?.response.status, .admitted)
         XCTAssertEqual(fixture.streamInput?.response.queue, .followUp)

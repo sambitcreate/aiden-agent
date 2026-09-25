@@ -36,6 +36,7 @@ async function fixture(options: {
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
   runInputAvailable?: boolean;
+  questionsAvailable?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -164,7 +165,9 @@ async function fixture(options: {
         if (
           accepts.some(
             (capability) =>
-              capability !== "tasks:read" && capability !== "agents:read",
+              capability !== "tasks:read" &&
+              capability !== "agents:read" &&
+              capability !== "questions:respond",
           )
         ) {
           return null;
@@ -610,6 +613,39 @@ async function fixture(options: {
                 return runAccess("chat-1", async () => result);
               }
               return result;
+            },
+          }),
+      ...(options.questionsAvailable === false || options.progressAvailable === false
+        ? {}
+        : {
+            supportsQuestionPrompts: () => true,
+            pendingQuestion: (_deviceId: string, streamId: string) => ({
+              promptId: "q-prompt-1",
+              streamId,
+              chatId: "chat-1",
+              toolCallId: "tool-2",
+              questions: [
+                {
+                  question: "Which chamfer?",
+                  header: "Chamfer",
+                  multiSelect: false,
+                  options: [
+                    { label: "0.5 mm", description: "Standard." },
+                    { label: "1.0 mm", description: "Heavy." },
+                  ],
+                },
+              ],
+              expiresAt: new Date(60_000).toISOString(),
+            }),
+            questionChatId: () => "chat-1",
+            respondQuestion: async (
+              deviceId: string,
+              promptId: string,
+              input: { cancelled: boolean },
+              _key: string,
+            ) => {
+              calls.push(`question:${deviceId}:${promptId}:${input.cancelled}`);
+              return { promptId, resolvedAt: new Date(6_000).toISOString() };
             },
           }),
       respondApproval: async (deviceId, approvalId, decision, _key) => {
@@ -3124,4 +3160,87 @@ test("every matcher path pattern in the router source is declared as a route tem
     [],
     "every router matcher path must have a declared route template for routePath evidence",
   );
+});
+
+test("question prompts negotiate, project, and respond under the device grant", async () => {
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "questions:respond"],
+    acceptsProgressCapabilities: true,
+  });
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), true);
+    assert.equal(server.capabilities.includes("questions:respond"), true);
+
+    const snapshot = await fetch(`${app.base}/streams/stream-1/question`, { headers });
+    assert.equal(snapshot.status, 200);
+    const { question } = await snapshot.json();
+    assert.equal(question.promptId, "q-prompt-1");
+    assert.equal(question.questions[0].options.length, 2);
+
+    const resolved = await fetch(`${app.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-01" },
+      body: JSON.stringify({
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: "0.5 mm" }],
+      }),
+    });
+    assert.equal(resolved.status, 200);
+    assert.deepEqual(await resolved.json(), {
+      promptId: "q-prompt-1",
+      resolvedAt: new Date(6_000).toISOString(),
+    });
+    assert.equal(
+      app.calls.some((call) => call.startsWith("question:device-authorized-12345678:q-prompt-1")),
+      true,
+    );
+  } finally {
+    app.close();
+  }
+});
+
+test("question routes fail closed without the grant or the host surface", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  const noGrant = await fixture({ capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${noGrant.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), true);
+    const denied = await fetch(`${noGrant.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-02" },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    noGrant.close();
+  }
+
+  const noSurface = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "questions:respond"],
+    acceptsProgressCapabilities: true,
+    questionsAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${noSurface.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-question-prompts-v1"), false);
+    const missing = await fetch(`${noSurface.base}/streams/stream-1/question`, { headers });
+    assert.equal(missing.status, 404);
+    const respondMissing = await fetch(`${noSurface.base}/questions/q-prompt-1/respond`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": "question-answer-key-03" },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(respondMissing.status, 404);
+  } finally {
+    noSurface.close();
+  }
 });

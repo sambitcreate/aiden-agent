@@ -1887,6 +1887,87 @@ enum AidenPendingApprovalResolution {
     }
 }
 
+/// Aiden On The Go pending question prompt. The card binds to the exact
+/// prompt/stream/chat identity from the Mac-owned snapshot.
+struct AidenPendingQuestion: Identifiable, Equatable, Sendable {
+    let id: String
+    let questions: [AidenRemoteQuestion]
+    let expiresAt: Date
+    let canRespond: Bool
+}
+
+enum AidenPendingQuestionResolution {
+    static func resolve(
+        _ question: AidenStreamPendingQuestion?,
+        streamId: String,
+        chatId: String,
+        canRespond: Bool = true,
+        now: Date = Date()
+    ) -> AidenPendingQuestion? {
+        guard let question,
+              question.streamId == streamId,
+              question.chatId == chatId,
+              question.expiresAt > now else { return nil }
+        return AidenPendingQuestion(
+            id: question.promptId,
+            questions: question.questions,
+            expiresAt: question.expiresAt,
+            canRespond: canRespond
+        )
+    }
+}
+
+/// Builds the wire answers from the card's selection state. A non-empty custom
+/// draft wins over option selections for that question; questions left
+/// unaddressed are omitted so the host records them as skipped.
+enum AidenQuestionAnswerDraft {
+    static func answers(
+        for questions: [AidenRemoteQuestion],
+        selections: [Int: Set<String>],
+        customAnswers: [Int: String]
+    ) -> [AidenQuestionAnswer] {
+        var answers: [AidenQuestionAnswer] = []
+        for (index, question) in questions.enumerated() {
+            let custom = (customAnswers[index] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !custom.isEmpty {
+                answers.append(.custom(questionIndex: index, answer: custom))
+                continue
+            }
+            let selected = selections[index] ?? []
+            let ordered = question.options.map(\.label).filter { selected.contains($0) }
+            guard !ordered.isEmpty else { continue }
+            if question.multiSelect {
+                answers.append(.multi(questionIndex: index, selected: ordered))
+            } else if let first = ordered.first {
+                answers.append(.option(questionIndex: index, answer: first))
+            }
+        }
+        return answers
+    }
+
+    /// Toggling a label keeps multi-select selections and replaces
+    /// single-select ones; clearing every selection drops the answer.
+    static func toggled(
+        selections: [Int: Set<String>],
+        questionIndex: Int,
+        label: String,
+        multiSelect: Bool
+    ) -> [Int: Set<String>] {
+        var next = selections
+        var current = next[questionIndex] ?? []
+        if current.contains(label) {
+            current.remove(label)
+        } else if multiSelect {
+            current.insert(label)
+        } else {
+            current = [label]
+        }
+        next[questionIndex] = current.isEmpty ? nil : current
+        return next
+    }
+}
+
 struct AidenLiveTool: Identifiable, Equatable, Sendable {
     let id: String
     let name: String

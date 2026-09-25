@@ -717,6 +717,7 @@ async function prepareGeneration(
       assistantMode,
       botBound,
       rendererOwner,
+      remoteOwner: browserOwner.kind === "remote",
       excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
     })
   ) {
@@ -2133,6 +2134,7 @@ export const llmClient = {
           assistantMode: authoritativeMode !== undefined,
           botBound: preparedBotContext !== undefined,
           rendererOwner: owner.id !== 0,
+          remoteOwner: owner.kind === "remote",
           excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
         })
           ? {

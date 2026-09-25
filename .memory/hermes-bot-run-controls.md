@@ -74,3 +74,21 @@ the transcript — surfaced as a receipt, then reconcileChat pulls it in), every
 uncommitted rejection keeps the draft, and a retry of an identical
 (streamId, mode, text) submission reuses the original Idempotency-Key so the
 Mac replays its recorded outcome. No control write auto-retries.
+
+On The Go slice D (2026-09-25, same branch): pending `ask_user_question`
+prompts reach the paired phone through Remote API v1 (contract revision 13).
+`GET /streams/{streamId}/question` + `POST /questions/{promptId}/respond`
+(feature `chat-question-prompts-v1`, capability `questions:respond`) reuse the
+Mac-owned `AskUserQuestionCoordinator`; the remote stream service keeps
+per-prompt records (device/stream/chat/renderer-document binding + expiry) and
+projects a non-terminal `question_required` event under the existing
+`waiting_for_approval` state so legacy clients degrade safely. Remote
+generation excludes `ask_user_question` unless the device negotiated the
+grant. iOS (`AidenQuestionCard` in `AidenChatFeature.swift`) and Android
+(`AidenQuestionCard.kt` + `models/AidenQuestion.kt` strict codec) share one
+decision table: stacked option/multi/custom answers, skip = `cancelled: true`,
+unaddressed questions sent as skipped, stable per-submission idempotency key,
+and reconcile-instead-of-resurrect after an ambiguous write. The
+`waiting_for_approval` status is disambiguated by fetching the approval
+snapshot first, then the question snapshot, then reconciling when neither
+resolves.
