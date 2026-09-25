@@ -1105,3 +1105,22 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - The lane38 linux external-editor memory describes the original 5-editor bounded support; the branch later expanded to a union model (21 executables, Flatpak fallback, `file-manager` id). Merge resolution kept the union model and ported main's `zeditor` alias plus PATH hardening (absolute roots only, regular-file check, PATH-major ordering) that linux's variant lacked.
 - `scripts/native-c-build-core.mjs` dropped `xcrun --sdk macosx` when abstracting the helper builds; plain `xcrun clang` resolves this host's CLT `MacOSX27.0.sdk` `libSystem.B.tbd` (arm64e.x1) which the installed tapi/ld cannot parse. Restored `--sdk macosx` — all 8 C helpers plus both Swift helpers then built.
 - Review found `.worktreeinclude` provisioning unconditionally calls the Darwin-only `aiden-worktree-file-io` helper, so Linux worktree creation would fail with a misleading `unsafe_source`. Gated `provisionWorktreeIncludedFiles` to `process.platform === "darwin"` with a platform-mocked regression test. Snapshot capture/restore stay ungated because mac→linux cross-platform snapshots must surface the honest `snapshot_invalid` failure rather than silently skip.
+
+## Merge origin/main into feature/linux-desktop-support (linux-parity worktree)
+
+- `git cherry` overstates divergence: main squash-merges, so equivalent work
+  shows as non-equivalent commits — classify via file-level trial-merge diffs
+  instead.
+- Union-merge of sibling test blocks can redeclare fixtures (duplicate
+  `const watcher`): resolve by keeping one declaration and both assertions.
+- Bundled-service tests (`app-updater-core` esbuild+mock harness) break on
+  any new transitive import — `node:crypto` and `AppImageUpdater` had to be
+  added to the mock map after the linux updater path merged in.
+- `fs.access(X_OK)` passes for directories; launcher discovery must stat for
+  regular files first (main already had this; linux needed the port).
+- The parallel linux-parity merge additionally put `linux`/`linux-rpm` into
+  `required.needs`, which broke the advisory-jobs policy and the shard
+  policy test; the reconciled branch keeps them advisory. Its
+  setsid-fixture compile failure (`clock_gettime` undeclared under strict
+  c17 on glibc) applied to both trees — fixed with the shared feature-test
+  macro block.

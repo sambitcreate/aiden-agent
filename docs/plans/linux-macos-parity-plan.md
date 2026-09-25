@@ -428,3 +428,34 @@ final pull-request delivery gate.
 - TypeScript, e2e type-check, ESLint on merged files, Vite renderer build, Electron main bundle, and focused suites (external editors, app updater core/Linux, remote state/pairing, host capabilities, onboarding, chat sidebar, handlers) pass. The full `test:aiden-remote` suite passes (461/462, one platform skip), Linux contracts pass, `build:native` produces all helpers, and the managed-worktree lifecycle suite passes 29/29.
 - Review loop complete: an independent review found that `.worktreeinclude` provisioning unconditionally invoked the Darwin-only `aiden-worktree-file-io` helper, so Linux worktree creation failed whenever it selected files. `provisionWorktreeIncludedFiles` now returns early off macOS, and the create path's 256 MB provisioning reserve is darwin-only to match; a platform-mocked regression test pins the no-op. The same loop restored `xcrun --sdk macosx` in the shared native build core (plain `xcrun clang` resolves an unparseable CLT SDK on this host) and pinned the flag in its contract test.
 - Merge committed as `751d4064` with remediation in `5d2efe27` and `2148442f`. Android compilation is CI-bound (no JDK on this host); native Linux acceptance and Computer Use admission remain gated as before.
+
+## Remaining before the branch merges to main
+
+A parallel linux-parity worktree merge (commits `b922f253`..`09ba95d4`)
+was reconciled into this branch; its resolutions were a subset of this
+tree's, and its checklist remains accurate for the final gap items:
+
+1. **Linux VM smoke.** Run on a Linux box: `npm ci`,
+   `npm run build:native` (compiles secret-service-authority and
+   global-shortcuts-portal on the linux path), `npm run test:linux-native`,
+   `test:linux-contracts`, `test:bot-authority`,
+   `test:secret-service-integration`,
+   `computer-use:linux-host-preflight`, and the main suite.
+2. **Linux CI burn-in.** The grafted `linux` + `linux-rpm` jobs run
+   advisory (they are intentionally absent from `required.needs` per
+   main's gate policy); watch them plus the Playwright e2e shards on
+   hosted runners.
+3. **Gemini Live orb on Linux.** #129–#137 replaced Assistant with the
+   orb; the `geminiLive` capability parses and gates, but the orb UI,
+   voice setup dialog and onboarding surfaces still need a linux runtime
+   check.
+4. **Managed worktree lifecycle on Linux.** `.worktreeinclude`
+   provisioning is darwin-gated until the file-io helper gains a Linux
+   port; verify create/remove cycles under the platform layer.
+5. **Shared-contract native clients.** `AidenChatFeature.swift` keeps
+   linux's richer authorization-error switch; iOS build passes locally,
+   Android compile is CI-bound.
+
+Deliberately platform-gated (not gaps): production Computer Use on Linux,
+Apple Foundation Models, macOS-only CUA-S1 forms helper, macOS packaging
+assertions in `verify-macos-package.mjs`.
