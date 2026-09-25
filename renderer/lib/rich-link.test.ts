@@ -47,6 +47,8 @@ test("host matching rejects lookalikes, non-web protocols, and malformed URLs", 
     "https://docs.google.com.evil.example/document/d/id",
     "https://slack.com.evil.example/archives/C1/p1",
     "https://notion.site.evil.example/page",
+    "https://github.com:8443/openai/codex/pull/1",
+    "http://gitlab.com:8080/group/project",
     "javascript:alert(1)",
     "file:///Users/example/repo",
     "/relative/path",
@@ -54,6 +56,8 @@ test("host matching rejects lookalikes, non-web protocols, and malformed URLs", 
   ];
   for (const href of unsupported) assert.equal(describeRichLink(href), null, href);
   assert.equal(describeRichLink("https://GITHUB.COM/openai/codex")?.provider, "github");
+  assert.equal(describeRichLink("https://github.com:443/openai/codex")?.provider, "github");
+  assert.equal(describeRichLink("http://github.com:80/openai/codex")?.provider, "github");
 });
 
 test("preview display values omit credentials, query secrets, fragments, and message timestamps", () => {

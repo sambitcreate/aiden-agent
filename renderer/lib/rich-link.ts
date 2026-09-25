@@ -323,6 +323,9 @@ export function describeRichLink(href: string): RichLinkDescriptor | null {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  // URL normalizes explicit default ports to an empty string. Any remaining
+  // port is a distinct origin and must not inherit a trusted provider label.
+  if (url.port) return null;
 
   return (
     describeGitHub(url) ??
