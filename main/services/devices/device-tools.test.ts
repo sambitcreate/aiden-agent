@@ -264,8 +264,11 @@ test("the shim runs the pinned install and refuses commands without device_open'
     const refused = spawnSync(command, ["snapshot", "-i"], { encoding: "utf8" });
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /Call device_open first/u);
-    const help = spawnSync(command, ["--help"], { encoding: "utf8" });
-    assert.equal(help.status, 0);
+    for (const args of [["--help"], ["help"], ["help", "workflows"], ["click", "--help"], ["snapshot", "-h"], ["--version"]]) {
+      const help = spawnSync(command, args, { encoding: "utf8" });
+      assert.equal(help.status, 0, `${args.join(" ")} is informational`);
+    }
+    assert.equal(spawnSync(command, ["version", "snapshot"], { encoding: "utf8" }).status, 1);
     const pinned = spawnSync(command, ["click", "@e3", "--config", "c.json", "--session", "aiden-1"], {
       encoding: "utf8",
       env: { ...process.env, AGENT_DEVICE_DAEMON_AUTH_TOKEN: "leak" },

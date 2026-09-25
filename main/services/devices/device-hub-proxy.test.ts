@@ -5,7 +5,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
-import type { Socket } from "node:net";
+import { connect, type Socket } from "node:net";
 import test from "node:test";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
 import { peerTlsOptions } from "../peer-transport.js";
@@ -361,6 +361,54 @@ test("allowlisted WebSocket upgrades are piped end to end", async () => {
     assert.equal(list.status, 101);
     list.socket!.destroy();
   });
+});
+
+test("a client that resets while its host resolves never crashes the proxy", async () => {
+  let release: (target: string | null) => void = () => undefined;
+  let resolving = false;
+  let released = false;
+  const proxy = await startDeviceHubProxy({
+    resolveHub: () => {
+      if (released) return null;
+      resolving = true;
+      return new Promise<string | null>((resolve) => (release = resolve));
+    },
+    allowedOrigins: ["file://"],
+  });
+  try {
+    const { token } = proxy.mintGrant();
+    const url = new URL(proxy.origin);
+    const socket = connect({ host: url.hostname, port: Number(url.port) });
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    socket.on("error", () => undefined);
+    socket.write(
+      [
+        `GET /vendor/serve-sim/helper/ws?device=${UDID}&t=${token} HTTP/1.1`,
+        `Host: ${url.host}`,
+        "Origin: file://",
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version: 13",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    const deadline = Date.now() + 5_000;
+    while (!resolving) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for host resolution");
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    socket.resetAndDestroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    released = true;
+    release(null);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Still serving: a fresh request is answered rather than the process having crashed.
+    assert.equal((await send(proxy, `/api/devices?t=${proxy.mintGrant().token}`)).status, 503);
+  } finally {
+    await proxy.close();
+  }
 });
 
 test("WebSocket upgrades on other paths are refused without reaching the hub", async () => {

@@ -417,9 +417,22 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     const decision = decide(request, true);
     if (!decision.ok) return refuseUpgrade(client, decision.status, decision.message);
     openSockets.add(client);
+    // A client that drops while its host resolves must never raise an unhandled socket error.
+    const dropEarly = () => {
+      openSockets.delete(client);
+      client.destroy();
+    };
+    client.once("error", dropEarly);
     const target = await resolve(decision.hostId);
-    if (client.destroyed) return;
-    if (!target) return refuseUpgrade(client, 503, "Device hub is not running");
+    client.off("error", dropEarly);
+    if (client.destroyed) {
+      openSockets.delete(client);
+      return;
+    }
+    if (!target) {
+      openSockets.delete(client);
+      return refuseUpgrade(client, 503, "Device hub is not running");
+    }
     trackHost(decision.hostId, client);
     if (isUpstream(target)) {
       const url = new URL(target.origin);
