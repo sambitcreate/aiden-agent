@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserAnnotationRegion, browserBoundsFromRect, browserElementAtPoint, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport } from "./browser-ui-state.js";
+import { acceptBrowserState, BROWSER_DEVICE_PRESETS, BROWSER_NATIVE_OCCLUDER_SELECTOR, browserAnnotationRegion, browserBoundsFromRect, browserElementAtPoint, browserNativeViewObstructed, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport } from "./browser-ui-state.js";
 import type { BrowserElement, BrowserState } from "../shared/browser.js";
 import { browserAnnotationCropBounds } from "./browser-annotation-capture.js";
 
@@ -30,6 +30,18 @@ test("annotations normalize reverse drags and pick the smallest enclosing elemen
   const inner = { ref: "inner", bounds: { x: 5, y: 5, width: 20, height: 20 } } as BrowserElement;
   assert.equal(browserElementAtPoint([outer, inner], { x: 10, y: 10 }), inner);
   assert.equal(browserElementAtPoint([outer, inner], { x: 110, y: 110 }), null);
+});
+
+test("native browser stays visible unless an overlay actually covers its slot", () => {
+  const host = { x: 800, y: 40, width: 400, height: 600 };
+  assert.equal(browserNativeViewObstructed(host, [{ x: 80, y: 420, width: 320, height: 220 }]), false);
+  assert.equal(browserNativeViewObstructed(host, [{ x: 790, y: 100, width: 40, height: 40 }]), true);
+  assert.equal(browserNativeViewObstructed(host, [{ x: 0, y: 0, width: 1920, height: 1080 }]), true);
+  assert.equal(browserNativeViewObstructed(host, [{ x: 800, y: 40, width: 0, height: 600 }]), false);
+  assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /data-slot="popover-content"/u);
+  assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /data-slot="dialog-overlay"/u);
+  assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /data-browser-occluder/u);
+  assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /\[role="listbox"\]/u);
 });
 
 test("native presentation never receives empty or nonfinite geometry", () => {

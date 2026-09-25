@@ -86,6 +86,48 @@ export function browserPartition(profileId: string, incognito: boolean): string 
   return `${incognito ? "" : "persist:"}aiden-browser-${incognito ? "private-" : "profile-"}${digest}`;
 }
 
+/** Guest pages must look like Chromium, not Electron or Aiden, or Google rejects sign-in. */
+export function browserGuestUserAgent(raw: string): string {
+  const mozilla = raw.match(/^Mozilla\/[\d.]+/u)?.[0] ?? "Mozilla/5.0";
+  const platform = raw.match(/\([^)]*\)/u)?.[0] ?? "(Macintosh; Intel Mac OS X 10_15_7)";
+  const chrome = raw.match(/Chrome\/[\d.]+/u)?.[0] ?? "Chrome/142.0.0.0";
+  return `${mozilla} ${platform} AppleWebKit/537.36 (KHTML, like Gecko) ${chrome} Safari/537.36`;
+}
+
+function browserHeaderWithout(headers: Record<string, string>, name: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== name.toLowerCase()) result[key] = value;
+  }
+  return result;
+}
+
+/** Keep Client Hints aligned with the reconstructed Chromium user agent. */
+export function applyBrowserGuestIdentityHeaders(
+  headers: Record<string, string>,
+  userAgent: string,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const major = userAgent.match(/Chrome\/(\d+)/u)?.[1] ?? "142";
+  const full = userAgent.match(/Chrome\/([\d.]+)/u)?.[1] ?? `${major}.0.0.0`;
+  const chPlatform =
+    platform === "darwin" ? '"macOS"' : platform === "win32" ? '"Windows"' : '"Linux"';
+  let next = browserHeaderWithout(headers, "User-Agent");
+  next = browserHeaderWithout(next, "sec-ch-ua");
+  next = browserHeaderWithout(next, "sec-ch-ua-mobile");
+  next = browserHeaderWithout(next, "sec-ch-ua-platform");
+  next = browserHeaderWithout(next, "sec-ch-ua-full-version");
+  next = browserHeaderWithout(next, "sec-ch-ua-full-version-list");
+  next["User-Agent"] = userAgent;
+  next["sec-ch-ua"] = `"Chromium";v="${major}", "Not=A?Brand";v="24", "Google Chrome";v="${major}"`;
+  next["sec-ch-ua-mobile"] = "?0";
+  next["sec-ch-ua-platform"] = chPlatform;
+  next["sec-ch-ua-full-version"] = full;
+  next["sec-ch-ua-full-version-list"] =
+    `"Chromium";v="${full}", "Not=A?Brand";v="10.0.0.0", "Google Chrome";v="${full}"`;
+  return next;
+}
+
 export function browserBoundedNumber(
   value: unknown,
   min: number,

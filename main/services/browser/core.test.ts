@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyBrowserGuestIdentityHeaders,
+  browserGuestUserAgent,
   browserUrl,
   browserDisplayUrl,
   browserRedactPreviewUrls,
@@ -29,6 +31,41 @@ test("navigation normalizes public and loopback hosts but refuses privileged sch
     assert.throws(() => browserUrl(url));
   }
 });
+test("guest user-agent drops Electron and Aiden product tokens Google rejects", () => {
+  const electron = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36";
+  const guest = browserGuestUserAgent(electron);
+  assert.equal(
+    guest,
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36",
+  );
+  assert.doesNotMatch(guest, /Electron|Aiden/u);
+  const linux = browserGuestUserAgent(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) aiden-agent/0.43.0 Chrome/142.0.0.0 Electron/43.1.1 Safari/537.36",
+  );
+  assert.match(linux, /Linux x86_64/u);
+  assert.doesNotMatch(linux, /Electron|aiden/iu);
+});
+
+test("guest identity headers rewrite Client Hints without dropping preview grants", () => {
+  const ua = browserGuestUserAgent(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Aiden Agent/0.43.0 Chrome/142.0.7444.175 Electron/43.1.1 Safari/537.36",
+  );
+  const headers = applyBrowserGuestIdentityHeaders(
+    { "User-Agent": "Electron", Cookie: "session=1", "X-Aiden-Preview-Authorization": "grant" },
+    ua,
+    "darwin",
+  );
+  assert.equal(headers["User-Agent"], ua);
+  assert.equal(headers["X-Aiden-Preview-Authorization"], "grant");
+  assert.equal(headers.Cookie, "session=1");
+  assert.match(headers["sec-ch-ua"] ?? "", /Chromium";v="142"/u);
+  assert.doesNotMatch(headers["sec-ch-ua"] ?? "", /Electron/u);
+  assert.equal(headers["sec-ch-ua-platform"], '"macOS"');
+  assert.equal(headers["sec-ch-ua-mobile"], "?0");
+  const linux = applyBrowserGuestIdentityHeaders({}, ua, "linux");
+  assert.equal(linux["sec-ch-ua-platform"], '"Linux"');
+});
+
 test("profile partitions isolate persistent, ephemeral, and unusual identity bytes", () => {
   assert.match(browserPartition("one", false), /^persist:aiden-browser-profile-/);
   assert.doesNotMatch(browserPartition("one", true), /^persist:/);
