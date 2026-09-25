@@ -1576,7 +1576,21 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
+/** Extra directories ahead of PATH for `run_command`, e.g. the pinned `agent-device` shim. */
+export interface CodingToolOptions {
+  pathPrefix?: string;
+}
+
+export function runCommandEnv(
+  options: CodingToolOptions = {},
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (!options.pathPrefix) return environment;
+  const current = environment.PATH;
+  return { ...environment, PATH: current ? `${options.pathPrefix}${path.delimiter}${current}` : options.pathPrefix };
+}
+
+function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool {
   const root = workspace.lexical;
   return {
     name: "run_command",
@@ -1611,7 +1625,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
         const child = spawn(command, {
           cwd: root,
           detached: process.platform !== "win32",
-          env: process.env,
+          env: runCommandEnv(options),
           shell: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -1708,7 +1722,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-function buildParentCodingToolSet(workspace: WorkspaceRootGuard): AgentTool[] {
+function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool[] {
   return [
     declarePiRuntimeReplay(makeParentReadFile(workspace), "safe"),
     declarePiRuntimeReplay(makeParentListDir(workspace), "safe"),
@@ -1716,7 +1730,7 @@ function buildParentCodingToolSet(workspace: WorkspaceRootGuard): AgentTool[] {
     declarePiRuntimeReplay(makeParentGrep(workspace), "safe"),
     declarePiRuntimeReplay(makeEditFile(workspace), "never"),
     declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
-    declarePiRuntimeReplay(makeRunCommand(workspace), "never"),
+    declarePiRuntimeReplay(makeRunCommand(workspace, options), "never"),
   ];
 }
 
@@ -1725,8 +1739,9 @@ export function buildCodingTools(
   root: string,
   /** Test-only scheduling seam for deterministic cancellation regressions. */
   testObserver?: WorkspaceRootGuard["testObserver"],
+  options: CodingToolOptions = {},
 ): AgentTool[] {
-  return buildParentCodingToolSet(createParentWorkspaceRoot(root, testObserver));
+  return buildParentCodingToolSet(createParentWorkspaceRoot(root, testObserver), options);
 }
 
 /**

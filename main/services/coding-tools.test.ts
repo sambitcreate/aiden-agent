@@ -9,6 +9,7 @@ import {
   buildCodingTools,
   buildSubagentCodingTools,
   DISCLOSURE_APPROVAL_TOOL_NAMES,
+  runCommandEnv,
   summarizeToolCall,
 } from "./coding-tools.js";
 import { createShareImageTool } from "./share-image-tool.js";
@@ -1316,6 +1317,32 @@ test("run_command cancellation kills the shell process group", async () => {
     setTimeout(() => controller.abort(new Error("test cancellation")), 50);
     await assert.rejects(running, /test cancellation/);
     assert.ok(Date.now() - startedAt < 3_000, "command process group should settle promptly");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run_command keeps PATH unless a device shim directory is attached", async () => {
+  const environment = { PATH: "/usr/bin:/bin", HOME: "/Users/me" };
+  assert.equal(runCommandEnv({}, environment), environment);
+  assert.equal(runCommandEnv({ pathPrefix: "" }, environment), environment);
+  assert.deepEqual(runCommandEnv({ pathPrefix: "/data/devices/bin" }, environment), {
+    PATH: `/data/devices/bin${path.delimiter}/usr/bin:/bin`,
+    HOME: "/Users/me",
+  });
+  assert.equal(environment.PATH, "/usr/bin:/bin");
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-path-"));
+  try {
+    const plain = buildCodingTools(root).find((tool) => tool.name === "run_command");
+    const pinned = buildCodingTools(root, undefined, { pathPrefix: "/aiden/devices/bin" }).find(
+      (tool) => tool.name === "run_command",
+    );
+    assert.ok(plain && pinned);
+    const text = (result: { content: readonly { type: string; text?: string }[] }) =>
+      result.content.map((part) => part.text ?? "").join("");
+    assert.doesNotMatch(text(await plain.execute("plain", { command: 'printf %s "$PATH"' })), /\/aiden\/devices\/bin/u);
+    assert.match(text(await pinned.execute("pinned", { command: 'printf %s "$PATH"' })), /^\/aiden\/devices\/bin:/u);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

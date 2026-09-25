@@ -982,3 +982,32 @@ The repository TypeScript library target does not include Array.at; use slice(-1
 - 2026-09-22 / PR #195: pinned cua-driver 0.8.3 snapshot tokens and identical AX trees cannot prove document continuity. Do not substitute URLs/titles or invent an advertised capability. Disabled form-fill admission/mutation pending an upstream atomic document-bound write contract; retained local scorer groundwork and cleanup only. Strict removal also needs retained teardown errors because ordinary controller close intentionally suppresses cleanup failures.
 ## AGENTS refresh — 2026-09-22
 The existing native read-html operation reads bounded UTF-8 regular files descriptor-relatively; extension/HTML validation lives in its UI caller, allowing AGENTS.md reuse without a new native protocol. Keep first-turn refresh separate from Pi prepareNextTurn (only subsequent logical turns), and add a provider-dispatch scope fence without mutating in-flight/retry bodies. Preserve the onboarding workspace queue/steering disclosure when adding AGENTS copy.
+## 2026-09-25 — Simulator devices Phases 0–2
+
+- Worktree-isolated sessions refuse Bash with `$(...)`, computed binaries, or `cd … && <heredoc>`; put scratch scripts in the session scratchpad and run `bash <file>`, and use Edit/Write for source changes. BSD `sed -i ''` multi-line substitutions fail silently.
+- A `show: false` Electron window never resolved a WebCodecs `isConfigSupported` probe; use a visible window with an `app.exit` timeout and write results to a file.
+- `agent-device snapshot` returns `SESSION_NOT_FOUND` until `agent-device open <bundleId> --session <s>` runs; the first open also builds the Apple runner (~4s here).
+- The repo has no Prettier dependency or config; `npx prettier` fetches an unpinned release and reformats to 80 columns. Do not run it — revert with `git checkout -- <file>` and reapply the edit.
+- E2E fixtures had no per-test app environment; `appEnvironment` option and `relaunch(afterClose, appEnvironment)` now exist for experimental flags.
+- A WebSocket test client hung waiting for the first frame: Node can deliver it inside the `upgrade` event's `head` buffer. Decode `head` when it is non-empty before listening for `data`.
+- `tsc` targets a lib older than ES2022: `Array.prototype.at` and `new Error(message, { cause })` fail type-check even though `tsx` runs them. Use index access, and assign `cause` with `declare readonly cause: unknown` as `managed-worktree-file-io.ts` does.
+- Handler modules import `../platform.js` (Electron), so they cannot be unit-tested under `tsx`. Put the IPC registration behind an injected `handle`/`owner`/`service` seam in a services file, and keep the handler as Electron wiring only.
+- Writes to `/Users/…/aiden-macos/.memory/` are refused in a worktree session; edit the worktree's own `.memory/` copy.
+
+## 2026-09-25 — Simulator devices Phase 3
+
+- E2E: right after a chat reply, the streaming-reveal layer briefly duplicates the response text, so `getByText` hits a strict-mode violation. Wait for `.streaming-reveal` to reach count 0 first.
+- `tests/e2e/*.mjs` get no ESLint Node globals. Import `Buffer`, `URL`, and the timers from `node:*` explicitly.
+- Hub E2E without a production seam: seed `userData/devices/tools/expo-device-hub/<v>/…/cli.mjs` (it imports the fake), `.install-complete`, and `consent.json`, then put a fake `xcrun` on PATH through `appEnvironment`.
+- Playwright `request.allHeaders()` showed no `Origin` on the `file://` renderer's stream fetch. Don't assert `Origin: file://`.
+- `local-device-host.test.ts` `waitFor` (200 `setImmediate` turns) flaked under the loaded CI lane. It is now bounded by 5s of wall time.
+- `cd … && python3 - <<'EOF'` passed the worktree guard this time, where a plain heredoc had been refused.
+- A manual test on a real simulator failed with "stream refused access". expo-device-hub routes WebSockets by exact path, so the input socket is `/vendor/serve-sim/helper/ws?device=<udid>`, not the per-device `wsUrl` in serve-sim's config. The fake hub had copied our wrong assumption, so the E2E passed anyway. Check fakes against the real hub's routing (`cli.mjs` `webSocketRoutes`).
+- `npm run dev` port 4143 was taken by another worktree's dev server. Run vite on another port and set `AIDEN_RENDERER_URL` to match (the device proxy allowlists that origin). The E2E uses the built renderer, so run `npm run build` after renderer changes.
+
+## 2026-09-25 — Simulator devices Phases 3.5–4
+
+- The faux LM Studio matched scenarios against the latest user message. pi-ai sends tool-result images to OpenAI-compatible APIs as an extra user message ("Attached image(s) from tool result:"), so image-returning tools ended the scenario early. The fixture now skips that carrier.
+- The Environment tabpanel stays mounted and reports visible after **Close environment panel**. Assert on the `Environment work surface` complementary region and the tab's `aria-selected` instead.
+- A fake agent-device must detach its daemon: the host awaits `devices --json` with a timeout and only polls `daemon.json`. Kill the daemon in `finally` from `agent-state/daemon.json` so a failed run leaves nothing behind.
+- `String.prototype.replaceAll` also fails `tsc` under the old lib; use `split().join()`.

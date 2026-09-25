@@ -42,6 +42,15 @@ import {
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import {
+  DEVICE_AGENT_GUIDANCE,
+  DEVICE_APPROVAL_TOOL_NAMES,
+  canUseDeviceTools,
+  createDeviceAgentTools,
+  deviceToolApprovalSummary,
+  isDeviceToolName,
+} from "./devices/device-tools.js";
+import { devicesEnabled } from "./devices/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -619,8 +628,9 @@ async function buildSystemPrompt(
   const browserSuffix = availableToolNames?.has("browser_open")
     ? `\n\n${BROWSER_AGENT_GUIDANCE}`
     : "";
+  const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -646,7 +656,8 @@ async function buildSystemPrompt(
         : "") +
     delegation +
     skillsSuffix +
-    browserSuffix
+    browserSuffix +
+    deviceSuffix
   );
 }
 
@@ -1136,6 +1147,35 @@ async function prepareGeneration(
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
+  // Simulator tools: the flag, agent access, and an interactive desktop owner must all hold now.
+  const deviceStaticGate = canUseDeviceTools({
+    enabled: devicesEnabled(),
+    agentAccess: true,
+    permission,
+    rendererOwner,
+    assistantMode,
+    bot: Boolean(botContext),
+  });
+  const deviceService = deviceStaticGate && params.chatId
+    ? await (await import("../handlers/devices.js")).deviceServiceForAgents()
+    : null;
+  const deviceGate = Boolean(deviceService?.state().consent.agentAccess);
+  const deviceTools =
+    deviceService && deviceGate
+      ? createDeviceAgentTools({
+          chatId: params.chatId,
+          signal,
+          supportsImages,
+          port: deviceService,
+          revalidate: async () => {
+            if (signal.aborted || !active.has(streamId))
+              throw new Error("This simulator generation is no longer active.");
+            if (!devicesEnabled()) throw new Error("Simulator support is off.");
+          },
+        }).filter(({ name }) => !options.excludeToolNames?.has(name))
+      : [];
+  // PATH gets the pinned agent-device only when the gate held at generation start.
+  const deviceShimDir = deviceTools.length ? (deviceService?.agentShimDir() ?? undefined) : undefined;
   const mcpInstructionCollector = createMcpInstructionCollector();
   let tools = (
     await buildAgentTools({
@@ -1147,6 +1187,8 @@ async function prepareGeneration(
       computerUse,
       formFill,
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
+      deviceTools,
+      ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -2579,7 +2621,8 @@ export const llmClient = {
             const workspaceApproval =
               permission === "ask" &&
               (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
-                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name));
+                BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
+                DEVICE_APPROVAL_TOOL_NAMES.has(context.toolCall.name));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -2719,7 +2762,12 @@ export const llmClient = {
                     ? summarizeScheduleToolCall(context.args)
                     : isBrowserToolName(context.toolCall.name)
                       ? browserToolApprovalSummary(context.toolCall.name)
-                      : summarizeToolCall(context.toolCall.name, context.args);
+                      : isDeviceToolName(context.toolCall.name)
+                        ? deviceToolApprovalSummary(
+                            context.toolCall.name,
+                            context.args as Record<string, unknown>,
+                          )
+                        : summarizeToolCall(context.toolCall.name, context.args);
           }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;

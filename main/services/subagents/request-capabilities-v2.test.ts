@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SubagentMcpScopeV2 } from "./authority-v2.js";
 import { subagentMcpEffectProfileFingerprintV2 } from "./authority-v2.js";
+import { DEVICE_TOOL_NAMES, isDeviceToolName } from "../devices/device-tools.js";
+import { buildSubagentCapabilityTools } from "./capability-tools.js";
 import { effectiveSubagentTaskCapabilities, parseSubagentToolRequest } from "./contracts.js";
 import {
   MAX_SUBAGENT_MODEL_MCP_NAME_BYTES,
@@ -613,4 +615,26 @@ test("hostile inventories stay within per-scope, total, and model-context byte c
   assert.ok(toolCount <= MAX_SUBAGENT_MODEL_MCP_TOOLS);
   assert.ok(nameBytes <= MAX_SUBAGENT_MODEL_MCP_NAME_BYTES);
   assert.equal(JSON.stringify(projection).length < 8_000, true);
+});
+
+test("subagents can never request or receive simulator device tools", () => {
+  for (const extra of [{ devices: true }, { device: true }, { device_open: true }]) {
+    assert.throws(
+      () =>
+        parseSubagentToolRequest({
+          capabilities: { workspaceRead: true, web: false, mcp: [], ...extra },
+          tasks: [{ role: "scout", label: "Device", task: "Open a simulator." }],
+        }),
+      undefined,
+      JSON.stringify(extra),
+    );
+  }
+  for (const role of ["scout", "planner", "reviewer"]) {
+    const { tools } = buildSubagentCapabilityTools({
+      workspaceRoot: process.cwd(),
+      permission: "full",
+      capabilityProfile: { kind: "subagent", role, featurePolicy: [...DEVICE_TOOL_NAMES] },
+    });
+    assert.deepEqual(tools.filter(({ name }) => isDeviceToolName(name)), [], role);
+  }
 });
