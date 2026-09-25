@@ -24,6 +24,14 @@ export function shouldFollowScrollBottom(
   return Boolean(autoScrollEnabled) && atBottom;
 }
 
+/**
+ * Content growth moves the trailing edge away from a previously latched viewport.
+ * Pin from that pre-update latch instead of the post-layout distance.
+ */
+export function shouldPinAfterContentGrowth(wasFollowingLatest: boolean): boolean {
+  return wasFollowingLatest;
+}
+
 /** Pin an overflow list so its latest rows are in view when the surface opens. */
 export function pinOverflowListToEnd(element: { scrollHeight: number; scrollTop: number } | null): void {
   if (!element) return;

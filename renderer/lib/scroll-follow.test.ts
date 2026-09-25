@@ -5,6 +5,7 @@ import {
   isAtScrollBottom,
   pinOverflowListToEnd,
   shouldFollowScrollBottom,
+  shouldPinAfterContentGrowth,
 } from "./scroll-follow.js";
 
 test("distance from the trailing edge is the unconsumed overflow", () => {
@@ -19,6 +20,8 @@ test("follow latch stays on within the idle slop and off once the reader leaves 
   assert.equal(shouldFollowScrollBottom(true, true), true);
   assert.equal(shouldFollowScrollBottom(true, false), false);
   assert.equal(shouldFollowScrollBottom(false, true), false);
+  assert.equal(shouldPinAfterContentGrowth(true), true);
+  assert.equal(shouldPinAfterContentGrowth(false), false);
 });
 
 test("opening a long task list pins to the latest rows", () => {

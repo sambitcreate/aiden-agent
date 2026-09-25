@@ -145,7 +145,15 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = remember(chatId) { LazyListState() }
+    val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
+    var followLatest by remember(listState) {
+        mutableStateOf(
+            AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        )
+    }
 
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -288,25 +296,27 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    val isScrolledUp by remember {
-        derivedStateOf {
-            !AidenChatScroll.isFollowingLatest(
+    LaunchedEffect(listState) {
+        var wasScrolling = false
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset
             )
+        }.collect { (scrolling, index, offset) ->
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            }
         }
     }
 
-    LaunchedEffect(chatId) {
-        listState.scrollToItem(AidenChatScroll.latestItemIndex())
-    }
-
     LaunchedEffect(chat?.messages?.size, isStreaming) {
-        if (AidenChatScroll.isFollowingLatest(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset
-            )
-        ) {
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
             listState.scrollToItem(AidenChatScroll.latestItemIndex())
         }
     }
@@ -641,8 +651,9 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = isScrolledUp,
+                visible = !followLatest,
                 onClick = {
+                    followLatest = true
                     scope.launch {
                         listState.animateScrollToItem(AidenChatScroll.latestItemIndex())
                     }

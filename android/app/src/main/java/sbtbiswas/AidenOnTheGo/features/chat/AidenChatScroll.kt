@@ -12,6 +12,14 @@ object AidenChatScroll {
         return firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset <= thresholdPx
     }
 
+    /**
+     * Reverse-layout insertions shift the previously visible latest item to index 1.
+     * Pin from the pre-update latch, not the post-layout first-visible index.
+     */
+    fun shouldPinLatestAfterContentChange(wasFollowingLatest: Boolean): Boolean {
+        return wasFollowingLatest
+    }
+
     fun latestItemIndex(): Int = 0
 
     fun taskListEndIndex(visibleCount: Int): Int = maxOf(0, visibleCount - 1)

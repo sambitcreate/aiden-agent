@@ -13,6 +13,8 @@ class AidenChatScrollTest {
         assertTrue(AidenChatScroll.isFollowingLatest(0, 80))
         assertFalse(AidenChatScroll.isFollowingLatest(0, 81))
         assertFalse(AidenChatScroll.isFollowingLatest(1, 0))
+        assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(true))
+        assertFalse(AidenChatScroll.shouldPinLatestAfterContentChange(false))
     }
 
     @Test

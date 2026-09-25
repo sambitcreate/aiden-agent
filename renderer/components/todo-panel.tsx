@@ -4,6 +4,7 @@ import {
   distanceFromScrollBottom,
   isAtScrollBottom,
   pinOverflowListToEnd,
+  shouldPinAfterContentGrowth,
 } from "../lib/scroll-follow";
 import type { TodoSnapshotViewV1, TodoTaskViewV1 } from "../shared/todo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
@@ -177,22 +178,44 @@ function TrackedTaskList({
 }) {
   const listRef = useRef<HTMLOListElement>(null);
   const didPinOnOpen = useRef(false);
+  const followLatest = useRef(true);
+  const taskFollowKey = tasks
+    .map((task) =>
+      [
+        task.id,
+        task.status,
+        task.subject,
+        task.activeForm ?? "",
+        (task.blockedBy ?? []).join(","),
+      ].join(":"),
+    )
+    .join("|");
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const onScroll = () => {
+      followLatest.current = isAtScrollBottom(
+        distanceFromScrollBottom(list.scrollHeight, list.clientHeight, list.scrollTop),
+      );
+    };
+    list.addEventListener("scroll", onScroll, { passive: true });
+    return () => list.removeEventListener("scroll", onScroll);
+  }, []);
+
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
     if (!didPinOnOpen.current) {
       pinOverflowListToEnd(list);
       didPinOnOpen.current = true;
+      followLatest.current = true;
       return;
     }
-    if (
-      isAtScrollBottom(
-        distanceFromScrollBottom(list.scrollHeight, list.clientHeight, list.scrollTop),
-      )
-    ) {
+    if (shouldPinAfterContentGrowth(followLatest.current)) {
       pinOverflowListToEnd(list);
     }
-  }, [tasks.length]);
+  }, [taskFollowKey]);
 
   return (
     <ol
