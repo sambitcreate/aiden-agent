@@ -692,6 +692,9 @@ export class AidenRemoteStreamService {
     this.approvals.delete(approvalId);
     const stream = this.streams.get(approval.streamId);
     const nextApproval = stream ? this.pendingApprovalForStream(stream.streamId) : undefined;
+    const nextQuestion = !nextApproval && stream
+      ? this.pendingQuestionForStream(stream.streamId)
+      : undefined;
     if (stream && !terminal(stream.state)) {
       if (!resolved) {
         this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
@@ -703,6 +706,20 @@ export class AidenRemoteStreamService {
             approvalId: nextApproval.approvalId,
             summary: nextApproval.summary,
             expiresAt: nextApproval.expiresAt,
+          },
+          false,
+          "waiting_for_approval",
+        );
+      } else if (nextQuestion) {
+        // A question may share the stream's waiting_for_approval state;
+        // resolving the approval must not drop the surviving prompt.
+        this.append(
+          stream,
+          "question_required",
+          {
+            promptId: nextQuestion.promptId,
+            questions: nextQuestion.questions,
+            expiresAt: nextQuestion.expiresAt,
           },
           false,
           "waiting_for_approval",
@@ -739,6 +756,9 @@ export class AidenRemoteStreamService {
     this.questions.delete(promptId);
     const stream = this.streams.get(question.streamId);
     const nextQuestion = stream ? this.pendingQuestionForStream(stream.streamId) : undefined;
+    const nextApproval = !nextQuestion && stream
+      ? this.pendingApprovalForStream(stream.streamId)
+      : undefined;
     if (stream && !terminal(stream.state)) {
       if (!resolved) {
         this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
@@ -750,6 +770,20 @@ export class AidenRemoteStreamService {
             promptId: nextQuestion.promptId,
             questions: nextQuestion.questions,
             expiresAt: nextQuestion.expiresAt,
+          },
+          false,
+          "waiting_for_approval",
+        );
+      } else if (nextApproval) {
+        // An approval may share the stream's waiting_for_approval state;
+        // resolving the question must not drop the surviving prompt.
+        this.append(
+          stream,
+          "approval_required",
+          {
+            approvalId: nextApproval.approvalId,
+            summary: nextApproval.summary,
+            expiresAt: nextApproval.expiresAt,
           },
           false,
           "waiting_for_approval",
@@ -1398,6 +1432,22 @@ export class AidenRemoteStreamService {
               this.approvals.delete(approvalId);
               this.options.notifyApprovalChanged?.(approval.chatId);
             }
+            for (const [promptId, question] of [...this.questions]) {
+              if (question.streamId !== stream.streamId) continue;
+              clearTimeout(question.expiry);
+              this.options.respondQuestion?.(
+                promptId,
+                {
+                  version: ASK_USER_QUESTION_VERSION,
+                  promptId,
+                  cancelled: true,
+                  answers: [],
+                },
+                question.ownerDocumentId,
+              );
+              this.questions.delete(promptId);
+              this.options.notifyApprovalChanged?.(question.chatId);
+            }
             this.options.cancel(streamId, stream.owner.owner.documentId);
             this.append(stream, "status", { state: "reconciling" }, false, "reconciling");
           }
@@ -1518,6 +1568,17 @@ export class AidenRemoteStreamService {
       this.options.approve(approvalId, "deny", approval.ownerDocumentId);
       this.approvals.delete(approvalId);
       this.options.notifyApprovalChanged?.(approval.chatId);
+    }
+    for (const [promptId, question] of this.questions) {
+      if (question.deviceId !== deviceId) continue;
+      clearTimeout(question.expiry);
+      this.options.respondQuestion?.(
+        promptId,
+        { version: ASK_USER_QUESTION_VERSION, promptId, cancelled: true, answers: [] },
+        question.ownerDocumentId,
+      );
+      this.questions.delete(promptId);
+      this.options.notifyApprovalChanged?.(question.chatId);
     }
     for (const [streamId, stream] of this.streams) {
       if (stream.deviceId !== deviceId) continue;

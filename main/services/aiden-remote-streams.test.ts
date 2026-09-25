@@ -1518,3 +1518,102 @@ test("question prompts stay unadvertised without a host responder", () => {
   const app = fixture();
   assert.equal(app.service.supportsQuestionPrompts(), false);
 });
+
+test("resolving one pending surface keeps the other's waiting prompt", async () => {
+  const questions: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      questions.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", { approvalId: "approval-1", summary: "Change a file" });
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+
+  // Resolving the approval must not drop the surviving question prompt.
+  await service.respondApproval("device-1", "approval-1", "deny", "approval-coexist-key-01");
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+
+  // Resolving the question then leaves no waiting surface.
+  await service.respondQuestion(
+    "device-1",
+    "q-prompt-1",
+    { cancelled: true, answers: [] },
+    "question-coexist-key-01",
+  );
+  assert.equal(service.status("device-1", "stream-1").state, "running");
+
+  // The symmetric case: question first, approval second.
+  const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
+  owner2.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  owner2.owner.send("chat:approval", { approvalId: "approval-2", summary: "Run a command" });
+  await service.respondQuestion(
+    "device-1",
+    "q-prompt-2",
+    { cancelled: true, answers: [] },
+    "question-coexist-key-02",
+  );
+  assert.equal(service.status("device-1", "stream-2").state, "waiting_for_approval");
+  assert.equal(service.pendingApproval("device-1", "stream-2")?.approvalId, "approval-2");
+});
+
+test("revocation settles a revoked device's pending question without waiting for expiry", async () => {
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      settled.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  const other = service.create("device-2", "stream-2", "chat-2", "turn-2");
+  other.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+
+  await service.revokeDevice("device-1");
+  assert.deepEqual(settled, ["q-prompt-1:true"]);
+  assert.throws(
+    () => service.questionChatId("device-1", "q-prompt-1"),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+  assert.equal(service.pendingQuestion("device-2", "stream-2")?.promptId, "q-prompt-2");
+});
+
+test("cancellation settles a pending question with a cancelled response", async () => {
+  const settled: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: (promptId, response) => {
+      settled.push(`${promptId}:${response.cancelled}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+
+  const cancelled = await service.cancel("device-1", "stream-1", "cancel-question-key-01");
+  assert.equal(cancelled.state, "reconciling");
+  assert.deepEqual(settled, ["q-prompt-1:true"]);
+  assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
+  await assert.rejects(
+    service.respondQuestion(
+      "device-1",
+      "q-prompt-1",
+      { cancelled: true, answers: [] },
+      "question-after-cancel-01",
+    ),
+    (error: unknown) => (error as { code?: string }).code === "question_expired",
+  );
+});

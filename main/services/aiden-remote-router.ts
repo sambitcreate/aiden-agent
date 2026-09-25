@@ -600,13 +600,20 @@ async function authenticateCredential(
   return { ...device, capabilities };
 }
 
-type BotChatResource = "chat" | "stream" | "approval";
+type BotChatResource = "chat" | "stream" | "approval" | "question";
 
 function unavailableBotChatResource(resource: BotChatResource): AidenRemoteServiceError {
   if (resource === "approval") {
     return new AidenRemoteServiceError(
       "approval_expired",
       "This approval is no longer available.",
+      409,
+    );
+  }
+  if (resource === "question") {
+    return new AidenRemoteServiceError(
+      "question_expired",
+      "This question prompt is no longer available.",
       409,
     );
   }
@@ -2635,7 +2642,7 @@ export function createAidenRemoteRequestHandler(
             dependencies.chats,
             device,
             chatId,
-            "approval",
+            "question",
             () =>
               dependencies.streams!.respondQuestion!(
                 device.id,
