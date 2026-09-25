@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { acceptBrowserState, BROWSER_DEVICE_PRESETS, BROWSER_NATIVE_OCCLUDER_SELECTOR, browserAnnotationRegion, browserBoundsFromRect, browserElementAtPoint, browserNativeViewObstructed, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport } from "./browser-ui-state.js";
 import type { BrowserElement, BrowserState } from "../shared/browser.js";
@@ -42,6 +43,8 @@ test("native browser stays visible unless an overlay actually covers its slot", 
   assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /data-slot="dialog-overlay"/u);
   assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /data-browser-occluder/u);
   assert.match(BROWSER_NATIVE_OCCLUDER_SELECTOR, /\[role="listbox"\]/u);
+  const occluderSource = readFileSync(new URL("./browser-ui-state.ts", import.meta.url), "utf8");
+  assert.match(occluderSource, /closest\('\[data-state="closed"\], \[aria-hidden="true"\], \[inert\]'\)/u);
 });
 
 test("native presentation never receives empty or nonfinite geometry", () => {

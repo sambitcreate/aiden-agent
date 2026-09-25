@@ -83,7 +83,7 @@ export function browserNativeViewObstructed(
 
 export function visibleBrowserNativeOccluders(root: ParentNode = document): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter((element) => {
-    if (element.getAttribute("data-state") === "closed" || element.getAttribute("aria-hidden") === "true") return false;
+    if (element.closest('[data-state="closed"], [aria-hidden="true"], [inert]')) return false;
     if (element.hasAttribute("popover")) {
       try {
         if (!element.matches(":popover-open")) return false;

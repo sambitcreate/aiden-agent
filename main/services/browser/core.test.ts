@@ -62,6 +62,8 @@ test("guest identity headers rewrite Client Hints without dropping preview grant
   assert.doesNotMatch(headers["sec-ch-ua"] ?? "", /Electron/u);
   assert.equal(headers["sec-ch-ua-platform"], '"macOS"');
   assert.equal(headers["sec-ch-ua-mobile"], "?0");
+  assert.equal(headers["sec-ch-ua-full-version"], '"142.0.7444.175"');
+  assert.match(headers["sec-ch-ua-full-version-list"] ?? "", /Not=A\?Brand";v="24\.0\.0\.0"/u);
   const linux = applyBrowserGuestIdentityHeaders({}, ua, "linux");
   assert.equal(linux["sec-ch-ua-platform"], '"Linux"');
 });

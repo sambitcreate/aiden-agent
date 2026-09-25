@@ -122,9 +122,9 @@ export function applyBrowserGuestIdentityHeaders(
   next["sec-ch-ua"] = `"Chromium";v="${major}", "Not=A?Brand";v="24", "Google Chrome";v="${major}"`;
   next["sec-ch-ua-mobile"] = "?0";
   next["sec-ch-ua-platform"] = chPlatform;
-  next["sec-ch-ua-full-version"] = full;
+  next["sec-ch-ua-full-version"] = `"${full}"`;
   next["sec-ch-ua-full-version-list"] =
-    `"Chromium";v="${full}", "Not=A?Brand";v="10.0.0.0", "Google Chrome";v="${full}"`;
+    `"Chromium";v="${full}", "Not=A?Brand";v="24.0.0.0", "Google Chrome";v="${full}"`;
   return next;
 }
 
