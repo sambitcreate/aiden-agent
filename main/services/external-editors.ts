@@ -492,7 +492,8 @@ export function linuxExecutableSearchPaths(
   homeDirectory: string = os.homedir(),
 ): string[] {
   return [
-    ...(pathValue?.split(path.delimiter) ?? []),
+    // Ignore cwd/relative PATH entries: a workspace must not supply its own editor launcher.
+    ...(pathValue?.split(path.delimiter) ?? []).filter(path.isAbsolute),
     "/usr/local/bin",
     "/usr/bin",
     "/snap/bin",
@@ -510,10 +511,13 @@ export async function resolveInstalledLinuxEditors(
     definitions
       .filter((definition) => LINUX_EXECUTABLES[definition.id])
       .map(async (definition) => {
-        for (const executable of LINUX_EXECUTABLES[definition.id] ?? []) {
-          for (const root of searchPaths) {
+        // PATH order outranks preferred-launcher order: first/code beats second/code-insiders.
+        for (const root of searchPaths) {
+          for (const executable of LINUX_EXECUTABLES[definition.id] ?? []) {
             const executablePath = path.join(root, executable);
             try {
+              // Directories satisfy X_OK; only regular files are launchers.
+              if (!(await fs.stat(executablePath)).isFile()) continue;
               await fs.access(executablePath, fsConstants.X_OK);
               return {
                 id: definition.id,
@@ -726,7 +730,17 @@ export async function openFolderInExternalEditor(
   if (!stats.isDirectory()) throw new Error(`Workspace path is not a folder: ${folderPath}`);
 
   const editor = (await dependencies.editors(true)).find((candidate) => candidate.id === editorId);
-  if (!editor) throw new Error(`${definition.label} is no longer installed.`);
+  if (!editor) {
+    if (
+      process.platform === "linux" &&
+      editorId !== "file-manager" &&
+      !LINUX_EXECUTABLES[editorId] &&
+      !LINUX_FLATPAKS[editorId]
+    ) {
+      throw new Error(`Opening ${definition.label} from Aiden is not supported on Linux.`);
+    }
+    throw new Error(`${definition.label} is no longer installed.`);
+  }
 
   if (editor.launch.kind === "file-manager") {
     const error = await dependencies.openPath(folderPath);

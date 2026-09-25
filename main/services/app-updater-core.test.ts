@@ -432,7 +432,11 @@ async function simulatedService() {
     }
   }
   const mocks: Record<string, unknown> = {
-    "electron-updater": { autoUpdater: updater, CancellationToken },
+    "electron-updater": {
+      autoUpdater: updater,
+      CancellationToken,
+      AppImageUpdater: class AppImageUpdater {},
+    },
     "../platform.js": {
       app: { getVersion: () => "0.28.31" },
       dialog: {
@@ -446,6 +450,7 @@ async function simulatedService() {
     "../runtime-profile.js": { currentRuntimeProfile: () => ({ id: "production" }) },
     "node:fs": { existsSync: () => true },
     "node:path": nodePath,
+    "node:crypto": await import("node:crypto"),
   };
   const bundle = await build({
     entryPoints: [new URL("./app-updater.ts", import.meta.url).pathname],
