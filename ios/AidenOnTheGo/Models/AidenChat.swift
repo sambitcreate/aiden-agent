@@ -1670,6 +1670,93 @@ enum AidenStreamInputStatus: String, Codable, Sendable {
     case rejected
 }
 
+/// Remote Slice 2 busy-composer presentation rules. A run input may only be
+/// offered while the displayed stream is controllable, the server negotiated
+/// `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+/// when the Mac durably committed the message (admitted or committed
+/// rejection); every other outcome keeps the draft untouched so a busy→idle
+/// race can never become an implicit Send.
+enum AidenRunInputPresentation {
+    struct Attempt: Equatable, Sendable {
+        let key: UUID
+        let streamId: String
+        let mode: AidenStreamInputMode
+        let text: String
+    }
+
+    static func offersRunInput(
+        isStreaming: Bool,
+        canControl: Bool,
+        supports: Bool,
+        hasDraft: Bool
+    ) -> Bool {
+        isStreaming && canControl && supports && hasDraft
+    }
+
+    static func consumesDraft(_ result: AidenStreamInputResult) -> Bool {
+        result.status == .admitted || result.committed
+    }
+
+    /// Removes the submitted text from the live draft. Text the user appended
+    /// while the submission was in flight is preserved; a draft that diverged
+    /// entirely is left untouched.
+    static func consumedDraft(submitted: String, current: String) -> String {
+        if current.trimmingCharacters(in: .whitespacesAndNewlines) == submitted { return "" }
+        if current.hasPrefix(submitted) {
+            return String(current.dropFirst(submitted.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return current
+    }
+
+    static func receipt(for result: AidenStreamInputResult) -> String? {
+        switch result.status {
+        case .admitted:
+            switch result.queue {
+            case .steer:
+                return String(localized: "Steering the current run")
+            case .followUp, .none:
+                return String(localized: "Queued to run next")
+            }
+        case .rejected:
+            guard result.committed else { return nil }
+            switch result.reason {
+            case .cancelled:
+                return String(localized: "Saved to the chat — the run was cancelled before it could use it")
+            case .capacity:
+                return String(localized: "Saved to the chat — the run queue was full")
+            case .runNotActive, .invalid, .none:
+                return String(localized: "Saved to the chat — the run ended before it could use it")
+            }
+        }
+    }
+
+    static func rejectionMessage(_ reason: AidenStreamInputRejectionReason?) -> String {
+        switch reason {
+        case .runNotActive:
+            String(localized: "The run already finished. Your draft is unchanged.")
+        case .cancelled:
+            String(localized: "The run was cancelled. Your draft is unchanged.")
+        case .capacity:
+            String(localized: "The follow-up queue is full. Try again in a moment.")
+        case .invalid, .none:
+            String(localized: "That input was not accepted. Your draft is unchanged.")
+        }
+    }
+
+    /// A manual retry of the exact same submission replays the Mac's original
+    /// outcome instead of risking a duplicate committed message.
+    static func reusesIdempotencyKey(
+        last: Attempt?,
+        streamId: String,
+        mode: AidenStreamInputMode,
+        text: String
+    ) -> Bool {
+        guard let last else { return false }
+        return last.streamId == streamId && last.mode == mode && last.text == text
+    }
+}
+
 enum AidenApprovalDecision: String, Codable, Sendable {
     case allow
     case deny

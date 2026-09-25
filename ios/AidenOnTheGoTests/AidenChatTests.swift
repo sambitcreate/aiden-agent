@@ -4548,4 +4548,122 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
     }
+
+    // MARK: - Remote Slice 2 busy-composer run input
+
+    private func runInputResult(
+        status: AidenStreamInputStatus,
+        queue: AidenStreamInputQueue? = nil,
+        reason: AidenStreamInputRejectionReason? = nil,
+        committed: Bool = false
+    ) -> AidenStreamInputResult {
+        AidenStreamInputResult(
+            streamId: "stream-1",
+            chatId: "chat-1",
+            turnId: "turn-1",
+            mode: .steer,
+            status: status,
+            queue: queue,
+            reason: reason,
+            committed: committed,
+            messageId: committed ? "message-1" : nil
+        )
+    }
+
+    func testRunInputOptionsRequireBusyControlledSupportedDraft() {
+        XCTAssertTrue(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: true, hasDraft: true
+        ))
+        // Old servers keep the Stop-only control.
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: false, hasDraft: true
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: false, canControl: true, supports: true, hasDraft: true
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: false, supports: true, hasDraft: true
+        ))
+        // An empty composer can never offer a submission.
+        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
+            isStreaming: true, canControl: true, supports: true, hasDraft: false
+        ))
+    }
+
+    func testRunInputDraftConsumedOnlyForCommittedOutcomes() {
+        XCTAssertTrue(AidenRunInputPresentation.consumesDraft(runInputResult(status: .admitted)))
+        XCTAssertTrue(AidenRunInputPresentation.consumesDraft(
+            runInputResult(status: .rejected, reason: .runNotActive, committed: true)
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.consumesDraft(
+            runInputResult(status: .rejected, reason: .capacity, committed: false)
+        ))
+    }
+
+    func testRunInputConsumedDraftPreservesInFlightTyping() {
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "fix it"),
+            ""
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "fix it\nplease"),
+            "please"
+        )
+        // A diverged draft (user replaced the text entirely) is left alone.
+        XCTAssertEqual(
+            AidenRunInputPresentation.consumedDraft(submitted: "fix it", current: "different"),
+            "different"
+        )
+    }
+
+    func testRunInputReceiptsCoverAdmittedAndCommittedRejections() {
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(for: runInputResult(status: .admitted, queue: .steer)),
+            "Steering the current run"
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(for: runInputResult(status: .admitted, queue: .followUp)),
+            "Queued to run next"
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(
+                for: runInputResult(status: .rejected, reason: .runNotActive, committed: true)
+            ),
+            "Saved to the chat — the run ended before it could use it"
+        )
+        XCTAssertNil(AidenRunInputPresentation.receipt(
+            for: runInputResult(status: .rejected, reason: .capacity, committed: false)
+        ))
+    }
+
+    func testRunInputRejectionMessagesKeepDraftSemantics() {
+        for reason in [AidenStreamInputRejectionReason.runNotActive, .cancelled, .capacity, .invalid] {
+            XCTAssertTrue(
+                AidenRunInputPresentation.rejectionMessage(reason).contains("unchanged"),
+                "\(reason) must promise draft retention"
+            )
+        }
+        XCTAssertTrue(AidenRunInputPresentation.rejectionMessage(nil).contains("unchanged"))
+    }
+
+    func testRunInputIdempotencyKeyReusesOnlyIdenticalAttempts() {
+        let attempt = AidenRunInputPresentation.Attempt(
+            key: UUID(), streamId: "stream-1", mode: .steer, text: "hold on"
+        )
+        XCTAssertTrue(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .steer, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .queue, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-1", mode: .steer, text: "different"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: attempt, streamId: "stream-2", mode: .steer, text: "hold on"
+        ))
+        XCTAssertFalse(AidenRunInputPresentation.reusesIdempotencyKey(
+            last: nil, streamId: "stream-1", mode: .steer, text: "hold on"
+        ))
+    }
 }

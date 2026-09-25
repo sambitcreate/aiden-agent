@@ -901,6 +901,10 @@ final class AidenChatViewModel {
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
+    private(set) var isSubmittingRunInput = false
+    private(set) var runInputReceipt: String?
+    @ObservationIgnored private var runInputReceiptTask: Task<Void, Never>?
+    @ObservationIgnored private var lastRunInputAttempt: AidenRunInputPresentation.Attempt?
     private(set) var pendingAttachments: [AidenAttachmentReference] = [] {
         didSet {
             if pendingAttachments != oldValue { composerGeneration &+= 1 }
@@ -1952,28 +1956,150 @@ final class AidenChatViewModel {
             && installation.hasNegotiatedAccess(to: .botWrite))
     }
 
-    func stop() async {
+    @discardableResult
+    func stop() async -> Bool {
         guard canControlCurrentRun, !isStopping,
               let streamID = activeStreamID,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = try? coordinator.requestContext(for: instanceId) else { return false }
         isStopping = true
         defer { isStopping = false }
         do {
             let status = try await coordinator.remoteClient(for: context).cancelStream(id: streamID)
             guard coordinator.isCurrent(context), activeStreamID == streamID,
-                  streamState?.isTerminal != true else { return }
+                  streamState?.isTerminal != true else { return false }
             guard status.streamId == streamID, status.chatId == chat.id else {
                 presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
-                return
+                return false
             }
             await apply(status, streamID: streamID, context: context, feedbackPolicy: .restoredStream)
             coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(streamID)")
+            return true
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
             guard coordinator.isCurrent(context), activeStreamID == streamID,
-                  streamState?.isTerminal != true else { return }
+                  streamState?.isTerminal != true else { return false }
             presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
+            return false
+        }
+    }
+
+    var supportsRunInput: Bool {
+        coordinator.server?.supportsChatRunInput == true
+    }
+
+    /// The busy composer shows Steer/Queue/Redirect only when the server
+    /// negotiated the feature and the composer holds text. Old servers keep
+    /// the Stop-only control.
+    var showsRunInputOptions: Bool {
+        AidenRunInputPresentation.offersRunInput(
+            isStreaming: isStreaming,
+            canControl: canControlCurrentRun,
+            supports: supportsRunInput,
+            hasDraft: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+    }
+
+    var canSubmitRunInput: Bool {
+        showsRunInputOptions && !isSubmittingRunInput && !isStopping
+    }
+
+    func submitRunInput(_ mode: AidenStreamInputMode) async {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSubmitRunInput, !text.isEmpty,
+              let streamID = activeStreamID,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        let key: UUID
+        if AidenRunInputPresentation.reusesIdempotencyKey(
+            last: lastRunInputAttempt, streamId: streamID, mode: mode, text: text
+        ), let last = lastRunInputAttempt {
+            key = last.key
+        } else {
+            key = UUID()
+        }
+        let attempt = AidenRunInputPresentation.Attempt(
+            key: key, streamId: streamID, mode: mode, text: text
+        )
+        lastRunInputAttempt = attempt
+        isSubmittingRunInput = true
+        defer { isSubmittingRunInput = false }
+        do {
+            let result = try await coordinator.remoteClient(for: context).submitStreamInput(
+                id: streamID,
+                input: AidenStreamInputRequest(mode: mode, text: text),
+                idempotencyKey: key
+            )
+            guard coordinator.isCurrent(context) else { return }
+            // The response must bind to the stream that was displayed when the
+            // submission left; a mismatched receipt is never trusted.
+            guard result.streamId == streamID, result.chatId == chat.id else {
+                presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+                return
+            }
+            if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
+            if AidenRunInputPresentation.consumesDraft(result) {
+                consumeRunInputDraft(text)
+                if let receipt = AidenRunInputPresentation.receipt(for: result) {
+                    showRunInputReceipt(receipt)
+                }
+                coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "run-input:\(key.uuidString)")
+                // The Mac persisted the message before queue admission; pull it
+                // into the transcript without waiting for the next turn.
+                _ = await reconcileChat(context: context)
+            } else {
+                presentedError = AidenRunInputPresentation.rejectionMessage(result.reason)
+                coordinator.haptics.play(.error, scope: hapticScope)
+            }
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context) else { return }
+            presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
+            coordinator.haptics.play(.error, scope: hapticScope)
+        }
+    }
+
+    /// Destructive: stop the current run, then send the composer contents as a
+    /// new turn once the stream is confirmed terminal. The draft is only
+    /// consumed by the new send; a failed cancel leaves it untouched.
+    func redirectRun() async {
+        guard canControlCurrentRun, !isStopping, !isSubmittingRunInput,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard await stop() else { return }
+        guard coordinator.isCurrent(context) else { return }
+        for _ in 0..<50 where isStreaming {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard coordinator.isCurrent(context) else { return }
+        }
+        guard !isStreaming else {
+            presentedError = String(localized: "The run is still stopping. Send your message once it finishes.")
+            return
+        }
+        await send()
+    }
+
+    private func consumeRunInputDraft(_ text: String) {
+        let remaining = AidenRunInputPresentation.consumedDraft(submitted: text, current: draft)
+        guard remaining != draft else { return }
+        draftPersistenceTask?.cancel()
+        suppressesDraftPersistence = true
+        draft = remaining
+        suppressesDraftPersistence = false
+        let clearedDraftGeneration = draftGeneration
+        if let draftSession {
+            Task { [weak self] in
+                guard let self, draftGeneration == clearedDraftGeneration, draft == remaining else { return }
+                _ = try? await draftStore.save(remaining, session: draftSession)
+            }
+        }
+    }
+
+    private func showRunInputReceipt(_ text: String) {
+        runInputReceiptTask?.cancel()
+        runInputReceipt = text
+        runInputReceiptTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.runInputReceipt = nil
         }
     }
 
@@ -5150,6 +5276,7 @@ private struct AidenComposerView: View {
     let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
+    @State private var redirectConfirmPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -5352,6 +5479,46 @@ private struct AidenComposerView: View {
                 .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
 
                 if model.isStreaming {
+                    if model.showsRunInputOptions {
+                        Menu {
+                            Button {
+                                Task { await model.submitRunInput(.steer) }
+                            } label: {
+                                Label("Steer now", systemImage: "arrow.triangle.turn.up.right.circle")
+                            }
+                            Button {
+                                Task { await model.submitRunInput(.queue) }
+                            } label: {
+                                Label("Queue to run next", systemImage: "text.append")
+                            }
+                            Divider()
+                            Button(role: .destructive) {
+                                redirectConfirmPresented = true
+                            } label: {
+                                Label("Redirect…", systemImage: "arrow.uturn.right")
+                            }
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.headline.bold())
+                                .frame(width: 30, height: 30)
+                                .background(runInputButtonBackground, in: Circle())
+                                .foregroundStyle(runInputButtonForeground)
+                                .frame(width: 44, height: 44)
+                        }
+                        .disabled(!model.canSubmitRunInput)
+                        .accessibilityLabel("Run input options")
+                        .accessibilityHint("Steer, queue, or redirect the current run")
+                        .confirmationDialog(
+                            "Stop this run and send your message as a new request?",
+                            isPresented: $redirectConfirmPresented,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Stop and send", role: .destructive) {
+                                Task { await model.redirectRun() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        }
+                    }
                     Button { Task { await model.stop() } } label: {
                         Image(systemName: "stop.fill")
                             .frame(width: 30, height: 30)
@@ -5378,6 +5545,13 @@ private struct AidenComposerView: View {
                     .disabled(!model.canSend)
                     .accessibilityLabel("Send message")
                 }
+            }
+
+            if let receipt = model.runInputReceipt {
+                Text(receipt)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .transition(.opacity)
             }
 
             if let error = voiceInput.errorMessage, !voiceInput.isListening {
@@ -5432,6 +5606,15 @@ private struct AidenComposerView: View {
 
     private var sendButtonForeground: Color {
         model.canSend ? palette.canvas : palette.secondary
+    }
+
+    private var runInputButtonBackground: Color {
+        if model.canSubmitRunInput { return palette.accent }
+        return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
+    }
+
+    private var runInputButtonForeground: Color {
+        model.canSubmitRunInput ? palette.canvas : palette.secondary
     }
 
     private var selectedModelAccessibilityValue: String {

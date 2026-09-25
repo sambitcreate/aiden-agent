@@ -129,6 +129,8 @@ fun AidenChatDetailScreen(
     val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isStopping by viewModel.isStopping.collectAsState()
+    val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
+    val runInputReceipt by viewModel.runInputReceipt.collectAsState()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
@@ -153,6 +155,7 @@ fun AidenChatDetailScreen(
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
+    var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
@@ -492,6 +495,11 @@ fun AidenChatDetailScreen(
                     canStop = viewModel.canControlCurrentRun && !isStopping,
                     canSend = viewModel.canSend,
                     isStreaming = isStreaming,
+                    showsRunInputOptions = viewModel.showsRunInputOptions,
+                    canSubmitRunInput = viewModel.canSubmitRunInput,
+                    onSubmitRunInput = { mode -> viewModel.submitRunInput(mode) },
+                    onRedirectRequest = { showRedirectConfirm = true },
+                    runInputReceipt = runInputReceipt,
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
                     onToggleVoice = {
@@ -665,6 +673,35 @@ fun AidenChatDetailScreen(
     }
     selectedAgent?.let { agent ->
         AidenAgentDetailSheet(agent = agent, onDismiss = { selectedAgent = null })
+    }
+
+    if (showRedirectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRedirectConfirm = false },
+            title = { Text("Redirect this run?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Stop this run and send your message as a new request.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.secondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRedirectConfirm = false
+                        viewModel.redirectRun()
+                    }
+                ) {
+                    Text("Stop and send", color = palette.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRedirectConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

@@ -914,6 +914,79 @@ data class AidenStreamInputResult(
     val messageId: String? = null
 )
 
+/**
+ * Remote Slice 2 busy-composer presentation rules (iOS parity:
+ * AidenRunInputPresentation). A run input may only be offered while the
+ * displayed stream is controllable, the server negotiated
+ * `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+ * when the Mac durably committed the message; every other outcome keeps the
+ * draft untouched so a busy→idle race can never become an implicit Send.
+ */
+object AidenRunInputPresentation {
+    data class Attempt(
+        val key: UUID,
+        val streamId: String,
+        val mode: AidenStreamInputMode,
+        val text: String
+    )
+
+    fun offersRunInput(
+        isStreaming: Boolean,
+        canControl: Boolean,
+        supports: Boolean,
+        hasDraft: Boolean
+    ): Boolean = isStreaming && canControl && supports && hasDraft
+
+    fun consumesDraft(result: AidenStreamInputResult): Boolean =
+        result.status == AidenStreamInputStatus.ADMITTED || result.committed
+
+    fun consumedDraft(submitted: String, current: String): String {
+        if (current.trim() == submitted) return ""
+        if (current.startsWith(submitted)) {
+            return current.drop(submitted.length).trim()
+        }
+        return current
+    }
+
+    fun receipt(result: AidenStreamInputResult): String? = when (result.status) {
+        AidenStreamInputStatus.ADMITTED -> when (result.queue) {
+            AidenStreamInputQueue.STEER -> "Steering the current run"
+            AidenStreamInputQueue.FOLLOW_UP, null -> "Queued to run next"
+        }
+        AidenStreamInputStatus.REJECTED -> {
+            if (!result.committed) null else when (result.reason) {
+                AidenStreamInputRejectionReason.CANCELLED ->
+                    "Saved to the chat — the run was cancelled before it could use it"
+                AidenStreamInputRejectionReason.CAPACITY ->
+                    "Saved to the chat — the run queue was full"
+                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE,
+                AidenStreamInputRejectionReason.INVALID, null ->
+                    "Saved to the chat — the run ended before it could use it"
+            }
+        }
+    }
+
+    fun rejectionMessage(reason: AidenStreamInputRejectionReason?): String = when (reason) {
+        AidenStreamInputRejectionReason.RUN_NOT_ACTIVE ->
+            "The run already finished. Your draft is unchanged."
+        AidenStreamInputRejectionReason.CANCELLED ->
+            "The run was cancelled. Your draft is unchanged."
+        AidenStreamInputRejectionReason.CAPACITY ->
+            "The follow-up queue is full. Try again in a moment."
+        AidenStreamInputRejectionReason.INVALID, null ->
+            "That input was not accepted. Your draft is unchanged."
+    }
+
+    /** A manual retry of the exact same submission replays the Mac's original
+     * outcome instead of risking a duplicate committed message. */
+    fun reusesIdempotencyKey(
+        last: Attempt?,
+        streamId: String,
+        mode: AidenStreamInputMode,
+        text: String
+    ): Boolean = last != null && last.streamId == streamId && last.mode == mode && last.text == text
+}
+
 @Serializable
 enum class AidenApprovalDecision {
     @SerialName("allow") ALLOW,

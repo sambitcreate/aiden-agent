@@ -62,3 +62,15 @@ failure previously poisoned the key with a sticky internal_error even though
 the action provably never ran — the ledger now discards the unexecuted entry
 (`discardUnexecuted`), and the durable gate has a rejection sink for replay
 paths that never invoke the wrapper.
+
+On The Go slice C (2026-09-24, same branch): the busy iOS/Android composer now
+offers Steer | Queue through the submit affordance alongside the existing Stop
+control when `/server.features` contains `chat-run-input-v1` and the composer
+holds text; old servers keep Stop-only. Redirect (stop + send-as-new-turn) sits
+behind an explicit confirm on both platforms. `AidenRunInputPresentation`
+carries the shared decision table: drafts are consumed only for admitted or
+committed results (committed-but-rejected means the message already landed in
+the transcript — surfaced as a receipt, then reconcileChat pulls it in), every
+uncommitted rejection keeps the draft, and a retry of an identical
+(streamId, mode, text) submission reuses the original Idempotency-Key so the
+Mac replays its recorded outcome. No control write auto-retries.

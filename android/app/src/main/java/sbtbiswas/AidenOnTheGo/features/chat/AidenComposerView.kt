@@ -48,6 +48,11 @@ fun AidenComposerView(
     canStop: Boolean = true,
     canSend: Boolean,
     isStreaming: Boolean,
+    showsRunInputOptions: Boolean = false,
+    canSubmitRunInput: Boolean = false,
+    onSubmitRunInput: (AidenStreamInputMode) -> Unit = {},
+    onRedirectRequest: () -> Unit = {},
+    runInputReceipt: String? = null,
     isVoiceListening: Boolean,
     isVoiceBusy: Boolean = false,
     onToggleVoice: () -> Unit,
@@ -69,6 +74,7 @@ fun AidenComposerView(
     var isFieldFocused by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
+    var showRunInputMenu by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier
@@ -369,55 +375,144 @@ fun AidenComposerView(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Morphing Send / Stop Circular Action Button
-                Surface(
-                    onClick = {
-                        if (isStreaming) {
-                            onStop()
-                        } else if (canSend) {
-                            onSend()
-                        }
-                    },
-                    enabled = (if (isStreaming) canStop else canSend) && !isReadOnly,
-                    shape = CircleShape,
-                    color = when {
-                        isStreaming -> palette.danger
-                        canSend -> palette.accent
-                        else -> palette.canvas.copy(alpha = 0.6f)
-                    },
-                    modifier = Modifier
-                        .size(AidenUi.MinimumTouchTarget)
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        AnimatedContent(
-                            targetState = isStreaming,
-                            transitionSpec = {
-                                (scaleIn(AidenMotion.spatialExpressiveSpring<Float>()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring<Float>()))
-                                    .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring<Float>()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring<Float>()))
-                            },
-                            label = "send_stop_morph"
-                        ) { streaming ->
-                            if (streaming) {
-                                Icon(
-                                    imageVector = Icons.Default.Stop,
-                                    contentDescription = "Stop generation",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
+                // Busy composer: negotiated servers offer Steer | Queue |
+                // Redirect from the submit affordance while Stop stays its own
+                // control; older servers keep the single morphing button.
+                if (isStreaming && showsRunInputOptions) {
+                    Box {
+                        Surface(
+                            onClick = { showRunInputMenu = true },
+                            enabled = canSubmitRunInput && !isReadOnly,
+                            shape = CircleShape,
+                            color = if (canSubmitRunInput) palette.accent else palette.canvas.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .size(AidenUi.MinimumTouchTarget)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Send message",
-                                    tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                    contentDescription = "Run input options",
+                                    tint = if (canSubmitRunInput) Color.White else palette.secondary.copy(alpha = 0.4f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
+                        DropdownMenu(
+                            expanded = showRunInputMenu,
+                            onDismissRequest = { showRunInputMenu = false },
+                            shape = RoundedCornerShape(18.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Steer now") },
+                                onClick = {
+                                    showRunInputMenu = false
+                                    onSubmitRunInput(AidenStreamInputMode.STEER)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Queue to run next") },
+                                onClick = {
+                                    showRunInputMenu = false
+                                    onSubmitRunInput(AidenStreamInputMode.QUEUE)
+                                }
+                            )
+                            HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
+                            DropdownMenuItem(
+                                text = { Text("Redirect…", color = palette.danger) },
+                                onClick = {
+                                    showRunInputMenu = false
+                                    onRedirectRequest()
+                                }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        onClick = onStop,
+                        enabled = canStop && !isReadOnly,
+                        shape = CircleShape,
+                        color = palette.danger,
+                        modifier = Modifier
+                            .size(AidenUi.MinimumTouchTarget)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Stop generation",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                } else {
+                    // Morphing Send / Stop Circular Action Button
+                    Surface(
+                        onClick = {
+                            if (isStreaming) {
+                                onStop()
+                            } else if (canSend) {
+                                onSend()
+                            }
+                        },
+                        enabled = (if (isStreaming) canStop else canSend) && !isReadOnly,
+                        shape = CircleShape,
+                        color = when {
+                            isStreaming -> palette.danger
+                            canSend -> palette.accent
+                            else -> palette.canvas.copy(alpha = 0.6f)
+                        },
+                        modifier = Modifier
+                            .size(AidenUi.MinimumTouchTarget)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            AnimatedContent(
+                                targetState = isStreaming,
+                                transitionSpec = {
+                                    (scaleIn(AidenMotion.spatialExpressiveSpring<Float>()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring<Float>()))
+                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring<Float>()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring<Float>()))
+                                },
+                                label = "send_stop_morph"
+                            ) { streaming ->
+                                if (streaming) {
+                                    Icon(
+                                        imageVector = Icons.Default.Stop,
+                                        contentDescription = "Stop generation",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowUpward,
+                                        contentDescription = "Send message",
+                                        tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            // Brief inline receipt for admitted/committed run inputs
+            if (runInputReceipt != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = runInputReceipt,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.secondary,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
             }
 
             // Voice Error Hint if applicable

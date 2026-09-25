@@ -42,9 +42,14 @@ semantics. Implement a main-owned admission boundary before adding consumers:
 > durable user-message append → Pi queue admission), Remote
 > `POST /streams/{streamId}/inputs` (feature `chat-run-input-v1`, idempotent,
 > contract revision 12), desktop IPC `chat:admitRunInput`, and additive iOS/
-> Android DTOs + client methods. Native composer UX follows in the On The Go
-> slice C work; the capability stays server-advertised only because the full
-> host path is verified.
+> Android DTOs + client methods. The busy iOS/Android composer now offers
+> Steer | Queue alongside Stop with confirm-gated Redirect when the server
+> advertises the feature (old servers keep Stop-only). Deliberate boundary:
+> the desktop renderer keeps its existing queue-while-busy/mid-run-steer UX —
+> the remote path deliberately goes through the same main-owned
+> persistence-plus-Pi-admission semantics via `chat:admitRunInput`, so no
+> consumer bypasses the host transcript boundary. The capability stays
+> server-advertised only because the full host path is verified.
 
 1. Negotiate an additive capability (`chat-run-input-v1`, subject to native review).
 2. Bind requests to chat, exact stream/run identity, authenticated principal,

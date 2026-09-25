@@ -87,6 +87,15 @@ class AidenChatViewModel(
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
     private val _isStopping = MutableStateFlow(false)
     val isStopping: StateFlow<Boolean> = _isStopping.asStateFlow()
+
+    private val _isSubmittingRunInput = MutableStateFlow(false)
+    val isSubmittingRunInput: StateFlow<Boolean> = _isSubmittingRunInput.asStateFlow()
+
+    private val _runInputReceipt = MutableStateFlow<String?>(null)
+    val runInputReceipt: StateFlow<String?> = _runInputReceipt.asStateFlow()
+
+    private var runInputReceiptToken = 0L
+    private var lastRunInputAttempt: AidenRunInputPresentation.Attempt? = null
     private val _isRespondingToApproval = MutableStateFlow(false)
     val isRespondingToApproval: StateFlow<Boolean> = _isRespondingToApproval.asStateFlow()
 
@@ -1128,22 +1137,150 @@ class AidenChatViewModel(
         _isStopping.value = true
         viewModelScope.launch {
             try {
-                val status = client.cancelStream(streamId)
-                if (activeClient() !== client || activeStreamId != streamId ||
-                    _streamState.value?.isTerminal == true) return@launch
-                if (status.streamId != streamId || status.chatId != chatId) {
-                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                    return@launch
-                }
-                apply(status, streamId)
-            } catch (e: Exception) {
-                if (activeClient() === client && activeStreamId == streamId &&
-                    _streamState.value?.isTerminal != true) {
-                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                }
+                cancelStreamOnce(client, streamId)
             } finally {
                 _isStopping.value = false
             }
+        }
+    }
+
+    /** Suspends until the cancel request resolves. True when the server
+     * accepted the cancel for the displayed stream; false leaves the draft
+     * and stream untouched so callers like Redirect can bail safely. */
+    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String): Boolean {
+        return try {
+            val status = client.cancelStream(streamId)
+            if (activeClient() !== client || activeStreamId != streamId ||
+                _streamState.value?.isTerminal == true) return false
+            if (status.streamId != streamId || status.chatId != chatId) {
+                _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+                return false
+            }
+            apply(status, streamId)
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (activeClient() === client && activeStreamId == streamId &&
+                _streamState.value?.isTerminal != true) {
+                _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+            }
+            false
+        }
+    }
+
+    val supportsRunInput: Boolean
+        get() = coordinator.serverInfo.value?.supportsChatRunInput == true
+
+    private val isStreamingNow: Boolean
+        get() = _streamState.value != null && !_streamState.value!!.isTerminal
+
+    /** The busy composer shows Steer/Queue/Redirect only when the server
+     * negotiated the feature and the composer holds text. Old servers keep
+     * the Stop-only control. */
+    val showsRunInputOptions: Boolean
+        get() = AidenRunInputPresentation.offersRunInput(
+            isStreaming = isStreamingNow,
+            canControl = canControlCurrentRun,
+            supports = supportsRunInput,
+            hasDraft = _draft.value.trim().isNotEmpty()
+        )
+
+    val canSubmitRunInput: Boolean
+        get() = showsRunInputOptions && !_isSubmittingRunInput.value && !_isStopping.value
+
+    fun submitRunInput(mode: AidenStreamInputMode) {
+        val text = _draft.value.trim()
+        if (!canSubmitRunInput || text.isEmpty()) return
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        val key = if (AidenRunInputPresentation.reusesIdempotencyKey(
+                lastRunInputAttempt, streamId, mode, text
+            )) lastRunInputAttempt!!.key else UUID.randomUUID()
+        val attempt = AidenRunInputPresentation.Attempt(key, streamId, mode, text)
+        lastRunInputAttempt = attempt
+        _isSubmittingRunInput.value = true
+        viewModelScope.launch {
+            try {
+                val result = client.submitStreamInput(
+                    id = streamId,
+                    input = AidenStreamInputRequest(mode = mode, text = text),
+                    idempotencyKey = key
+                )
+                if (activeClient() !== client) return@launch
+                // The response must bind to the stream that was displayed when
+                // the submission left; a mismatched receipt is never trusted.
+                if (result.streamId != streamId || result.chatId != chatId) {
+                    _presentedError.value =
+                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                    return@launch
+                }
+                if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
+                if (AidenRunInputPresentation.consumesDraft(result)) {
+                    consumeRunInputDraft(text)
+                    AidenRunInputPresentation.receipt(result)?.let { showRunInputReceipt(it) }
+                    // The Mac persisted the message before queue admission;
+                    // pull it into the transcript without waiting for the
+                    // next turn.
+                    reconcileChat()
+                } else {
+                    _presentedError.value = AidenRunInputPresentation.rejectionMessage(result.reason)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() === client) {
+                    _presentedError.value =
+                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                }
+            } finally {
+                _isSubmittingRunInput.value = false
+            }
+        }
+    }
+
+    /** Destructive: stop the current run, then send the composer contents as
+     * a new turn once the stream is confirmed terminal. The draft is only
+     * consumed by the new send; a failed cancel leaves it untouched. */
+    fun redirectRun() {
+        if (!canControlCurrentRun || _isStopping.value || _isSubmittingRunInput.value) return
+        val client = activeClient() ?: return
+        val streamId = activeStreamId ?: return
+        _isStopping.value = true
+        viewModelScope.launch {
+            try {
+                if (!cancelStreamOnce(client, streamId)) return@launch
+                var waited = 0
+                while (isStreamingNow && activeStreamId == streamId && waited < 50) {
+                    delay(100)
+                    waited++
+                }
+                if (activeClient() !== client) return@launch
+                if (isStreamingNow) {
+                    _presentedError.value =
+                        "The run is still stopping. Send your message once it finishes."
+                    return@launch
+                }
+                send()
+            } finally {
+                _isStopping.value = false
+            }
+        }
+    }
+
+    private fun consumeRunInputDraft(text: String) {
+        val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
+        if (remaining != _draft.value) {
+            _draft.value = remaining
+            draftSession?.let { draftStore.save(remaining, it) }
+        }
+    }
+
+    private fun showRunInputReceipt(text: String) {
+        runInputReceiptToken++
+        val token = runInputReceiptToken
+        _runInputReceipt.value = text
+        viewModelScope.launch {
+            delay(4000)
+            if (runInputReceiptToken == token) _runInputReceipt.value = null
         }
     }
 
