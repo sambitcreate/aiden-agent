@@ -167,3 +167,23 @@ explicitly (Kotlin `Char.isWhitespace` diverges on NEL/figure-space/
 information-separator edge cases) matching iOS `Character.isWhitespace`.
 Verification: remote suite 468+1skip, LAN 7/7, peers 17/17, tsc clean, iOS
 app+test bundle build green; Android reviewed manually (no local JVM).
+
+PR #251 CI + review loop (2026-09-25, same branch): first PR run failed on
+a missing ci-test-registry lane entry (chat-run-input-admission.test.ts →
+core-git), an Android mock predating the questions/skills progress grants,
+a malformed entryJson helper (trailing comma → JsonDecodingException), an
+inverted U+2007 expectation (figure space IS Unicode White_Space on both
+platforms; 0x1C-0x1F are the Kotlin-divergent rejects), and the reviewed
+product-shell rule rejecting `sparkles` SF Symbols in iOS chat sources —
+skill icons use `slash.circle`. Hermes bot then flagged two real defects:
+(1) POST /questions/{id}/respond resolved questionChatId before the
+idempotency ledger, so a replay after commit hit question_expired instead
+of replaying the settled response — respondQuestion now takes the router's
+runAccess closure (runChatMutation) inside executeIdempotent, matching the
+submitInput idiom, and questionChatId left the router Pick; (2) submitInput
+emitted status running on every admitted input, clobbering
+waiting_for_approval while a prompt was pending — the running append is now
+gated on no pending approval/question. respondApproval on main shares the
+pre-ledger lookup shape; flagged as follow-up, out of this branch's diff.
+Verification: remote suite 469+1skip, LAN 7/7, peers 17/17, tsc clean,
+CI run 36180567552 fully green before these review fixes.

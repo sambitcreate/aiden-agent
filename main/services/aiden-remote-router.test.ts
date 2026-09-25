@@ -656,15 +656,22 @@ async function fixture(options: {
               ],
               expiresAt: new Date(60_000).toISOString(),
             }),
-            questionChatId: () => "chat-1",
             respondQuestion: async (
               deviceId: string,
               promptId: string,
               input: { cancelled: boolean },
               _key: string,
+              runAccess?: (
+                chatId: string,
+                action: () => Promise<{ promptId: string; resolvedAt: string }>,
+              ) => Promise<{ promptId: string; resolvedAt: string }>,
             ) => {
               calls.push(`question:${deviceId}:${promptId}:${input.cancelled}`);
-              return { promptId, resolvedAt: new Date(6_000).toISOString() };
+              const result = { promptId, resolvedAt: new Date(6_000).toISOString() };
+              if (runAccess) {
+                return runAccess("chat-1", async () => result);
+              }
+              return result;
             },
           }),
       respondApproval: async (deviceId, approvalId, decision, _key) => {

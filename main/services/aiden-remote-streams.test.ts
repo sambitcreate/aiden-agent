@@ -1339,6 +1339,37 @@ const QUESTION_PROMPT = {
   ],
 };
 
+test("queued run input while a question is pending keeps the waiting state", async () => {
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: () => true,
+    submitInput: async () => ({
+      admitted: true,
+      queue: "follow-up",
+      committed: true,
+      messageId: "message_remote_queued",
+    }),
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+
+  const result = await service.submitInput(
+    "device-1",
+    "stream-1",
+    { mode: "queue", text: "Queue behind the prompt." },
+    "input-key-question-queued",
+    inputPassthrough,
+  );
+  assert.equal(result.status, "admitted");
+  // The queued admission commits, but the run is still parked on the pending
+  // question — reporting running would hide the prompt from clients.
+  assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
+  assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
+});
+
 test("remote question prompts bind to their stream and resolve once", async () => {
   const settled: string[] = [];
   const changed: string[] = [];
@@ -1378,6 +1409,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
       ],
     },
     "question-answer-key-01",
+    inputPassthrough,
   );
   assert.equal(resolved.promptId, "q-prompt-1");
   assert.equal(settled.length, 1);
@@ -1396,6 +1428,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
         ],
       },
       "question-answer-key-01",
+    inputPassthrough,
     ),
     resolved,
   );
@@ -1405,6 +1438,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
       "q-prompt-1",
       { cancelled: true, answers: [] },
       "question-answer-key-01",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
@@ -1414,6 +1448,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "0.5 mm" }] },
       "question-answer-key-02",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "question_expired",
   );
@@ -1435,6 +1470,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "2.0 mm" }] },
       "question-answer-key-03",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -1444,6 +1480,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "multi", selected: ["Front"] }] },
       "question-answer-key-04",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -1453,6 +1490,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 9, kind: "option", answer: "0.5 mm" }] },
       "question-answer-key-05",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -1461,6 +1499,7 @@ test("remote question responses are semantically validated against the stored pr
     "q-prompt-1",
     { cancelled: true, answers: [] },
     "question-answer-key-06",
+    inputPassthrough,
   );
   assert.equal(resolved.promptId, "q-prompt-1");
 });
@@ -1546,6 +1585,7 @@ test("resolving one pending surface keeps the other's waiting prompt", async () 
     "q-prompt-1",
     { cancelled: true, answers: [] },
     "question-coexist-key-01",
+    inputPassthrough,
   );
   assert.equal(service.status("device-1", "stream-1").state, "running");
 
@@ -1558,6 +1598,7 @@ test("resolving one pending surface keeps the other's waiting prompt", async () 
     "q-prompt-2",
     { cancelled: true, answers: [] },
     "question-coexist-key-02",
+    inputPassthrough,
   );
   assert.equal(service.status("device-1", "stream-2").state, "waiting_for_approval");
   assert.equal(service.pendingApproval("device-1", "stream-2")?.approvalId, "approval-2");
@@ -1613,6 +1654,7 @@ test("cancellation settles a pending question with a cancelled response", async 
       "q-prompt-1",
       { cancelled: true, answers: [] },
       "question-after-cancel-01",
+    inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "question_expired",
   );

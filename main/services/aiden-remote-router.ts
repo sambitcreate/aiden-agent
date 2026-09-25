@@ -154,7 +154,7 @@ export interface AidenRemoteRouterDependencies {
     Partial<
       Pick<
         AidenRemoteStreamService,
-        "submitInput" | "supportsRunInput" | "pendingQuestion" | "questionChatId" | "respondQuestion" | "supportsQuestionPrompts"
+        "submitInput" | "supportsRunInput" | "pendingQuestion" | "respondQuestion" | "supportsQuestionPrompts"
       >
     >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
@@ -2661,22 +2661,16 @@ export function createAidenRemoteRequestHandler(
         ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        const chatId = dependencies.streams.questionChatId!(device.id, questionMatch[1]!);
         writeJson(
           response,
           200,
-          await runChatMutation(
-            dependencies.chats,
-            device,
-            chatId,
-            "question",
-            () =>
-              dependencies.streams!.respondQuestion!(
-                device.id,
-                questionMatch[1]!,
-                input,
-                key,
-              ),
+          await dependencies.streams.respondQuestion(
+            device.id,
+            questionMatch[1]!,
+            input,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "question", action),
           ),
         );
         return;

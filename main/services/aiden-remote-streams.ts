@@ -1335,11 +1335,21 @@ export class AidenRemoteStreamService {
     return this.options.respondQuestion !== undefined;
   }
 
+  /**
+   * `runAccess` wraps the router's chat-access mutation around the fresh
+   * resolution and stays inside the ledger action so a settled outcome still
+   * replays after the question record is resolved away. Required so no
+   * caller can silently skip authorization (tests pass a passthrough).
+   */
   async respondQuestion(
     deviceId: string,
     promptId: string,
     input: AidenRemoteQuestionRespondRequest,
     key: string,
+    runAccess: (
+      chatId: string,
+      action: () => Promise<{ promptId: string; resolvedAt: string }>,
+    ) => Promise<{ promptId: string; resolvedAt: string }>,
   ): Promise<{ promptId: string; resolvedAt: string }> {
     try {
       return await this.executeIdempotent(
@@ -1377,14 +1387,16 @@ export class AidenRemoteStreamService {
               400,
             );
           }
-          if (!this.resolveQuestion(promptId, response)) {
-            throw new AidenRemoteServiceError(
-              "question_already_resolved",
-              "This question was already resolved.",
-              409,
-            );
-          }
-          return { promptId, resolvedAt: new Date(this.options.now()).toISOString() };
+          return runAccess(question.chatId, async () => {
+            if (!this.resolveQuestion(promptId, response)) {
+              throw new AidenRemoteServiceError(
+                "question_already_resolved",
+                "This question was already resolved.",
+                409,
+              );
+            }
+            return { promptId, resolvedAt: new Date(this.options.now()).toISOString() };
+          });
         },
       );
     } catch (error) {
@@ -1536,7 +1548,14 @@ export class AidenRemoteStreamService {
               text: parsed.text,
               ownerDocumentId: stream.owner.owner.documentId,
             });
-            if (admission.admitted) {
+            // A queued input while a prompt is pending does not resume the
+            // run — emitting running would clobber waiting_for_approval and
+            // hide the outstanding approval/question from clients.
+            if (
+              admission.admitted &&
+              !this.pendingApprovalForStream(stream.streamId) &&
+              !this.pendingQuestionForStream(stream.streamId)
+            ) {
               this.append(stream, "status", { state: "running" }, false, "running");
             }
             if (admission.committed) {
