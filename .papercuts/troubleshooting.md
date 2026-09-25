@@ -1,3 +1,5 @@
+# Troubleshooting
+
 - 2026-09-25 transcript open-at-bottom: Hermex's `defaultScrollAnchor(.bottom, for: .initialOffset)` plus a size-change bottom anchor is the first-paint solution; `ScrollViewProxy.scrollTo` in `onAppear` is only a fallback after the destination is visible. Desktop long-chat follow should observe one content wrapper, not a subtree MutationObserver.
 
 - 2026-09-20 chat↔PR feature: `DataStore` classifies a file whose normalized `chatId` disagrees with its filename as unsafe — records that keep their own `chatId` would still leak links across a rename, so the file normalizer must drop the payload when `record.chatId` doesn't match the target chat, not just flag the file. Reconciliation intents are durable per-chat state, not in-flight results: attaching "ambiguous" candidates must happen when intents are re-read after `reconcilePending` (a crash between `gh pr create` and the link persists only the intent).

@@ -291,7 +291,13 @@ struct AidenChatProgressSheet: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .onAppear {
+                    if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
+                        proxy.scrollTo(anchorID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: tasks.last?.id) { _, _ in
                     if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
                         proxy.scrollTo(anchorID, anchor: .bottom)
                     }

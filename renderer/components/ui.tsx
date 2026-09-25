@@ -908,7 +908,7 @@ export function ScrollArea({
     return () => observer.disconnect();
   }, [toolbar, footer, title, leading, actions, scheduleFollowBottom]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     scheduleFollowBottom();
   }, [autoScrollToBottom, ...autoScrollDeps]);
 
@@ -972,7 +972,7 @@ export function ScrollArea({
           updateScrollEdges(event.currentTarget);
         }}
       >
-        <div ref={content} data-scroll-content>
+        <div ref={content} data-scroll-content className="min-h-full">
           {children}
         </div>
       </div>

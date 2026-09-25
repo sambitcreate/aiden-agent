@@ -74,7 +74,8 @@ test("renders a floating elevated progress chip without an inline expanding pane
   assert.match(html, /Task progress: 1 of 3 completed\. In progress: Writing code\./u);
   assert.match(source, /<HoverCard openDelay=\{160\} closeDelay=\{120\}>/u);
   assert.match(source, /<HoverCardContent[\s\S]*side="top"/u);
-  assert.match(source, /pinOverflowListToEnd\(listRef\.current\)/u);
+  assert.match(source, /if \(!didPinOnOpen\.current\)/u);
+  assert.match(source, /if \(remaining < 48\) pinOverflowListToEnd\(list\)/u);
   assert.match(source, /function TrackedTaskList\(/u);
   assert.doesNotMatch(source, /hover:-translate|focus-visible:-translate/u);
   assert.match(source, /Blocked by\{" "\}/u);

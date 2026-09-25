@@ -172,8 +172,17 @@ function TrackedTaskList({
   blocked: (task: TodoTaskViewV1) => boolean;
 }) {
   const listRef = useRef<HTMLOListElement>(null);
+  const didPinOnOpen = useRef(false);
   useLayoutEffect(() => {
-    pinOverflowListToEnd(listRef.current);
+    const list = listRef.current;
+    if (!list) return;
+    if (!didPinOnOpen.current) {
+      pinOverflowListToEnd(list);
+      didPinOnOpen.current = true;
+      return;
+    }
+    const remaining = list.scrollHeight - list.clientHeight - list.scrollTop;
+    if (remaining < 48) pinOverflowListToEnd(list);
   }, [tasks.length]);
 
   return (

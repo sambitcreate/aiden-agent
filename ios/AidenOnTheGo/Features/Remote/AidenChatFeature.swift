@@ -2985,14 +2985,6 @@ struct AidenChatDetailView: View {
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
-            .onAppear {
-                isScrolledAwayFromLatest = false
-                scrollToBottom(proxy, animated: false)
-            }
-            .onChange(of: model.chat.id) { _, _ in
-                isScrolledAwayFromLatest = false
-                scrollToBottom(proxy, animated: false)
-            }
             .onChange(of: model.chat.messages.count) { _, _ in
                 guard !isScrolledAwayFromLatest else { return }
                 scrollToBottom(proxy, animated: false)

@@ -244,9 +244,11 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val palette = AidenTheme.palette
     val tasks = progress.tasks.filter { it.status != AidenChatTaskStatus.DELETED }
     val listState = rememberLazyListState()
+    val didPinToEnd = remember { mutableStateOf(false) }
     LaunchedEffect(tasks.size) {
-        if (tasks.isNotEmpty()) {
+        if (tasks.isNotEmpty() && !didPinToEnd.value) {
             listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
+            didPinToEnd.value = true
         }
     }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {

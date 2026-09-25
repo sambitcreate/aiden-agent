@@ -301,7 +301,7 @@ fun AidenChatDetailScreen(
         listState.scrollToItem(AidenChatScroll.latestItemIndex())
     }
 
-    LaunchedEffect(chat?.messages?.size, isStreaming, liveText) {
+    LaunchedEffect(chat?.messages?.size, isStreaming) {
         if (AidenChatScroll.isFollowingLatest(
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset
