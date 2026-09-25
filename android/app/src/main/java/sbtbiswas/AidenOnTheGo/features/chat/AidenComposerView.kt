@@ -74,7 +74,9 @@ fun AidenComposerView(
     var isFieldFocused by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
-    var showRunInputMenu by remember { mutableStateOf(false) }
+    // Reset when the options cluster leaves composition so a remembered-open
+    // menu cannot reappear unsolicited on the next busy stream.
+    var showRunInputMenu by remember(showsRunInputOptions) { mutableStateOf(false) }
 
     Surface(
         modifier = modifier

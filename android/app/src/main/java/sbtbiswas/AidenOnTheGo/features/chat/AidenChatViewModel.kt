@@ -68,9 +68,6 @@ class AidenChatViewModel(
     private val _streamState = MutableStateFlow<AidenStreamState?>(null)
     val streamState: StateFlow<AidenStreamState?> = _streamState.asStateFlow()
 
-    val isStreaming: StateFlow<Boolean>
-        get() = MutableStateFlow(_streamState.value != null && !_streamState.value!!.isTerminal).asStateFlow()
-
     private val _liveText = MutableStateFlow("")
     val liveText: StateFlow<String> = _liveText.asStateFlow()
 
@@ -1249,7 +1246,8 @@ class AidenChatViewModel(
             try {
                 if (!cancelStreamOnce(client, streamId)) return@launch
                 var waited = 0
-                while (isStreamingNow && activeStreamId == streamId && waited < 50) {
+                while (isStreamingNow && activeStreamId == streamId &&
+                    activeClient() === client && waited < 50) {
                     delay(100)
                     waited++
                 }
@@ -1257,6 +1255,11 @@ class AidenChatViewModel(
                 if (isStreamingNow) {
                     _presentedError.value =
                         "The run is still stopping. Send your message once it finishes."
+                    return@launch
+                }
+                if (!canSend) {
+                    _presentedError.value =
+                        "The run stopped, but your message could not be sent. Check your connection and try again."
                     return@launch
                 }
                 send()

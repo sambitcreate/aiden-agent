@@ -1738,7 +1738,7 @@ enum AidenRunInputPresentation {
         case .cancelled:
             String(localized: "The run was cancelled. Your draft is unchanged.")
         case .capacity:
-            String(localized: "The follow-up queue is full. Try again in a moment.")
+            String(localized: "The follow-up queue is full. Your draft is unchanged — try again in a moment.")
         case .invalid, .none:
             String(localized: "That input was not accepted. Your draft is unchanged.")
         }

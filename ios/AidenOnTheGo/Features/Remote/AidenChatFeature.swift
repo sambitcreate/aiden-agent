@@ -1027,6 +1027,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
+        runInputReceiptTask?.cancel()
     }
 
     var isConnected: Bool {
@@ -1963,6 +1964,15 @@ final class AidenChatViewModel {
               let context = try? coordinator.requestContext(for: instanceId) else { return false }
         isStopping = true
         defer { isStopping = false }
+        return await cancelStreamOnce(streamID: streamID, context: context)
+    }
+
+    /// Shared cancel core for Stop and Redirect. Callers hold `isStopping` so
+    /// the composer controls stay inert for the whole operation.
+    private func cancelStreamOnce(
+        streamID: String,
+        context: AidenRemoteRequestContext
+    ) async -> Bool {
         do {
             let status = try await coordinator.remoteClient(for: context).cancelStream(id: streamID)
             guard coordinator.isCurrent(context), activeStreamID == streamID,
@@ -1974,6 +1984,8 @@ final class AidenChatViewModel {
             await apply(status, streamID: streamID, context: context, feedbackPolicy: .restoredStream)
             coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(streamID)")
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
             guard coordinator.isCurrent(context), activeStreamID == streamID,
@@ -1985,7 +1997,8 @@ final class AidenChatViewModel {
     }
 
     var supportsRunInput: Bool {
-        coordinator.server?.supportsChatRunInput == true
+        guard !isReadOnlyFixture else { return false }
+        return coordinator.server?.supportsChatRunInput == true
     }
 
     /// The busy composer shows Steer/Queue/Redirect only when the server
@@ -2061,17 +2074,32 @@ final class AidenChatViewModel {
     /// Destructive: stop the current run, then send the composer contents as a
     /// new turn once the stream is confirmed terminal. The draft is only
     /// consumed by the new send; a failed cancel leaves it untouched.
+    /// `isStopping` stays held for the whole operation so the composer controls
+    /// remain inert while the run winds down.
     func redirectRun() async {
         guard canControlCurrentRun, !isStopping, !isSubmittingRunInput,
+              let streamID = activeStreamID,
               let context = try? coordinator.requestContext(for: instanceId) else { return }
-        guard await stop() else { return }
-        guard coordinator.isCurrent(context) else { return }
-        for _ in 0..<50 where isStreaming {
-            try? await Task.sleep(for: .milliseconds(100))
-            guard coordinator.isCurrent(context) else { return }
+        isStopping = true
+        defer { isStopping = false }
+        guard await cancelStreamOnce(streamID: streamID, context: context) else { return }
+        do {
+            var waited = 0
+            while isStreaming && activeStreamID == streamID && waited < 50 {
+                try await Task.sleep(for: .milliseconds(100))
+                waited += 1
+                guard coordinator.isCurrent(context) else { return }
+            }
+        } catch {
+            return
         }
+        guard coordinator.isCurrent(context) else { return }
         guard !isStreaming else {
             presentedError = String(localized: "The run is still stopping. Send your message once it finishes.")
+            return
+        }
+        guard canSend else {
+            presentedError = String(localized: "The run stopped, but your message could not be sent. Check your connection and try again.")
             return
         }
         await send()

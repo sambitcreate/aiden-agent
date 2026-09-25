@@ -281,6 +281,11 @@ fun AidenChatDetailScreen(
         }
     }
 
+    // The destructive confirm must not outlive the run it would interrupt.
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) showRedirectConfirm = false
+    }
+
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(10),
         onResult = preparePickedUris

@@ -941,9 +941,11 @@ object AidenRunInputPresentation {
         result.status == AidenStreamInputStatus.ADMITTED || result.committed
 
     fun consumedDraft(submitted: String, current: String): String {
-        if (current.trim() == submitted) return ""
+        // Char.isWhitespace covers Unicode space separators, matching iOS
+        // CharacterSet.whitespacesAndNewlines semantics.
+        if (current.trim { it.isWhitespace() } == submitted) return ""
         if (current.startsWith(submitted)) {
-            return current.drop(submitted.length).trim()
+            return current.drop(submitted.length).trim { it.isWhitespace() }
         }
         return current
     }
@@ -972,7 +974,7 @@ object AidenRunInputPresentation {
         AidenStreamInputRejectionReason.CANCELLED ->
             "The run was cancelled. Your draft is unchanged."
         AidenStreamInputRejectionReason.CAPACITY ->
-            "The follow-up queue is full. Try again in a moment."
+            "The follow-up queue is full. Your draft is unchanged — try again in a moment."
         AidenStreamInputRejectionReason.INVALID, null ->
             "That input was not accepted. Your draft is unchanged."
     }
