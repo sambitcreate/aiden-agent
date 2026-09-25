@@ -20,6 +20,17 @@ object AidenChatScroll {
         return wasFollowingLatest
     }
 
+    fun reverseLayoutItemCount(messageCount: Int, streaming: Boolean): Int {
+        return messageCount + if (streaming) 1 else 0
+    }
+
+    /**
+     * Viewport samples that already include an insertion must not rewrite the latch.
+     */
+    fun shouldUpdateFollowLatchFromViewport(contentChanged: Boolean): Boolean {
+        return !contentChanged
+    }
+
     fun latestItemIndex(): Int = 0
 
     fun taskListEndIndex(visibleCount: Int): Int = maxOf(0, visibleCount - 1)

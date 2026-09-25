@@ -77,7 +77,7 @@ test("renders a floating elevated progress chip without an inline expanding pane
   assert.match(source, /if \(!didPinOnOpen\.current\)/u);
   assert.match(source, /shouldPinAfterContentGrowth\(followLatest\.current\)/u);
   assert.match(source, /addEventListener\("scroll"/u);
-  assert.doesNotMatch(source, /}, \[tasks\.length\]\)/u);
+  assert.match(source, /\[taskFollowKey\]/u);
   assert.match(source, /function TrackedTaskList\(/u);
   assert.doesNotMatch(source, /hover:-translate|focus-visible:-translate/u);
   assert.match(source, /Blocked by\{" "\}/u);

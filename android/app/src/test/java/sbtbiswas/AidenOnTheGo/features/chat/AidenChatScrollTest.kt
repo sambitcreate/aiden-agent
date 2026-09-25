@@ -15,6 +15,10 @@ class AidenChatScrollTest {
         assertFalse(AidenChatScroll.isFollowingLatest(1, 0))
         assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(true))
         assertFalse(AidenChatScroll.shouldPinLatestAfterContentChange(false))
+        assertEquals(3, AidenChatScroll.reverseLayoutItemCount(3, false))
+        assertEquals(4, AidenChatScroll.reverseLayoutItemCount(3, true))
+        assertTrue(AidenChatScroll.shouldUpdateFollowLatchFromViewport(false))
+        assertFalse(AidenChatScroll.shouldUpdateFollowLatchFromViewport(true))
     }
 
     @Test

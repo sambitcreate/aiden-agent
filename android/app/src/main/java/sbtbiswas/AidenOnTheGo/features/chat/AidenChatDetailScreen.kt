@@ -163,6 +163,8 @@ fun AidenChatDetailScreen(
     var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+    val currentChat by rememberUpdatedState(chat)
+    val currentlyStreaming by rememberUpdatedState(isStreaming)
 
     DisposableEffect(voiceInput, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -297,14 +299,23 @@ fun AidenChatDetailScreen(
     )
 
     LaunchedEffect(listState) {
+        var lastItemCount = -1
         var wasScrolling = false
         snapshotFlow {
+            val itemCount = AidenChatScroll.reverseLayoutItemCount(
+                currentChat?.messages?.size ?: 0,
+                currentlyStreaming
+            )
             Triple(
                 listState.isScrollInProgress,
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset
-            )
-        }.collect { (scrolling, index, offset) ->
+            ) to itemCount
+        }.collect { (viewport, itemCount) ->
+            val (scrolling, index, offset) = viewport
+            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
+            lastItemCount = itemCount
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(contentChanged)) return@collect
             if (scrolling) {
                 wasScrolling = true
                 followLatest = AidenChatScroll.isFollowingLatest(index, offset)
@@ -318,6 +329,7 @@ fun AidenChatDetailScreen(
     LaunchedEffect(chat?.messages?.size, isStreaming) {
         if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
             listState.scrollToItem(AidenChatScroll.latestItemIndex())
+            followLatest = true
         }
     }
 
