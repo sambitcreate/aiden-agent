@@ -4022,7 +4022,10 @@ private struct AidenSettledMessageRows: View, Equatable {
     let presentationStyle: AidenChatPresentationStyle
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.model === rhs.model && lhs.presentationStyle == rhs.presentationStyle
+        // The view model is a reference type; compare the rendered payload so
+        // a settled-in chat update re-renders while per-token liveText churn
+        // (which never touches chat) still skips.
+        lhs.model.chat == rhs.model.chat && lhs.presentationStyle == rhs.presentationStyle
     }
 
     var body: some View {
@@ -6552,7 +6555,7 @@ private struct AidenComposerSuggestionList: View {
     }
 
     private func isDisabled(_ suggestion: AidenComposerSuggestion) -> Bool {
-        if case .skill(let entry) = suggestion { !entry.available }
+        if case .skill(let entry) = suggestion { return !entry.available }
         return false
     }
 
