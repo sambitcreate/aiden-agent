@@ -880,16 +880,21 @@ export function ScrollArea({
     setAtScrollEnd(remaining < 2);
   }, []);
 
+  const followBottomNow = React.useCallback(() => {
+    const element = viewport.current;
+    if (!element) return;
+    if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
+    else updateScrollEdges(element);
+  }, [scrollToBottom, updateScrollEdges]);
+
   const scheduleFollowBottom = React.useCallback(() => {
+    followBottomNow();
     if (followFrameRef.current) return;
     followFrameRef.current = requestAnimationFrame(() => {
       followFrameRef.current = 0;
-      const element = viewport.current;
-      if (!element) return;
-      if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
-      else updateScrollEdges(element);
+      followBottomNow();
     });
-  }, [scrollToBottom, updateScrollEdges]);
+  }, [followBottomNow]);
 
   React.useLayoutEffect(() => {
     const measure = () => {

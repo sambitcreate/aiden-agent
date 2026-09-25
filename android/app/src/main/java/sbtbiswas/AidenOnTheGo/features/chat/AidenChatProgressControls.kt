@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -244,9 +245,9 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val palette = AidenTheme.palette
     val tasks = progress.tasks.filter { it.status != AidenChatTaskStatus.DELETED }
     val listState = rememberLazyListState()
-    val didPinToEnd = remember { mutableStateOf(false) }
-    LaunchedEffect(tasks.size) {
-        if (tasks.isNotEmpty() && !didPinToEnd.value) {
+    val didPinToEnd = rememberSaveable(progress.epoch) { mutableStateOf(false) }
+    LaunchedEffect(progress.epoch, tasks.size) {
+        if (AidenChatScroll.shouldPinTaskList(didPinToEnd.value, tasks.size)) {
             listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
             didPinToEnd.value = true
         }

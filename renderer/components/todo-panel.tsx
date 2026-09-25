@@ -1,6 +1,10 @@
 import { Check, Circle, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
-import { pinOverflowListToEnd } from "../lib/scroll-follow";
+import {
+  distanceFromScrollBottom,
+  isAtScrollBottom,
+  pinOverflowListToEnd,
+} from "../lib/scroll-follow";
 import type { TodoSnapshotViewV1, TodoTaskViewV1 } from "../shared/todo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
@@ -181,8 +185,13 @@ function TrackedTaskList({
       didPinOnOpen.current = true;
       return;
     }
-    const remaining = list.scrollHeight - list.clientHeight - list.scrollTop;
-    if (remaining < 48) pinOverflowListToEnd(list);
+    if (
+      isAtScrollBottom(
+        distanceFromScrollBottom(list.scrollHeight, list.clientHeight, list.scrollTop),
+      )
+    ) {
+      pinOverflowListToEnd(list);
+    }
   }, [tasks.length]);
 
   return (

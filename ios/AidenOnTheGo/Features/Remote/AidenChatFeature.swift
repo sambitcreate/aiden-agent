@@ -2989,10 +2989,6 @@ struct AidenChatDetailView: View {
                 guard !isScrolledAwayFromLatest else { return }
                 scrollToBottom(proxy, animated: false)
             }
-            .onChange(of: model.liveText) { _, _ in
-                guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy)
-            }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
                 composerIsFocused = false

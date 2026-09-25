@@ -20,5 +20,9 @@ class AidenChatScrollTest {
         assertEquals(0, AidenChatScroll.taskListEndIndex(0))
         assertEquals(0, AidenChatScroll.taskListEndIndex(1))
         assertEquals(17, AidenChatScroll.taskListEndIndex(18))
+        assertTrue(AidenChatScroll.shouldPinTaskList(false, 3))
+        assertFalse(AidenChatScroll.shouldPinTaskList(true, 3))
+        assertFalse(AidenChatScroll.shouldPinTaskList(false, 0))
+        assertFalse(AidenChatScroll.isFollowingLatest(2, 0))
     }
 }

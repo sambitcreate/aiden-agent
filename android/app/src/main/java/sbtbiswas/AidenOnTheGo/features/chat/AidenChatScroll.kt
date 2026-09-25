@@ -15,4 +15,8 @@ object AidenChatScroll {
     fun latestItemIndex(): Int = 0
 
     fun taskListEndIndex(visibleCount: Int): Int = maxOf(0, visibleCount - 1)
+
+    fun shouldPinTaskList(alreadyPinned: Boolean, visibleCount: Int): Boolean {
+        return visibleCount > 0 && !alreadyPinned
+    }
 }
