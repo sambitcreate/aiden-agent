@@ -246,6 +246,7 @@ struct AidenChatProgressSheet: View {
     let kind: AidenProgressSheet
     let model: AidenChatViewModel
     @State private var selectedTurnId: String?
+    @State private var isScrolledAwayFromTaskLatest = false
 
     var body: some View {
         NavigationStack {
@@ -292,7 +293,37 @@ struct AidenChatProgressSheet: View {
                 }
                 .listStyle(.insetGrouped)
                 .defaultScrollAnchor(AidenChatScrollPolicy.initialTranscriptAnchor, for: .initialOffset)
+                .defaultScrollAnchor(
+                    AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromTaskLatest),
+                    for: .sizeChanges
+                )
+                .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
+                    AidenScrollFollowGeometry(
+                        isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
+                            contentOffsetY: geometry.contentOffset.y,
+                            containerHeight: geometry.containerSize.height,
+                            contentHeight: geometry.contentSize.height,
+                            bottomInset: geometry.contentInsets.bottom
+                        ),
+                        contentHeight: geometry.contentSize.height
+                    )
+                } action: { previous, next in
+                    isScrolledAwayFromTaskLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                        wasScrolledAway: isScrolledAwayFromTaskLatest,
+                        isAwayFromLatest: next.isAwayFromLatest,
+                        contentGrew: next.contentHeight > previous.contentHeight
+                    )
+                }
                 .onAppear {
+                    if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
+                        proxy.scrollTo(anchorID, anchor: .bottom)
+                    }
+                    isScrolledAwayFromTaskLatest = false
+                }
+                .onChange(of: AidenChatScrollPolicy.taskListFollowKey(tasks)) { _, _ in
+                    guard AidenChatScrollPolicy.shouldPinTaskListAfterGrowth(wasFollowingLatest: !isScrolledAwayFromTaskLatest) else {
+                        return
+                    }
                     if let anchorID = AidenChatScrollPolicy.taskListAnchorID(tasks) {
                         proxy.scrollTo(anchorID, anchor: .bottom)
                     }

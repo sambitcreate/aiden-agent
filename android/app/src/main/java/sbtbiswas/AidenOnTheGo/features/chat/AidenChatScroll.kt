@@ -25,17 +25,86 @@ object AidenChatScroll {
     }
 
     /**
-     * Viewport samples that already include an insertion must not rewrite the latch.
+     * Viewport samples that already include an unmatched insertion must not rewrite
+     * the latch. The epoch stays pending until the content-change effect records
+     * [consumedItemCount], not merely after the first sample whose count changed.
      */
-    fun shouldUpdateFollowLatchFromViewport(contentChanged: Boolean): Boolean {
-        return !contentChanged
+    fun shouldUpdateFollowLatchFromViewport(
+        contentChanged: Boolean,
+        itemCount: Int = 0,
+        consumedItemCount: Int = -1,
+    ): Boolean {
+        return !isInsertionEpochPending(contentChanged, itemCount, consumedItemCount)
+    }
+
+    fun isInsertionEpochPending(
+        contentChanged: Boolean,
+        itemCount: Int,
+        consumedItemCount: Int,
+    ): Boolean {
+        return contentChanged || (consumedItemCount >= 0 && itemCount != consumedItemCount)
     }
 
     fun latestItemIndex(): Int = 0
 
     fun taskListEndIndex(visibleCount: Int): Int = maxOf(0, visibleCount - 1)
 
+    fun isFollowingTaskListEnd(
+        firstVisibleItemIndex: Int,
+        visibleCount: Int,
+    ): Boolean {
+        if (visibleCount <= 0) return false
+        return firstVisibleItemIndex >= taskListEndIndex(visibleCount)
+    }
+
+    fun taskListFollowKey(
+        tasks: List<Triple<Long, String, String>>,
+    ): String {
+        return tasks.joinToString("|") { (id, status, activeForm) ->
+            "$id:$status:$activeForm"
+        }
+    }
+
     fun shouldPinTaskList(alreadyPinned: Boolean, visibleCount: Int): Boolean {
         return visibleCount > 0 && !alreadyPinned
     }
+
+    fun applyViewportFollowSample(state: FollowLatchState, sample: ViewportFollowSample): FollowLatchState {
+        val contentChanged = state.lastItemCount >= 0 && sample.itemCount != state.lastItemCount
+        var followLatest = state.followLatest
+        var wasScrolling = state.wasScrolling
+        if (shouldUpdateFollowLatchFromViewport(contentChanged, sample.itemCount, state.consumedItemCount)) {
+            if (sample.scrolling) {
+                wasScrolling = true
+                followLatest = isFollowingLatest(sample.index, sample.offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = isFollowingLatest(sample.index, sample.offset)
+            }
+        }
+        return state.copy(
+            lastItemCount = sample.itemCount,
+            followLatest = followLatest,
+            wasScrolling = wasScrolling,
+        )
+    }
+
+    fun consumeInsertionEpoch(state: FollowLatchState, itemCount: Int): FollowLatchState {
+        val followLatest = if (shouldPinLatestAfterContentChange(state.followLatest)) true else state.followLatest
+        return state.copy(consumedItemCount = itemCount, followLatest = followLatest)
+    }
 }
+
+data class ViewportFollowSample(
+    val itemCount: Int,
+    val index: Int,
+    val offset: Int,
+    val scrolling: Boolean,
+)
+
+data class FollowLatchState(
+    val lastItemCount: Int = -1,
+    val consumedItemCount: Int = -1,
+    val followLatest: Boolean = true,
+    val wasScrolling: Boolean = false,
+)

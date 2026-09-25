@@ -4,6 +4,7 @@ import {
   distanceFromScrollBottom,
   isAtScrollBottom,
   pinOverflowListToEnd,
+  resolveProgrammaticFollowLatch,
   shouldFollowScrollBottom,
   shouldPinAfterContentGrowth,
 } from "./scroll-follow.js";
@@ -22,6 +23,13 @@ test("follow latch stays on within the idle slop and off once the reader leaves 
   assert.equal(shouldFollowScrollBottom(false, true), false);
   assert.equal(shouldPinAfterContentGrowth(true), true);
   assert.equal(shouldPinAfterContentGrowth(false), false);
+});
+
+test("programmatic jump keeps follow latched until the live edge is reached", () => {
+  assert.deepEqual(resolveProgrammaticFollowLatch(true, false), { pending: true, followLatest: true });
+  assert.deepEqual(resolveProgrammaticFollowLatch(true, true), { pending: false, followLatest: true });
+  assert.deepEqual(resolveProgrammaticFollowLatch(false, false), { pending: false, followLatest: false });
+  assert.equal(shouldPinAfterContentGrowth(resolveProgrammaticFollowLatch(true, false).followLatest), true);
 });
 
 test("opening a long task list pins to the latest rows", () => {

@@ -16,7 +16,35 @@ enum AidenChatScrollPolicy {
         shouldFollowLatest ? .bottom : nil
     }
 
+    /// Content growth can report "away from latest" for a frame before size
+    /// pinning reapplies. Keep the previous follow latch in that window.
+    static func shouldTreatAsScrolledAway(
+        wasScrolledAway: Bool,
+        isAwayFromLatest: Bool,
+        contentGrew: Bool
+    ) -> Bool {
+        if !wasScrolledAway && contentGrew {
+            return false
+        }
+        return isAwayFromLatest
+    }
+
+    static func shouldPinTaskListAfterGrowth(wasFollowingLatest: Bool) -> Bool {
+        wasFollowingLatest
+    }
+
+    static func taskListFollowKey(_ tasks: [AidenRemoteChatTask]) -> String {
+        tasks.map { task in
+            "\(task.id):\(task.status.rawValue):\(task.subject):\(task.activeForm ?? "")"
+        }.joined(separator: "|")
+    }
+
     static func taskListAnchorID<Task: Identifiable>(_ tasks: [Task]) -> Task.ID? {
         tasks.last?.id
     }
+}
+
+struct AidenScrollFollowGeometry: Equatable {
+    var isAwayFromLatest: Bool
+    var contentHeight: CGFloat
 }

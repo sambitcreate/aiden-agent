@@ -2961,15 +2961,22 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                aidenChatIsScrolledAwayFromLatest(
-                    contentOffsetY: geometry.contentOffset.y,
-                    containerHeight: geometry.containerSize.height,
-                    contentHeight: geometry.contentSize.height,
-                    bottomInset: geometry.contentInsets.bottom
+            .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
+                AidenScrollFollowGeometry(
+                    isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
+                        contentOffsetY: geometry.contentOffset.y,
+                        containerHeight: geometry.containerSize.height,
+                        contentHeight: geometry.contentSize.height,
+                        bottomInset: geometry.contentInsets.bottom
+                    ),
+                    contentHeight: geometry.contentSize.height
                 )
-            } action: { _, isAwayFromLatest in
-                isScrolledAwayFromLatest = isAwayFromLatest
+            } action: { previous, next in
+                isScrolledAwayFromLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                    wasScrolledAway: isScrolledAwayFromLatest,
+                    isAwayFromLatest: next.isAwayFromLatest,
+                    contentGrew: next.contentHeight > previous.contentHeight
+                )
             }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }

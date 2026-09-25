@@ -43,8 +43,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -245,11 +245,35 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val palette = AidenTheme.palette
     val tasks = progress.tasks.filter { it.status != AidenChatTaskStatus.DELETED }
     val listState = rememberLazyListState()
-    val didPinToEnd = rememberSaveable(progress.epoch) { mutableStateOf(false) }
-    LaunchedEffect(progress.epoch, tasks.size) {
-        if (AidenChatScroll.shouldPinTaskList(didPinToEnd.value, tasks.size)) {
+    var didPinToEnd by remember(listState) { mutableStateOf(false) }
+    var followLatest by remember(listState) { mutableStateOf(true) }
+    val taskFollowKey = AidenChatScroll.taskListFollowKey(
+        tasks.map { Triple(it.id, it.status.name, it.activeForm.orEmpty()) }
+    )
+    LaunchedEffect(listState) {
+        var wasScrolling = false
+        snapshotFlow {
+            Triple(listState.isScrollInProgress, listState.firstVisibleItemIndex, tasks.size)
+        }.collect { (scrolling, index, visibleCount) ->
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingTaskListEnd(index, visibleCount)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingTaskListEnd(index, visibleCount)
+            }
+        }
+    }
+    LaunchedEffect(progress.epoch, taskFollowKey) {
+        if (AidenChatScroll.shouldPinTaskList(didPinToEnd, tasks.size)) {
             listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
-            didPinToEnd.value = true
+            didPinToEnd = true
+            followLatest = true
+            return@LaunchedEffect
+        }
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest) && tasks.isNotEmpty()) {
+            listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
+            followLatest = true
         }
     }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {

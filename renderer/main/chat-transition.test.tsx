@@ -294,7 +294,8 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   assert.match(scrollArea, /data-scroll-content/u);
   assert.match(scrollArea, /autoScrollResetKey/u);
   assert.match(scrollArea, /data-scroll-content className="min-h-full"/u);
-  assert.match(scrollArea, /followBottomNow\(\);\n {4}if \(followFrameRef\.current\) return;/u);
+  assert.match(scrollArea, /resolveProgrammaticFollowLatch/u);
+  assert.match(scrollArea, /programmaticPinPendingRef/u);
   assert.doesNotMatch(
     effect,
     /subtree:\s*true/u,

@@ -154,6 +154,7 @@ fun AidenChatDetailScreen(
             )
         )
     }
+    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -315,7 +316,14 @@ fun AidenChatDetailScreen(
             val (scrolling, index, offset) = viewport
             val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
             lastItemCount = itemCount
-            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(contentChanged)) return@collect
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
+                    contentChanged,
+                    itemCount,
+                    consumedItemCount
+                )
+            ) {
+                return@collect
+            }
             if (scrolling) {
                 wasScrolling = true
                 followLatest = AidenChatScroll.isFollowingLatest(index, offset)
@@ -327,10 +335,15 @@ fun AidenChatDetailScreen(
     }
 
     LaunchedEffect(chat?.messages?.size, isStreaming) {
+        val itemCount = AidenChatScroll.reverseLayoutItemCount(
+            chat?.messages?.size ?: 0,
+            isStreaming
+        )
         if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
             listState.scrollToItem(AidenChatScroll.latestItemIndex())
             followLatest = true
         }
+        consumedItemCount = itemCount
     }
 
     Scaffold(
@@ -667,7 +680,8 @@ fun AidenChatDetailScreen(
                 onClick = {
                     followLatest = true
                     scope.launch {
-                        listState.animateScrollToItem(AidenChatScroll.latestItemIndex())
+                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+                        followLatest = true
                     }
                 },
                 modifier = Modifier

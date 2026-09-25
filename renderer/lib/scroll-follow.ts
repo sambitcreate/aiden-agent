@@ -37,3 +37,20 @@ export function pinOverflowListToEnd(element: { scrollHeight: number; scrollTop:
   if (!element) return;
   element.scrollTop = element.scrollHeight;
 }
+
+/**
+ * Smooth jump-to-bottom samples intermediate scrollTop. Keep follow latched
+ * until the animation reaches the trailing edge.
+ */
+export function resolveProgrammaticFollowLatch(
+  programmaticPinPending: boolean,
+  atBottom: boolean,
+): { pending: boolean; followLatest: boolean } {
+  if (!programmaticPinPending) {
+    return { pending: false, followLatest: atBottom };
+  }
+  if (atBottom) {
+    return { pending: false, followLatest: true };
+  }
+  return { pending: true, followLatest: true };
+}

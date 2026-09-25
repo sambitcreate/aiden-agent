@@ -22,6 +22,7 @@ import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
   distanceFromScrollBottom,
   isAtScrollBottom,
+  resolveProgrammaticFollowLatch,
   SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
 } from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
@@ -852,6 +853,7 @@ export function ScrollArea({
   const [atTop, setAtTop] = React.useState(true);
   const atBottomRef = React.useRef(true);
   const followFrameRef = React.useRef(0);
+  const programmaticPinPendingRef = React.useRef(false);
   const autoScrollRef = React.useRef(autoScrollToBottom);
   const split = React.useContext(SplitContext);
 
@@ -860,6 +862,7 @@ export function ScrollArea({
   const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = viewport.current;
     if (!element) return;
+    programmaticPinPendingRef.current = behavior === "smooth";
     element.scrollTo({ top: element.scrollHeight, behavior });
     atBottomRef.current = true;
     setAtBottom(true);
@@ -875,7 +878,10 @@ export function ScrollArea({
       element.clientHeight,
       element.scrollTop,
     );
-    atBottomRef.current = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
+    const atBottom = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
+    const next = resolveProgrammaticFollowLatch(programmaticPinPendingRef.current, atBottom);
+    programmaticPinPendingRef.current = next.pending;
+    atBottomRef.current = next.followLatest;
     setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
   }, []);
