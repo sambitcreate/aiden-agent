@@ -20,12 +20,12 @@ const shQuote = (value: string): string => `'${value.split("'").join(`'"'"'`)}'`
 export function agentDeviceLauncherSource(nodePath: string, entryPath: string): string {
   return `import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
-// Help never drives a device: help [guide], --version, and <command> --help pass without device_open's flags.
+// Only agent-device's own help fast paths pass without device_open's flags: a lone help flag or --version,
+// help <guide>, and <command> --help. A help flag anywhere else can be a positional (after --, or to cdp).
+const helpFlag = arg => arg === "--help" || arg === "-h";
 const informational =
-  args[0] === "help" ||
-  args.includes("--help") ||
-  args.includes("-h") ||
-  (args.length === 1 && ["--version", "version"].includes(args[0]));
+  (args.length === 1 && (helpFlag(args[0]) || ["help", "--version", "-V", "version"].includes(args[0]))) ||
+  (args.length === 2 && (args[0] === "help" || helpFlag(args[1])));
 const hasValue = flag => { const index = args.indexOf(flag); return index >= 0 && !!args[index + 1] && !args[index + 1].startsWith("--"); };
 if (!informational && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and include its --config and --session flags.");

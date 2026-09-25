@@ -424,15 +424,16 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     };
     client.once("error", dropEarly);
     const target = await resolve(decision.hostId);
-    client.off("error", dropEarly);
     if (client.destroyed) {
       openSockets.delete(client);
       return;
     }
+    // Still listening while refusing: writing to a peer that already reset can fail with EPIPE.
     if (!target) {
       openSockets.delete(client);
       return refuseUpgrade(client, 503, "Device hub is not running");
     }
+    client.off("error", dropEarly);
     trackHost(decision.hostId, client);
     if (isUpstream(target)) {
       const url = new URL(target.origin);

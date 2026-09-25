@@ -242,6 +242,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let proxy: Promise<DeviceHubProxy> | null = null;
   /** Bumped by every revoke, so a grant or agent start that raced one never outlives it. */
   let consentEpoch = 0;
+  /** Bumped only by a streaming revoke, so an agent-access or sharing change never aborts an open. */
+  let streamingEpoch = 0;
   let saving: Promise<void> = Promise.resolve();
   let granting: Promise<unknown> = Promise.resolve();
   /** A running "Remove installed tools"; grants wait for it so nothing reinstalls mid-delete. */
@@ -639,6 +641,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   async function revoke(kind: DeviceConsentKind): Promise<DeviceServiceState> {
     await load();
     consentEpoch += 1;
+    if (kind === "streaming") streamingEpoch += 1;
     if (kind === "peerSharing") {
       consent = { ...consent, peerSharing: false };
       await saveConsent();
@@ -826,11 +829,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         return { ...session };
       }
       const ready = requireReady(hostId);
-      const epoch = consentEpoch;
-      const existing = sessions.find(
-        (session) =>
-          session.chatId === input.chatId && session.hostId === hostId && session.deviceId === input.deviceId,
-      );
+      const epoch = streamingEpoch;
       let device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
       if (!device) {
         await listDevices(ready);
@@ -839,9 +838,14 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (!device) throw new Error("That simulator is no longer available.");
       await attach(ready, device);
       // A revoke while the simulator booted wins; never register a session after it.
-      if (epoch !== consentEpoch || !consent.streaming) {
+      if (epoch !== streamingEpoch || !consent.streaming) {
         throw new Error("Simulator streaming was turned off while opening.");
       }
+      // Looked up after the boot, so concurrent opens share one session and a close meanwhile sticks.
+      const existing = sessions.find(
+        (session) =>
+          session.chatId === input.chatId && session.hostId === hostId && session.deviceId === input.deviceId,
+      );
       if (existing) {
         emit();
         return { ...existing };

@@ -320,6 +320,49 @@ test("a streaming revoke while a local simulator boots never registers its sessi
   );
 });
 
+test("turning off agent access or sharing while a local simulator boots still opens it", async () => {
+  let release!: () => void;
+  const bootGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ service, hub }) => {
+      await service.refresh();
+      const opening = service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      await waitFor(() => hub.calls.some((call) => call.url.endsWith("/boot")));
+      await service.revokeConsent("agentAccess");
+      await service.revokeConsent("peerSharing");
+      release();
+      const session = await opening;
+      assert.equal(session.deviceId, IPHONE_OLD);
+      assert.deepEqual(
+        service.sessionsForChat("chat-1").map((entry) => entry.deviceId),
+        [IPHONE_OLD],
+      );
+    },
+    { bootGate, consent: { streaming: true, agentAccess: true, peerSharing: true } },
+  );
+});
+
+test("concurrent opens of one simulator in a chat share a single session", async () => {
+  let release!: () => void;
+  const bootGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ service, hub }) => {
+      await service.refresh();
+      const first = service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      await waitFor(() => hub.calls.some((call) => call.url.endsWith("/boot")));
+      const second = service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "agent" });
+      release();
+      await Promise.all([first, second]);
+      assert.equal(service.sessionsForChat("chat-1").length, 1);
+    },
+    { bootGate, consent: { streaming: true } },
+  );
+});
+
 test("open boots when needed, attaches the stream helper, and is idempotent per chat", async () => {
   await withService(
     async ({ service, hub }) => {

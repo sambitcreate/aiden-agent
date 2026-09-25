@@ -256,7 +256,11 @@ test("the shim runs the pinned install and refuses commands without device_open'
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-agent-shim-"));
   try {
     const entryPath = path.join(baseDir, "fake-agent-device.mjs");
-    await writeFile(entryPath, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+    await writeFile(
+      entryPath,
+      "const { AGENT_DEVICE_CONFIG: config = null, AGENT_DEVICE_DAEMON_AUTH_TOKEN: token = null } = process.env;\n" +
+        "console.log(JSON.stringify({ args: process.argv.slice(2), config, token }));\n",
+    );
     const { shimDir, command } = await ensureAgentDeviceShim({ baseDir, nodePath: process.execPath, entryPath });
     assert.equal(shimDir, path.join(baseDir, "bin"));
     assert.equal((await stat(command)).mode & 0o777, 0o755);
@@ -264,17 +268,34 @@ test("the shim runs the pinned install and refuses commands without device_open'
     const refused = spawnSync(command, ["snapshot", "-i"], { encoding: "utf8" });
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /Call device_open first/u);
-    for (const args of [["--help"], ["help"], ["help", "workflows"], ["click", "--help"], ["snapshot", "-h"], ["--version"]]) {
-      const help = spawnSync(command, args, { encoding: "utf8" });
+    const leaky = { ...process.env, AGENT_DEVICE_CONFIG: "user.json", AGENT_DEVICE_DAEMON_AUTH_TOKEN: "leak" };
+    for (const args of [["--help"], ["-h"], ["help"], ["help", "workflows"], ["click", "--help"], ["snapshot", "-h"], ["--version"]]) {
+      const help = spawnSync(command, args, { encoding: "utf8", env: leaky });
       assert.equal(help.status, 0, `${args.join(" ")} is informational`);
+      assert.deepEqual(JSON.parse(help.stdout), { args, config: null, token: null });
     }
-    assert.equal(spawnSync(command, ["version", "snapshot"], { encoding: "utf8" }).status, 1);
+    // Only agent-device's help fast paths pass: a help flag after `--`, to cdp, or among other args can drive a device.
+    for (const args of [
+      ["version", "snapshot"],
+      ["type", "--", "-h"],
+      ["fill", "@e1", "--", "--help"],
+      ["click", "@e3", "-h"],
+      ["cdp", "heap", "-h"],
+    ]) {
+      const refusedHelp = spawnSync(command, args, { encoding: "utf8" });
+      assert.equal(refusedHelp.status, 1, `${args.join(" ")} needs device_open's flags`);
+      assert.match(refusedHelp.stderr, /Call device_open first/u);
+    }
     const pinned = spawnSync(command, ["click", "@e3", "--config", "c.json", "--session", "aiden-1"], {
       encoding: "utf8",
-      env: { ...process.env, AGENT_DEVICE_DAEMON_AUTH_TOKEN: "leak" },
+      env: leaky,
     });
     assert.equal(pinned.status, 0, pinned.stderr);
-    assert.deepEqual(JSON.parse(pinned.stdout), ["click", "@e3", "--config", "c.json", "--session", "aiden-1"]);
+    assert.deepEqual(JSON.parse(pinned.stdout), {
+      args: ["click", "@e3", "--config", "c.json", "--session", "aiden-1"],
+      config: null,
+      token: null,
+    });
     assert.match(agentDeviceLauncherSource("/node", "/entry"), /delete env\.AGENT_DEVICE_DAEMON_AUTH_TOKEN/u);
 
     const config = agentDeviceConfigPath(baseDir, "local");
