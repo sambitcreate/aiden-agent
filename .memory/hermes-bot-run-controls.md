@@ -187,3 +187,14 @@ gated on no pending approval/question. respondApproval on main shares the
 pre-ledger lookup shape; flagged as follow-up, out of this branch's diff.
 Verification: remote suite 469+1skip, LAN 7/7, peers 17/17, tsc clean,
 CI run 36180567552 fully green before these review fixes.
+
+PR #251 round 2 review loop (2026-09-25): Hermes's second pass on 1df84eeb
+found two more defects — AidenSettledMessageRows equated on the ViewModel
+pointer (===) so settled rows never re-rendered, and the iOS suggestion
+list's isDisabled dropped `return` inside `if case` so unavailable skills
+were never disabled. After fixing those (ee6da4c1), pullfrog caught that
+comparing model.chat in == still reads the same live reference on both
+sides — AidenSettledMessageRows now takes chat: AidenChat as a value
+snapshot (9997383e). Hermes's pass on c07287f6 (assistant chats now return
+{"skills":[]} instead of 409 from the registry) reported no findings; all
+17 PR checks green on c07287f6.
