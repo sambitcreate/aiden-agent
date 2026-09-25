@@ -19,10 +19,10 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -145,7 +145,7 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = rememberLazyListState()
+    val listState = remember(chatId) { LazyListState() }
 
     val voiceInput = remember(context) { ComposerVoiceInputController(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -290,7 +290,24 @@ fun AidenChatDetailScreen(
 
     val isScrolledUp by remember {
         derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+            !AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        }
+    }
+
+    LaunchedEffect(chatId) {
+        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+    }
+
+    LaunchedEffect(chat?.messages?.size, isStreaming, liveText) {
+        if (AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        ) {
+            listState.scrollToItem(AidenChatScroll.latestItemIndex())
         }
     }
 
@@ -627,7 +644,7 @@ fun AidenChatDetailScreen(
                 visible = isScrolledUp,
                 onClick = {
                     scope.launch {
-                        listState.animateScrollToItem(0)
+                        listState.animateScrollToItem(AidenChatScroll.latestItemIndex())
                     }
                 },
                 modifier = Modifier

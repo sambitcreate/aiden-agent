@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
@@ -242,6 +243,12 @@ fun AidenTaskProgressSheet(
 private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
     val palette = AidenTheme.palette
     val tasks = progress.tasks.filter { it.status != AidenChatTaskStatus.DELETED }
+    val listState = rememberLazyListState()
+    LaunchedEffect(tasks.size) {
+        if (tasks.isNotEmpty()) {
+            listState.scrollToItem(AidenChatScroll.taskListEndIndex(tasks.size))
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
         Text("Task progress", style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
@@ -252,6 +259,7 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
         )
         Spacer(modifier = Modifier.height(14.dp))
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
