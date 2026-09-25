@@ -499,6 +499,7 @@
         "renderer/lib/remote-connection-status.test.ts",
         "renderer/lib/remote-pairing-lifecycle.test.ts",
         "renderer/lib/scheduled-mcp-access-contract.test.ts",
+        "renderer/lib/scroll-follow.test.ts",
         "renderer/lib/scrollbar-gutter-contract.test.ts",
         "renderer/lib/settings-section.test.ts",
         "renderer/lib/sidebar-chat-shortcuts.test.ts",
