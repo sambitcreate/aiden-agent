@@ -27,8 +27,11 @@ class AidenSkillTest {
         description: String = "Review changes.",
         extra: String = ""
     ): String {
-        val reason = if (available) "" else """"unavailableReason":"Shadowed.","""
-        return """{"invocationId":"$invocationId","name":"$name","description":"$description","source":"workspace","available":$available,$reason$extra}"""
+        val extras = buildList {
+            if (!available) add(""""unavailableReason":"Shadowed."""")
+            if (extra.isNotEmpty()) add(extra.trimEnd(','))
+        }.joinToString(",")
+        return """{"invocationId":"$invocationId","name":"$name","description":"$description","source":"workspace","available":$available${if (extras.isEmpty()) "" else ",$extras"}}"""
     }
 
     private fun catalogJson(entries: List<String>) =
@@ -109,13 +112,18 @@ class AidenSkillTest {
         assertNull(AidenComposerSuggestionQuery.parse("/${"x".repeat(257)}"))
         assertEquals("x".repeat(256), AidenComposerSuggestionQuery.parse("/${"x".repeat(256)}")?.query)
         // The whitespace class is the Unicode White_Space property — the same
-        // set iOS's Character.isWhitespace implements. NEL opens a trigger;
-        // figure space and information separators do not.
+        // set iOS's Character.isWhitespace implements. NEL and figure space
+        // open a trigger; information separators (which Kotlin's native
+        // isWhitespace would wrongly accept) do not.
         assertEquals(
             AidenComposerSuggestionQuery.Kind.SKILL,
-            AidenComposerSuggestionQuery.parse("run/rev")?.kind
+            AidenComposerSuggestionQuery.parse("run\u0085/rev")?.kind
         )
-        assertNull(AidenComposerSuggestionQuery.parse("see /rev"))
+        assertEquals(
+            AidenComposerSuggestionQuery.Kind.SKILL,
+            AidenComposerSuggestionQuery.parse("see\u2007/rev")?.kind
+        )
+        assertNull(AidenComposerSuggestionQuery.parse("see\u001C/rev"))
         assertNull(AidenComposerSuggestionQuery.parse("see/rev"))
     }
 

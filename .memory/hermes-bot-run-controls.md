@@ -124,3 +124,46 @@ liveText/reasoning/tools/activityTimeline inside the live_stream item
 instead of screen scope and remembers row callbacks + the reversed list so
 settled rows skip recomposition. Unread marks and LA freshness chips remain
 deferred behind the E.2 push foundation.
+
+On The Go slice G (2026-09-25, same branch): composer power, Mac stays
+authority. Contract revision 14 adds `skills:invoke` (progress vocabulary),
+feature `chat-skills-v1`, `GET /chats/{chatId}/skills` (≤500 entries of
+bounded display metadata + opaque `sk1_` lease; bot chats narrowed by current
+bot skill policy), optional `skill` on `POST /chats/{chatId}/turns` redeemed
+through the existing `reserveSkillPreparation`/`prepareSkillInvocation`/
+handoff path, and error `skill_unavailable`. Skill instructions/paths never
+cross the wire; the lease is workspace+registry-revision bound and revalidated
+at admission. iOS/Android negotiate `skills:invoke` on the post-pairing
+upgrade when the feature is advertised (latent iOS bug fixed: the client's
+`updateDeviceCapabilities` allowlist never gained `questionsRespond`, so the
+question upgrade silently threw). Both composers parse the trailing `/query`
+or `@query` token: `/` lists catalog skills (hidden during a run since stream
+inputs carry no lease), `@` lists roster agents (`chatAgents`) plus workspace
+files (`botConversationFiles`/`workspaceFiles`); selections insert plain text
+or set the pending lease, sent via `AidenTurnRequestBuilder`. Subagent
+interrupt stays deferred: Remote deliberately never advertises child-run
+control, so mobile remains inspect-only.
+
+Slice G review fixes (2026-09-25, same branch, 34a538af): the SWE2 review
+of 171629fb found three P1s plus P2s, all fixed. (1) Android
+`updateDeviceCapabilities` progress allowlist gained `SKILLS_INVOKE` — without
+it the negotiated grant was contract-invalid and never persisted (regression
+test added). (2) Remote `startTurn` now consumes attachments and reserves
+append/skill capacity inside the protected try so failures release the turn
+lease and mark the stream error; reservation failures map to `rate_limited`
+429 retryable, and the catch releases unconditionally (release() is a no-op
+post-handoff). The `!started && !accepted` path also releases. (3) Empty
+skill `description` is valid wire data — the host projection emits "" for
+description-less skills, so all three strict parsers gained `allowEmpty` for
+that field only, and the shared fixture carries a third `triage` entry with
+`description: ""` pinning the behavior on every platform. P2s: skill-catalog
+registry failures map through `skillInvocationRemoteError`; the remote skill
+path admits `workspaceMutationGate` exactly like the desktop handler (abort
+releases the turn; `isCurrent` folds `!admission.signal.aborted`); lease-dead
+skill methods in `chat-turn-admission.ts` throw
+`SkillInvocationError("turn_unavailable")` so they map to 429 instead of 500;
+Android composer whitespace now pins the Unicode White_Space property
+explicitly (Kotlin `Char.isWhitespace` diverges on NEL/figure-space/
+information-separator edge cases) matching iOS `Character.isWhitespace`.
+Verification: remote suite 468+1skip, LAN 7/7, peers 17/17, tsc clean, iOS
+app+test bundle build green; Android reviewed manually (no local JVM).

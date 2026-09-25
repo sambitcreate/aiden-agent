@@ -3103,13 +3103,16 @@ final class AidenChatTests: XCTestCase {
             )
         )
         // The whitespace class is the Unicode White_Space property — the same
-        // set the Android parser pins explicitly. NEL opens a trigger; figure
-        // space and information separators do not.
+        // set the Android parser pins explicitly. NEL and figure space open a
+        // trigger; information separators do not.
         XCTAssertEqual(
             AidenComposerSuggestionQuery.parse(draft: "run\u{85}/rev")?.kind,
             .skill
         )
-        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "see\u{2007}/rev"))
+        XCTAssertEqual(
+            AidenComposerSuggestionQuery.parse(draft: "see\u{2007}/rev")?.kind,
+            .skill
+        )
         XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "see\u{1C}/rev"))
     }
 

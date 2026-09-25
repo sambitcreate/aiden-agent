@@ -31,8 +31,8 @@ data class AidenComposerSuggestionQuery(
 
         /** Unicode White_Space property — the exact set iOS's
          * `Character.isWhitespace` implements. Kotlin's `Char.isWhitespace`
-         * diverges (it also accepts 0x1C-0x1F and U+2007 but misses NEL), so
-         * the trigger grammar pins the shared set explicitly. */
+         * diverges (it also accepts 0x1C-0x1F but misses NEL), so the trigger
+         * grammar pins the shared set explicitly. */
         private fun Char.isComposerTriggerWhitespace(): Boolean =
             this in '\u0009'..'\u000D' || this == '\u0020' || this == '\u0085' ||
                 this == '\u00A0' || this == '\u1680' ||

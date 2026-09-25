@@ -304,7 +304,7 @@ class AidenRemoteClientTest {
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """
-                {"capabilities":["chat:read","chat:write","bot:read","bot:write","tasks:read","agents:read"]}
+                {"capabilities":["chat:read","chat:write","bot:read","bot:write","tasks:read","agents:read","questions:respond","skills:invoke"]}
                 """.trimIndent()
             )
         )
