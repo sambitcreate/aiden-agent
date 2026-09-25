@@ -65,6 +65,7 @@ test("chat-scoped transcript UI remounts so previews cannot cross navigation", (
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /<MessageList\s+key=\{chatId\}/u);
   assert.doesNotMatch(pane, /<ScrollArea[^>]*\bkey=\{chatId\}/u);
+  assert.match(pane, /autoScrollResetKey=\{chatId\}/u);
 });
 
 test("per-chat reset runs before paint so no frame carries the outgoing chat", () => {
@@ -290,6 +291,14 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
   assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
   assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
+  assert.match(scrollArea, /data-scroll-content/u);
+  assert.match(scrollArea, /autoScrollResetKey/u);
+  assert.doesNotMatch(
+    effect,
+    /subtree:\s*true/u,
+    "Long transcripts must not observe every mutation under the viewport",
+  );
+  assert.match(effect, /if \(contentElement\) resizeObserver\.observe\(contentElement\)/u);
 });
 
 test("scroll area still pads the viewport for its overlaid chrome", () => {

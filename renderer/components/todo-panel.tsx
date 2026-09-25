@@ -1,4 +1,6 @@
 import { Check, Circle, ListChecks, LoaderCircle, LockKeyhole } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
+import { pinOverflowListToEnd } from "../lib/scroll-follow";
 import type { TodoSnapshotViewV1, TodoTaskViewV1 } from "../shared/todo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
@@ -153,56 +155,79 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
           side="top"
           className="w-[min(32rem,calc(100vw-2rem))] p-1.5"
         >
-          <ol className="max-h-[min(26rem,55vh)] overflow-y-auto p-0.5" aria-label="Tracked tasks">
-            {tasks.map((task) => {
-              const dependencyIds =
-                task.blockedBy?.filter((id) => byId.get(id)?.status !== "completed") ?? [];
-              return (
-                <li
-                  key={task.id}
-                  className="flex min-h-9 items-start gap-2.5 rounded-control px-2 py-2 text-small"
-                >
-                  <span
-                    className={
-                      task.status === "in_progress"
-                        ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-status-accent-surface text-status-accent"
-                        : task.status === "completed"
-                          ? "mt-0.5 grid size-5 shrink-0 place-items-center text-tertiary"
-                          : "mt-0.5 grid size-5 shrink-0 place-items-center text-secondary"
-                    }
-                  >
-                    {taskIcon(task)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="sr-only">{taskStatusText(task, dependencyIds)}</span>
-                    <span
-                      className={
-                        task.status === "completed"
-                          ? "block text-tertiary line-through"
-                          : "block text-primary"
-                      }
-                    >
-                      {task.subject}
-                    </span>
-                    {blocked(task) ? (
-                      <span className="mt-0.5 block text-mini leading-relaxed text-tertiary">
-                        Blocked by{" "}
-                        {dependencyIds
-                          .map((id) => `#${id} ${byId.get(id)?.subject ?? "task"}`)
-                          .join(" · ")}
-                      </span>
-                    ) : task.status === "in_progress" && task.activeForm ? (
-                      <span className="mt-0.5 block text-mini leading-relaxed text-tertiary">
-                        {task.activeForm}
-                      </span>
-                    ) : null}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
+          <TrackedTaskList tasks={tasks} byId={byId} blocked={blocked} />
         </HoverCardContent>
       </HoverCard>
     </>,
+  );
+}
+
+function TrackedTaskList({
+  tasks,
+  byId,
+  blocked,
+}: {
+  tasks: TodoTaskViewV1[];
+  byId: Map<number, TodoTaskViewV1>;
+  blocked: (task: TodoTaskViewV1) => boolean;
+}) {
+  const listRef = useRef<HTMLOListElement>(null);
+  useLayoutEffect(() => {
+    pinOverflowListToEnd(listRef.current);
+  }, [tasks.length]);
+
+  return (
+    <ol
+      ref={listRef}
+      className="max-h-[min(26rem,55vh)] overflow-y-auto p-0.5"
+      aria-label="Tracked tasks"
+    >
+      {tasks.map((task) => {
+        const dependencyIds =
+          task.blockedBy?.filter((id) => byId.get(id)?.status !== "completed") ?? [];
+        return (
+          <li
+            key={task.id}
+            className="flex min-h-9 items-start gap-2.5 rounded-control px-2 py-2 text-small"
+          >
+            <span
+              className={
+                task.status === "in_progress"
+                  ? "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-status-accent-surface text-status-accent"
+                  : task.status === "completed"
+                    ? "mt-0.5 grid size-5 shrink-0 place-items-center text-tertiary"
+                    : "mt-0.5 grid size-5 shrink-0 place-items-center text-secondary"
+              }
+            >
+              {taskIcon(task)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="sr-only">{taskStatusText(task, dependencyIds)}</span>
+              <span
+                className={
+                  task.status === "completed"
+                    ? "block text-tertiary line-through"
+                    : "block text-primary"
+                }
+              >
+                {task.subject}
+              </span>
+              {blocked(task) ? (
+                <span className="mt-0.5 block text-mini leading-relaxed text-tertiary">
+                  Blocked by{" "}
+                  {dependencyIds
+                    .map((id) => `#${id} ${byId.get(id)?.subject ?? "task"}`)
+                    .join(" · ")}
+                </span>
+              ) : task.status === "in_progress" && task.activeForm ? (
+                <span className="mt-0.5 block text-mini leading-relaxed text-tertiary">
+                  {task.activeForm}
+                </span>
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
