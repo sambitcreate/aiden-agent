@@ -216,6 +216,21 @@ test("the viewer shell labels every control and exposes a focusable screen", () 
   assert.match(html, /aspect-ratio:0\.46/u);
 });
 
+test("an active viewer shows the flat screen until a frame proves the stream can be framed in 3D", () => {
+  const html = renderToStaticMarkup(
+    <DeviceViewer
+      chatId="chat-1"
+      session={{ chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" }}
+      device={IPHONE}
+      active
+      compact={false}
+      onClose={noop}
+    />,
+  );
+  assert.match(html, /data-frame="flat"/u);
+  assert.doesNotMatch(html, /device-viewer-3d/u);
+});
+
 test("viewer status labels", () => {
   assert.equal(deviceStatusLabel("idle", false), "Connecting…");
   assert.equal(deviceStatusLabel("streaming", true), "Live");

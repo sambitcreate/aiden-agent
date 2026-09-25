@@ -62,6 +62,18 @@ export function DevicePhoneViewport({
     };
     const observer = new ResizeObserver(resize);
     observer.observe(host);
+    // Moving between Retina and standard displays changes the pixel ratio without a resize.
+    let ratioQuery: MediaQueryList | null = null;
+    const watchRatio = () => {
+      ratioQuery?.removeEventListener("change", ratioChanged);
+      ratioQuery = window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`) ?? null;
+      ratioQuery?.addEventListener("change", ratioChanged);
+    };
+    function ratioChanged() {
+      resize();
+      watchRatio();
+    }
+    watchRatio();
     const blur = () => interactionRef.current?.end();
     window.addEventListener("blur", blur);
     void loadPhoneViewer()
@@ -93,6 +105,8 @@ export function DevicePhoneViewport({
       onResetReady(null);
       onFrameListener(null);
       observer.disconnect();
+      ratioQuery?.removeEventListener("change", ratioChanged);
+      ratioQuery = null;
       window.removeEventListener("blur", blur);
       viewerRef.current?.dispose();
       viewerRef.current = null;

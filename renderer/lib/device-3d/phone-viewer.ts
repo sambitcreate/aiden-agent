@@ -44,10 +44,6 @@ export function fitCamera(bounds: Box3, verticalFovDegrees: number, aspect: numb
   return { x: center.x, y: center.y, distance };
 }
 
-export function reducedMotionPreferred(): boolean {
-  return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-}
-
 /** Owns only presentation resources. The caller retains the decoded canvas and the stream connection. */
 export function createPhoneViewer(options: {
   readonly canvas: HTMLCanvasElement;
@@ -86,13 +82,21 @@ export function createPhoneViewer(options: {
 
   let screen: DeviceScreenSize | null = null;
   let profile = options.profile ?? IOS_PHONE_SHAPE;
-  let layout = phoneDisplayLayout(screen, options.source.width, options.source.height);
+  /** The source canvas is 300×150 until the first frame lands; its size means nothing before that. */
+  let hasFrame = false;
+  const sourceWidth = () => (hasFrame ? options.source.width : 0);
+  const sourceHeight = () => (hasFrame ? options.source.height : 0);
+  let layout = phoneDisplayLayout(screen, sourceWidth(), sourceHeight());
   let phone: PhoneScene = createPhoneScene(texture, layout, profile);
   scene.add(phone.root);
   const motion = createDeviceMotion();
+  const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   let disposed = false;
+  let failed = false;
   let viewport = { width: 0, height: 0, pixelRatio: 1 };
   let drawingBuffer = { width: 0, height: 0, pixelRatio: 0 };
+  /** Framing is fitted to the resting pose, so the device holds its size while it turns. */
+  let fit: ReturnType<typeof fitCamera> | null = null;
 
   const applyPose = () => {
     phone.root.rotation.set(motion.pitch(), motion.yaw(), 0, "XYZ");
@@ -100,19 +104,27 @@ export function createPhoneViewer(options: {
   };
   const applyCamera = () => {
     if (!viewport.width || !viewport.height) return;
-    camera.aspect = viewport.width / viewport.height;
+    if (!fit) {
+      camera.aspect = viewport.width / viewport.height;
+      phone.root.rotation.set(0, 0, 0);
+      phone.root.updateMatrixWorld(true);
+      fit = fitCamera(new Box3().setFromObject(phone.root as Object3D), FIELD_OF_VIEW, camera.aspect);
+      applyPose();
+      camera.position.set(fit.x, fit.y, fit.distance);
+      camera.lookAt(fit.x, fit.y, 0);
+      camera.updateProjectionMatrix();
+    }
     phone.root.updateMatrixWorld(true);
-    const fit = fitCamera(new Box3().setFromObject(phone.root as Object3D), FIELD_OF_VIEW, camera.aspect);
-    camera.position.set(fit.x, fit.y, fit.distance);
-    camera.lookAt(fit.x, fit.y, 0);
-    camera.updateProjectionMatrix();
   };
   const fail = () => {
-    if (disposed) return;
+    if (disposed || failed) return;
+    // Latched: one failure, one fallback, and no further frames.
+    failed = true;
+    scheduler.dispose();
     options.onUnavailable();
   };
   const scheduler = createRenderScheduler(() => {
-    if (disposed || !viewport.width || !viewport.height) return;
+    if (disposed || failed || !viewport.width || !viewport.height) return;
     try {
       if (
         drawingBuffer.width !== viewport.width ||
@@ -123,7 +135,7 @@ export function createPhoneViewer(options: {
         renderer.setSize(viewport.width, viewport.height, false);
         drawingBuffer = viewport;
       }
-      motion.advance(performance.now(), reducedMotionPreferred());
+      motion.advance(performance.now(), reducedMotion?.matches ?? false);
       applyPose();
       applyCamera();
       renderer.render(scene, camera);
@@ -133,7 +145,7 @@ export function createPhoneViewer(options: {
     }
   });
   const updateLayout = (nextProfile: DeviceShapeProfile) => {
-    const next = phoneDisplayLayout(screen, options.source.width, options.source.height);
+    const next = phoneDisplayLayout(screen, sourceWidth(), sourceHeight());
     const resized = textureWidth !== options.source.width || textureHeight !== options.source.height;
     if (resized) {
       // A native resolution change needs a texture of the new size; the scene survives.
@@ -152,6 +164,13 @@ export function createPhoneViewer(options: {
     } else if (next.rotation !== layout.rotation || next.rawLandscape !== layout.rawLandscape) {
       phone.setDisplay(texture, next);
     }
+    if (
+      nextProfile !== profile ||
+      next.aspect !== layout.aspect ||
+      next.rotation !== layout.rotation
+    ) {
+      fit = null;
+    }
     layout = next;
     profile = nextProfile;
     applyPose();
@@ -165,7 +184,8 @@ export function createPhoneViewer(options: {
 
   return {
     frameUpdated() {
-      if (disposed) return;
+      if (disposed || failed) return;
+      hasFrame = true;
       updateLayout(profile);
       texture.needsUpdate = true;
       scheduler.invalidate();
@@ -181,6 +201,7 @@ export function createPhoneViewer(options: {
       if (![width, height, pixelRatio].every(Number.isFinite) || width <= 0 || height <= 0) return;
       const ratio = Math.min(2, Math.max(1, pixelRatio));
       if (viewport.width === width && viewport.height === height && viewport.pixelRatio === ratio) return;
+      if (viewport.width !== width || viewport.height !== height) fit = null;
       viewport = { width, height, pixelRatio: ratio };
       scheduler.invalidate();
     },

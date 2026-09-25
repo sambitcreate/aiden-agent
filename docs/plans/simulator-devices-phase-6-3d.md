@@ -33,8 +33,10 @@ Accessibility: the 3D wrapper is a focusable `role="application"` region that fo
 ## As built
 
 - `three@0.186.1` (MIT) is a runtime dependency; `@types/three` is a dev dependency. Vite emits it in the lazy `phone-viewer` chunk (about 145 kB gzip), so the Simulator tab costs nothing until a 3D frame is shown.
-- Framing is refitted every render from the posed body's bounds instead of T3's separate framing spring; motion is a new spring rather than T3's recovered one.
-- A WebGL failure (creation, render, or context loss) switches to the flat screen with a toast and disables the toggle for the session.
+- Framing is fitted to the resting pose once per layout, orientation or viewport change, instead of T3's separate framing spring, so the device keeps its size while it turns. Motion is a new spring rather than T3's recovered one.
+- A WebGL failure (creation, render, or context loss) switches to the flat screen with one toast and disables the toggle until that simulator's viewer is reopened.
+- The 3D frame mounts only after the first decoded frame and a screen description, so MJPEG and hinged streams never flash a 3D body first.
+- Switching between 3D and flat keeps keyboard focus on the device and releases any held keys; keys pressed on the Reconnect button stay with the button. The drawing buffer follows pixel-ratio changes when the window moves between displays.
 - Tests: `renderer/lib/device-3d/device-3d.test.ts` (in `test:devices`) covers layout, UVs, touch projection per orientation, camera fit, motion, the scheduler, wheel orbit, interaction ownership, preference storage, blockers, and shape choice.
 
 ## Exit

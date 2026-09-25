@@ -97,7 +97,14 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const [toolsOpen, setToolsOpen] = React.useState(false);
   const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() => readFramePreference());
   const [webglUnavailable, setWebglUnavailable] = React.useState(false);
+  /** Sticky once a frame lands, so the 3D frame never loads for a stream that turns out flat-only. */
+  const [framed, setFramed] = React.useState(false);
+  const framedRef = React.useRef(false);
   const frameListenerRef = React.useRef<(() => void) | null>(null);
+  const stageRef = React.useRef<HTMLDivElement | null>(null);
+  /** Keys sent down and not yet up, released whenever the focused surface goes away. */
+  const pressedKeysRef = React.useRef(new Set<string>());
+  const stageFocusedRef = React.useRef(false);
   const [resetPose, setResetPose] = React.useState<(() => void) | null>(null);
   const [duoState, setDuoState] = React.useState<DuoControlState>({
     pending: false,
@@ -149,7 +156,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
       {
         present(source, width, height) {
           const presented = canvasSink.present(source, width, height);
-          if (presented) frameListenerRef.current?.();
+          if (presented) {
+            frameListenerRef.current?.();
+            if (!framedRef.current) {
+              framedRef.current = true;
+              setFramed(true);
+            }
+          }
           return presented;
         },
       },
@@ -177,6 +190,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     clientRef.current = client;
     client.start();
     return () => {
+      for (const code of pressedKeysRef.current) client.sendKey(code, "up");
+      pressedKeysRef.current.clear();
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
       setInputConnected(false);
@@ -231,12 +246,20 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   };
 
   // Tab and Shift+Tab stay with the app so keyboard users can always leave the device.
+  // Keys pressed on a control inside the surface (the Reconnect button) stay with that control.
   const key = (phase: "down" | "up") => (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
     if (event.code === "Tab" || event.metaKey) return;
     event.preventDefault();
     if (phase === "down" && event.repeat) return;
+    if (phase === "down") pressedKeysRef.current.add(event.code);
+    else pressedKeysRef.current.delete(event.code);
     clientRef.current?.sendKey(event.code, phase);
   };
+  const releaseKeys = React.useCallback(() => {
+    for (const code of pressedKeysRef.current) clientRef.current?.sendKey(code, "up");
+    pressedKeysRef.current.clear();
+  }, []);
 
   const aspect = screen ? screen.width / screen.height : defaultAspect(device);
   const blocker = frameBlocker({
@@ -244,7 +267,18 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     hinged: Boolean(screen?.supportsHingeAngle),
     webglUnavailable,
   });
-  const frame3d = active && framePreference === "3d" && blocker === null;
+  const frame3d = active && framePreference === "3d" && blocker === null && screen !== null && framed;
+  // Switching surfaces unmounts or hides the focused one: release its keys and keep focus on the device.
+  React.useLayoutEffect(() => {
+    releaseKeys();
+    const stage = stageRef.current;
+    if (!stage || !stageFocusedRef.current) return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && stage.contains(focused)) return;
+    stage
+      .querySelector<HTMLElement>(frame3d ? ".device-viewer-3d" : ".device-viewer-screen")
+      ?.focus({ preventScroll: true });
+  }, [frame3d, releaseKeys]);
   const profile = React.useMemo(
     () =>
       resolveDeviceShape(
@@ -324,7 +358,22 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           {label}
         </span>
       </header>
-      <div className="device-viewer-stage" data-frame={frame3d ? "3d" : "flat"}>
+      <div
+        ref={stageRef}
+        className="device-viewer-stage"
+        data-frame={frame3d ? "3d" : "flat"}
+        onFocus={() => {
+          stageFocusedRef.current = true;
+        }}
+        onBlur={(event) => {
+          releaseKeys();
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          // A surface that is removed or hidden while focused loses focus to nothing; the switch refocuses.
+          const target = event.target;
+          if (!target.isConnected || target.closest("[hidden]")) return;
+          stageFocusedRef.current = false;
+        }}
+      >
         {frame3d ? (
           <div
             className="device-viewer-3d"
