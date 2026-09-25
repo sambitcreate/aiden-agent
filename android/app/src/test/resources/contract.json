@@ -1520,6 +1520,13 @@
         "source": "configured",
         "available": false,
         "unavailableReason": "Shadowed by workspace skill \"release-notes\"."
+      },
+      {
+        "invocationId": "sk1_ccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "triage",
+        "description": "",
+        "source": "global",
+        "available": true
       }
     ]
   }

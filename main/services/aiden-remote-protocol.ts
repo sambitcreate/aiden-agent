@@ -1313,10 +1313,10 @@ function assertAidenRemoteJsonValue(value: unknown, location: string): void {
   visit(value, 0, location);
 }
 
-function requiredString(record: Record<string, unknown>, key: string): string {
+function requiredString(record: Record<string, unknown>, key: string, allowEmpty = false): string {
   const value = record[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Aiden Remote fixture field ${key} must be a non-empty string.`);
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
+    throw new Error(`Aiden Remote fixture field ${key} must be a ${allowEmpty ? "" : "non-empty "}string.`);
   }
   return value;
 }
@@ -1387,8 +1387,8 @@ function assertExactKeys(record: Record<string, unknown>, allowed: readonly stri
   }
 }
 
-function assertBoundedString(record: Record<string, unknown>, key: string, maxLength: number): string {
-  const value = requiredString(record, key);
+function assertBoundedString(record: Record<string, unknown>, key: string, maxLength: number, allowEmpty = false): string {
+  const value = requiredString(record, key, allowEmpty);
   if (characterLength(value) > maxLength) throw new Error(`Aiden Remote field ${key} exceeds ${maxLength} characters.`);
   return value;
 }
@@ -3463,10 +3463,12 @@ export function parseAidenRemoteSkillCatalogEntry(
     AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH,
   );
   const name = assertBoundedString(value, "name", AIDEN_REMOTE_SKILL_NAME_MAX_LENGTH);
+  // A skill with no description frontmatter legitimately projects "".
   const description = assertBoundedString(
     value,
     "description",
     AIDEN_REMOTE_SKILL_DESCRIPTION_MAX_LENGTH,
+    true,
   );
   const source = enumMember(value.source, AIDEN_REMOTE_SKILL_SOURCES, `${label} source`);
   if (typeof value.available !== "boolean") {

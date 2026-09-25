@@ -973,3 +973,11 @@ the question grant — this also fixed a latent iOS bug where the
 
 Subagent interrupt stays deferred: Remote intentionally exposes no child-run
 control surface, so mobile remains inspect-only for subagents.
+
+Review follow-ups (`59caafa7`): the remote turn now consumes attachments and
+reserves append/skill capacity inside the protected try so failures release
+the lease and mark the stream; the workspace mutation gate wraps remote skill
+preparation exactly like desktop; catalog/lease failures map onto the remote
+error vocabulary instead of 500s; empty skill descriptions decode on all
+three platforms; Android persists the negotiated `skills:invoke` grant; and
+both composers pin the Unicode White_Space trigger grammar.

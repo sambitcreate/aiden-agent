@@ -152,7 +152,8 @@ class AidenInstallationStore(
         val progress = setOf(
             AidenRemoteCapability.TASKS_READ,
             AidenRemoteCapability.AGENTS_READ,
-            AidenRemoteCapability.QUESTIONS_RESPOND
+            AidenRemoteCapability.QUESTIONS_RESPOND,
+            AidenRemoteCapability.SKILLS_INVOKE
         )
         if (item.deviceCapabilities.toSet() - progress != deviceCapabilities.toSet() - progress) return
         list[index] = item.copy(deviceCapabilities = deviceCapabilities)

@@ -146,7 +146,10 @@ export class ChatTurnAdmission {
           record?.lease !== lease ||
           record.skillSlotReserved
         ) {
-          throw new Error("This skill turn is no longer available.");
+          throw new SkillInvocationError(
+            "turn_unavailable",
+            "This skill turn is no longer available.",
+          );
         }
         const reservationBytes = SLASH_LIMITS.formattedInvocationBytes;
         if (
@@ -171,7 +174,10 @@ export class ChatTurnAdmission {
           !record.skillSlotReserved ||
           record.preparedSkillInvocation
         ) {
-          throw new Error("This skill turn is no longer available.");
+          throw new SkillInvocationError(
+            "turn_unavailable",
+            "This skill turn is no longer available.",
+          );
         }
         const invocationBytes = Buffer.byteLength(
           invocation.formattedPrompt,

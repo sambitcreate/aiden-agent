@@ -160,15 +160,20 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertTrue(fixture.server.supportsChatRunInput)
         XCTAssertTrue(fixture.server.supportsQuestionPrompts)
         XCTAssertTrue(fixture.server.supportsChatSkills)
-        XCTAssertEqual(fixture.chatSkills?.skills.count, 2)
+        XCTAssertEqual(fixture.chatSkills?.skills.count, 3)
         XCTAssertEqual(fixture.chatSkills?.skills.first?.name, "review-code")
         XCTAssertEqual(fixture.chatSkills?.skills.first?.available, true)
         XCTAssertNil(fixture.chatSkills?.skills.first?.unavailableReason)
-        XCTAssertEqual(fixture.chatSkills?.skills.last?.available, false)
+        XCTAssertEqual(fixture.chatSkills?.skills[1].available, false)
         XCTAssertEqual(
-            fixture.chatSkills?.skills.last?.unavailableReason,
+            fixture.chatSkills?.skills[1].unavailableReason,
             "Shadowed by workspace skill \"release-notes\"."
         )
+        // A description-less skill is valid wire data; the strict decoder must
+        // accept the empty string rather than failing the whole catalog.
+        XCTAssertEqual(fixture.chatSkills?.skills.last?.name, "triage")
+        XCTAssertEqual(fixture.chatSkills?.skills.last?.description, "")
+        XCTAssertEqual(fixture.chatSkills?.skills.last?.available, true)
         XCTAssertEqual(fixture.question?.pending.promptId, "q-fixture-01")
         XCTAssertEqual(fixture.question?.pending.streamId, fixture.streamStatus.streamId)
         XCTAssertEqual(fixture.question?.pending.chatId, fixture.chat.id)

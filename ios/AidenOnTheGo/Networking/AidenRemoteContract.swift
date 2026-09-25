@@ -388,7 +388,8 @@ private func boundedString<Key: CodingKey>(
     forKey key: Key,
     maxLength: Int,
     field: String,
-    required: Bool = false
+    required: Bool = false,
+    allowEmpty: Bool = false
 ) throws -> String? {
     let value: String?
     // `decodeIfPresent` treats an explicitly encoded JSON null the same as an
@@ -401,7 +402,7 @@ private func boundedString<Key: CodingKey>(
         value = nil
     }
     guard let value else { return nil }
-    guard !value.isEmpty, value.unicodeScalars.count <= maxLength else {
+    guard (allowEmpty || !value.isEmpty), value.unicodeScalars.count <= maxLength else {
         throw AidenRemoteContractError.unsafePayloadField(field)
     }
     return value
@@ -2055,12 +2056,14 @@ struct AidenRemoteSkillCatalogEntry: Decodable, Equatable, Sendable, Identifiabl
             field: "skill.name",
             required: true
         )!
+        // A skill with no description frontmatter legitimately projects "".
         description = try boundedString(
             values,
             forKey: .description,
             maxLength: 240,
             field: "skill.description",
-            required: true
+            required: true,
+            allowEmpty: true
         )!
         source = try values.decode(AidenRemoteSkillSource.self, forKey: .source)
         available = try values.decode(Bool.self, forKey: .available)

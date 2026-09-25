@@ -2397,10 +2397,13 @@ final class AidenRemoteClientTests: XCTestCase {
         )
 
         let catalog = try await client.chatSkills(chatId: "chat_fixture_01")
-        XCTAssertEqual(catalog.skills.count, 2)
+        XCTAssertEqual(catalog.skills.count, 3)
         XCTAssertEqual(catalog.skills.first?.name, "review-code")
         XCTAssertEqual(catalog.skills.first?.available, true)
-        XCTAssertEqual(catalog.skills.last?.available, false)
+        XCTAssertEqual(catalog.skills[1].available, false)
+        XCTAssertEqual(catalog.skills.last?.name, "triage")
+        XCTAssertEqual(catalog.skills.last?.description, "")
+        XCTAssertEqual(catalog.skills.last?.available, true)
         XCTAssertEqual(
             requests,
             [

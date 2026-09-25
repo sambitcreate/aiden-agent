@@ -940,7 +940,7 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
       "continue_full",
     );
   }
-  assert.equal(fixture.chatSkills.skills.length, 2);
+  assert.equal(fixture.chatSkills.skills.length, 3);
   assert.equal(fixture.chatSkills.skills[0]!.name, "review-code");
   assert.equal(fixture.chatSkills.skills[0]!.available, true);
   assert.equal(
@@ -952,6 +952,11 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
     fixture.chatSkills.skills[1]!.unavailableReason,
     'Shadowed by workspace skill "release-notes".',
   );
+  // A description-less skill is valid wire data; every strict decoder must
+  // accept the empty string rather than failing the whole catalog.
+  assert.equal(fixture.chatSkills.skills[2]!.name, "triage");
+  assert.equal(fixture.chatSkills.skills[2]!.description, "");
+  assert.equal(fixture.chatSkills.skills[2]!.available, true);
   const legacyCapabilities: readonly string[] =
     fixture.legacyNonNegotiating.server.capabilities;
   assert.equal(legacyCapabilities.includes("bot:read"), false);

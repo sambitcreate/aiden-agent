@@ -24,10 +24,11 @@ class AidenSkillTest {
         invocationId: String = "sk1_${"a".repeat(43)}",
         name: String = "review-code",
         available: Boolean = true,
+        description: String = "Review changes.",
         extra: String = ""
     ): String {
         val reason = if (available) "" else """"unavailableReason":"Shadowed.","""
-        return """{"invocationId":"$invocationId","name":"$name","description":"Review changes.","source":"workspace","available":$available,$reason$extra}"""
+        return """{"invocationId":"$invocationId","name":"$name","description":"$description","source":"workspace","available":$available,$reason$extra}"""
     }
 
     private fun catalogJson(entries: List<String>) =
@@ -43,6 +44,12 @@ class AidenSkillTest {
         assertEquals(AidenRemoteSkillSource.WORKSPACE, catalog.skills[0].source)
         assertTrue(catalog.skills[0].available)
         assertEquals("Shadowed.", catalog.skills[1].unavailableReason)
+
+        // A skill with no description frontmatter legitimately projects "".
+        val descriptionLess = AidenSkillContractCodec.parseCatalog(
+            catalogJson(listOf(entryJson(description = "")))
+        )
+        assertEquals("", descriptionLess.skills[0].description)
     }
 
     @Test
@@ -101,6 +108,15 @@ class AidenSkillTest {
         // Bounded query length.
         assertNull(AidenComposerSuggestionQuery.parse("/${"x".repeat(257)}"))
         assertEquals("x".repeat(256), AidenComposerSuggestionQuery.parse("/${"x".repeat(256)}")?.query)
+        // The whitespace class is the Unicode White_Space property — the same
+        // set iOS's Character.isWhitespace implements. NEL opens a trigger;
+        // figure space and information separators do not.
+        assertEquals(
+            AidenComposerSuggestionQuery.Kind.SKILL,
+            AidenComposerSuggestionQuery.parse("run/rev")?.kind
+        )
+        assertNull(AidenComposerSuggestionQuery.parse("see /rev"))
+        assertNull(AidenComposerSuggestionQuery.parse("see/rev"))
     }
 
     @Test

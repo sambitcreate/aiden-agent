@@ -29,8 +29,19 @@ data class AidenComposerSuggestionQuery(
     companion object {
         const val MAX_QUERY_CHARACTERS = 256
 
+        /** Unicode White_Space property — the exact set iOS's
+         * `Character.isWhitespace` implements. Kotlin's `Char.isWhitespace`
+         * diverges (it also accepts 0x1C-0x1F and U+2007 but misses NEL), so
+         * the trigger grammar pins the shared set explicitly. */
+        private fun Char.isComposerTriggerWhitespace(): Boolean =
+            this in '\u0009'..'\u000D' || this == '\u0020' || this == '\u0085' ||
+                this == '\u00A0' || this == '\u1680' ||
+                this in '\u2000'..'\u200A' || this == '\u2028' ||
+                this == '\u2029' || this == '\u202F' || this == '\u205F' ||
+                this == '\u3000'
+
         fun parse(draft: String): AidenComposerSuggestionQuery? {
-            val tokenStart = draft.indexOfLast { it.isWhitespace() } + 1
+            val tokenStart = draft.indexOfLast { it.isComposerTriggerWhitespace() } + 1
             if (tokenStart >= draft.length) return null
             val kind = when (draft[tokenStart]) {
                 '/' -> Kind.SKILL

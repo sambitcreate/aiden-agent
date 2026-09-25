@@ -198,11 +198,16 @@ class AidenBotContractTest {
         assertEquals(pendingQuestion.questions, questionEvent.payload?.questionPrompt?.questions)
         assertFalse(questionEvent.terminal)
         val skillCatalog = AidenSkillContractCodec.parseCatalog(requireNotNull(fixture.chatSkills))
-        assertEquals(2, skillCatalog.skills.size)
+        assertEquals(3, skillCatalog.skills.size)
         assertEquals("review-code", skillCatalog.skills.first().name)
         assertTrue(skillCatalog.skills.first().available)
         assertFalse(skillCatalog.skills[1].available)
         assertNotNull(skillCatalog.skills[1].unavailableReason)
+        // A description-less skill is valid wire data; the strict codec must
+        // accept the empty string rather than failing the whole catalog.
+        assertEquals("triage", skillCatalog.skills[2].name)
+        assertEquals("", skillCatalog.skills[2].description)
+        assertTrue(skillCatalog.skills[2].available)
         assertTrue(fixture.server.supportsChatSkills)
         assertFalse(fixture.legacyNonNegotiating.server.capabilities.contains(AidenRemoteCapability.BOT_READ))
     }

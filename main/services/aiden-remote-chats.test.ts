@@ -15,6 +15,7 @@ import {
   AidenRemoteAttachmentStore,
 } from "./aiden-remote-attachments.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/shared/slash-commands.js";
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
 import type { RegisteredSkill } from "./skill-registry.js";
@@ -158,16 +159,39 @@ function fixture(
       beginChatTurn: (_chatId, _turnId, _ownerId) => {
         begins += 1;
         let active = true;
+        const releaseCleanups = new Set<() => void>();
         return {
           isActive: () => active,
-          reserveAppendPayload: () => undefined,
-          reserveSkillPreparation: () => undefined,
+          reserveAppendPayload: () => {
+            if (!active) throw new Error("This message turn is no longer available.");
+          },
+          reserveSkillPreparation: () => {
+            if (!active) {
+              throw new SkillInvocationError(
+                "turn_unavailable",
+                "This skill turn is no longer available.",
+              );
+            }
+          },
           prepareSkillInvocation: (invocation: PreparedSkillInvocation) => {
+            if (!active) {
+              throw new SkillInvocationError(
+                "turn_unavailable",
+                "This skill turn is no longer available.",
+              );
+            }
             preparedInvocations.push(invocation);
           },
           settleAsyncWork: () => undefined,
-          onReleased: () => undefined,
-          release: () => { active = false; },
+          onReleased: (cleanup: () => void) => {
+            if (!active) cleanup();
+            else releaseCleanups.add(cleanup);
+          },
+          release: () => {
+            active = false;
+            for (const cleanup of releaseCleanups) cleanup();
+            releaseCleanups.clear();
+          },
         };
       },
       start: async (streamId, _params, owner, generationOptions) => {
@@ -1801,4 +1825,92 @@ test("remote skill turn maps lease failures onto the remote vocabulary", async (
   // A failed preparation must release the turn so the next send is admitted.
   const retry = await app.service.startTurn("device-1", "chat-1", "skill-retry-0000001", { text: "plain" });
   assert.equal(retry.status, "accepted");
+});
+
+test("chat skill catalog maps registry failures onto the remote vocabulary", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    skillCatalog: async () => {
+      throw new SkillInvocationError("workspace_changed", "The workspace changed.");
+    },
+  });
+  await assert.rejects(
+    app.service.chatSkillCatalog("device-1", "chat-1"),
+    (error: unknown) =>
+      (error as { code?: string; status?: number }).code === "skill_unavailable" &&
+      (error as { status?: number }).status === 409,
+  );
+});
+
+const resolvedSkill = {
+  stableId: "skill:review",
+  name: "review-code",
+  description: "Review changes.",
+  instructions: "Review the diff carefully.",
+  source: "workspace" as const,
+  enabled: true,
+  available: true,
+  invocationId: `sk1_${"a".repeat(43)}`,
+  toolKey: "skill_review_code",
+};
+
+const skillInvocation = {
+  version: 1 as const,
+  invocationId: `sk1_${"a".repeat(43)}`,
+  displayName: "review-code",
+  source: "workspace" as const,
+};
+
+test("remote skill turn rejects while its workspace is changing", async () => {
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => resolvedSkill,
+  });
+  const endMutation = workspaceMutationGate.begin("workspace-9");
+  try {
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "skill-gated-000001", {
+        text: "check this diff",
+        skill: skillInvocation,
+      }),
+      (error: unknown) =>
+        (error as { code?: string; status?: number }).code === "rate_limited" &&
+        (error as { status?: number }).status === 429,
+    );
+    assert.equal(app.appends(), 0);
+  } finally {
+    endMutation();
+  }
+  // Once the workspace settles the same turn is admitted again.
+  const retry = await app.service.startTurn("device-1", "chat-1", "skill-gated-retry1", {
+    text: "check this diff",
+    skill: skillInvocation,
+  });
+  assert.equal(retry.status, "accepted");
+});
+
+test("remote skill turn aborts the append when its workspace changes mid-prepare", async () => {
+  let endMutation: (() => void) | undefined;
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => {
+      // The registry still resolves, but the workspace begins changing before
+      // the append commits; the admission abort must release the turn.
+      endMutation = workspaceMutationGate.begin("workspace-9");
+      return resolvedSkill;
+    },
+  });
+  try {
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "skill-abort-000001", {
+        text: "check this diff",
+        skill: skillInvocation,
+      }),
+      (error: unknown) =>
+        (error as { code?: string; status?: number }).code === "rate_limited" &&
+        (error as { status?: number }).status === 429,
+    );
+    assert.equal(app.appends(), 0);
+  } finally {
+    endMutation?.();
+  }
 });

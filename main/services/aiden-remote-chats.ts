@@ -75,6 +75,7 @@ import {
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
 import type { RegisteredSkill } from "./skill-registry.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const QUESTION_PROMPT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
@@ -569,6 +570,7 @@ function parseTurn(input: unknown): {
 
 /** Maps skill-lease failures onto the remote error vocabulary exactly once. */
 function skillInvocationRemoteError(error: unknown): AidenRemoteServiceError {
+  if (error instanceof AidenRemoteServiceError) return error;
   if (error instanceof SkillInvocationError) {
     if (error.code === "instructions_too_large") {
       return new AidenRemoteServiceError("payload_too_large", error.message, 413);
@@ -585,6 +587,17 @@ function skillInvocationRemoteError(error: unknown): AidenRemoteServiceError {
     "internal_error",
     "The skill could not be prepared. Try again.",
     500,
+    true,
+  );
+}
+
+/** Maps append/skill reservation failures onto the remote error vocabulary. */
+function turnReservationRemoteError(error: unknown): AidenRemoteServiceError {
+  if (error instanceof SkillInvocationError) return skillInvocationRemoteError(error);
+  return new AidenRemoteServiceError(
+    "rate_limited",
+    error instanceof Error ? error.message : "This message turn is no longer available.",
+    429,
     true,
   );
 }
@@ -1267,9 +1280,14 @@ export class AidenRemoteChatService {
     }
     const authoritative = await this.chat(chatId);
     const workspaceId = persistedChatWorkspaceId(authoritative.workspaceId);
-    const skills = authoritative.botId
-      ? await (this.options.botSkillCatalog?.(deviceId, authoritative.botId, authoritative.id, workspaceId) ?? [])
-      : await this.options.skillCatalog(workspaceId);
+    let skills: readonly SkillCatalogEntry[];
+    try {
+      skills = authoritative.botId
+        ? await (this.options.botSkillCatalog?.(deviceId, authoritative.botId, authoritative.id, workspaceId) ?? [])
+        : await this.options.skillCatalog(workspaceId);
+    } catch (error) {
+      throw skillInvocationRemoteError(error);
+    }
     // The registry projection is already renderer-safe; revalidating through
     // the remote parser pins the exact wire contract at the boundary.
     return parseAidenRemoteSkillCatalog({ skills });
@@ -1392,21 +1410,27 @@ export class AidenRemoteChatService {
             this.options.streams.markStartError(deviceId, streamId, new Error("This chat already has a response in progress."));
             throw new AidenRemoteServiceError("turn_already_active", "This chat already has a response in progress.", 409);
           }
-          const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
-          turn.onReleased(owner.owner.onInvalidated(turn.release));
-          turn.reserveAppendPayload(
-            Buffer.byteLength(parsed.text, "utf8") +
-              attachmentRepresentationBytes(attachments) +
-              1_024,
-          );
           const messageId = `message_${randomUUID()}`;
           let appended = false;
           let appendedChat: Chat | undefined;
           try {
+            turn.onReleased(owner.owner.onInvalidated(turn.release));
+            const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
+            try {
+              if (parsed.skill) turn.reserveSkillPreparation();
+              turn.reserveAppendPayload(
+                Buffer.byteLength(parsed.text, "utf8") +
+                  attachmentRepresentationBytes(attachments) +
+                  1_024,
+              );
+            } catch (error) {
+              throw turnReservationRemoteError(error);
+            }
             // The lease reserves, prepares, and hands the expanded prompt to
             // generation exactly like a desktop send; the stored message keeps
             // the user's own text plus safe skill provenance.
             let preparedSkill: PreparedSkillInvocation | undefined;
+            let workspaceAdmission: { signal: AbortSignal; release: () => void } | undefined;
             if (parsed.skill) {
               const resolveFresh = this.options.resolveSkillInvocation;
               if (!resolveFresh) {
@@ -1416,8 +1440,33 @@ export class AidenRemoteChatService {
                   404,
                 );
               }
+              let admission: { signal: AbortSignal; release: () => void };
               try {
-                turn.reserveSkillPreparation();
+                admission = workspaceMutationGate.admit(
+                  requireSkillInvocationWorkspace(workspaceId),
+                );
+              } catch (error) {
+                throw error instanceof SkillInvocationError
+                  ? skillInvocationRemoteError(error)
+                  : new AidenRemoteServiceError(
+                      "rate_limited",
+                      error instanceof Error
+                        ? error.message
+                        : "The workspace is changing. Try again in a moment.",
+                      429,
+                      true,
+                    );
+              }
+              workspaceAdmission = admission;
+              const abortTurn = () => turn.release();
+              admission.signal.addEventListener("abort", abortTurn, {
+                once: true,
+              });
+              turn.onReleased(() => {
+                admission.signal.removeEventListener("abort", abortTurn);
+                admission.release();
+              });
+              try {
                 preparedSkill = await prepareSkillInvocationForAppend(
                   {
                     invocationId: parsed.skill.invocationId,
@@ -1449,7 +1498,8 @@ export class AidenRemoteChatService {
                   providerId: selection.providerId,
                   model: selection.modelId,
                   expectedWorkspaceId: workspaceId,
-                  isCurrent: turn.isActive,
+                  isCurrent: () =>
+                    turn.isActive() && workspaceAdmission?.signal.aborted !== true,
                 },
               ),
               recover: () => this.options.chatStore.get(chatId),
@@ -1463,6 +1513,7 @@ export class AidenRemoteChatService {
               owner.owner,
             );
             if (!started && !accepted) {
+              turn.release();
               this.options.streams.markStartError(
                 deviceId,
                 streamId,
@@ -1478,7 +1529,7 @@ export class AidenRemoteChatService {
               message: projectAidenRemoteChat({ ...chat, messages: [message] }).messages[0]!,
             };
           } catch (error) {
-            if (!appended) turn.release();
+            turn.release();
             turn.settleAsyncWork();
             this.options.streams.markStartError(deviceId, streamId, error);
             if (isAppendReconciliationRequiredError(error)) {

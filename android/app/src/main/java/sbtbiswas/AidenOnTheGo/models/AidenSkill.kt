@@ -102,7 +102,8 @@ object AidenSkillContractCodec {
         return AidenRemoteSkillCatalogEntry(
             invocationId = invocationId,
             name = obj.requiredString("name", label, MAX_NAME_LENGTH),
-            description = obj.requiredString("description", label, MAX_DESCRIPTION_LENGTH),
+            // A skill with no description frontmatter legitimately projects "".
+            description = obj.requiredString("description", label, MAX_DESCRIPTION_LENGTH, allowEmpty = true),
             source = source,
             available = available,
             unavailableReason = unavailableReason
@@ -120,11 +121,11 @@ object AidenSkillContractCodec {
     private fun JsonObject.requiredArray(key: String, label: String): JsonArray = this[key] as? JsonArray
         ?: invalid("$label missing $key")
 
-    private fun JsonObject.requiredString(key: String, label: String, maxLength: Int): String {
+    private fun JsonObject.requiredString(key: String, label: String, maxLength: Int, allowEmpty: Boolean = false): String {
         val primitive = this[key] as? JsonPrimitive ?: invalid("$label missing $key")
         if (!primitive.isString) invalid("$label $key")
         val value = primitive.content
-        if (value.isEmpty() || value.codePointCount(0, value.length) > maxLength) invalid("$label $key")
+        if ((!allowEmpty && value.isEmpty()) || value.codePointCount(0, value.length) > maxLength) invalid("$label $key")
         return value
     }
 
