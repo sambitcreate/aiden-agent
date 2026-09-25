@@ -50,6 +50,7 @@ test("chat rich links keep anchor navigation and work in every assistant render 
   const richLink = source("../components/rich-link.tsx");
   assert.match(bubble, /<StreamingMarkdownReveal[\s\S]*richLinks/u);
   assert.match(bubble, /<Markdown content=\{content\} richLinks/u);
+  assert.match(bubble, /<RichLinkBudget[\s\S]*key=\{streaming \? "streaming" : "settled"\}/u);
   assert.match(streaming, /<MarkdownInline content=\{parts\.markdown\} richLinks=\{richLinks\}/u);
   assert.match(streaming, /<MarkdownContent content=\{unit\.text\} richLinks=\{richLinks\}/u);
   assert.match(richLink, /<a[\s\S]*href=\{href\}/u);

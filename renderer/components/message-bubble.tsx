@@ -90,7 +90,10 @@ export function MessageBubble({
   }
 
   return (
-    <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
+    <RichLinkBudget
+      key={streaming ? "streaming" : "settled"}
+      limit={MAX_RICH_LINKS_PER_MESSAGE}
+    >
       <div className="group flex w-full">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
         {attachments && attachments.length > 0 ? (
