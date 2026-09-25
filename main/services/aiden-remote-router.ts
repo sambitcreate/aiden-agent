@@ -1303,7 +1303,7 @@ export function createAidenRemoteRequestHandler(
         }
         for (const capability of input.accepts) {
           if (capability === "simulators:control") {
-            if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
+            // Refuse non-desktops first so they never learn whether this Mac has simulators.
             if (device.type !== "mac" && device.type !== "linux") {
               throw new AidenRemoteServiceError(
                 "capability_denied",
@@ -1311,6 +1311,7 @@ export function createAidenRemoteRequestHandler(
                 403,
               );
             }
+            if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
           } else if (!progressCapabilitySupported(dependencies, capability)) {
             throw new AidenRemoteServiceError(
               "not_found",

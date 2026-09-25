@@ -3065,6 +3065,15 @@ test("only paired desktops negotiate simulator control, and only where it exists
     } finally {
       await off.close();
     }
+    // A phone gets the same refusal whether or not this Mac has simulators.
+    const phoneOff = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "iphone" });
+    try {
+      const response = await fetch(`${phoneOff.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    } finally {
+      await phoneOff.close();
+    }
   }
 });
 

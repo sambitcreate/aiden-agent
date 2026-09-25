@@ -826,6 +826,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         return { ...session };
       }
       const ready = requireReady(hostId);
+      const epoch = consentEpoch;
       const existing = sessions.find(
         (session) =>
           session.chatId === input.chatId && session.hostId === hostId && session.deviceId === input.deviceId,
@@ -837,6 +838,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       if (!device) throw new Error("That simulator is no longer available.");
       await attach(ready, device);
+      // A revoke while the simulator booted wins; never register a session after it.
+      if (epoch !== consentEpoch || !consent.streaming) {
+        throw new Error("Simulator streaming was turned off while opening.");
+      }
       if (existing) {
         emit();
         return { ...existing };

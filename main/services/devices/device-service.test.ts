@@ -138,10 +138,11 @@ interface HubCall {
   body: unknown;
 }
 
-function fakeFetch(options: { refuse?: string; screenshotType?: string } = {}) {
+function fakeFetch(options: { refuse?: string; screenshotType?: string; bootGate?: Promise<void> } = {}) {
   const calls: HubCall[] = [];
   const fetch: DeviceServiceDeps["fetch"] = async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body) });
+    if (options.bootGate && url.endsWith("/boot")) await options.bootGate;
     const screenshot = url.endsWith("/screenshot");
     const payload = screenshot
       ? Buffer.from([0x89, 0x50, 0x4e, 0x47])
@@ -172,7 +173,7 @@ async function withService(
     states: DeviceServiceState[];
     proxyStarts: number[];
   }) => Promise<void>,
-  options: FakeHostOptions & { consent?: object; refuse?: string; screenshotType?: string } = {},
+  options: FakeHostOptions & { consent?: object; refuse?: string; screenshotType?: string; bootGate?: Promise<void> } = {},
 ) {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-service-"));
   if (options.consent) await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
@@ -296,6 +297,26 @@ test("an unavailable host reports the user-readable reason", async () => {
       assert.equal(state.unavailableReason, "Open Xcode once and accept its license, then try again.");
     },
     { unavailable: "Open Xcode once and accept its license, then try again." },
+  );
+});
+
+test("a streaming revoke while a local simulator boots never registers its session", async () => {
+  let release!: () => void;
+  const bootGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ service, hub }) => {
+      await service.refresh();
+      const opening = service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      await waitFor(() => hub.calls.some((call) => call.url.endsWith("/boot")));
+      await service.revokeConsent("streaming");
+      release();
+      await assert.rejects(opening, /turned off while opening/u);
+      assert.deepEqual(service.state().sessions, []);
+      assert.deepEqual(service.sessionsForChat("chat-1"), []);
+    },
+    { bootGate, consent: { streaming: true } },
   );
 });
 
