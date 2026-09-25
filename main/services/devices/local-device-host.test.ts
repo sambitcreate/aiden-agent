@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DeviceHostUnavailableError } from "./device-host.js";
+import { DeviceHostUnavailableError, DeviceToolsMissingError } from "./device-host.js";
 import {
   AGENT_DEVICE,
   DEVICE_HUB,
@@ -227,12 +227,38 @@ test("Xcode failures map to setup steps the user can take", () => {
   assert.match(xcodeUnavailableReason({ stdout: "", stderr: "boom", code: 1 })!, /did not respond/u);
 });
 
+test("a missing install never reaches npm unless the caller allows installing", async () => {
+  await withHost(
+    async (harness) => {
+      let asked = 0;
+      harness.deps.resolveNpmRunner = async () => {
+        asked += 1;
+        return null;
+      };
+      const host = createLocalDeviceHost(harness.deps);
+      const phases: string[] = [];
+      for (const start of [() => host.ensureReady((phase) => phases.push(phase)), () => host.ensureAgentReady()]) {
+        await assert.rejects(start(), (error: unknown) => {
+          assert.ok(error instanceof DeviceToolsMissingError);
+          assert.equal(error.tool, DEVICE_HUB.name);
+          return true;
+        });
+      }
+      assert.equal(asked, 0);
+      assert.deepEqual(phases, []);
+      assert.equal(harness.spawns.length, 0);
+    },
+    {},
+    { installed: false },
+  );
+});
+
 test("a missing install asks for npm only when needed and reports installing first", async () => {
   await withHost(
     async (harness) => {
       const host = createLocalDeviceHost(harness.deps);
       const phases: string[] = [];
-      await assert.rejects(host.ensureReady((phase) => phases.push(phase)), (error: unknown) => {
+      await assert.rejects(host.ensureReady((phase) => phases.push(phase), { allowInstall: true }), (error: unknown) => {
         assert.ok(error instanceof DeviceHostUnavailableError);
         assert.equal(error.reason, NPM_REQUIRED_REASON);
         return true;
@@ -257,7 +283,9 @@ test("a missing install asks for npm only when needed and reports installing fir
     async (harness) => {
       const host = createLocalDeviceHost(harness.deps);
       const phases: string[] = [];
-      await host.ensureReady((phase, detail) => phases.push(detail ? `${phase}:${detail}` : phase));
+      await host.ensureReady((phase, detail) => phases.push(detail ? `${phase}:${detail}` : phase), {
+        allowInstall: true,
+      });
       assert.deepEqual(phases, ["installing:expo-device-hub@0.12.0", "starting"]);
       assert.equal(npmCalls.length, 1);
       assert.equal(npmCalls[0][npmCalls[0].length - 1], "expo-device-hub@0.12.0");
@@ -376,6 +404,25 @@ test("agent-device starts in HTTP mode only when agent access is requested", asy
     await host.stopAgent();
     assert.ok(host.current(), "stopping the agent keeps the hub for manual viewing");
     await host.stop();
+  });
+});
+
+test("stopping the agent after a relaunch stops the daemon a previous run left behind", async () => {
+  await withHost(async (harness) => {
+    const stateDir = path.join(harness.baseDir, "agent-state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(path.join(stateDir, "daemon.json"), JSON.stringify({ httpPort: 61_500, token: "old" }));
+    const host = createLocalDeviceHost(harness.deps);
+    await host.stopAgent();
+    const stop = harness.commands.find((entry) => entry.args.includes("daemon"));
+    assert.equal(stop?.args[0], deviceToolPaths(harness.baseDir, AGENT_DEVICE).entryPath);
+    assert.deepEqual(stop?.args.slice(1), ["daemon", "stop", "--state-dir", stateDir]);
+    assert.equal(harness.spawns.length, 0, "stopping never starts the hub");
+  });
+  await withHost(async (harness) => {
+    const host = createLocalDeviceHost(harness.deps);
+    await host.stopAgent();
+    assert.equal(harness.commands.length, 0, "no daemon file means nothing to stop");
   });
 });
 

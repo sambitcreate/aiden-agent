@@ -239,7 +239,20 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       // Consent and agent readiness resolve before anything boots or a session registers.
       const agent = await port.agentTarget({ chatId, hostId: target.hostId, deviceId: target.id });
       live();
+      const alreadyOpen = port
+        .state()
+        .sessions.some(
+          (candidate) =>
+            candidate.chatId === chatId && candidate.hostId === target.hostId && candidate.deviceId === target.id,
+        );
       const session = await port.open({ chatId, hostId: target.hostId, deviceId: target.id, openedBy: "agent" });
+      if (signal.aborted) {
+        // A stopped generation leaves nothing behind: no new session and no tab jumping forward.
+        if (!alreadyOpen) {
+          await port.close({ chatId, hostId: session.hostId, deviceId: session.deviceId }).catch(() => undefined);
+        }
+        live();
+      }
       port.reveal(chatId);
       const device =
         port.state().devices.find((candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId) ??

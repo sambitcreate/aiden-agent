@@ -625,7 +625,8 @@ test("subagents can never request or receive simulator device tools", () => {
           capabilities: { workspaceRead: true, web: false, mcp: [], ...extra },
           tasks: [{ role: "scout", label: "Device", task: "Open a simulator." }],
         }),
-      undefined,
+      // The closed capability shape rejects any device key, not a generic parse failure.
+      /^Error: Invalid subagent capability request\.$/u,
       JSON.stringify(extra),
     );
   }

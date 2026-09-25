@@ -1011,3 +1011,5 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - The Environment tabpanel stays mounted and reports visible after **Close environment panel**. Assert on the `Environment work surface` complementary region and the tab's `aria-selected` instead.
 - A fake agent-device must detach its daemon: the host awaits `devices --json` with a timeout and only polls `daemon.json`. Kill the daemon in `finally` from `agent-state/daemon.json` so a failed run leaves nothing behind.
 - `String.prototype.replaceAll` also fails `tsc` under the old lib; use `split().join()`.
+- `assert.throws(fn, /regex/)` matches against `String(error)`, which includes `Error: `. Anchor as `/^Error: …$/u`, not `/^…$/u`.
+- A fixed `consent.json.<pid>.tmp` let two saves racing each other rename a partial file. Chain the saves and use a unique temp name.

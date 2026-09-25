@@ -231,6 +231,26 @@ test("a cancelled generation stops before touching the device", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("a generation stopped while the simulator boots closes the new session and never reveals it", async () => {
+  for (const alreadyOpen of [false, true]) {
+    const controller = new AbortController();
+    const { port, calls } = fakePort(
+      alreadyOpen ? { sessions: [{ chatId: "chat-1", hostId: "local", deviceId: BOOTED.id, openedBy: "user" }] } : {},
+    );
+    const open = port.open;
+    port.open = async (input) => {
+      const session = await open(input);
+      controller.abort(new Error("stopped"));
+      return session;
+    };
+    const [, deviceOpen] = createDeviceAgentTools({ chatId: "chat-1", signal: controller.signal, supportsImages: true, port });
+    await assert.rejects(deviceOpen!.execute("call", {} as never), /stopped/u);
+    assert.ok(!calls.some((call) => call.startsWith("reveal:")));
+    // A session the user already had stays open; one this call created is closed without shutdown.
+    assert.equal(calls.includes(`close:${BOOTED.id}:false`), !alreadyOpen);
+  }
+});
+
 test("the shim runs the pinned install and refuses commands without device_open's flags", async () => {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-agent-shim-"));
   try {

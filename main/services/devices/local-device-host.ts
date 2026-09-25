@@ -14,6 +14,7 @@ import { LOCAL_DEVICE_HOST_ID } from "../../../renderer/shared/devices.js";
 import {
   DeviceHostError,
   DeviceHostUnavailableError,
+  DeviceToolsMissingError,
   type AgentDeviceEndpoint,
   type DeviceCommandOptions,
   type DeviceCommandResult,
@@ -23,6 +24,7 @@ import {
   type DeviceHostHelpers,
   type DeviceHostPhase,
   type DeviceHostReady,
+  type DeviceHostStartOptions,
   type DevicePlatformAvailability,
 } from "./device-host.js";
 import {
@@ -201,8 +203,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   const ready = (): DeviceHostReady | null =>
     hub ? { nodePath: deps.nodePath, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run } : null;
 
-  async function install(spec: ToolSpec, onPhase?: (phase: DeviceHostPhase, detail?: string) => void) {
+  async function install(
+    spec: ToolSpec,
+    onPhase: ((phase: DeviceHostPhase, detail?: string) => void) | undefined,
+    allowInstall: boolean,
+  ) {
     if (await isToolInstalled(deps.baseDir, spec)) return deviceToolPaths(deps.baseDir, spec).entryPath;
+    if (!allowInstall) throw new DeviceToolsMissingError(spec.name);
     onPhase?.("installing", `${spec.name}@${spec.version}`);
     const runNpm = await deps.resolveNpmRunner();
     if (!runNpm) throw new DeviceHostUnavailableError(NPM_REQUIRED_REASON);
@@ -325,7 +332,10 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting agent-device");
   }
 
-  async function ensureHub(onPhase?: (phase: DeviceHostPhase, detail?: string) => void) {
+  async function ensureHub(
+    onPhase?: (phase: DeviceHostPhase, detail?: string) => void,
+    options: DeviceHostStartOptions = {},
+  ) {
     const current = ready();
     if (current) return current;
     return withStartLock(async () => {
@@ -333,7 +343,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (existing) return existing;
       const availability = await platformAvailability();
       if (!availability.available) throw new DeviceHostUnavailableError(availability.reason ?? "");
-      const entryPath = await install(DEVICE_HUB, onPhase);
+      const entryPath = await install(DEVICE_HUB, onPhase, options.allowInstall === true);
       onPhase?.("starting");
       stopped = false;
       restartDelayMs = 0;
@@ -350,12 +360,22 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     return reason ? { platform: "ios", available: false, reason } : { platform: "ios", available: true };
   }
 
+  /**
+   * Stops the daemon, including one a previous Aiden left running: it has no
+   * idle timeout, so a leftover `daemon.json` means a live token.
+   */
   async function stopAgent(): Promise<void> {
     const endpoint = agentDevice;
     agentDevice = null;
-    if (!endpoint) return;
+    let entryPath = endpoint?.entryPath;
+    if (!entryPath) {
+      const leftover = await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(() => null);
+      if (leftover === null) return;
+      if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
+      entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
+    }
     await deps
-      .runCommand(deps.nodePath, [endpoint.entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
+      .runCommand(deps.nodePath, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
         timeoutMs: DAEMON_STOP_TIMEOUT_MS,
         env: agentEnv(),
       })
@@ -369,12 +389,12 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     hubInstalled: () => isToolInstalled(deps.baseDir, DEVICE_HUB),
     agentInstalled: () => isToolInstalled(deps.baseDir, AGENT_DEVICE),
     ensureReady: ensureHub,
-    async ensureAgentReady(onPhase) {
-      const hubReady = await ensureHub(onPhase);
+    async ensureAgentReady(onPhase, options = {}) {
+      const hubReady = await ensureHub(onPhase, options);
       if (agentDevice) return { ...hubReady, agentDevice };
       return withStartLock(async () => {
         if (!agentDevice) {
-          const entryPath = await install(AGENT_DEVICE, onPhase);
+          const entryPath = await install(AGENT_DEVICE, onPhase, options.allowInstall === true);
           onPhase?.("starting");
           agentDevice = await startAgentDaemon(entryPath);
         }

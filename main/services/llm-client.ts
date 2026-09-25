@@ -1171,11 +1171,25 @@ async function prepareGeneration(
             if (signal.aborted || !active.has(streamId))
               throw new Error("This simulator generation is no longer active.");
             if (!devicesEnabled()) throw new Error("Simulator support is off.");
+            if (workspace) {
+              const currentWorkspace = await configStore.getWorkspace(workspace.id);
+              if (
+                !currentWorkspace ||
+                currentWorkspace.permission === "none" ||
+                currentWorkspace.permission !== workspace.permission ||
+                currentWorkspace.folderPath !== workspace.folderPath
+              ) {
+                throw new Error("Workspace access changed. Start a new response to use simulators.");
+              }
+            }
           },
+          screenshotDir: () => deviceService.screenshotDir(params.chatId!),
         }).filter(({ name }) => !options.excludeToolNames?.has(name))
       : [];
-  // PATH gets the pinned agent-device only when the gate held at generation start.
-  const deviceShimDir = deviceTools.length ? (deviceService?.agentShimDir() ?? undefined) : undefined;
+  // PATH gets the pinned agent-device only when the gate held at generation start, and
+  // loses it on the next command once agent access is revoked.
+  const deviceShimDir =
+    deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
   const mcpInstructionCollector = createMcpInstructionCollector();
   let tools = (
     await buildAgentTools({

@@ -55,8 +55,8 @@ export interface ToolContext {
   browserTools?: readonly AgentTool[];
   /** Main-created simulator tools, present only when the device gate held at generation start. */
   deviceTools?: readonly AgentTool[];
-  /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. */
-  shellPathPrefix?: string;
+  /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. A getter is read per command. */
+  shellPathPrefix?: string | (() => string | null | undefined);
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */

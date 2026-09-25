@@ -1331,6 +1331,12 @@ test("run_command keeps PATH unless a device shim directory is attached", async 
     HOME: "/Users/me",
   });
   assert.equal(environment.PATH, "/usr/bin:/bin");
+  // A getter is read per command, so a revoke drops the shim from the next one.
+  let shim: string | null = "/data/devices/bin";
+  const live = { pathPrefix: () => shim };
+  assert.equal(runCommandEnv(live, environment).PATH, `/data/devices/bin${path.delimiter}/usr/bin:/bin`);
+  shim = null;
+  assert.equal(runCommandEnv(live, environment), environment);
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-path-"));
   try {

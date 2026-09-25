@@ -66,6 +66,15 @@ export interface DevicePlatformAvailability {
 }
 
 export type DeviceHostPhase = "installing" | "starting";
+
+/**
+ * Only an explicit consent action passes `allowInstall: true`. Every other
+ * start (refresh, `device_open`) fails with `DeviceToolsMissingError` instead
+ * of contacting npm.
+ */
+export interface DeviceHostStartOptions {
+  allowInstall?: boolean;
+}
 export type DeviceHostHealth = "ready" | "restarting" | "failed";
 
 export interface DeviceHost {
@@ -76,11 +85,15 @@ export interface DeviceHost {
   hubInstalled(): Promise<boolean>;
   /** Whether the pinned agent-device is installed, so agent tools never reach npm. */
   agentInstalled(): Promise<boolean>;
-  /** Installs the hub on first use and starts it. Concurrent callers share one start. */
-  ensureReady(onPhase?: (phase: DeviceHostPhase, detail?: string) => void): Promise<DeviceHostReady>;
-  /** Installs and starts agent-device after the user grants agent access. */
+  /** Starts the hub, installing it first only when allowed. Concurrent callers share one start. */
+  ensureReady(
+    onPhase?: (phase: DeviceHostPhase, detail?: string) => void,
+    options?: DeviceHostStartOptions,
+  ): Promise<DeviceHostReady>;
+  /** Starts agent-device, installing it first only when the user is granting agent access. */
   ensureAgentReady(
     onPhase?: (phase: DeviceHostPhase, detail?: string) => void,
+    options?: DeviceHostStartOptions,
   ): Promise<DeviceHostAgentReady>;
   /** Current endpoints when already running, without starting anything. */
   current(): DeviceHostReady | null;
@@ -97,6 +110,14 @@ export class DeviceHostUnavailableError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "DeviceHostUnavailableError";
+  }
+}
+
+/** A pinned tool is not installed and this start was not allowed to install it. */
+export class DeviceToolsMissingError extends Error {
+  constructor(readonly tool: string) {
+    super(`${tool} is not installed.`);
+    this.name = "DeviceToolsMissingError";
   }
 }
 

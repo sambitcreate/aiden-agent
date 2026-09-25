@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { DeviceServiceState } from "../../../renderer/shared/devices.js";
-import { DeviceHostUnavailableError, type DeviceHost, type DeviceHostReady } from "./device-host.js";
+import {
+  DeviceHostUnavailableError,
+  DeviceToolsMissingError,
+  type DeviceHost,
+  type DeviceHostReady,
+} from "./device-host.js";
 import type { DeviceHubProxy } from "./device-hub-proxy.js";
 import { createDeviceService, parseSimctlDevices, type DeviceServiceDeps } from "./device-service.js";
 
@@ -61,10 +66,13 @@ interface FakeHostOptions {
   listCode?: number;
   agentInstalled?: boolean;
   agentFails?: string;
+  /** Holds `ensureAgentReady` until the returned release runs, to race revokes against it. */
+  agentGate?: Promise<void>;
 }
 
 function fakeHost(options: FakeHostOptions = {}) {
   const calls: string[] = [];
+  const installs: boolean[] = [];
   const commands: string[][] = [];
   let ready: DeviceHostReady | null = null;
   const makeReady = (): DeviceHostReady => ({
@@ -82,18 +90,25 @@ function fakeHost(options: FakeHostOptions = {}) {
     kind: "local",
     platformAvailability: async () => ({ platform: "ios", available: true }),
     hubInstalled: async () => options.installed ?? true,
-    ensureReady: async (onPhase) => {
+    ensureReady: async (onPhase, start) => {
       calls.push("ensureReady");
+      installs.push(start?.allowInstall === true);
       if (options.unavailable) throw new DeviceHostUnavailableError(options.unavailable);
-      if (!(options.installed ?? true)) onPhase?.("installing", "expo-device-hub@0.12.0");
+      if (!(options.installed ?? true)) {
+        if (!start?.allowInstall) throw new DeviceToolsMissingError("expo-device-hub");
+        onPhase?.("installing", "expo-device-hub@0.12.0");
+      }
       onPhase?.("starting");
       ready = makeReady();
       return ready;
     },
     agentInstalled: async () => options.agentInstalled ?? true,
-    ensureAgentReady: async (onPhase) => {
+    ensureAgentReady: async (onPhase, start) => {
       calls.push("ensureAgentReady");
+      installs.push(start?.allowInstall === true);
       if (options.agentFails) throw new Error(options.agentFails);
+      if (!(options.agentInstalled ?? true) && !start?.allowInstall) throw new DeviceToolsMissingError("agent-device");
+      if (options.agentGate) await options.agentGate;
       onPhase?.("starting");
       ready ??= makeReady();
       return {
@@ -111,7 +126,7 @@ function fakeHost(options: FakeHostOptions = {}) {
       ready = null;
     },
   };
-  return { host, calls, commands };
+  return { host, calls, installs, commands };
 }
 
 interface HubCall {
@@ -183,6 +198,16 @@ async function withService(
     await rm(baseDir, { recursive: true, force: true });
   }
 }
+
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
+  const deadline = Date.now() + 5_000;
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error("timed out waiting");
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+const waitForCall = (calls: string[], name: string) => waitFor(() => calls.includes(name));
 
 test("simctl JSON yields available iOS simulators, booted first, with iPads classified", () => {
   const devices = parseSimctlDevices(SIMCTL_FIXTURE);
@@ -458,11 +483,111 @@ test("a failed agent install leaves access off, and tools never install", async 
     async ({ service, host }) => {
       await assert.rejects(
         service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE }),
-        /agent-device is not installed/u,
+        /agent-device is not installed\. Ask the user to turn agent access off and on/u,
       );
-      assert.equal(host.calls.includes("ensureAgentReady"), false);
+      // The tool path asked the host without permission to install.
+      assert.deepEqual(host.installs, [false]);
     },
     { agentInstalled: false, consent: { streaming: true, agentAccess: true } },
+  );
+});
+
+test("a revoke that lands mid-grant wins, and the agent it started is stopped", async () => {
+  let release!: () => void;
+  const agentGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ baseDir, service, host }) => {
+      await service.grantConsent("streaming");
+      const grant = service.grantConsent("agentAccess");
+      await waitForCall(host.calls, "ensureAgentReady");
+      await service.revokeConsent("agentAccess");
+      release();
+      await assert.rejects(grant, /turned off while it was being set up/u);
+      assert.equal(service.state().consent.agentAccess, false);
+      assert.equal(service.agentShimDir(), null);
+      assert.deepEqual(host.calls.filter((call) => call === "stopAgent").length, 2);
+      assert.equal(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")).agentAccess, false);
+    },
+    { agentGate },
+  );
+});
+
+test("a revoke during an agent tool call wins, and revoking removes the token configs", async () => {
+  let release!: () => void;
+  const agentGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ baseDir, service, host }) => {
+      const target = service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE });
+      await waitForCall(host.calls, "ensureAgentReady");
+      await mkdir(path.join(baseDir, "hosts", "local"), { recursive: true });
+      await writeFile(path.join(baseDir, "hosts", "local", "agent-device.json"), "{}");
+      await service.revokeConsent("agentAccess");
+      release();
+      await assert.rejects(target, /Agent access to simulators is off/u);
+      assert.equal(service.agentShimDir(), null);
+      await assert.rejects(access(path.join(baseDir, "hosts")));
+      assert.equal(host.calls.filter((call) => call === "stopAgent").length, 2);
+    },
+    { agentGate, consent: { streaming: true, agentAccess: true } },
+  );
+});
+
+test("the pinned shim is back on PATH after a relaunch only while agent access holds", async () => {
+  await withService(
+    async ({ baseDir, service }) => {
+      await mkdir(path.join(baseDir, "bin"), { recursive: true });
+      await writeFile(path.join(baseDir, "bin", "agent-device"), "#!/bin/sh\n");
+      await service.load();
+      assert.equal(service.agentShimDir(), path.join(baseDir, "bin"));
+      await service.revokeConsent("agentAccess");
+      assert.equal(service.agentShimDir(), null);
+    },
+    { consent: { streaming: true, agentAccess: true } },
+  );
+  await withService(
+    async ({ baseDir, service }) => {
+      await service.load();
+      assert.equal(service.agentShimDir(), null, "no shim file means nothing to put on PATH");
+      await mkdir(path.join(baseDir, "bin"), { recursive: true });
+    },
+    { consent: { streaming: true, agentAccess: true } },
+  );
+});
+
+test("screenshot directories are private per chat and removed with the chat", async () => {
+  await withService(async ({ baseDir, service }) => {
+    const first = await service.screenshotDir("chat/../1");
+    const second = await service.screenshotDir("chat-2");
+    assert.notEqual(first, second);
+    assert.equal(path.dirname(first), path.join(baseDir, "screenshots"));
+    assert.match(path.basename(first), /^[0-9a-f]{24}$/u);
+    await writeFile(path.join(first, "shot.png"), "png");
+    service.closeChat("chat/../1");
+    await waitFor(async () => !(await access(first).then(() => true, () => false)));
+    await access(second);
+  });
+});
+
+test("concurrent consent saves never collide on a temp file", async () => {
+  await withService(
+    async ({ baseDir, service }) => {
+      await Promise.all([
+        service.revokeConsent("agentAccess"),
+        service.revokeConsent("agentAccess"),
+        service.revokeConsent("streaming"),
+      ]);
+      assert.deepEqual(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")), {
+        version: 1,
+        streaming: false,
+        agentAccess: false,
+      });
+      assert.deepEqual((await readdir(baseDir)).filter((name) => name.endsWith(".tmp")), []);
+    },
+    { consent: { streaming: true, agentAccess: true } },
   );
 });
 

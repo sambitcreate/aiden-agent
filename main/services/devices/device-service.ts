@@ -7,7 +7,8 @@
  * (a local spawn) but never contacts npm. Consent is device-local, stored in
  * `userData/devices/consent.json`, because the installs it authorizes are.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   LOCAL_DEVICE_HOST_ID,
@@ -22,7 +23,12 @@ import {
   type DeviceStreamGrant,
   type DeviceSummary,
 } from "../../../renderer/shared/devices.js";
-import { DeviceHostUnavailableError, type DeviceHost, type DeviceHostReady } from "./device-host.js";
+import {
+  DeviceHostUnavailableError,
+  DeviceToolsMissingError,
+  type DeviceHost,
+  type DeviceHostReady,
+} from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
 import type { DeviceHubProxy } from "./device-hub-proxy.js";
 import { AGENT_DEVICE, DEVICE_HUB } from "./device-toolchain.js";
@@ -87,8 +93,10 @@ export interface DeviceService {
    * never installs, since installing happens only when the user grants access.
    */
   agentTarget(input: { chatId: string; hostId: string; deviceId: string }): Promise<{ command: string; args: string[] }>;
-  /** The `agent-device` shim directory once agent access is set up, for `run_command`'s PATH. */
+  /** The `agent-device` shim directory while agent access holds, for `run_command`'s PATH. */
   agentShimDir(): string | null;
+  /** A per-chat directory for screenshots a text-only model cannot view. Removed with the chat. */
+  screenshotDir(chatId: string): Promise<string>;
   /** Asks the renderer to show the Simulator tab for a chat. */
   reveal(chatId: string): void;
   onReveal(listener: (chatId: string) => void): () => void;
@@ -167,6 +175,9 @@ function parseConsent(text: string): DeviceConsent {
   }
 }
 
+const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
+const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -185,6 +196,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let loaded: Promise<void> | null = null;
   let starting: Promise<DeviceHostReady | null> | null = null;
   let proxy: Promise<DeviceHubProxy> | null = null;
+  /** Bumped by every revoke, so a grant or agent start that raced one never outlives it. */
+  let consentEpoch = 0;
+  let saving: Promise<void> = Promise.resolve();
+  let granting: Promise<unknown> = Promise.resolve();
 
   const snapshot = (): DeviceServiceState => ({
     hostStatus: hostState.status,
@@ -226,15 +241,29 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     loaded ??= (async () => {
       consent = parseConsent(await readFile(consentPath, "utf8").catch(() => ""));
       hostState = await idleStatus();
+      // After a relaunch the shim from the earlier grant still pins agent-device for run_command.
+      const shim = path.join(deps.baseDir, "bin");
+      if (consent.agentAccess && (await access(path.join(shim, "agent-device")).then(() => true, () => false))) {
+        shimDir = shim;
+      }
     })();
     return loaded;
   }
 
-  async function saveConsent(): Promise<void> {
-    await mkdir(deps.baseDir, { recursive: true });
-    const temporary = `${consentPath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ version: 1, ...consent }, null, 2)}\n`);
-    await rename(temporary, consentPath);
+  /** Saves run one at a time, each writing the consent current when it runs. */
+  function saveConsent(): Promise<void> {
+    const next = saving.then(async () => {
+      await mkdir(deps.baseDir, { recursive: true });
+      const temporary = `${consentPath}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, `${JSON.stringify({ version: 1, ...consent }, null, 2)}\n`);
+        await rename(temporary, consentPath);
+      } finally {
+        await rm(temporary, { force: true }).catch(() => undefined);
+      }
+    });
+    saving = next.catch(() => undefined);
+    return next;
   }
 
   /** Starts the host. Without `allowInstall`, a missing install stops short of npm. */
@@ -247,13 +276,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           setHost(await idleStatus());
           return null;
         }
-        const ready = await host.ensureReady((phase, detail) =>
-          setHost({ status: phase, ...(detail ? { detail } : {}) }),
+        const ready = await host.ensureReady(
+          (phase, detail) => setHost({ status: phase, ...(detail ? { detail } : {}) }),
+          { allowInstall },
         );
         setHost({ status: "ready" });
         return ready;
       } catch (error) {
-        if (error instanceof DeviceHostUnavailableError) setHost({ status: "unavailable" }, error.reason);
+        if (error instanceof DeviceToolsMissingError) setHost(await idleStatus());
+        else if (error instanceof DeviceHostUnavailableError) setHost({ status: "unavailable" }, error.reason);
         else setHost({ status: "error", detail: errorMessage(error) });
         return null;
       } finally {
@@ -314,15 +345,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     }
   }
 
-  async function prepareAgent(onPhase?: Parameters<DeviceHost["ensureAgentReady"]>[0]) {
-    const ready = await host.ensureAgentReady(onPhase);
+  /** Starts agent-device and writes the shim. Callers publish `shimDir` only after rechecking consent. */
+  async function prepareAgent(allowInstall: boolean, onPhase?: Parameters<DeviceHost["ensureAgentReady"]>[0]) {
+    const ready = await host.ensureAgentReady(onPhase, { allowInstall });
     const shim = await ensureAgentDeviceShim({
       baseDir: deps.baseDir,
       nodePath: ready.nodePath,
       entryPath: ready.agentDevice.entryPath,
     });
-    shimDir = shim.shimDir;
-    return { ready, command: shim.command };
+    return { ready, shim };
   }
 
   async function stopHost(): Promise<void> {
@@ -351,16 +382,31 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       if (kind === "agentAccess") {
         // The only path that installs agent-device: an explicit grant from the Simulator tab.
-        try {
-          await prepareAgent((phase, detail) => setHost({ status: phase, ...(detail ? { detail } : {}) }));
-        } catch (error) {
-          setHost(await idleStatus());
-          throw error instanceof DeviceHostUnavailableError ? new Error(error.reason) : error;
-        }
-        consent = { ...consent, agentAccess: true };
-        await saveConsent();
-        setHost({ status: "ready" });
-        return snapshot();
+        // Grants run one at a time, and a revoke that lands mid-grant wins.
+        const grant = granting.then(async () => {
+          const epoch = consentEpoch;
+          let prepared: Awaited<ReturnType<typeof prepareAgent>>;
+          try {
+            prepared = await prepareAgent(true, (phase, detail) =>
+              setHost({ status: phase, ...(detail ? { detail } : {}) }),
+            );
+          } catch (error) {
+            setHost(await idleStatus());
+            throw error instanceof DeviceHostUnavailableError ? new Error(error.reason) : error;
+          }
+          if (epoch !== consentEpoch || !consent.streaming) {
+            await host.stopAgent();
+            setHost(await idleStatus());
+            throw new Error("Agent access was turned off while it was being set up.");
+          }
+          consent = { ...consent, agentAccess: true };
+          shimDir = prepared.shim.shimDir;
+          await saveConsent();
+          setHost({ status: "ready" });
+          return snapshot();
+        });
+        granting = grant.catch(() => undefined);
+        return grant;
       }
       consent = { ...consent, [kind]: true };
       await saveConsent();
@@ -373,12 +419,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async revokeConsent(kind) {
       await load();
+      consentEpoch += 1;
       consent =
         kind === "streaming" ? { streaming: false, agentAccess: false } : { ...consent, agentAccess: false };
-      await saveConsent();
       shimDir = null;
+      await saveConsent();
       if (kind === "streaming") await stopHost();
       else await host.stopAgent();
+      // The per-host configs hold the daemon token.
+      await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(() => undefined);
       setHost(await idleStatus());
       return snapshot();
     },
@@ -444,6 +493,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       emit();
     },
     closeChat(chatId) {
+      void rm(path.join(deps.baseDir, "screenshots", chatKey(chatId)), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
       const remaining = sessions.filter((session) => session.chatId !== chatId);
       if (remaining.length === sessions.length) return;
       sessions = remaining;
@@ -491,22 +543,39 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async agentTarget(input) {
       await load();
-      if (!consent.streaming || !consent.agentAccess) {
-        throw new Error("Agent access to simulators is off. Ask the user to allow it in the Simulator tab.");
-      }
+      if (!consent.streaming || !consent.agentAccess) throw new Error(AGENT_ACCESS_OFF);
       if (input.hostId !== host.id) throw new Error(`Unknown device host ${input.hostId}.`);
-      if (!(await host.agentInstalled())) {
-        throw new Error("agent-device is not installed. Ask the user to turn agent access off and on in the Simulator tab.");
+      const epoch = consentEpoch;
+      let prepared: Awaited<ReturnType<typeof prepareAgent>>;
+      try {
+        // Never installs: a missing tool sends the user back to the Simulator tab.
+        prepared = await prepareAgent(false);
+      } catch (error) {
+        if (error instanceof DeviceToolsMissingError) {
+          throw new Error(
+            `${error.tool} is not installed. Ask the user to turn agent access off and on in the Simulator tab.`,
+          );
+        }
+        throw error;
       }
-      const { ready, command } = await prepareAgent();
+      if (epoch !== consentEpoch || !consent.streaming || !consent.agentAccess) {
+        if (!consent.agentAccess) await host.stopAgent();
+        throw new Error(AGENT_ACCESS_OFF);
+      }
+      shimDir = prepared.shim.shimDir;
       const config = agentDeviceConfigPath(deps.baseDir, input.hostId);
-      await writeAgentDeviceConfig(config, ready.agentDevice);
+      await writeAgentDeviceConfig(config, prepared.ready.agentDevice);
       return {
-        command,
+        command: prepared.shim.command,
         args: ["--config", config, "--session", agentDeviceSession(input.chatId, input.hostId, input.deviceId)],
       };
     },
     agentShimDir: () => (consent.streaming && consent.agentAccess ? shimDir : null),
+    async screenshotDir(chatId) {
+      const directory = path.join(deps.baseDir, "screenshots", chatKey(chatId));
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      return directory;
+    },
     reveal(chatId) {
       for (const listener of revealListeners) listener(chatId);
     },
