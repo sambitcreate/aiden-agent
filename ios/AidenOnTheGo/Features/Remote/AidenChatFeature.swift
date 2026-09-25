@@ -6083,7 +6083,7 @@ private struct AidenComposerView: View {
 
             if let selectedSkill = model.selectedSkill {
                 HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
+                    Image(systemName: "slash.circle")
                         .font(.caption.weight(.medium))
                     Text("/\(selectedSkill.name)")
                         .font(.caption.weight(.medium))
@@ -6561,7 +6561,7 @@ private struct AidenComposerSuggestionList: View {
         switch suggestion {
         case .skill(let entry):
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
+                Image(systemName: "slash.circle")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(palette.secondary)
                     .frame(width: 18)

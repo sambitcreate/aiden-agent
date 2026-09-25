@@ -28,8 +28,8 @@ class AidenSkillTest {
         extra: String = ""
     ): String {
         val extras = buildList {
-            if (!available) add(""""unavailableReason":"Shadowed."""")
-            if (extra.isNotEmpty()) add(extra.trimEnd(','))
+            if (!available) add("\"unavailableReason\":\"Shadowed.\"")
+            if (extra.isNotEmpty()) add(extra)
         }.joinToString(",")
         return """{"invocationId":"$invocationId","name":"$name","description":"$description","source":"workspace","available":$available${if (extras.isEmpty()) "" else ",$extras"}}"""
     }
@@ -59,7 +59,7 @@ class AidenSkillTest {
     fun skillCatalogCodecFailsClosedOnUnsafeShapes() {
         // Unknown field fails closed.
         assertThrows(AidenRemoteContractException::class.java) {
-            AidenSkillContractCodec.parseCatalog(catalogJson(listOf(entryJson(extra = """"path":"/x",""""))))
+            AidenSkillContractCodec.parseCatalog(catalogJson(listOf(entryJson(extra = "\"path\":\"/x\""))))
         }
         // Invocation ids must match the opaque lease format exactly.
         for (bad in listOf("plain-name", "sk1_short", "sk2_${"a".repeat(43)}", "sk1_${"a".repeat(44)}")) {
@@ -74,7 +74,7 @@ class AidenSkillTest {
         // Available entries must not carry an unavailable reason; unavailable
         // entries must carry one.
         assertThrows(AidenRemoteContractException::class.java) {
-            AidenSkillContractCodec.parseCatalog(catalogJson(listOf(entryJson(extra = """"unavailableReason":"x",""""))))
+            AidenSkillContractCodec.parseCatalog(catalogJson(listOf(entryJson(extra = "\"unavailableReason\":\"x\""))))
         }
         assertThrows(AidenRemoteContractException::class.java) {
             AidenSkillContractCodec.parseCatalog(
