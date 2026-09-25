@@ -399,7 +399,11 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
           agentDevice = await startAgentDaemon(entryPath);
         }
         const current = ready();
-        if (!current) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting agent-device");
+        if (!current) {
+          // The hub stopped while the daemon started; never leave the daemon and its token behind.
+          await stopAgent();
+          throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting agent-device");
+        }
         return { ...current, agentDevice } satisfies DeviceHostAgentReady;
       });
     },

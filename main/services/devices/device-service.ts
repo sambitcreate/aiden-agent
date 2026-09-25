@@ -246,6 +246,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let granting: Promise<unknown> = Promise.resolve();
   /** A running "Remove installed tools"; grants wait for it so nothing reinstalls mid-delete. */
   let removing: Promise<DeviceServiceState> | null = null;
+  /** Agent starts from `agentTarget`, which removal waits out before deleting their files. */
+  const agentStarts = new Set<Promise<unknown>>();
 
   const hostList = (): DeviceHostInfo[] => [
     { id: host.id, kind: "local", name: "This Mac", ...hostState },
@@ -334,10 +336,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     starting ??= (async () => {
       const epoch = consentEpoch;
       try {
+        if (!consent.streaming) return null;
         if (!allowInstall && !(await host.hubInstalled())) {
           setHost(await idleStatus());
           return null;
         }
+        // A revoke during the install check wins before npm is contacted.
+        if (epoch !== consentEpoch || !consent.streaming) return null;
         const ready = await host.ensureReady(
           (phase, detail) => setHost({ status: phase, ...(detail ? { detail } : {}) }),
           { allowInstall },
@@ -698,8 +703,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (kind === "agentAccess") {
         // The only path that installs agent-device: an explicit grant from the Simulator tab.
         // Grants run one at a time, and a revoke that lands mid-grant wins.
+        const epoch = consentEpoch;
         const grant = granting.then(async () => {
-          const epoch = consentEpoch;
+          // A revoke queued ahead of this grant, or streaming turned off meanwhile, wins before npm.
+          if (epoch !== consentEpoch || !consent.streaming) {
+            throw new Error("Agent access was turned off while it was being set up.");
+          }
           let prepared: Awaited<ReturnType<typeof prepareAgent>>;
           try {
             prepared = await prepareAgent(true, (phase, detail) =>
@@ -725,9 +734,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         granting = grant.catch(() => undefined);
         return grant;
       }
+      const epoch = consentEpoch;
       consent = { ...consent, [kind]: true };
       await saveConsent();
       emit();
+      // A revoke or removal that landed while this grant was saving wins; nothing is installed.
+      if (epoch !== consentEpoch) return snapshot();
       if (kind === "streaming") {
         const ready = await start(true);
         if (ready) await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
@@ -750,14 +762,17 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           // Any install or start already under way finishes, and loses to the revoke, before deleting.
           await granting;
           await starting?.catch(() => undefined);
+          await Promise.all([...agentStarts].map((running) => running.catch(() => undefined)));
           await stopHost();
-          await Promise.all(
+          const results = await Promise.allSettled(
             ["tools", "bin", "agent-state", "hosts", "screenshots", "hub.json"].map((entry) =>
               rm(path.join(deps.baseDir, entry), { recursive: true, force: true }),
             ),
           );
           shimDir = null;
           setHost(await idleStatus());
+          const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (failed) throw new Error(`Some simulator tool files could not be deleted: ${errorMessage(failed.reason)}`);
           return snapshot();
         } finally {
           removing = null;
@@ -924,11 +939,14 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await load();
       if (!consent.streaming || !consent.agentAccess) throw new Error(AGENT_ACCESS_OFF);
       if (input.hostId !== host.id) throw new Error(`Unknown device host ${input.hostId}.`);
+      if (removing) throw new Error(AGENT_ACCESS_OFF);
       const epoch = consentEpoch;
       let prepared: Awaited<ReturnType<typeof prepareAgent>>;
+      // Never installs: a missing tool sends the user back to the Simulator tab.
+      const preparing = prepareAgent(false);
+      agentStarts.add(preparing);
       try {
-        // Never installs: a missing tool sends the user back to the Simulator tab.
-        prepared = await prepareAgent(false);
+        prepared = await preparing;
       } catch (error) {
         if (error instanceof DeviceToolsMissingError) {
           throw new Error(
@@ -936,9 +954,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
           );
         }
         throw error;
+      } finally {
+        agentStarts.delete(preparing);
       }
       if (epoch !== consentEpoch || !consent.streaming || !consent.agentAccess) {
-        if (!consent.agentAccess) await host.stopAgent();
+        // Stops whatever this call started: the hub too once streaming is off.
+        if (!consent.streaming) await stopHost();
+        else if (!consent.agentAccess) await host.stopAgent();
         throw new Error(AGENT_ACCESS_OFF);
       }
       shimDir = prepared.shim.shimDir;

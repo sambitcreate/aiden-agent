@@ -2223,7 +2223,9 @@ export const llmClient = {
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: SETTINGS_SECTIONS,
+              settingsSections: devicesEnabled()
+                ? SETTINGS_SECTIONS
+                : SETTINGS_SECTIONS.filter((section) => section !== "simulator"),
               settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,

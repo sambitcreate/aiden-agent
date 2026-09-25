@@ -807,6 +807,14 @@ This phase also gets its own plan, `docs/plans/simulator-devices-phase-6-3d.md`.
 - New IPC: `devices:toolchain` (disk read only), `devices:prune-tools` and `devices:remove-tools`. `removeTools()` runs a streaming revoke first, waits for any in-flight grant or start, then deletes `tools`, `bin`, `agent-state`, `hosts`, `screenshots` and `hub.json`. A grant waits for a removal in progress.
 - Race fix found while building this: a streaming revoke during the first install could still start the hub. `start()` now rechecks the consent epoch after `ensureReady` and stops the host.
 - The setup copy moved to `DEVICE_SETUP_NOTICE` in `renderer/shared/devices.ts`, so the panel and Settings share it.
+- Review fixes:
+  - `start()` and a streaming grant check the epoch before contacting npm, and a queued agent grant checks it against the epoch from when it was called.
+  - Removal waits for in-flight `agentTarget` calls and refuses new ones. `agentTarget` stops the hub it restarted once streaming is off.
+  - `ensureAgentReady` stops a daemon whose hub vanished.
+  - Removal deletes with `allSettled` and always refreshes the status.
+  - The settings page re-reads helper versions when the host status changes.
+  - Confirmations stay open and busy until the work finishes, then return focus.
+  - The command palette and the assistant prompt hide Simulator without the capability.
 - `docs/devices.md` covers the user guide and internals, and README has an Upcoming entry. Onboarding was skipped at the user's request and stays skipped while the flag defaults off.
 
 ## Risks

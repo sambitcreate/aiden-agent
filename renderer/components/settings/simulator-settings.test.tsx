@@ -66,6 +66,16 @@ test("Simulator is an Agent settings destination hidden without the devices capa
   const settingsView = read("../../main/settings-view.tsx");
   assert.match(settingsView, /capabilities\.devices \? NAV : NAV\.filter\(\(item\) => item\.id !== "simulator"\)/u);
   assert.match(settingsView, /simulator: SimulatorSettings/u);
+  assert.match(
+    read("../command-palette.tsx"),
+    /destination\.id !== "simulator" \|\| capabilities\.devices/u,
+    "the command palette hides Simulator without the capability",
+  );
+  assert.match(
+    read("../../../main/services/llm-client.ts"),
+    /devicesEnabled\(\)\s*\? SETTINGS_SECTIONS\s*: SETTINGS_SECTIONS\.filter\(\(section\) => section !== "simulator"\)/u,
+    "the assistant prompt lists Simulator only when enabled",
+  );
 });
 
 test("a build without the devices capability reads nothing and says so", () => {
@@ -127,8 +137,10 @@ test("an unavailable Mac explains why, and a missing state is a read in progress
 
 test("downloads and removal each ask before they run", () => {
   const source = read("./simulator-settings.tsx");
-  assert.match(source, /if \(granted && \(kind === "streaming" \|\| kind === "agentAccess"\)\) setConfirming\(kind\)/u);
+  assert.match(source, /if \(granted && \(kind === "streaming" \|\| kind === "agentAccess"\)\) confirm\(kind\)/u);
   assert.match(source, /confirmVariant="destructive"/u);
-  assert.match(source, /onRemove=\{\(\) => setConfirming\("remove"\)\}/u);
+  assert.match(source, /onRemove=\{\(\) => confirm\("remove"\)\}/u);
+  // Both confirmations stay open, busy, until the work finishes, then return focus to their control.
+  assert.equal(source.match(/keepOpenOnConfirm\n\s*returnFocus=\{returnFocus\}/gu)?.length, 2);
   assert.doesNotMatch(source, /setInterval|setTimeout/u, "no background polling");
 });

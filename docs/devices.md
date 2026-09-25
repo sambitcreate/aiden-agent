@@ -30,7 +30,7 @@ The paired Mac's simulators then appear under their own heading in your tab. Aid
 
 ## Settings → Simulator
 
-Settings → **Simulator** appears only when the feature flag is on. It contains:
+Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
 
 - **Simulator streaming**, **Agent access** and **Share with paired Macs** switches. Turning on either of the first two asks before anything is downloaded from npm. Turning streaming off also turns the other two off.
 - **Helper tools**: the pinned version of each helper, whether it is installed, and any older versions still on disk. Reading this touches only the disk.
@@ -70,7 +70,12 @@ Everything host-specific sits behind `DeviceHost` (`device-host.ts`, `local-devi
 - per-chat sessions
 - the toolchain actions: read, prune and remove.
 
-Consent revokes win races: every revoke bumps a consent epoch, and a grant or start that sees the epoch change stops what it started and fails. Removing the tools runs a streaming revoke first, then waits for any in-flight install or start before it deletes files. A new grant waits for the removal to finish.
+Consent revokes win races. Every revoke bumps a consent epoch. A grant, start or agent tool call checks that epoch:
+
+- before it contacts npm, so it never contacts npm after a revoke, and
+- again when it finishes. If the epoch changed, it stops the hub or agent-device it started and fails.
+
+Removing the tools runs a streaming revoke first. It then waits for any in-flight grant, hub start or agent tool call before it deletes files, and new agent tool calls are refused while it runs. A new grant waits for the removal to finish.
 
 ### The hub is never exposed
 

@@ -21,6 +21,8 @@ export interface SimulatorSettingsViewProps {
   confirming: "streaming" | "agentAccess" | "remove" | null;
   onConsent(kind: DeviceConsentKind, granted: boolean): void;
   onConfirm(): void;
+  /** The control that opened the confirmation, focused again when it closes. */
+  returnFocus?: () => HTMLElement | null;
   onCancelConfirm(): void;
   onPrune(): void;
   onRemove(): void;
@@ -90,6 +92,7 @@ export function SimulatorSettingsView({
   confirming,
   onConsent,
   onConfirm,
+  returnFocus,
   onCancelConfirm,
   onPrune,
   onRemove,
@@ -210,6 +213,8 @@ export function SimulatorSettingsView({
         description={confirmCopy?.body}
         confirmLabel={confirmCopy?.confirmLabel}
         busy={busy}
+        keepOpenOnConfirm
+        returnFocus={returnFocus}
         onConfirm={onConfirm}
       />
       <AlertDialog
@@ -220,6 +225,8 @@ export function SimulatorSettingsView({
         confirmLabel="Remove tools"
         confirmVariant="destructive"
         busy={busy}
+        keepOpenOnConfirm
+        returnFocus={returnFocus}
         onConfirm={onConfirm}
       />
     </>
@@ -233,18 +240,34 @@ export function SimulatorSettings() {
   const [pending, setPending] = React.useState<Pending>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState<SimulatorSettingsViewProps["confirming"]>(null);
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
+  const confirm = (next: NonNullable<SimulatorSettingsViewProps["confirming"]>) => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConfirming(next);
+  };
 
   React.useEffect(() => {
     if (!capabilities.devices) return;
     let current = true;
+    let lastStatus: DeviceServiceState["hostStatus"] | null = null;
     const unsubscribe = devicesApi.onState((next) => {
-      if (current) setState(next);
+      if (!current) return;
+      setState(next);
+      // Installs and removals elsewhere (the Simulator tab, another window) change what is on disk.
+      // Re-read on status changes only: a disk read, never a poll.
+      if (lastStatus !== null && next.hostStatus !== lastStatus) {
+        void devicesApi.toolchain().then((tools) => {
+          if (current) setToolchain(tools);
+        }, () => undefined);
+      }
+      lastStatus = next.hostStatus;
     });
     Promise.all([devicesApi.getState(), devicesApi.toolchain()])
       .then(([nextState, nextToolchain]) => {
         if (!current) return;
         setState(nextState);
         setToolchain(nextToolchain);
+        lastStatus ??= nextState.hostStatus;
       })
       .catch((reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : "Could not read simulator settings.");
@@ -292,7 +315,7 @@ export function SimulatorSettings() {
       confirming={confirming}
       onConsent={(kind, granted) => {
         // Turning on anything that downloads from npm asks first; sharing and every revoke do not.
-        if (granted && (kind === "streaming" || kind === "agentAccess")) setConfirming(kind);
+        if (granted && (kind === "streaming" || kind === "agentAccess")) confirm(kind);
         else void run(kind, () => devicesApi.setConsent(kind, granted).then(setState));
       }}
       onConfirm={() => {
@@ -302,11 +325,12 @@ export function SimulatorSettings() {
           void run(kind, () => devicesApi.setConsent(kind, true).then(setState));
         }
       }}
+      returnFocus={() => returnFocusRef.current}
       onCancelConfirm={() => {
         if (!pending) setConfirming(null);
       }}
       onPrune={() => void run("prune", () => devicesApi.pruneTools().then(setToolchain))}
-      onRemove={() => setConfirming("remove")}
+      onRemove={() => confirm("remove")}
     />
   );
 }

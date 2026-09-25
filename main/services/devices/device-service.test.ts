@@ -659,6 +659,78 @@ test("removal waits out an agent install in flight, and a grant waits for the re
   );
 });
 
+test("a streaming revoke while the grant is saving wins before npm is contacted", async () => {
+  await withService(
+    async ({ service, host }) => {
+      const grant = service.grantConsent("streaming");
+      while (!service.state().consent.streaming) await new Promise((resolve) => setImmediate(resolve));
+      const revoked = service.revokeConsent("streaming");
+      const state = await grant;
+      await revoked;
+      assert.equal(state.consent.streaming, false);
+      assert.equal(host.calls.includes("ensureReady"), false, "no install or start after the revoke");
+      assert.equal(host.host.current(), null);
+    },
+    { installed: false },
+  );
+});
+
+test("an agent grant queued behind another loses to a streaming revoke without installing", async () => {
+  let release!: () => void;
+  const agentGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ service, host }) => {
+      await service.grantConsent("streaming");
+      const first = service.grantConsent("agentAccess");
+      await waitForCall(host.calls, "ensureAgentReady");
+      const second = service.grantConsent("agentAccess");
+      // Let the second grant pass its entry checks and queue behind the first.
+      await new Promise((resolve) => setImmediate(resolve));
+      await service.revokeConsent("streaming");
+      release();
+      await assert.rejects(first, /turned off while it was being set up/u);
+      await assert.rejects(second, /turned off while it was being set up/u);
+      assert.equal(host.calls.filter((call) => call === "ensureAgentReady").length, 1);
+      assert.equal(service.state().consent.agentAccess, false);
+    },
+    { agentGate },
+  );
+});
+
+test("removal waits out an agent tool call in flight, stops what it started, and no shim survives", async () => {
+  let release!: () => void;
+  const agentGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await withService(
+    async ({ baseDir, service, host }) => {
+      const target = service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE });
+      await waitForCall(host.calls, "ensureAgentReady");
+      let removed = false;
+      const removal = service.removeTools().then((state) => {
+        removed = true;
+        return state;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(removed, false, "removal waits for the agent start");
+      await assert.rejects(
+        service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE }),
+        /Agent access to simulators is off/u,
+      );
+      release();
+      await assert.rejects(target, /Agent access to simulators is off/u);
+      const state = await removal;
+      assert.equal(state.consent.agentAccess, false);
+      assert.equal(service.agentShimDir(), null);
+      assert.equal(host.host.current(), null, "the hub the tool call started is stopped");
+      await assert.rejects(access(path.join(baseDir, "bin")), /ENOENT/u);
+    },
+    { agentGate, consent: { streaming: true, agentAccess: true } },
+  );
+});
+
 test("the pinned shim is back on PATH after a relaunch only while agent access holds", async () => {
   await withService(
     async ({ baseDir, service }) => {
