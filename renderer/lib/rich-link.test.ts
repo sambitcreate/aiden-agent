@@ -25,6 +25,7 @@ test("supported service URLs produce local preview descriptors", () => {
     ["https://onedrive.live.com/?id=secret", "sharepoint", "file", "Shared item"],
     ["https://app.box.com/folder/12345", "box", "folder", "Shared folder"],
     ["https://www.notion.so/Project-Roadmap-0123456789abcdef0123456789abcdef", "notion", "document", "Project Roadmap"],
+    ["https://www.notion.so/Project-Roadmap-01234567-89ab-cdef-0123-456789abcdef", "notion", "document", "Project Roadmap"],
     ["https://workspace.slack.com/archives/C123/p1720000000000000", "slack", "message", "workspace"],
     ["https://teams.microsoft.com/l/meetup-join/opaque", "teams", "meeting", "Teams meeting"],
     ["https://outlook.office.com/calendar/view/month", "outlook", "calendar", "Outlook calendar"],
@@ -136,6 +137,23 @@ test("plain-message tokenization leaves URLs in backtick code literal", () => {
   const closedThenOutside = "`https://github.com/acme/repo` https://github.com/openai/codex";
   assert.deepEqual(
     tokenizeWebLinks(closedThenOutside)
+      .filter((segment) => segment.kind === "link")
+      .map((segment) => segment.href),
+    ["https://github.com/openai/codex"],
+  );
+
+  const fenced = [
+    "```text",
+    "A literal ``` run does not close this fence.",
+    "https://github.com/acme/private",
+    "```",
+    "~~~sh",
+    "curl https://gitlab.com/acme/private",
+    "~~~~",
+    "https://github.com/openai/codex",
+  ].join("\n");
+  assert.deepEqual(
+    tokenizeWebLinks(fenced)
       .filter((segment) => segment.kind === "link")
       .map((segment) => segment.href),
     ["https://github.com/openai/codex"],

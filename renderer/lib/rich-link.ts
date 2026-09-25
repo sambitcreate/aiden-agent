@@ -258,7 +258,8 @@ function describeNotion(url: URL): RichLinkDescriptor | null {
   if (!exactHost(url, "notion.so", "www.notion.so") && !hasHost(url, "notion.site")) return null;
   const parts = pathParts(url);
   const last = parts[parts.length - 1] || "Notion page";
-  const withoutId = last.replace(/-[0-9a-f]{32}$/iu, "").replace(/^[0-9a-f]{32}$/iu, "");
+  const notionId = /(?:-|^)(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/iu;
+  const withoutId = last.replace(notionId, "");
   return descriptor(
     "notion",
     "Notion",
@@ -382,12 +383,77 @@ interface TextRange {
   end: number;
 }
 
-function backtickCodeRanges(content: string): TextRange[] {
+interface TextLine extends TextRange {
+  value: string;
+}
+
+function textLines(content: string): TextLine[] {
+  const lines: TextLine[] = [];
+  let start = 0;
+  while (start < content.length) {
+    const newline = content.indexOf("\n", start);
+    const end = newline < 0 ? content.length : newline + 1;
+    const rawValue = content.slice(start, newline < 0 ? content.length : newline);
+    lines.push({ start, end, value: rawValue.endsWith("\r") ? rawValue.slice(0, -1) : rawValue });
+    start = end;
+  }
+  return lines;
+}
+
+function fenceMarker(line: string): { character: "`" | "~"; length: number; rest: string } | null {
+  const indent = /^ {0,3}/u.exec(line)?.[0].length ?? 0;
+  const character = line[indent];
+  if (character !== "`" && character !== "~") return null;
+  let end = indent;
+  while (line[end] === character) end += 1;
+  const length = end - indent;
+  if (length < 3) return null;
+  return { character, length, rest: line.slice(end) };
+}
+
+function fencedCodeRanges(content: string): TextRange[] {
+  const lines = textLines(content);
   const ranges: TextRange[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const openingLine = lines[index]!;
+    const opening = fenceMarker(openingLine.value);
+    if (!opening) continue;
+    let closingIndex = -1;
+    for (let candidateIndex = index + 1; candidateIndex < lines.length; candidateIndex += 1) {
+      const candidate = fenceMarker(lines[candidateIndex]!.value);
+      if (
+        candidate &&
+        candidate.character === opening.character &&
+        candidate.length >= opening.length &&
+        candidate.rest.trim() === ""
+      ) {
+        closingIndex = candidateIndex;
+        break;
+      }
+    }
+    const end = closingIndex < 0 ? content.length : lines[closingIndex]!.end;
+    ranges.push({ start: openingLine.start, end });
+    if (closingIndex < 0) break;
+    index = closingIndex;
+  }
+  return ranges;
+}
+
+function backtickCodeRanges(content: string, fencedRanges: TextRange[]): TextRange[] {
+  const ranges: TextRange[] = [];
+  let fencedRangeIndex = 0;
   let cursor = 0;
   while (cursor < content.length) {
     const start = content.indexOf("`", cursor);
     if (start < 0) break;
+    while (fencedRanges[fencedRangeIndex] && fencedRanges[fencedRangeIndex]!.end <= start) {
+      fencedRangeIndex += 1;
+    }
+    const fencedRange = fencedRanges[fencedRangeIndex];
+    if (fencedRange && start >= fencedRange.start && start < fencedRange.end) {
+      cursor = fencedRange.end;
+      continue;
+    }
     let delimiterEnd = start + 1;
     while (content[delimiterEnd] === "`") delimiterEnd += 1;
     const delimiter = content.slice(start, delimiterEnd);
@@ -411,9 +477,27 @@ function backtickCodeRanges(content: string): TextRange[] {
   return ranges;
 }
 
+function mergeTextRanges(ranges: TextRange[]): TextRange[] {
+  const sorted = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  const merged: TextRange[] = [];
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
 export function tokenizeWebLinks(content: string): WebLinkSegment[] {
   const segments: WebLinkSegment[] = [];
-  const codeRanges = backtickCodeRanges(content);
+  const fencedRanges = fencedCodeRanges(content);
+  const codeRanges = mergeTextRanges([
+    ...backtickCodeRanges(content, fencedRanges),
+    ...fencedRanges,
+  ]);
   let codeRangeIndex = 0;
   let cursor = 0;
   WEB_URL_PATTERN.lastIndex = 0;
