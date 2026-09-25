@@ -119,7 +119,7 @@ test("detects metadata changes while a file is being read", async context => {
   let mutated = false;
   context.mock.method(prototype, "read", async function (...args) {
     const result = await original.apply(this, args);
-    if (!mutated && result.bytesRead) { mutated = true; await chmod(file, 0o700); }
+    if (!mutated && result.bytesRead) { mutated = true; await this.chmod(0o700); await this.utimes(0, 0); }
     return result;
   });
   await assert.rejects(computeLinuxPayloadInventory(root), /changed during inventory/u);
