@@ -581,7 +581,7 @@ test("command palette selects each chat with identical labels independently", as
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   await seedPaletteChats(aiden);
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   await palette.getByRole("combobox").fill("Search chats");
   await palette.getByRole("option", { name: "Search chats" }).click();
@@ -657,7 +657,7 @@ test("command palette selects same-named models from distinct provider identitie
   });
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   await palette.getByRole("option", { name: "Change model" }).click();
   const search = palette.getByRole("combobox", { name: "Search models" });
@@ -711,7 +711,7 @@ for (const field of ["title", "timestamp"] as const) {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     await seedPaletteChats(aiden);
-    await page.keyboard.press("Meta+k");
+    await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
     const palette = page.locator("[data-command-palette-content]");
     await palette.getByRole("option", { name: "Search chats" }).click();
     const search = palette.getByRole("combobox", { name: "Search chats" });
@@ -753,7 +753,7 @@ for (const mode of [
   test(`command palette direct ${mode.label} entry discards stale root selection`, async ({ aiden }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
-    await page.keyboard.press("Meta+k");
+    await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
     const palette = page.locator("[data-command-palette-content]");
     await palette.getByRole("combobox").fill("Toggle sidebar");
     await expect(palette.getByRole("option", { name: /Toggle sidebar/u })).toHaveAttribute("aria-selected", "true");
@@ -785,7 +785,7 @@ for (const mode of [
 test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   const search = palette.getByRole("combobox");
   await search.fill("Toggle sidebar");
@@ -847,7 +847,7 @@ test("command palette loads model results when settings resolve after providers"
   }, settings);
   await page.reload();
   await expect(page.locator("textarea")).toBeVisible();
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   await palette.getByRole("option", { name: "Change model" }).click();
   const search = palette.getByRole("combobox", { name: "Search models" });

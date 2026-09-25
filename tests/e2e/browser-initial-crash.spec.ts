@@ -37,6 +37,15 @@ test("current native crash before the first commit retries its pending URL", asy
         PATH: process.env.PATH,
         AIDEN_BROWSER_CRASH_ROOT: root,
         AIDEN_CONFIG_DIR: path.join(root, "config"),
+        // The crash fixture bypasses the Electron fixture's environment
+        // assembly, so forward the display session itself on Linux.
+        ...(process.platform === "linux"
+          ? Object.fromEntries(
+              ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE"]
+                .filter((name) => process.env[name] !== undefined)
+                .map((name) => [name, process.env[name]]),
+            )
+          : {}),
       },
     });
   } finally {
