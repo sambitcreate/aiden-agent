@@ -918,3 +918,30 @@ must not be broken in the meantime. The shipped Quiet Open Chat policy is the
 hook real notifications will consult: notification kinds are already
 classified blocking vs ambient, so a future push pipeline can reuse the same
 decision table server- and client-side.
+
+## Cold-open snappiness and streaming polish — 2026-09-24
+
+Chat open is already cache-first on both clients (exact cached transcript
+before secondary loads; Android restores draft + transcript synchronously in
+the ViewModel init). This slice removes the remaining open-time serial work
+and per-token settled-row churn:
+
+- iOS `load()` now overlaps stream restore (status probe plus approval and
+  question snapshots) with the transcript + catalog fetch — matching Android,
+  where `resumeActiveStreamIfNeeded` has always launched independently of the
+  parallel `loadChat`/`loadCatalog` coroutines.
+- iOS settled transcript rows moved into `AidenSettledMessageRows`, a child
+  view tracking only `chat`: per-token `liveText` updates no longer re-run
+  the `ForEach` or re-evaluate finished message bodies. `AidenMessageView`
+  also conforms to `Equatable` (message + presentation style; the attachment
+  loader closure is intentionally ignored) so even real `chat` changes only
+  re-render the rows that actually changed.
+- Android now collects `liveText`/`reasoning`/`tools`/`activityTimeline`
+  inside the `live_stream` LazyColumn item instead of at screen level, so a
+  token recomposes only the streaming card rather than the whole screen.
+  Settled-row inputs are `remember`ed (message callbacks, attachment loader,
+  reversed list) making `UserMessageRow`/`AssistantMessageRow` skippable —
+  previously fresh lambdas forced every visible row to recompose per token.
+
+Deferred per the slice scope: device-local unread marks and Live Activity
+freshness chips wait for the E.2 push foundation.

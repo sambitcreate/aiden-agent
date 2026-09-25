@@ -20,7 +20,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -123,10 +122,6 @@ fun AidenChatDetailScreen(
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
-    val liveText by viewModel.liveText.collectAsState()
-    val reasoning by viewModel.reasoning.collectAsState()
-    val tools by viewModel.tools.collectAsState()
-    val activityTimeline by viewModel.activityTimeline.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
     val isStopping by viewModel.isStopping.collectAsState()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsState()
@@ -595,6 +590,17 @@ fun AidenChatDetailScreen(
         val rawMessages = chat?.messages ?: emptyList()
         val isBotChat = chat?.isBotChat == true
 
+        // Stable row inputs keep settled transcript rows skippable while the
+        // streaming card recomposes on every token.
+        val reversedMessages = remember(rawMessages) { rawMessages.asReversed() }
+        val loadAttachmentImage = remember(viewModel) { viewModel::attachmentImageData }
+        val onCopyMessage = remember(context) { { text: String -> copyToClipboard(context, text) } }
+        val onShareMessage = remember(context) { { text: String -> shareText(context, text) } }
+        val onReplyMessage = remember(viewModel) { { text: String -> viewModel.updateDraft("> $text\n") } }
+        val onOpenMessageUrl = remember(uriHandler) {
+            { url: String -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -617,6 +623,12 @@ fun AidenChatDetailScreen(
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
                     item(key = "live_stream") {
+                        // Per-token state is collected inside the item so each
+                        // update recomposes only this card, not the screen.
+                        val liveText by viewModel.liveText.collectAsState()
+                        val reasoning by viewModel.reasoning.collectAsState()
+                        val tools by viewModel.tools.collectAsState()
+                        val activityTimeline by viewModel.activityTimeline.collectAsState()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -628,7 +640,6 @@ fun AidenChatDetailScreen(
                     }
                 }
 
-                val reversedMessages = rawMessages.asReversed()
                 itemsIndexed(
                     items = reversedMessages,
                     key = { _, msg -> msg.id }
@@ -641,10 +652,10 @@ fun AidenChatDetailScreen(
                             message = message,
                             position = pos,
                             palette = palette,
-                            loadAttachmentImage = viewModel::attachmentImageData,
-                            onCopy = { text -> copyToClipboard(context, text) },
-                            onShare = { text -> shareText(context, text) },
-                            onReply = { text -> viewModel.updateDraft("> $text\n") }
+                            loadAttachmentImage = loadAttachmentImage,
+                            onCopy = onCopyMessage,
+                            onShare = onShareMessage,
+                            onReply = onReplyMessage
                         )
                     } else {
                         AssistantMessageRow(
@@ -653,11 +664,11 @@ fun AidenChatDetailScreen(
                             isLastInCluster = isLastInCluster,
                             isBotChat = isBotChat,
                             palette = palette,
-                            loadAttachmentImage = viewModel::attachmentImageData,
-                            onCopy = { text -> copyToClipboard(context, text) },
-                            onShare = { text -> shareText(context, text) },
-                            onReply = { text -> viewModel.updateDraft("> $text\n") },
-                            onOpenUrl = { url -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+                            loadAttachmentImage = loadAttachmentImage,
+                            onCopy = onCopyMessage,
+                            onShare = onShareMessage,
+                            onReply = onReplyMessage,
+                            onOpenUrl = onOpenMessageUrl
                         )
                     }
                 }

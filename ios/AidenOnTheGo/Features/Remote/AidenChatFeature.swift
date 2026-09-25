@@ -1173,6 +1173,9 @@ final class AidenChatViewModel {
             chat = cached
             resolveModelSelection()
         }
+        // Stream restore (status probe + approval/question snapshots) does not
+        // depend on the transcript fetch — overlap the round-trips on open.
+        async let streamRestore = restoreStreamIfNeeded()
         do {
             async let chatRequest = coordinator.remoteClient(for: context).chat(id: chat.id)
             async let catalogRequest = coordinator.remoteClient(for: context).modelCatalog()
@@ -1187,7 +1190,7 @@ final class AidenChatViewModel {
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
         guard coordinator.isCurrent(context) else { return }
-        await restoreStreamIfNeeded()
+        await streamRestore
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
         await loadProgressSnapshot(
@@ -2283,6 +2286,9 @@ final class AidenChatViewModel {
         do {
             let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
             guard coordinator.isCurrent(context) else { return }
+            // A send() that started a newer stream while the status probe was
+            // in flight owns the surface — never clobber its identity.
+            guard activeStreamID == nil || activeStreamID == stream.streamId else { return }
             activeStreamID = stream.streamId
             if !status.state.isTerminal {
                 await liveActivities.start(
@@ -3363,9 +3369,10 @@ struct AidenChatDetailView: View {
             alignment: .leading,
             spacing: presentationStyle == .botMessages ? 3 : 18
         ) {
-            ForEach(Array(model.chat.messages.enumerated()), id: \.element.id) { index, message in
-                messageRow(message, at: index)
-            }
+            // Settled rows live in a child view that tracks only `chat`, so
+            // per-token liveText updates never re-evaluate finished messages.
+            AidenSettledMessageRows(model: model, presentationStyle: presentationStyle)
+                .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
@@ -3376,21 +3383,6 @@ struct AidenChatDetailView: View {
         }
         .padding(.horizontal)
         .padding(.top, 20)
-    }
-
-    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
-        let previous = index > 0 ? model.chat.messages[index - 1] : nil
-        let isBotMessage = presentationStyle == .botMessages
-        let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
-
-        return AidenMessageView(
-            message: message,
-            presentationStyle: presentationStyle,
-            loadAttachmentImage: { attachment in
-                await model.attachmentImageData(for: attachment)
-            }
-        )
-        .padding(.top, topPadding)
     }
 
     private var composer: some View {
@@ -3748,11 +3740,48 @@ private struct AidenComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
-private struct AidenMessageView: View {
+private struct AidenSettledMessageRows: View, Equatable {
+    let model: AidenChatViewModel
+    let presentationStyle: AidenChatPresentationStyle
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.presentationStyle == rhs.presentationStyle
+    }
+
+    var body: some View {
+        ForEach(Array(model.chat.messages.enumerated()), id: \.element.id) { index, message in
+            messageRow(message, at: index)
+        }
+    }
+
+    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
+        let previous = index > 0 ? model.chat.messages[index - 1] : nil
+        let isBotMessage = presentationStyle == .botMessages
+        let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
+
+        return AidenMessageView(
+            message: message,
+            presentationStyle: presentationStyle,
+            loadAttachmentImage: { attachment in
+                await model.attachmentImageData(for: attachment)
+            }
+        )
+        .equatable()
+        .padding(.top, topPadding)
+    }
+}
+
+private struct AidenMessageView: View, Equatable {
     @Environment(\.aidenPalette) private var palette
     let message: AidenChatMessage
     let presentationStyle: AidenChatPresentationStyle
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The loader closure captures the stable view-model; identity churn on
+        // it must not force settled rows to re-render on every streamed token.
+        lhs.message == rhs.message && lhs.presentationStyle == rhs.presentationStyle
+    }
 
     private var botReply: AidenBotReplyProjection? {
         guard presentationStyle == .botMessages, message.role == .assistant else { return nil }

@@ -112,3 +112,15 @@ notification never goes stale. Push pairing (APNs/FCM via Mac-mediated or
 sealed relay, mute-safe titles, LA pushType token) is documented as deferred
 E.2 in docs/plans/aiden-on-the-go-plan.md; the shipped decision table is the
 hook real notifications will reuse.
+
+On The Go slice F (2026-09-24, same branch): cold-open/streaming polish, no
+contract change. iOS load() overlaps restoreStreamIfNeeded (status +
+approval/question snapshots) with the chat+catalog fetch via async let —
+parity with Android's always-independent resumeActiveStreamIfNeeded. Settled
+rows are isolated on both platforms: iOS AidenSettledMessageRows tracks only
+`chat` (ForEach skips per-token) and AidenMessageView is Equatable on
+message+style (attachment-loader closure ignored); Android collects
+liveText/reasoning/tools/activityTimeline inside the live_stream item
+instead of screen scope and remembers row callbacks + the reversed list so
+settled rows skip recomposition. Unread marks and LA freshness chips remain
+deferred behind the E.2 push foundation.
