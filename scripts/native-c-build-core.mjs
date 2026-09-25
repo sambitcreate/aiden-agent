@@ -42,6 +42,8 @@ export async function nativeCCompileInvocation({
     return {
       executable: "/usr/bin/xcrun",
       args: [
+        "--sdk",
+        "macosx",
         "clang",
         ...common,
         "-mmacosx-version-min=14.4",
