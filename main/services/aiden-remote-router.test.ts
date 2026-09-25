@@ -589,7 +589,6 @@ async function fixture(options: {
         expiresAt: new Date(60_000).toISOString(),
         canAllow: options.approvalCanAllow ?? false,
       }),
-      approvalChatId: () => "chat-1",
       approvalRequiredCapability: () =>
         options.approvalRequiredCapability,
       cancel: async (deviceId, streamId, _key) => {
@@ -674,9 +673,33 @@ async function fixture(options: {
               return result;
             },
           }),
-      respondApproval: async (deviceId, approvalId, decision, _key) => {
-        calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
-        return { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+      respondApproval: async (
+        deviceId,
+        approvalId,
+        decision,
+        _key,
+        runAccess?: (
+          chatId: string,
+          action: () => Promise<{
+            approvalId: string;
+            decision: "allow" | "deny";
+            resolvedAt: string;
+          }>,
+        ) => Promise<{
+          approvalId: string;
+          decision: "allow" | "deny";
+          resolvedAt: string;
+        }>,
+      ) => {
+        const result = { approvalId, decision, resolvedAt: new Date(5_000).toISOString() };
+        const action = async () => {
+          calls.push(`approval:${deviceId}:${approvalId}:${decision}`);
+          return result;
+        };
+        if (runAccess) {
+          return runAccess("chat-1", action);
+        }
+        return action();
       },
       openEvents: (_deviceId, streamId, after, response) => {
         calls.push(`events:${streamId}:${after}`);

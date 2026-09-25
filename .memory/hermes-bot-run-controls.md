@@ -183,8 +183,11 @@ runAccess closure (runChatMutation) inside executeIdempotent, matching the
 submitInput idiom, and questionChatId left the router Pick; (2) submitInput
 emitted status running on every admitted input, clobbering
 waiting_for_approval while a prompt was pending — the running append is now
-gated on no pending approval/question. respondApproval on main shares the
-pre-ledger lookup shape; flagged as follow-up, out of this branch's diff.
+gated on no pending approval/question. The same pre-ledger lookup shape in
+respondApproval was then fixed on this branch too: it now takes runAccess
+inside executeIdempotent (approvalChatId lookup removed from the router
+preflight and both Picks; the capability probe moved inside the mutation
+action so it only runs on fresh execution).
 Verification: remote suite 469+1skip, LAN 7/7, peers 17/17, tsc clean,
 CI run 36180567552 fully green before these review fixes.
 

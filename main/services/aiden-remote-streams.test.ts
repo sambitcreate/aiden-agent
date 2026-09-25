@@ -221,16 +221,16 @@ test("cancel and approval decisions are bound to the owning device and owner ide
     summary: "Write a file",
   });
   await assert.rejects(
-    app.service.respondApproval("device-2", "approval-1", "allow", "wrong-device-key-0001"),
+    app.service.respondApproval("device-2", "approval-1", "allow", "wrong-device-key-0001", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
-  const resolved = await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001");
+  const resolved = await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough);
   assert.deepEqual(
-    await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001"),
+    await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough),
     resolved,
   );
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-1", "allow", "approval-deny-key-001"),
+    app.service.respondApproval("device-1", "approval-1", "allow", "approval-deny-key-001", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
   assert.equal(resolved.decision, "deny");
@@ -370,6 +370,7 @@ test("privileged approval details remain host-only and mobile can deny but canno
       "approval-1",
       "allow",
       "approval-host-only-allow-key",
+      inputPassthrough,
     ),
     (error: unknown) =>
       error instanceof AidenRemoteServiceError && error.code === "capability_denied",
@@ -382,6 +383,7 @@ test("privileged approval details remain host-only and mobile can deny but canno
     "approval-1",
     "deny",
     "approval-host-only-deny-key",
+    inputPassthrough,
   );
   assert.equal(denied.decision, "deny");
   assert.equal(service.pendingApproval("device-1", "stream-1"), null);
@@ -432,6 +434,7 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
     "approval-schedule",
     "allow",
     "approval-schedule-allow-key",
+    inputPassthrough,
   );
   assert.equal(allowed.decision, "allow");
   assert.match(app.approvals[0] ?? "", /:allow:/u);
@@ -453,7 +456,7 @@ test("multiple approvals remain queued and cancellation synchronously clears the
   assert.equal(app.service.pendingApprovalForChat("chat-1"), null);
   assert.equal(app.approvals.some((entry) => entry.includes("approval-2:deny")), true);
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1"),
+    app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
 });
@@ -1575,7 +1578,7 @@ test("resolving one pending surface keeps the other's waiting prompt", async () 
   assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
 
   // Resolving the approval must not drop the surviving question prompt.
-  await service.respondApproval("device-1", "approval-1", "deny", "approval-coexist-key-01");
+  await service.respondApproval("device-1", "approval-1", "deny", "approval-coexist-key-01", inputPassthrough);
   assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
   assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
 

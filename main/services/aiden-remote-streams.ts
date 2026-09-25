@@ -1624,6 +1624,10 @@ export class AidenRemoteStreamService {
     approvalId: string,
     decision: "allow" | "deny",
     key: string,
+    runAccess: (
+      chatId: string,
+      action: () => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
+    ) => Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }>,
   ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
     try {
       return await this.executeIdempotent(
@@ -1642,10 +1646,12 @@ export class AidenRemoteStreamService {
               403,
             );
           }
-          if (!this.resolveApproval(approvalId, decision)) {
-            throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
-          }
-          return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+          return runAccess(approval.chatId, async () => {
+            if (!this.resolveApproval(approvalId, decision)) {
+              throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
+            }
+            return { approvalId, decision, resolvedAt: new Date(this.options.now()).toISOString() };
+          });
         },
       );
     } catch (error) {

@@ -149,7 +149,7 @@ export interface AidenRemoteRouterDependencies {
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "streamChatId" | "status" | "pendingApproval" | "approvalChatId" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
+    "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
   > &
     Partial<
       Pick<
@@ -2685,31 +2685,26 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        const chatId = dependencies.streams.approvalChatId(device.id, approvalMatch[1]!);
         writeJson(
           response,
           200,
-          await runChatMutation(
-            dependencies.chats,
-            device,
-            chatId,
-            "approval",
-            () => {
-              const requiredCapability =
-                dependencies.streams!.approvalRequiredCapability(
-                  device.id,
-                  approvalMatch[1]!,
-                );
-              if (decision === "allow" && requiredCapability) {
-                requireDeviceCapabilities(device, [requiredCapability]);
-              }
-              return dependencies.streams!.respondApproval(
-                device.id,
-                approvalMatch[1]!,
-                decision,
-                key,
-              );
-            },
+          await dependencies.streams.respondApproval(
+            device.id,
+            approvalMatch[1]!,
+            decision,
+            key,
+            (chatId, action) =>
+              runChatMutation(dependencies.chats!, device, chatId, "approval", async () => {
+                const requiredCapability =
+                  dependencies.streams!.approvalRequiredCapability(
+                    device.id,
+                    approvalMatch[1]!,
+                  );
+                if (decision === "allow" && requiredCapability) {
+                  requireDeviceCapabilities(device, [requiredCapability]);
+                }
+                return action();
+              }),
           ),
         );
         return;
