@@ -127,6 +127,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## T3 Code simulator devices
+
+The experimental Simulator tab's device host, toolchain installer, hub proxy,
+agent device tools, and agent-device PATH shim (`main/services/devices/`), and
+its stream client and simulator controls (`renderer/`), are adapted from T3 Code at commit
+`1c127066`, under the same MIT license as the T3 Code browser entry above.
+Copyright (c) 2026 T3 Tools Inc. T3's device frame models are not included.
+
+## expo-device-hub and agent-device (installed on request)
+
+These are not bundled. After the user consents in the Simulator tab, Aiden
+installs the pinned versions with npm into its application data folder.
+
+- `expo-device-hub@0.12.0`: Copyright (c) 2015-present 650 Industries, Inc.
+  (aka Expo). MIT License. https://github.com/expo/expo-device-hub
+- `agent-device@0.21.12`: Copyright (c) 2026 Callstack. MIT License.
+  https://github.com/callstack/agent-device
+
 ## Playwright browser selector runtime
 
 The pinned injected selector runtime is bundled for sandboxed browser automation. Copyright Microsoft Corporation. Licensed under the Apache License, Version 2.0; the full license is in `main/services/browser/PLAYWRIGHT-LICENSE`.
