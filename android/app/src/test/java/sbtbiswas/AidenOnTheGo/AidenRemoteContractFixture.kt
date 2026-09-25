@@ -256,6 +256,9 @@ data class AidenRemoteContractFixture(
     val streamInput: AidenStreamInputFixture? = null,
     val streamStatus: AidenStreamStatus? = null,
     val question: AidenQuestionFixture? = null,
+    /** Raw catalog wire object; tests decode it through the strict codec so
+     * the shared fixture exercises the same bounds as the live route. */
+    val chatSkills: JsonObject? = null,
     val events: List<JsonObject> = emptyList(),
     val legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture,
     val error: AidenRemoteErrorEnvelope? = null

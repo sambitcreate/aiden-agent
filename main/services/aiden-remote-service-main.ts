@@ -99,6 +99,7 @@ import { botApplicationService } from "./bot-application-service-main.js";
 import {
   botRuntimeAuthority,
   preflightBotTurnAuthority,
+  resolveBotRuntimeCatalogSnapshot,
 } from "./bot-runtime-authority-main.js";
 import {
   AidenRemoteBotService,
@@ -107,7 +108,13 @@ import {
   botCapabilityCatalog,
   botCapabilityStore,
   botManagedWorkspace,
+  resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
+import {
+  exactBotSkillToolNames,
+  filterBotSkillSnapshot,
+} from "./bot-tool-authority.js";
+import { skillRegistry } from "./skill-registry-main.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   createBotInboxProjectionService,
@@ -483,6 +490,48 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("questions:respond")
               );
             },
+            deviceSupportsSkillInvocation: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return (
+                device !== undefined &&
+                device.acceptsProgressCapabilities === true &&
+                device.capabilities.includes("skills:invoke")
+              );
+            },
+            skillCatalog: (workspaceId) => skillRegistry.catalog(workspaceId),
+            botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
+              // The same Full/Custom narrowing the generation path enforces:
+              // admit fresh, revalidate, then filter the workspace snapshot
+              // down to the Bot's currently admitted skill tool names.
+              const admission = await botRuntimeAuthority.admit({
+                audienceId: deviceId,
+                botId,
+                chatId,
+              });
+              try {
+                const runtimeCatalog = await resolveBotRuntimeCatalogSnapshot(
+                  admission.authority,
+                );
+                const workspace = await configStore.getWorkspace(workspaceId);
+                if (!workspace) return [];
+                const snapshot = await skillRegistry.snapshotResolved(workspace);
+                const resolved = await resolveBotRuntimeSkills(botId);
+                const toolNames = exactBotSkillToolNames(
+                  admission.authority,
+                  runtimeCatalog.resources.skills,
+                  resolved,
+                  snapshot,
+                );
+                await admission.revalidateBeforeEffect();
+                return filterBotSkillSnapshot(snapshot, toolNames, admission).catalog;
+              } finally {
+                admission.release();
+              }
+            },
+            resolveSkillInvocation: (workspaceId, invocationId) =>
+              skillRegistry.resolveFresh(workspaceId, invocationId),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,

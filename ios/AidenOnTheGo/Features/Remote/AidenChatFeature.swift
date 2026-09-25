@@ -282,14 +282,16 @@ enum AidenTurnRequestBuilder {
         providerId: String?,
         modelId: String?,
         thinkingLevel: String?,
-        attachments: [AidenAttachmentReference]
+        attachments: [AidenAttachmentReference],
+        skill: AidenSkillInvocation? = nil
     ) -> AidenTurnStart {
         AidenTurnStart(
             text: text,
             providerId: providerId,
             modelId: modelId,
             thinkingLevel: thinkingLevel,
-            attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id)
+            attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id),
+            skill: skill
         )
     }
 }
@@ -298,6 +300,85 @@ struct AidenChatModelSelection: Equatable {
     let providerId: String?
     let modelId: String?
     let thinkingLevel: String?
+}
+
+/// Slice G composer trigger parsing. The palette tracks only the trailing
+/// `/query` or `@query` token: the trigger must start the draft or follow
+/// whitespace, and the token ends at the next whitespace. Anything else —
+/// triggers inside a token, a completed mention, punctuation — is ordinary
+/// text and never opens a palette.
+struct AidenComposerSuggestionQuery: Equatable {
+    enum Kind: Equatable {
+        case skill
+        case mention
+    }
+
+    static let maximumQueryCharacters = 256
+
+    let kind: Kind
+    let query: String
+    /// Draft range covering the trigger through the query; replaced on select.
+    let tokenRange: Range<String.Index>
+
+    static func parse(draft: String) -> AidenComposerSuggestionQuery? {
+        let tokenStart = draft.lastIndex(where: { $0.isWhitespace })
+            .map { draft.index(after: $0) } ?? draft.startIndex
+        guard tokenStart < draft.endIndex else { return nil }
+        let trigger = draft[tokenStart]
+        let kind: Kind
+        switch trigger {
+        case "/": kind = .skill
+        case "@": kind = .mention
+        default: return nil
+        }
+        let query = String(draft[draft.index(after: tokenStart)...])
+        guard query.unicodeScalars.count <= maximumQueryCharacters else { return nil }
+        return AidenComposerSuggestionQuery(
+            kind: kind,
+            query: query,
+            tokenRange: tokenStart..<draft.endIndex
+        )
+    }
+
+    func matches(_ candidate: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        return candidate.localizedCaseInsensitiveContains(query)
+    }
+
+    /// Prefix matches rank ahead of substring matches, mirroring the desktop
+    /// palette ordering.
+    func ranksBefore(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsPrefix = lhs.localizedCaseInsensitiveHasPrefix(query)
+        let rhsPrefix = rhs.localizedCaseInsensitiveHasPrefix(query)
+        if lhsPrefix != rhsPrefix { return lhsPrefix }
+        return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+    }
+}
+
+private extension String {
+    func localizedCaseInsensitiveHasPrefix(_ prefix: String) -> Bool {
+        guard !prefix.isEmpty else { return true }
+        return range(of: prefix, options: [.caseInsensitive, .anchored]) != nil
+    }
+}
+
+/// One row in the composer suggestion palette. Skills carry the opaque lease
+/// redeemed on turn start; agents and files insert plain display text — the
+/// client never resolves or expands them.
+enum AidenComposerSuggestion: Identifiable {
+    case skill(AidenRemoteSkillCatalogEntry)
+    case agent(AidenRemoteChatAgent)
+    case file(AidenWorkspaceFileEntry)
+
+    var id: String {
+        switch self {
+        case .skill(let entry): "skill-\(entry.invocationId)"
+        case .agent(let agent): "agent-\(agent.agentId)"
+        case .file(let entry): "file-\(entry.id)"
+        }
+    }
+
+    static let maximumVisibleRows = 100
 }
 
 enum AidenChatModelAuthority {
@@ -926,6 +1007,7 @@ final class AidenChatViewModel {
             guard draft != oldValue else { return }
             draftGeneration &+= 1
             composerGeneration &+= 1
+            prefetchComposerSuggestionData()
             guard !suppressesDraftPersistence else { return }
             scheduleDraftPersistence()
         }
@@ -1625,13 +1707,15 @@ final class AidenChatViewModel {
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = pendingAttachments
+        let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
         let request = AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
             thinkingLevel: modelSelection.thinkingLevel,
-            attachments: submittedAttachments
+            attachments: submittedAttachments,
+            skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
         )
         let previousUpdatedAt = chat.updatedAt
         let optimisticID = "local-\(UUID().uuidString.lowercased())"
@@ -1705,6 +1789,7 @@ final class AidenChatViewModel {
             guard coordinator.isCurrent(context) else { return }
             turnAttempts.reset()
             chat = acceptedChat
+            selectedSkill = nil
             liveText = ""
             reasoning = ""
             tools = []
@@ -2101,6 +2186,198 @@ final class AidenChatViewModel {
             guard coordinator.isCurrent(context) else { return }
             presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
+        }
+    }
+
+    // MARK: - Slice G composer power
+
+    /// Skills require the negotiated grant in addition to the advertised
+    /// feature; old servers hide the palette and sends stay ordinary text.
+    var canUseSkills: Bool {
+        guard !isReadOnlyFixture,
+              coordinator.server?.supportsChatSkills == true,
+              let installation = coordinator.installationStore.activeInstallation else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .skillsInvoke)
+    }
+
+    /// Roster mentions reuse the negotiated progress read the subagent sheet
+    /// already gates on.
+    var canMentionAgents: Bool { canReadAgentRoster }
+
+    /// File mentions ride the existing bounded file-index grants; bot chats
+    /// use the bot-conversation index, workspace chats the workspace index.
+    var canMentionFiles: Bool {
+        guard !isReadOnlyFixture,
+              let installation = coordinator.installationStore.activeInstallation else {
+            return false
+        }
+        return installation.hasNegotiatedAccess(to: .filesRead)
+    }
+
+    private(set) var skillCatalog: [AidenRemoteSkillCatalogEntry] = []
+    private(set) var selectedSkill: AidenRemoteSkillCatalogEntry?
+    private var skillCatalogLoaded = false
+    private var skillCatalogRetryPending = true
+    private var mentionAgents: [AidenRemoteChatAgent]?
+    private var mentionAgentsLoaded = false
+    private var mentionAgentsRetryPending = true
+    private var mentionFiles: [AidenWorkspaceFileEntry] = []
+    private var mentionFilesLoaded = false
+    private var mentionFilesRetryPending = true
+    @ObservationIgnored private var skillCatalogTask: Task<Void, Never>?
+    @ObservationIgnored private var mentionAgentsTask: Task<Void, Never>?
+    @ObservationIgnored private var mentionFilesTask: Task<Void, Never>?
+
+    /// The active trailing `/query` or `@query` token, or nil while the draft
+    /// tail is ordinary text. Skill triggers stay hidden during a run: stream
+    /// inputs cannot carry a skill lease, so offering the palette mid-flight
+    /// would imply the selection applies to the steer.
+    var composerSuggestionQuery: AidenComposerSuggestionQuery? {
+        guard let query = AidenComposerSuggestionQuery.parse(draft: draft) else { return nil }
+        switch query.kind {
+        case .skill: return canUseSkills && !isStreaming ? query : nil
+        case .mention: return (canMentionAgents || canMentionFiles) ? query : nil
+        }
+    }
+
+    var composerSuggestions: [AidenComposerSuggestion] {
+        guard let query = composerSuggestionQuery else { return [] }
+        switch query.kind {
+        case .skill:
+            let matches = skillCatalog.filter { query.matches($0.name) }
+            let ranked = matches.sorted { query.ranksBefore($0.name, $1.name) }
+            return ranked.prefix(AidenComposerSuggestion.maximumVisibleRows).map { .skill($0) }
+        case .mention:
+            var rows: [AidenComposerSuggestion] = []
+            if canMentionAgents {
+                let agents = (agentRoster?.agents ?? mentionAgents ?? [])
+                    .filter { query.matches($0.label) }
+                    .sorted { query.ranksBefore($0.label, $1.label) }
+                rows.append(contentsOf: agents.map { .agent($0) })
+            }
+            if canMentionFiles {
+                let files = mentionFiles
+                    .filter {
+                        $0.kind == .file
+                            && (query.matches($0.displayPath) || query.matches($0.name))
+                    }
+                    .sorted { query.ranksBefore($0.displayPath, $1.displayPath) }
+                rows.append(contentsOf: files.map { .file($0) })
+            }
+            return Array(rows.prefix(AidenComposerSuggestion.maximumVisibleRows))
+        }
+    }
+
+    /// Selects a palette skill, consuming the `/query` token. The lease is
+    /// redeemed by the Mac at turn admission; the catalog row is never an
+    /// authority by itself.
+    func selectSkillSuggestion(_ entry: AidenRemoteSkillCatalogEntry) {
+        guard entry.available,
+              let query = composerSuggestionQuery, query.kind == .skill else { return }
+        selectedSkill = entry
+        draft.removeSubrange(query.tokenRange)
+    }
+
+    func clearSelectedSkill() {
+        selectedSkill = nil
+    }
+
+    /// Replaces the trailing `@query` token with the chosen display text.
+    /// Insertions are plain user text; the Mac assigns no client-side mention
+    /// semantics beyond what the model already sees.
+    func selectMentionSuggestion(_ suggestion: AidenComposerSuggestion) {
+        guard let query = composerSuggestionQuery, query.kind == .mention else { return }
+        let insertion: String
+        switch suggestion {
+        case .agent(let agent):
+            insertion = "@\(agent.label) "
+        case .file(let entry):
+            insertion = "@\(entry.displayPath) "
+        case .skill:
+            return
+        }
+        draft.replaceSubrange(query.tokenRange, with: insertion)
+    }
+
+    /// Lazy per-open fetch: a trigger kind appearing for the first time kicks
+    /// off its bounded read. Failures may retry on the next palette open; a
+    /// completed read is reused for the chat's lifetime.
+    private func prefetchComposerSuggestionData() {
+        switch composerSuggestionQuery?.kind {
+        case .skill:
+            ensureSkillCatalog()
+        case .mention:
+            ensureMentionAgents()
+            ensureMentionFiles()
+        case nil:
+            // A fresh palette open may retry a failed read.
+            skillCatalogRetryPending = true
+            mentionAgentsRetryPending = true
+            mentionFilesRetryPending = true
+        }
+    }
+
+    private func ensureSkillCatalog() {
+        guard skillCatalogRetryPending, !skillCatalogLoaded, skillCatalogTask == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        skillCatalogRetryPending = false
+        skillCatalogTask = Task { [weak self] in
+            guard let self else { return }
+            defer { skillCatalogTask = nil }
+            do {
+                let catalog = try await coordinator.remoteClient(for: context).chatSkills(chatId: chat.id)
+                guard coordinator.isCurrent(context) else { return }
+                skillCatalog = catalog.skills
+                skillCatalogLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+    }
+
+    private func ensureMentionAgents() {
+        guard canMentionAgents, mentionAgentsRetryPending, !mentionAgentsLoaded,
+              mentionAgentsTask == nil, agentRoster == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        mentionAgentsRetryPending = false
+        mentionAgentsTask = Task { [weak self] in
+            guard let self else { return }
+            defer { mentionAgentsTask = nil }
+            do {
+                let roster = try await coordinator.remoteClient(for: context).agentRoster(chatId: chat.id)
+                guard coordinator.isCurrent(context) else { return }
+                mentionAgents = roster.isAvailable ? roster.agents : []
+                mentionAgentsLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
+        }
+    }
+
+    private func ensureMentionFiles() {
+        guard canMentionFiles, mentionFilesRetryPending, !mentionFilesLoaded,
+              mentionFilesTask == nil,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        mentionFilesRetryPending = false
+        mentionFilesTask = Task { [weak self] in
+            guard let self else { return }
+            defer { mentionFilesTask = nil }
+            do {
+                let client = try coordinator.remoteClient(for: context)
+                let index = chat.isBotChat
+                    ? try await client.botConversationFiles(chatId: chat.id)
+                    : try await client.workspaceFiles(workspaceId: chat.workspaceId)
+                guard coordinator.isCurrent(context) else { return }
+                mentionFiles = index.entries
+                mentionFilesLoaded = true
+            } catch let error where aidenIsCancellation(error) {
+            } catch {
+                _ = await coordinator.handleCredentialRevocation(error, context: context)
+            }
         }
     }
 
@@ -5804,6 +6081,45 @@ private struct AidenComposerView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            if let selectedSkill = model.selectedSkill {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.caption.weight(.medium))
+                    Text("/\(selectedSkill.name)")
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Button {
+                        model.clearSelectedSkill()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .accessibilityLabel("Remove skill \(selectedSkill.name)")
+                }
+                .foregroundStyle(palette.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(palette.secondary.opacity(0.12), in: Capsule())
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Skill \(selectedSkill.name) selected")
+            }
+
+            if !model.composerSuggestions.isEmpty {
+                AidenComposerSuggestionList(
+                    suggestions: model.composerSuggestions,
+                    onSelect: { suggestion in
+                        switch suggestion {
+                        case .skill(let entry):
+                            model.selectSkillSuggestion(entry)
+                        case .agent, .file:
+                            model.selectMentionSuggestion(suggestion)
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             TextField("Message Aiden", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 4)
@@ -6198,5 +6514,114 @@ private struct AidenComposerGlassModifier: ViewModifier {
 private extension View {
     func aidenComposerGlass(enabled: Bool = true) -> some View {
         modifier(AidenComposerGlassModifier(enabled: enabled))
+    }
+}
+
+/// Compact composer palette for `/` skills and `@` roster/file mentions. The
+/// panel is presentation only: skills hand the Mac an opaque lease, mentions
+/// insert display text. It inherits the composer glass surface rather than
+/// introducing a second floating container.
+private struct AidenComposerSuggestionList: View {
+    @Environment(\.aidenPalette) private var palette
+    let suggestions: [AidenComposerSuggestion]
+    let onSelect: (AidenComposerSuggestion) -> Void
+
+    private let maximumRows = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(suggestions.prefix(maximumRows))) { suggestion in
+                Button {
+                    onSelect(suggestion)
+                } label: {
+                    row(for: suggestion)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDisabled(suggestion))
+                if suggestion.id != suggestions.prefix(maximumRows).last?.id {
+                    Divider().opacity(0.35)
+                }
+            }
+        }
+        .background(palette.raised.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func isDisabled(_ suggestion: AidenComposerSuggestion) -> Bool {
+        if case .skill(let entry) = suggestion { !entry.available }
+        return false
+    }
+
+    @ViewBuilder
+    private func row(for suggestion: AidenComposerSuggestion) -> some View {
+        switch suggestion {
+        case .skill(let entry):
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("/\(entry.name)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(entry.available ? palette.foreground : palette.secondary)
+                        .lineLimit(1)
+                    Text(entry.available ? entry.description : (entry.unavailableReason ?? ""))
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Text(entry.source.rawValue)
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                entry.available
+                    ? "Skill \(entry.name)"
+                    : "Skill \(entry.name), unavailable"
+            )
+        case .agent(let agent):
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.square")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                Text(agent.label)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(palette.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("agent")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Mention agent \(agent.label)")
+        case .file(let entry):
+            HStack(spacing: 8) {
+                Image(systemName: "doc")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 18)
+                Text(entry.displayPath)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(palette.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("file")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary.opacity(0.85))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Mention file \(entry.displayPath)")
+        }
     }
 }

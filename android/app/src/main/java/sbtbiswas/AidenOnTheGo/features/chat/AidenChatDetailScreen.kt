@@ -131,6 +131,8 @@ fun AidenChatDetailScreen(
     val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val draft by viewModel.draft.collectAsState()
+    val selectedSkill by viewModel.selectedSkill.collectAsState()
+    val composerSuggestions by viewModel.composerSuggestions.collectAsState()
     val presentedError by viewModel.presentedError.collectAsState()
     val voiceInputMode by voiceInputStore.mode.collectAsState()
     val taskProgress by viewModel.taskProgress.collectAsState()
@@ -528,6 +530,15 @@ fun AidenChatDetailScreen(
                     onSubmitRunInput = { mode -> viewModel.submitRunInput(mode) },
                     onRedirectRequest = { showRedirectConfirm = true },
                     runInputReceipt = runInputReceipt,
+                    selectedSkill = selectedSkill,
+                    onClearSkill = { viewModel.clearSelectedSkill() },
+                    composerSuggestions = composerSuggestions,
+                    onSelectSuggestion = { suggestion ->
+                        when (suggestion) {
+                            is AidenComposerSuggestion.Skill -> viewModel.selectSkillSuggestion(suggestion.entry)
+                            else -> viewModel.selectMentionSuggestion(suggestion)
+                        }
+                    },
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
                     onToggleVoice = {

@@ -7,6 +7,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
+import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillCatalogEntry
+import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillSource
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
@@ -113,5 +116,59 @@ class AidenComposerUiTest {
 
         compose.onNodeWithContentDescription("Stop generation").assertIsEnabled()
         compose.onNodeWithContentDescription("Run input options").assertDoesNotExist()
+    }
+
+    @Test
+    fun skillPaletteListsBoundedRowsAndHonorsAvailability() {
+        val selected = mutableListOf<AidenComposerSuggestion>()
+        val available = AidenRemoteSkillCatalogEntry(
+            invocationId = "sk1_${"a".repeat(43)}",
+            name = "review-code",
+            description = "Review changes.",
+            source = AidenRemoteSkillSource.WORKSPACE,
+            available = true,
+            unavailableReason = null
+        )
+        val unavailable = AidenRemoteSkillCatalogEntry(
+            invocationId = "sk1_${"b".repeat(43)}",
+            name = "ship",
+            description = "Ship it.",
+            source = AidenRemoteSkillSource.CONFIGURED,
+            available = false,
+            unavailableReason = "Shadowed."
+        )
+        var cleared = false
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "/re",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedSkill = available,
+                    onClearSkill = { cleared = true },
+                    composerSuggestions = listOf(
+                        AidenComposerSuggestion.Skill(available),
+                        AidenComposerSuggestion.Skill(unavailable)
+                    ),
+                    onSelectSuggestion = { selected += it }
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Skill review-code").assertExists()
+        compose.onNodeWithContentDescription("Skill ship, unavailable").assertExists()
+        // Unavailable rows stay visible but do not select.
+        compose.onNodeWithContentDescription("Skill ship, unavailable").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(emptyList<AidenComposerSuggestion>(), selected) }
+        compose.onNodeWithContentDescription("Skill review-code").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, selected.size) }
+        // The selected-skill chip clears without touching the draft.
+        compose.onNodeWithContentDescription("Remove skill review-code").performClick()
+        compose.runOnIdle { assertEquals(true, cleared) }
     }
 }

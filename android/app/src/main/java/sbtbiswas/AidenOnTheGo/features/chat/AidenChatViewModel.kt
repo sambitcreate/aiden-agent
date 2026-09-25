@@ -11,10 +11,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -655,6 +657,7 @@ class AidenChatViewModel(
         draftSession?.let { session ->
             draftStore.save(text, session)
         }
+        prefetchComposerSuggestionData()
     }
 
     fun selectProvider(providerId: String) {
@@ -754,7 +757,8 @@ class AidenChatViewModel(
             providerId = turnModel.providerId,
             modelId = turnModel.modelId,
             thinkingLevel = turnModel.thinkingLevel,
-            attachments = submittedAttachments
+            attachments = submittedAttachments,
+            skill = _selectedSkill.value
         )
 
         val previousUpdatedAt = currentChat.updatedAt
@@ -810,6 +814,7 @@ class AidenChatViewModel(
                     chatCache.saveActiveStream(stream, instanceId, chatId)
                 }
                 turnAttempts.reset()
+                _selectedSkill.value = null
 
                 _liveText.value = ""
                 _reasoning.value = ""
@@ -1338,6 +1343,215 @@ class AidenChatViewModel(
             } finally {
                 _isSubmittingRunInput.value = false
             }
+        }
+    }
+
+    // MARK: - Slice G composer power
+
+    /** Skills require the negotiated grant in addition to the advertised
+     * feature; old servers hide the palette and sends stay ordinary text. */
+    val canUseSkills: Boolean
+        get() = coordinator.serverInfo.value?.supportsChatSkills == true &&
+            !isReadOnlyPresentation &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE) == true
+
+    /** Roster mentions reuse the negotiated progress read the subagent sheet
+     * already gates on. */
+    val canMentionAgents: Boolean get() = canReadAgentRoster
+
+    /** File mentions ride the existing bounded file-index grants; bot chats
+     * use the bot-conversation index, workspace chats the workspace index. */
+    val canMentionFiles: Boolean
+        get() = !isReadOnlyPresentation &&
+            installationForProgress()?.hasNegotiatedAccess(AidenRemoteCapability.FILES_READ) == true
+
+    private val _skillCatalog = MutableStateFlow<List<AidenRemoteSkillCatalogEntry>>(emptyList())
+    val skillCatalog: StateFlow<List<AidenRemoteSkillCatalogEntry>> = _skillCatalog.asStateFlow()
+    private val _selectedSkill = MutableStateFlow<AidenRemoteSkillCatalogEntry?>(null)
+    val selectedSkill: StateFlow<AidenRemoteSkillCatalogEntry?> = _selectedSkill.asStateFlow()
+    private val _mentionAgents = MutableStateFlow<List<AidenChatAgent>?>(null)
+    private val _mentionFiles = MutableStateFlow<List<AidenWorkspaceFileEntry>>(emptyList())
+    private var skillCatalogLoaded = false
+    private var skillCatalogRetryPending = true
+    private var mentionAgentsLoaded = false
+    private var mentionAgentsRetryPending = true
+    private var mentionFilesLoaded = false
+    private var mentionFilesRetryPending = true
+    private var skillCatalogJob: Job? = null
+    private var mentionAgentsJob: Job? = null
+    private var mentionFilesJob: Job? = null
+
+    /** The active trailing `/query` or `@query` token, or null while the draft
+     * tail is ordinary text. Skill triggers stay hidden during a run: stream
+     * inputs cannot carry a skill lease, so offering the palette mid-flight
+     * would imply the selection applies to the steer. */
+    private fun composerSuggestionQuery(draft: String, streaming: Boolean): AidenComposerSuggestionQuery? {
+        val query = AidenComposerSuggestionQuery.parse(draft) ?: return null
+        return when (query.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL ->
+                if (canUseSkills && !streaming) query else null
+            AidenComposerSuggestionQuery.Kind.MENTION ->
+                if (canMentionAgents || canMentionFiles) query else null
+        }
+    }
+
+    /** Composed palette state: the query derives from the draft tail and the
+     * rows from the fetched catalogs, so a single combined flow keeps
+     * collection at the composer edge instead of the screen. */
+    val composerSuggestions: StateFlow<List<AidenComposerSuggestion>> = combine(
+        combine(_draft, _streamState, _skillCatalog) { draft, stream, catalog -> Triple(draft, stream, catalog) },
+        combine(_agentRoster, _mentionAgents, _mentionFiles) { roster, agents, files -> Triple(roster, agents, files) },
+        coordinator.serverInfo
+    ) { (draft, streamState, catalog), (roster, mentionAgents, mentionFiles), _ ->
+        val streaming = streamState != null && !streamState.isTerminal
+        val query = composerSuggestionQuery(draft, streaming) ?: return@combine emptyList()
+        when (query.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL ->
+                catalog
+                    .filter { query.matches(it.name) }
+                    .sortedWith { a, b -> query.compare(a.name, b.name) }
+                    .take(AidenComposerSuggestion.MAX_VISIBLE_ROWS)
+                    .map { AidenComposerSuggestion.Skill(it) }
+            AidenComposerSuggestionQuery.Kind.MENTION -> {
+                val rows = mutableListOf<AidenComposerSuggestion>()
+                if (canMentionAgents) {
+                    (roster?.agents ?: mentionAgents.orEmpty())
+                        .filter { query.matches(it.label) }
+                        .sortedWith { a, b -> query.compare(a.label, b.label) }
+                        .forEach { rows.add(AidenComposerSuggestion.Agent(it)) }
+                }
+                if (canMentionFiles) {
+                    mentionFiles
+                        .filter {
+                            it.kind == AidenWorkspaceFileKind.FILE &&
+                                (query.matches(it.displayPath) || query.matches(it.name))
+                        }
+                        .sortedWith { a, b -> query.compare(a.displayPath, b.displayPath) }
+                        .forEach { rows.add(AidenComposerSuggestion.File(it)) }
+                }
+                rows.take(AidenComposerSuggestion.MAX_VISIBLE_ROWS)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Selects a palette skill, consuming the `/query` token. The lease is
+     * redeemed by the Mac at turn admission; the catalog row is never an
+     * authority by itself. */
+    fun selectSkillSuggestion(entry: AidenRemoteSkillCatalogEntry) {
+        val query = composerSuggestionQuery(_draft.value, isStreamingNow) ?: return
+        if (!entry.available || query.kind != AidenComposerSuggestionQuery.Kind.SKILL) return
+        _selectedSkill.value = entry
+        updateDraft(_draft.value.removeRange(query.tokenStart, _draft.value.length))
+    }
+
+    fun clearSelectedSkill() {
+        _selectedSkill.value = null
+    }
+
+    /** Replaces the trailing `@query` token with the chosen display text.
+     * Insertions are plain user text; the Mac assigns no client-side mention
+     * semantics beyond what the model already sees. */
+    fun selectMentionSuggestion(suggestion: AidenComposerSuggestion) {
+        val query = composerSuggestionQuery(_draft.value, isStreamingNow) ?: return
+        if (query.kind != AidenComposerSuggestionQuery.Kind.MENTION) return
+        val insertion = when (suggestion) {
+            is AidenComposerSuggestion.Agent -> "@${suggestion.agent.label} "
+            is AidenComposerSuggestion.File -> "@${suggestion.entry.displayPath} "
+            is AidenComposerSuggestion.Skill -> return
+        }
+        updateDraft(_draft.value.replaceRange(query.tokenStart, _draft.value.length, insertion))
+    }
+
+    /** Lazy per-open fetch: a trigger kind appearing for the first time kicks
+     * off its bounded read. Failures may retry on the next palette open; a
+     * completed read is reused for the chat's lifetime. */
+    private fun prefetchComposerSuggestionData() {
+        when (composerSuggestionQuery(_draft.value, isStreamingNow)?.kind) {
+            AidenComposerSuggestionQuery.Kind.SKILL -> ensureSkillCatalog()
+            AidenComposerSuggestionQuery.Kind.MENTION -> {
+                ensureMentionAgents()
+                ensureMentionFiles()
+            }
+            null -> {
+                skillCatalogRetryPending = true
+                mentionAgentsRetryPending = true
+                mentionFilesRetryPending = true
+            }
+        }
+    }
+
+    private fun ensureSkillCatalog() {
+        if (!skillCatalogRetryPending || skillCatalogLoaded || skillCatalogJob?.isActive == true) return
+        val client = activeClient() ?: return
+        skillCatalogRetryPending = false
+        skillCatalogJob = viewModelScope.launch {
+            try {
+                val catalog = client.chatSkills(chatId)
+                if (activeClient() === client) {
+                    _skillCatalog.value = catalog.skills
+                    skillCatalogLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    private fun ensureMentionAgents() {
+        if (!canMentionAgents || !mentionAgentsRetryPending || mentionAgentsLoaded ||
+            mentionAgentsJob?.isActive == true || _agentRoster.value != null) return
+        val client = activeClient() ?: return
+        mentionAgentsRetryPending = false
+        mentionAgentsJob = viewModelScope.launch {
+            try {
+                val roster = client.chatAgents(chatId)
+                if (activeClient() === client) {
+                    _mentionAgents.value = if (roster.availability == AidenChatProgressAvailability.READY) {
+                        roster.agents
+                    } else {
+                        emptyList()
+                    }
+                    mentionAgentsLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    private fun ensureMentionFiles() {
+        if (!canMentionFiles || !mentionFilesRetryPending || mentionFilesLoaded ||
+            mentionFilesJob?.isActive == true) return
+        val client = activeClient() ?: return
+        val currentChat = _chat.value ?: return
+        mentionFilesRetryPending = false
+        mentionFilesJob = viewModelScope.launch {
+            try {
+                val index = if (currentChat.isBotChat) {
+                    client.botConversationFiles(currentChat.id)
+                } else {
+                    client.workspaceFiles(currentChat.workspaceId)
+                }
+                if (activeClient() === client) {
+                    _mentionFiles.value = index.entries
+                    mentionFilesLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                handleComposerPrefetchError(e)
+            }
+        }
+    }
+
+    /** Composer prefetch reads are advisory: they retry on the next palette
+     * open. Only an explicit revocation tears the pairing down, matching the
+     * progress-observation convention. */
+    private fun handleComposerPrefetchError(error: Throwable) {
+        if (isProgressCredentialRevoked(error) &&
+            coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+            coordinator.removeInstallation(instanceId)
         }
     }
 

@@ -37,6 +37,7 @@ async function fixture(options: {
   approvalRequiredCapability?: AidenRemoteCapability;
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
+  skillsAvailable?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -340,6 +341,24 @@ async function fixture(options: {
         calls.push(`attachment-content:${id}:${attachmentId}`);
         return { bytes: Buffer.from("fixture"), mimeType: "image/png" };
       },
+      ...(options.skillsAvailable === false
+        ? {}
+        : {
+            chatSkillCatalog: async (deviceId, id) => {
+              calls.push(`skill-catalog:${deviceId}:${id}`);
+              return {
+                skills: [
+                  {
+                    invocationId: `sk1_${"a".repeat(43)}`,
+                    name: "review-code",
+                    description: "Review changes.",
+                    source: "workspace" as const,
+                    available: true,
+                  },
+                ],
+              };
+            },
+          }),
     },
     chatProgress: options.progressAvailable === false
       ? undefined
@@ -1245,9 +1264,11 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "git:write",
       "schedule:read",
       "schedule:write",
+      "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
     assert.equal(server.features.includes("chat-agents-v1"), false);
+    assert.equal(server.features.includes("chat-skills-v1"), true);
 
     const read = await fetch(`${unsupported.base}/chats/chat-1/tasks`, { headers });
     assert.equal(read.status, 404);
@@ -3240,6 +3261,62 @@ test("question routes fail closed without the grant or the host surface", async 
       body: JSON.stringify({ cancelled: true, answers: [] }),
     });
     assert.equal(respondMissing.status, 404);
+  } finally {
+    noSurface.close();
+  }
+});
+
+test("chat skills route gates on negotiated skills:invoke and advertises its feature", async () => {
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+
+  const legacy = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${legacy.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), true,
+      "the feature advertises the host wiring even before a device negotiates the grant");
+    const denied = await fetch(`${legacy.base}/chats/chat-1/skills`, { headers });
+    assert.equal(denied.status, 403);
+    assert.equal(legacy.calls.some((call) => call.startsWith("skill-catalog:")), false);
+  } finally {
+    legacy.close();
+  }
+
+  const negotiated = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+  });
+  try {
+    const server = await (await fetch(`${negotiated.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), true);
+    const skills = await fetch(`${negotiated.base}/chats/chat-1/skills`, { headers });
+    assert.equal(skills.status, 200);
+    assert.deepEqual(await skills.json(), {
+      skills: [{
+        invocationId: `sk1_${"a".repeat(43)}`,
+        name: "review-code",
+        description: "Review changes.",
+        source: "workspace",
+        available: true,
+      }],
+    });
+    assert.equal(negotiated.calls.includes("skill-catalog:device-authorized-12345678:chat-1"), true);
+  } finally {
+    negotiated.close();
+  }
+
+  const noSurface = await fixture({
+    capabilities: ["server:read", "chat:read", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+    skillsAvailable: false,
+  });
+  try {
+    const server = await (await fetch(`${noSurface.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), false);
+    const missing = await fetch(`${noSurface.base}/chats/chat-1/skills`, { headers });
+    assert.equal(missing.status, 404);
   } finally {
     noSurface.close();
   }

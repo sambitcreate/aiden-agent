@@ -42,6 +42,7 @@ object AidenRemoteProtocol {
     const val CHAT_AGENTS_FEATURE = "chat-agents-v1"
     const val CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1"
     const val CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1"
+    const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -438,16 +439,17 @@ data class AidenRemoteCapability(val rawValue: String) {
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
+        val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
             FILES_READ, FILES_WRITE, GIT_READ, GIT_WRITE,
             SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ,
-            QUESTIONS_RESPOND
+            QUESTIONS_RESPOND, SKILLS_INVOKE
         )
 
-        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND)
+        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE)
     }
 }
 
@@ -499,6 +501,7 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val APPROVAL_EXPIRED = AidenRemoteErrorCode("approval_expired")
         val QUESTION_ALREADY_RESOLVED = AidenRemoteErrorCode("question_already_resolved")
         val QUESTION_EXPIRED = AidenRemoteErrorCode("question_expired")
+        val SKILL_UNAVAILABLE = AidenRemoteErrorCode("skill_unavailable")
         val OPERATION_IN_PROGRESS = AidenRemoteErrorCode("operation_in_progress")
         val OPERATION_STALE = AidenRemoteErrorCode("operation_stale")
         val GIT_CAPABILITY_DENIED = AidenRemoteErrorCode("git_capability_denied")
@@ -517,7 +520,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             FILESYSTEM_IDENTITY_CHANGED, PATH_OUTSIDE_ROOT, HANDLE_CAPACITY, TURN_ALREADY_ACTIVE,
             STREAM_GONE, APPROVAL_ALREADY_RESOLVED, APPROVAL_EXPIRED, OPERATION_IN_PROGRESS,
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
-            SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED
+            SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
+            SKILL_UNAVAILABLE
         )
     }
 }

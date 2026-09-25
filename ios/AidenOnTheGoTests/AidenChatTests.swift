@@ -3014,6 +3014,96 @@ final class AidenChatTests: XCTestCase {
         ).attachmentIds)
     }
 
+    func testTurnRequestBuilderCarriesTheOpaqueSkillLease() throws {
+        let entry = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteSkillCatalogEntry.self,
+            from: Data(#"""
+            {
+                "invocationId": "sk1_\#(String(repeating: "a", count: 43))",
+                "name": "review-code",
+                "description": "Review the current changes.",
+                "source": "workspace",
+                "available": true
+            }
+            """#.utf8)
+        )
+        let request = AidenTurnRequestBuilder.make(
+            text: "Review this",
+            providerId: nil,
+            modelId: nil,
+            thinkingLevel: nil,
+            attachments: [],
+            skill: AidenSkillInvocation(entry: entry)
+        )
+
+        XCTAssertEqual(request.skill?.version, 1)
+        XCTAssertEqual(request.skill?.invocationId, entry.invocationId)
+        XCTAssertEqual(request.skill?.displayName, "review-code")
+        XCTAssertEqual(request.skill?.source, .workspace)
+
+        let encoded = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(object.keys),
+            ["text", "skill"]
+        )
+        let skill = try XCTUnwrap(object["skill"] as? [String: Any])
+        XCTAssertEqual(
+            Set(skill.keys),
+            ["version", "invocationId", "displayName", "source"]
+        )
+        XCTAssertEqual(skill["version"] as? Int, 1)
+
+        XCTAssertNil(AidenTurnRequestBuilder.make(
+            text: "Plain",
+            providerId: nil,
+            modelId: nil,
+            thinkingLevel: nil,
+            attachments: []
+        ).skill)
+    }
+
+    func testComposerSuggestionQueryParsesOnlyTrailingTriggerTokens() {
+        let skill = AidenComposerSuggestionQuery.parse(draft: "/rev")
+        XCTAssertEqual(skill?.kind, .skill)
+        XCTAssertEqual(skill?.query, "rev")
+        if let skill {
+            XCTAssertEqual(String("/rev"[skill.tokenRange]), "/rev")
+        } else {
+            XCTFail("Expected a skill trigger")
+        }
+
+        // A trigger mid-draft still opens while its token trails the text.
+        let midTrigger = AidenComposerSuggestionQuery.parse(draft: "please /rev")
+        XCTAssertEqual(midTrigger?.kind, .skill)
+        XCTAssertEqual(midTrigger?.query, "rev")
+        if let midTrigger {
+            XCTAssertEqual(String("please /rev"[midTrigger.tokenRange]), "/rev")
+        }
+        // A completed token (whitespace after it) closes the palette.
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "please run /review now"))
+
+        let trailingMention = AidenComposerSuggestionQuery.parse(draft: "hey @Sub")
+        XCTAssertEqual(trailingMention?.kind, .mention)
+        XCTAssertEqual(trailingMention?.query, "Sub")
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "hey @Sub ag"))
+
+        // Triggers inside a token are ordinary text.
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "a/b"))
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "email me@x"))
+        // An empty query is still an open palette request.
+        XCTAssertEqual(AidenComposerSuggestionQuery.parse(draft: "/")?.query, "")
+        XCTAssertEqual(AidenComposerSuggestionQuery.parse(draft: "@")?.query, "")
+        XCTAssertNil(AidenComposerSuggestionQuery.parse(draft: "done "))
+        XCTAssertNil(
+            AidenComposerSuggestionQuery.parse(
+                draft: "/" + String(repeating: "x", count: 300)
+            )
+        )
+    }
+
 #if DEBUG
     @MainActor
     func testBotChatViewModelRejectsProviderAndModelPickerMutations() {

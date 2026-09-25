@@ -945,3 +945,31 @@ and per-token settled-row churn:
 
 Deferred per the slice scope: device-local unread marks and Live Activity
 freshness chips wait for the E.2 push foundation.
+
+## Composer power (`/skills`, `@mentions`) — 2026-09-25
+
+The Mac stays the execution authority; mobile only ever sees bounded display
+metadata plus an opaque invocation lease. Contract revision 14 adds the
+`skills:invoke` negotiable capability, the `chat-skills-v1` feature token,
+`GET /chats/{chatId}/skills` (≤500 entries of `invocationId`/`name`/
+`description`/`source`/`available`/`unavailableReason` — never paths,
+instructions, or registry internals), an optional `skill` lease on
+`POST /chats/{chatId}/turns`, and the `skill_unavailable` error code. Bot
+catalogs are narrowed by the bot's currently admitted skill policy, and the
+turn route redeems the lease through the same
+`reserveSkillPreparation`/`prepareSkillInvocation`/`handoff` path desktop
+slash selection uses — stale, malformed, or unavailable leases fail closed
+and the turn is released cleanly.
+
+On both native clients the composer parses the trailing `/query` or `@query`
+token: `/` lists catalog skills (hidden while a run is active, since stream
+inputs cannot carry a lease) and `@` lists roster agents plus workspace files
+through the existing `agents`, `botConversationFiles`, and `workspaceFiles`
+reads. Selecting a skill sets a pending lease chip the send attaches to
+`AidenTurnStart`; mention selections insert plain `@label`/`@displayPath`
+text. Capability upgrades negotiate `skills:invoke` post-pairing exactly like
+the question grant — this also fixed a latent iOS bug where the
+`updateDeviceCapabilities` allowlist had never gained `questionsRespond`.
+
+Subagent interrupt stays deferred: Remote intentionally exposes no child-run
+control surface, so mobile remains inspect-only for subagents.

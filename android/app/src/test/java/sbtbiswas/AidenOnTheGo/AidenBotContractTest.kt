@@ -121,7 +121,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(13, fixture.contractRevision)
+        assertEquals(14, fixture.contractRevision)
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -197,6 +197,13 @@ class AidenBotContractTest {
         assertEquals(pendingQuestion.promptId, questionEvent.payload?.questionPrompt?.promptId)
         assertEquals(pendingQuestion.questions, questionEvent.payload?.questionPrompt?.questions)
         assertFalse(questionEvent.terminal)
+        val skillCatalog = AidenSkillContractCodec.parseCatalog(requireNotNull(fixture.chatSkills))
+        assertEquals(2, skillCatalog.skills.size)
+        assertEquals("review-code", skillCatalog.skills.first().name)
+        assertTrue(skillCatalog.skills.first().available)
+        assertFalse(skillCatalog.skills[1].available)
+        assertNotNull(skillCatalog.skills[1].unavailableReason)
+        assertTrue(fixture.server.supportsChatSkills)
         assertFalse(fixture.legacyNonNegotiating.server.capabilities.contains(AidenRemoteCapability.BOT_READ))
     }
 

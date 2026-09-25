@@ -643,13 +643,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     static let tasksRead = Self(rawValue: "tasks:read")
     static let agentsRead = Self(rawValue: "agents:read")
     static let questionsRespond = Self(rawValue: "questions:respond")
+    static let skillsInvoke = Self(rawValue: "skills:invoke")
 
     static let v1Known: [Self] = [
         .serverRead, .chatRead, .chatWrite, .approvalRespond,
         .workspaceRead, .workspaceBrowse, .workspaceManage,
         .filesRead, .filesWrite, .gitRead, .gitWrite,
         .scheduleRead, .scheduleWrite, .botRead, .botWrite, .tasksRead, .agentsRead,
-        .questionsRespond,
+        .questionsRespond, .skillsInvoke,
     ]
 
     init(from decoder: Decoder) throws {
@@ -742,6 +743,7 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "approval_expired"),
         Self(rawValue: "question_already_resolved"),
         Self(rawValue: "question_expired"),
+        Self(rawValue: "skill_unavailable"),
         Self(rawValue: "operation_in_progress"),
         Self(rawValue: "operation_stale"),
         Self(rawValue: "git_capability_denied"),
@@ -1995,6 +1997,122 @@ struct AidenRemoteChatAgentRoster: Decodable, Equatable, Sendable {
     }
 }
 
+/// Invocable-skill catalog (GET /chats/{chatId}/skills). Entries carry the same
+/// bounded, renderer-safe projection the desktop slash palette consumes: an
+/// opaque invocation lease plus safe display metadata — never skill paths,
+/// instructions, fingerprints, or registry internals.
+enum AidenRemoteSkillSource: String, Codable, Sendable {
+    case configured
+    case workspace
+    case global
+}
+
+struct AidenRemoteSkillCatalogEntry: Decodable, Equatable, Sendable, Identifiable {
+    let invocationId: String
+    let name: String
+    let description: String
+    let source: AidenRemoteSkillSource
+    let available: Bool
+    let unavailableReason: String?
+
+    var id: String { invocationId }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(
+            dynamic,
+            allowed: Set([
+                "invocationId", "name", "description", "source", "available", "unavailableReason",
+            ])
+        )
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        invocationId = try boundedString(
+            values,
+            forKey: .invocationId,
+            maxLength: 64,
+            field: "skill.invocationId",
+            required: true
+        )!
+        // The lease is a fixed opaque format, not a general identifier;
+        // accepting anything wider would let a poisoned catalog mint client-
+        // side lease shapes the host grammar never issued.
+        let leaseScalars = Array(invocationId.unicodeScalars)
+        let validLeaseFormat =
+            invocationId.hasPrefix("sk1_") && leaseScalars.count == 47 &&
+            leaseScalars.dropFirst(4).allSatisfy { scalar in
+                (scalar.value >= 48 && scalar.value <= 57) ||
+                    (scalar.value >= 65 && scalar.value <= 90) ||
+                    (scalar.value >= 97 && scalar.value <= 122) ||
+                    scalar.value == 95 || scalar.value == 45
+            }
+        guard validLeaseFormat else {
+            throw AidenRemoteContractError.unsafePayloadField("skill.invocationId")
+        }
+        name = try boundedString(
+            values,
+            forKey: .name,
+            maxLength: 80,
+            field: "skill.name",
+            required: true
+        )!
+        description = try boundedString(
+            values,
+            forKey: .description,
+            maxLength: 240,
+            field: "skill.description",
+            required: true
+        )!
+        source = try values.decode(AidenRemoteSkillSource.self, forKey: .source)
+        available = try values.decode(Bool.self, forKey: .available)
+        unavailableReason = try boundedString(
+            values,
+            forKey: .unavailableReason,
+            maxLength: 160,
+            field: "skill.unavailableReason"
+        )
+        guard available == (unavailableReason == nil) else {
+            throw AidenRemoteContractError.unsafePayloadField("skill.unavailableReason")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case invocationId, name, description, source, available, unavailableReason
+    }
+}
+
+struct AidenRemoteSkillCatalog: Decodable, Equatable, Sendable {
+    let skills: [AidenRemoteSkillCatalogEntry]
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: ["skills"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        skills = try values.decode([AidenRemoteSkillCatalogEntry].self, forKey: .skills)
+        guard skills.count <= 500,
+              Set(skills.map(\.invocationId)).count == skills.count else {
+            throw AidenRemoteContractError.unsafePayloadField("skillCatalog.skills")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case skills }
+}
+
+/// Opaque invocation lease redeemed on POST /chats/{chatId}/turns. The Mac
+/// resolves, expands, and binds it to the appended user message exactly like a
+/// desktop slash selection; the client never expands skill content itself.
+struct AidenSkillInvocation: Encodable, Equatable, Sendable {
+    let version = 1
+    let invocationId: String
+    let displayName: String
+    let source: AidenRemoteSkillSource
+
+    init(entry: AidenRemoteSkillCatalogEntry) {
+        invocationId = entry.invocationId
+        displayName = entry.name
+        source = entry.source
+    }
+}
+
 struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendable {
     let accepts: [AidenRemoteCapability]
 
@@ -2003,7 +2121,9 @@ struct AidenRemoteDeviceCapabilitiesUpdateRequest: Decodable, Equatable, Sendabl
         try assertKnownKeys(dynamic, allowed: ["accepts"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accepts = try values.decode([AidenRemoteCapability].self, forKey: .accepts)
-        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        let allowed = Set([
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+        ])
         guard !accepts.isEmpty,
               accepts.count <= allowed.count,
               Set(accepts).count == accepts.count,
@@ -2710,6 +2830,7 @@ struct AidenRemoteContractFixture: Decodable {
     let streamApproval: AidenStreamApprovalSnapshot
     let streamInput: StreamInputFixture?
     let question: QuestionFixture?
+    let chatSkills: AidenRemoteSkillCatalog?
     let events: [AidenRemoteStreamEvent]
     let speechStatus: AidenSpeechStatus
     let speechTranscription: AidenSpeechTranscription
@@ -2783,6 +2904,7 @@ struct AidenRemoteContractFixture: Decodable {
         streamApproval = try values.decode(AidenStreamApprovalSnapshot.self, forKey: .streamApproval)
         streamInput = try values.decodeIfPresent(StreamInputFixture.self, forKey: .streamInput)
         question = try values.decodeIfPresent(QuestionFixture.self, forKey: .question)
+        chatSkills = try values.decodeIfPresent(AidenRemoteSkillCatalog.self, forKey: .chatSkills)
         events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
         speechStatus = try values.decode(AidenSpeechStatus.self, forKey: .speechStatus)
         speechTranscription = try values.decode(AidenSpeechTranscription.self, forKey: .speechTranscription)
@@ -2990,7 +3112,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
         case legacyNonNegotiating
         case taskProgress, agentRoster, deviceCapabilitiesUpdate, chatProgressEvents
-        case streamStatus, streamApproval, streamInput, question, events, speechStatus, speechTranscription, error
+        case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription, error
     }
 }
 

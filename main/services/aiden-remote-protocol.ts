@@ -62,6 +62,7 @@ export const AIDEN_REMOTE_PROGRESS_CAPABILITIES = [
   "tasks:read",
   "agents:read",
   "questions:respond",
+  "skills:invoke",
 ] as const;
 
 export type AidenRemoteProgressCapability =
@@ -100,6 +101,16 @@ export const AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE = "chat-run-input-v1" as const;
  * question cards.
  */
 export const AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE = "chat-question-prompts-v1" as const;
+
+/**
+ * Server feature token for the chat skill surface (`GET /chats/{chatId}/skills`
+ * and the `skill` invocation field on `POST /chats/{chatId}/turns`). The host
+ * advertises it only while a main-owned skill registry path is wired. Catalog
+ * reads and invocation both additionally require the negotiated `skills:invoke`
+ * grant; old servers omit the token and clients must not show the skill palette
+ * or send a `skill` field.
+ */
+export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
 
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
@@ -160,6 +171,7 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "approval_expired",
   "question_already_resolved",
   "question_expired",
+  "skill_unavailable",
   "operation_in_progress",
   "operation_stale",
   "git_capability_denied",
@@ -794,6 +806,7 @@ export interface AidenRemoteContractFixture {
     respondRequest: AidenRemoteQuestionRespondRequest;
     respondResponse: AidenRemoteQuestionRespondResponse;
   };
+  chatSkills: AidenRemoteSkillCatalog;
   events: AidenRemoteStreamEvent[];
   fileIndex: unknown;
   fileDocument: unknown;
@@ -3405,6 +3418,100 @@ export function parseAidenRemoteChatAgentRoster(
   return { ...base, availability, unavailableReason, agents: [] };
 }
 
+/**
+ * Public invocable-skill contract (version 1). Entries are the same bounded,
+ * renderer-safe `SkillCatalogEntry` projection the desktop slash palette
+ * consumes: an opaque invocation lease plus safe display metadata — never skill
+ * paths, instructions, fingerprints, or registry internals. A lease is
+ * workspace- and registry-revision-bound and may only be redeemed on the turn
+ * route by a device holding `skills:invoke`.
+ */
+export const AIDEN_REMOTE_SKILL_SOURCES = ["configured", "workspace", "global"] as const;
+export type AidenRemoteSkillSource = (typeof AIDEN_REMOTE_SKILL_SOURCES)[number];
+export const AIDEN_REMOTE_SKILL_MAX_ENTRIES = 500;
+export const AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH = 64;
+export const AIDEN_REMOTE_SKILL_NAME_MAX_LENGTH = 80;
+export const AIDEN_REMOTE_SKILL_DESCRIPTION_MAX_LENGTH = 240;
+export const AIDEN_REMOTE_SKILL_UNAVAILABLE_REASON_MAX_LENGTH = 160;
+
+export interface AidenRemoteSkillCatalogEntry {
+  invocationId: string;
+  name: string;
+  description: string;
+  source: AidenRemoteSkillSource;
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export interface AidenRemoteSkillCatalog {
+  skills: AidenRemoteSkillCatalogEntry[];
+}
+
+export function parseAidenRemoteSkillCatalogEntry(
+  value: unknown,
+  label = "Skill catalog entry",
+): AidenRemoteSkillCatalogEntry {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(
+    value,
+    ["invocationId", "name", "description", "source", "available", "unavailableReason"],
+    label,
+  );
+  const invocationId = assertBoundedString(
+    value,
+    "invocationId",
+    AIDEN_REMOTE_SKILL_INVOCATION_ID_MAX_LENGTH,
+  );
+  const name = assertBoundedString(value, "name", AIDEN_REMOTE_SKILL_NAME_MAX_LENGTH);
+  const description = assertBoundedString(
+    value,
+    "description",
+    AIDEN_REMOTE_SKILL_DESCRIPTION_MAX_LENGTH,
+  );
+  const source = enumMember(value.source, AIDEN_REMOTE_SKILL_SOURCES, `${label} source`);
+  if (typeof value.available !== "boolean") {
+    throw new Error(`${label} available must be a boolean.`);
+  }
+  const unavailableReason = hasOwn(value, "unavailableReason")
+    ? assertBoundedString(
+        value,
+        "unavailableReason",
+        AIDEN_REMOTE_SKILL_UNAVAILABLE_REASON_MAX_LENGTH,
+      )
+    : undefined;
+  if (value.available && unavailableReason !== undefined) {
+    throw new Error(`${label} unavailableReason is only valid when unavailable.`);
+  }
+  if (!value.available && unavailableReason === undefined) {
+    throw new Error(`${label} unavailableReason is required when unavailable.`);
+  }
+  return {
+    invocationId,
+    name,
+    description,
+    source,
+    available: value.available,
+    ...(unavailableReason !== undefined ? { unavailableReason } : {}),
+  };
+}
+
+export function parseAidenRemoteSkillCatalog(
+  value: unknown,
+  label = "Skill catalog",
+): AidenRemoteSkillCatalog {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["skills"], label);
+  if (!Array.isArray(value.skills) || value.skills.length > AIDEN_REMOTE_SKILL_MAX_ENTRIES) {
+    throw new Error(`${label} skills must be a bounded array.`);
+  }
+  const skills = value.skills.map((entry) => parseAidenRemoteSkillCatalogEntry(entry, label));
+  const invocationIds = new Set(skills.map((entry) => entry.invocationId));
+  if (invocationIds.size !== skills.length) {
+    throw new Error(`${label} invocationIds must be unique.`);
+  }
+  return { skills };
+}
+
 export interface AidenRemoteStreamInputRequest {
   mode: AidenRemoteRunInputMode;
   text: string;
@@ -4133,6 +4240,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE)) {
     throw new Error("Fixture server must advertise chat question prompts.");
   }
+  if (!serverFeatures.includes(AIDEN_REMOTE_CHAT_SKILLS_FEATURE)) {
+    throw new Error("Fixture server must advertise chat skills.");
+  }
   for (const feature of AIDEN_REMOTE_PROGRESS_FEATURES) {
     if (!serverFeatures.includes(feature)) {
       throw new Error(`Fixture server must advertise ${feature}.`);
@@ -4739,6 +4849,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (question.respondResponse.promptId !== question.pending.promptId) {
     throw new Error("Canonical question fixture must answer the pending prompt.");
   }
+  const chatSkills = parseAidenRemoteSkillCatalog(value.chatSkills, "Fixture skill catalog");
+  if (chatSkills.skills.length === 0) {
+    throw new Error("Canonical skill catalog fixture must list at least one skill.");
+  }
   if (
     JSON.stringify(deviceCapabilitiesUpdate.response.capabilities) !==
       JSON.stringify(deviceCapabilities) ||
@@ -4855,6 +4969,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     streamApproval: value.streamApproval,
     streamInput,
     question,
+    chatSkills,
     fileIndex: value.fileIndex,
     fileDocument: value.fileDocument,
     git: value.git,

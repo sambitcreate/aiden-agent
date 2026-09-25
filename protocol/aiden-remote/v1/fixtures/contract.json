@@ -1,5 +1,5 @@
 {
-  "contractRevision": 13,
+  "contractRevision": 14,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -21,7 +21,8 @@
     "bot:write",
     "tasks:read",
     "agents:read",
-    "questions:respond"
+    "questions:respond",
+    "skills:invoke"
   ],
   "health": {
     "ok": true,
@@ -52,7 +53,8 @@
       "bot:write",
       "tasks:read",
       "agents:read",
-      "questions:respond"
+      "questions:respond",
+      "skills:invoke"
     ],
     "endpoint": "https://aiden-fixture.example.test/api/aiden/v1",
     "serverSpkiSha256": "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -73,7 +75,8 @@
       "bot:write",
       "tasks:read",
       "agents:read",
-      "questions:respond"
+      "questions:respond",
+      "skills:invoke"
     ],
     "serverCapabilities": [
       "server:read",
@@ -93,14 +96,16 @@
       "bot:write",
       "tasks:read",
       "agents:read",
-      "questions:respond"
+      "questions:respond",
+      "skills:invoke"
     ],
     "features": [
       "chat-summaries-v1",
       "chat-tasks-v1",
       "chat-agents-v1",
       "chat-run-input-v1",
-      "chat-question-prompts-v1"
+      "chat-question-prompts-v1",
+      "chat-skills-v1"
     ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
@@ -1281,7 +1286,8 @@
       "accepts": [
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
       ]
     },
     "response": {
@@ -1296,7 +1302,8 @@
         "bot:write",
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
       ]
     }
   },
@@ -1496,5 +1503,24 @@
       "promptId": "q-fixture-01",
       "resolvedAt": "2026-08-18T19:02:30.000Z"
     }
+  },
+  "chatSkills": {
+    "skills": [
+      {
+        "invocationId": "sk1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "review-code",
+        "description": "Review the current changes for bugs, regressions, and style drift.",
+        "source": "workspace",
+        "available": true
+      },
+      {
+        "invocationId": "sk1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "release-notes",
+        "description": "Draft release notes from the recent commit history.",
+        "source": "configured",
+        "available": false,
+        "unavailableReason": "Shadowed by workspace skill \"release-notes\"."
+      }
+    ]
   }
 }

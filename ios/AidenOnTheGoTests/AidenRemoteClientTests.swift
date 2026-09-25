@@ -2356,6 +2356,85 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    func testSkillCatalogEndpointAndProgressVocabularyNegotiation() async throws {
+        let client = makeClient()
+        let skillsData = try botFixtureData(at: ["chatSkills"])
+        var requests: [String] = []
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            requests.append("\(request.httpMethod ?? "?") \(path)")
+            switch (request.httpMethod, path) {
+            case ("POST", "/api/aiden/v1/device/capabilities"):
+                let body = try Self.jsonBody(request)
+                XCTAssertEqual(
+                    Set(try XCTUnwrap(body["accepts"] as? [String])),
+                    Set(["tasks:read", "agents:read", "questions:respond", "skills:invoke"])
+                )
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: "{\"capabilities\":[\"server:read\",\"tasks:read\",\"agents:read\",\"questions:respond\",\"skills:invoke\"]}"
+                )
+            case ("GET", "/api/aiden/v1/chats/chat_fixture_01/skills"):
+                XCTAssertNil(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.query)
+                return Self.response(for: request, status: 200, data: skillsData)
+            default:
+                XCTFail("Unexpected skills request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        // Regression: the upgrade must accept the whole additive vocabulary;
+        // an earlier allowlist rejected questions:respond client-side and the
+        // swallowed failure left prompts permanently unnegotiated.
+        let capabilities = try await client.updateDeviceCapabilities(
+            accepts: [.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke]
+        )
+        XCTAssertEqual(
+            capabilities,
+            [.serverRead, .tasksRead, .agentsRead, .questionsRespond, .skillsInvoke]
+        )
+
+        let catalog = try await client.chatSkills(chatId: "chat_fixture_01")
+        XCTAssertEqual(catalog.skills.count, 2)
+        XCTAssertEqual(catalog.skills.first?.name, "review-code")
+        XCTAssertEqual(catalog.skills.first?.available, true)
+        XCTAssertEqual(catalog.skills.last?.available, false)
+        XCTAssertEqual(
+            requests,
+            [
+                "POST /api/aiden/v1/device/capabilities",
+                "GET /api/aiden/v1/chats/chat_fixture_01/skills",
+            ]
+        )
+    }
+
+    func testSkillCatalogDecodingRejectsUnsafeEntries() throws {
+        let oversized = String(repeating: "x", count: 65)
+        let malformed: [String] = [
+            // Missing description.
+            #"{"skills":[{"invocationId":"sk1_\#(String(repeating: "a", count: 43))","name":"a","source":"workspace","available":true}]}"#,
+            // Unavailable entries must carry a reason.
+            #"{"skills":[{"invocationId":"sk1_\#(String(repeating: "a", count: 43))","name":"a","description":"d","source":"workspace","available":false}]}"#,
+            // Duplicate leases are ambiguous.
+            #"{"skills":[{"invocationId":"sk1_\#(String(repeating: "a", count: 43))","name":"a","description":"d","source":"workspace","available":true},{"invocationId":"sk1_\#(String(repeating: "a", count: 43))","name":"b","description":"d","source":"global","available":true}]}"#,
+            // Registry internals are never part of the wire projection.
+            #"{"skills":[{"invocationId":"sk1_\#(String(repeating: "a", count: 43))","name":"a","description":"d","source":"workspace","available":true,"skillPath":"/Users/x/.aiden/skills/a"}]}"#,
+            // Oversized lease.
+            #"{"skills":[{"invocationId":"\#(oversized)","name":"a","description":"d","source":"workspace","available":true}]}"#,
+        ]
+        for json in malformed {
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(
+                    AidenRemoteSkillCatalog.self,
+                    from: Data(json.utf8)
+                ),
+                json
+            )
+        }
+    }
+
     func testTranscriptAndProgressStreamsRejectCrossChannelEventTypes() async throws {
         let client = makeClient()
         let progressEvents = try XCTUnwrap(

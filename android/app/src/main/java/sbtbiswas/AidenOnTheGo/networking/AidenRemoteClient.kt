@@ -950,6 +950,18 @@ class AidenRemoteClient(
     suspend fun pendingQuestion(chatId: String, streamId: String): AidenStreamPendingQuestion? =
         streamQuestion(streamId).question
 
+    /** Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+     * the Bot's currently admitted skills; the catalog is presentation input
+     * only — the Mac re-validates every lease redemption at turn admission. */
+    suspend fun chatSkills(chatId: String): AidenRemoteSkillCatalog = executeRequest(
+        "/chats/$chatId/skills",
+        botScope = AidenBotPrivateResponseScope.Root("chatSkills")
+    ) { bytes ->
+        AidenSkillContractCodec.parseCatalog(
+            json.parseToJsonElement(String(bytes, Charsets.UTF_8))
+        )
+    }
+
     /** Question responses never auto-retry; the stable request UUID makes a
      * manual retry replay the Mac's original outcome. */
     suspend fun respondToQuestion(

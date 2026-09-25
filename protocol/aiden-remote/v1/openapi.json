@@ -971,6 +971,43 @@
     }
    }
   },
+  "/chats/{chatId}/skills": {
+   "parameters": [
+    {
+     "$ref": "#/components/parameters/ProtocolVersion"
+    }
+   ],
+   "get": {
+    "operationId": "getChatSkills",
+    "description": "Bounded invocable-skill catalog for one chat, identical to the desktop slash palette projection: opaque invocation leases plus safe display metadata. Bot chats are narrowed to the Bot's currently admitted skills. Requires the negotiated skills:invoke grant in addition to chat:read.",
+    "x-aiden-archived-access": "readable",
+    "x-aiden-capability": "chat:read",
+    "x-aiden-capabilities": [
+     "chat:read",
+     "skills:invoke"
+    ],
+    "parameters": [
+     {
+      "$ref": "#/components/parameters/ChatId"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Canonical chat skill catalog",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatSkillCatalog"
+        }
+       }
+      }
+     },
+     "default": {
+      "$ref": "#/components/responses/Error"
+     }
+    }
+   }
+  },
   "/chats/{chatId}/progress/events": {
    "parameters": [
     {
@@ -4375,7 +4412,8 @@
         "bot:write",
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
        ]
       },
       "uniqueItems": true
@@ -4473,7 +4511,8 @@
         "bot:write",
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
        ]
       },
       "uniqueItems": true
@@ -4500,7 +4539,8 @@
         "bot:write",
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
        ]
       },
       "uniqueItems": true
@@ -4630,7 +4670,8 @@
        "enum": [
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
        ]
       },
       "uniqueItems": true
@@ -4666,7 +4707,8 @@
         "bot:write",
         "tasks:read",
         "agents:read",
-        "questions:respond"
+        "questions:respond",
+        "skills:invoke"
        ]
       },
       "uniqueItems": true
@@ -8021,6 +8063,95 @@
        "type": "string",
        "pattern": "^att_[A-Za-z0-9_-]{43}$"
       }
+     },
+     "skill": {
+      "$ref": "#/components/schemas/SkillInvocation",
+      "description": "Optional explicit skill invocation lease from GET /chats/{chatId}/skills. The Mac resolves, expands, and binds it to the appended user message exactly like a desktop slash selection; requires the negotiated skills:invoke grant."
+     }
+    },
+    "additionalProperties": false
+   },
+   "SkillInvocation": {
+    "type": "object",
+    "required": [
+     "version",
+     "invocationId",
+     "displayName",
+     "source"
+    ],
+    "properties": {
+     "version": {
+      "const": 1
+     },
+     "invocationId": {
+      "type": "string",
+      "maxLength": 64
+     },
+     "displayName": {
+      "type": "string",
+      "maxLength": 80
+     },
+     "source": {
+      "enum": [
+       "configured",
+       "workspace",
+       "global"
+      ]
+     }
+    },
+    "additionalProperties": false
+   },
+   "ChatSkillCatalogEntry": {
+    "type": "object",
+    "required": [
+     "invocationId",
+     "name",
+     "description",
+     "source",
+     "available"
+    ],
+    "properties": {
+     "invocationId": {
+      "type": "string",
+      "maxLength": 64
+     },
+     "name": {
+      "type": "string",
+      "maxLength": 80
+     },
+     "description": {
+      "type": "string",
+      "maxLength": 240
+     },
+     "source": {
+      "enum": [
+       "configured",
+       "workspace",
+       "global"
+      ]
+     },
+     "available": {
+      "type": "boolean"
+     },
+     "unavailableReason": {
+      "type": "string",
+      "maxLength": 160
+     }
+    },
+    "additionalProperties": false
+   },
+   "ChatSkillCatalog": {
+    "type": "object",
+    "required": [
+     "skills"
+    ],
+    "properties": {
+     "skills": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+       "$ref": "#/components/schemas/ChatSkillCatalogEntry"
+      }
      }
     },
     "additionalProperties": false
@@ -9854,6 +9985,7 @@
      "approval_expired",
      "question_already_resolved",
      "question_expired",
+     "skill_unavailable",
      "operation_in_progress",
      "operation_stale",
      "git_capability_denied",

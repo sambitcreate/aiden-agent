@@ -893,11 +893,11 @@ test("durable operation registry restores only exact bounded identities and reje
   );
 });
 
-test("canonical revision-13 fixtures parse into explicit bounded contract views", async () => {
+test("canonical revision-14 fixtures parse into explicit bounded contract views", async () => {
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 13);
+  assert.equal(fixture.contractRevision, 14);
   assert.equal(fixture.botList.maxBots, 256);
   assert.deepEqual(fixture.botList.favorites, fixture.botFavorites);
   assert.equal(fixture.botSummary.health, "ready");
@@ -940,6 +940,18 @@ test("canonical revision-13 fixtures parse into explicit bounded contract views"
       "continue_full",
     );
   }
+  assert.equal(fixture.chatSkills.skills.length, 2);
+  assert.equal(fixture.chatSkills.skills[0]!.name, "review-code");
+  assert.equal(fixture.chatSkills.skills[0]!.available, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(fixture.chatSkills.skills[0]!, "unavailableReason"),
+    false,
+  );
+  assert.equal(fixture.chatSkills.skills[1]!.available, false);
+  assert.equal(
+    fixture.chatSkills.skills[1]!.unavailableReason,
+    'Shadowed by workspace skill "release-notes".',
+  );
   const legacyCapabilities: readonly string[] =
     fixture.legacyNonNegotiating.server.capabilities;
   assert.equal(legacyCapabilities.includes("bot:read"), false);

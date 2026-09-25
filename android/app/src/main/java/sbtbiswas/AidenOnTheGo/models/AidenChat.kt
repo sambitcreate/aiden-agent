@@ -816,7 +816,8 @@ data class AidenTurnStart(
     val providerId: String? = null,
     val modelId: String? = null,
     val thinkingLevel: String? = null,
-    val attachmentIds: List<String>? = null
+    val attachmentIds: List<String>? = null,
+    val skill: AidenSkillInvocation? = null
 )
 
 @Serializable
@@ -1306,14 +1307,16 @@ object AidenTurnRequestBuilder {
         providerId: String?,
         modelId: String?,
         thinkingLevel: String?,
-        attachments: List<AidenAttachmentReference>
+        attachments: List<AidenAttachmentReference>,
+        skill: AidenRemoteSkillCatalogEntry? = null
     ): AidenTurnStart {
         return AidenTurnStart(
             text = text,
             providerId = providerId,
             modelId = modelId,
             thinkingLevel = thinkingLevel,
-            attachmentIds = if (attachments.isEmpty()) null else attachments.map { it.id }
+            attachmentIds = if (attachments.isEmpty()) null else attachments.map { it.id },
+            skill = skill?.takeIf { it.available }?.let { AidenSkillInvocation(it) }
         )
     }
 }

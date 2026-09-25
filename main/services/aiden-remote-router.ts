@@ -15,6 +15,7 @@ import {
   AIDEN_REMOTE_CHAT_AGENTS_FEATURE,
   AIDEN_REMOTE_CHAT_RUN_INPUT_FEATURE,
   AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE,
+  AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
@@ -116,7 +117,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -249,6 +250,7 @@ export type AidenRemoteRouteLabel =
   | "chatMove"
   | "chatTasks"
   | "chatAgents"
+  | "chatSkills"
   | "chatProgressEvents"
   | "chatAttachment"
   | "turns"
@@ -308,6 +310,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatMove: ["/chats/:id/move"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
+  chatSkills: ["/chats/:id/skills"],
   chatProgressEvents: ["/chats/:id/progress/events"],
   chatAttachment: [
     "/chats/:id/attachments",
@@ -1000,7 +1003,7 @@ function requireDeviceCapabilities(
 
 function requireNegotiatedProgressCapability(
   device: AidenRemoteRouterAuthenticatedDevice,
-  capability: "tasks:read" | "agents:read",
+  capability: AidenRemoteProgressCapability,
 ): void {
   if (
     device.acceptsProgressCapabilities === true &&
@@ -1021,6 +1024,9 @@ function progressCapabilitySupported(
 ): boolean {
   if (capability === "questions:respond") {
     return dependencies.streams?.supportsQuestionPrompts?.() === true;
+  }
+  if (capability === "skills:invoke") {
+    return typeof dependencies.chats?.chatSkillCatalog === "function";
   }
   if (!dependencies.chats || !dependencies.chatProgress?.openEvents) return false;
   return capability === "tasks:read"
@@ -1252,6 +1258,9 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(dependencies.streams?.supportsQuestionPrompts?.() === true
               ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE]
+              : []),
+            ...(progressCapabilitySupported(dependencies, "skills:invoke")
+              ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -2367,6 +2376,24 @@ export function createAidenRemoteRequestHandler(
             chatAgentsMatch[1]!,
             agentsQuery.turnId,
           ),
+        );
+        return;
+      }
+      const chatSkillsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/skills$/u.exec(path);
+      if (chatSkillsMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chatSkills";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (typeof dependencies.chats?.chatSkillCatalog !== "function") {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireNegotiatedProgressCapability(device, "skills:invoke");
+        await requireChatAccess(dependencies.chats, device, chatSkillsMatch[1]!, "read");
+        writeJson(
+          response,
+          200,
+          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!),
         );
         return;
       }

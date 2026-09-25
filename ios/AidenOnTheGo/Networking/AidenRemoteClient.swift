@@ -75,6 +75,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatAgentsFeature = "chat-agents-v1"
     static let chatRunInputFeature = "chat-run-input-v1"
     static let chatQuestionPromptsFeature = "chat-question-prompts-v1"
+    static let chatSkillsFeature = "chat-skills-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -214,6 +215,10 @@ struct AidenServer: Codable, Equatable, Sendable {
 
     var supportsQuestionPrompts: Bool {
         features.contains(Self.chatQuestionPromptsFeature)
+    }
+
+    var supportsChatSkills: Bool {
+        features.contains(Self.chatSkillsFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -725,7 +730,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     func updateDeviceCapabilities(
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
-        let allowed = Set([AidenRemoteCapability.tasksRead, .agentsRead])
+        let allowed = Set([
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+        ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {
@@ -769,6 +776,13 @@ final class AidenRemoteClient: @unchecked Sendable {
             throw AidenRemoteClientError.invalidResponse
         }
         return value
+    }
+
+    /// Bounded invocable-skill catalog for one chat. Bot chats are narrowed to
+    /// the Bot's currently admitted skills; the catalog is presentation input
+    /// only — the Mac re-validates every lease redemption at turn admission.
+    func chatSkills(chatId: String) async throws -> AidenRemoteSkillCatalog {
+        try await send(method: "GET", path: ["chats", chatId, "skills"])
     }
 
     func updateDeviceIdentity(name: String) async throws {

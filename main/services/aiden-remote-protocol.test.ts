@@ -92,7 +92,7 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 13);
+  assert.equal(fixture.contractRevision, 14);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, AIDEN_REMOTE_CAPABILITIES);
@@ -243,6 +243,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/move",
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
+    "/chats/{chatId}/skills",
     "/chats/{chatId}/progress/events",
     "/chats/{chatId}/turns",
     "/chats/{chatId}/attachments",
@@ -382,6 +383,12 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   );
   assert.equal(agentsGet["x-aiden-capability"], "chat:read");
   assert.deepEqual(agentsGet["x-aiden-capabilities"], ["chat:read", "agents:read"]);
+  const skillsGet = record(
+    record(paths["/chats/{chatId}/skills"], "chat skills").get,
+    "chat skills get",
+  );
+  assert.equal(skillsGet["x-aiden-capability"], "chat:read");
+  assert.deepEqual(skillsGet["x-aiden-capabilities"], ["chat:read", "skills:invoke"]);
   const progressEventsGet = record(
     record(paths["/chats/{chatId}/progress/events"], "chat progress events").get,
     "chat progress events get",

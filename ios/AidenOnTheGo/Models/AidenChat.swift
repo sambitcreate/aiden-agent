@@ -1565,19 +1565,22 @@ struct AidenTurnStart: Encodable, Equatable, Sendable {
     let modelId: String?
     let thinkingLevel: String?
     let attachmentIds: [String]?
+    let skill: AidenSkillInvocation?
 
     init(
         text: String,
         providerId: String? = nil,
         modelId: String? = nil,
         thinkingLevel: String? = nil,
-        attachmentIds: [String]? = nil
+        attachmentIds: [String]? = nil,
+        skill: AidenSkillInvocation? = nil
     ) {
         self.text = text
         self.providerId = providerId
         self.modelId = modelId
         self.thinkingLevel = thinkingLevel
         self.attachmentIds = attachmentIds
+        self.skill = skill
     }
 }
 

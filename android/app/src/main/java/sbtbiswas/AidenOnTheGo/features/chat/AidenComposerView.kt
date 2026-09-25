@@ -22,12 +22,15 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
@@ -60,6 +63,10 @@ fun AidenComposerView(
     onRemoveAttachment: (AidenMessageAttachmentUpload) -> Unit = {},
     onAddImage: () -> Unit = {},
     onAddFile: () -> Unit = {},
+    selectedSkill: AidenRemoteSkillCatalogEntry? = null,
+    onClearSkill: () -> Unit = {},
+    composerSuggestions: List<AidenComposerSuggestion> = emptyList(),
+    onSelectSuggestion: (AidenComposerSuggestion) -> Unit = {},
     selectedProvider: AidenProvider? = null,
     selectedModel: AidenModel? = null,
     selectedThinkingLevel: String? = null,
@@ -147,7 +154,63 @@ fun AidenComposerView(
                 }
             }
 
-            // 2. Multiline Auto-Expanding Text Field
+            // 2. Selected-skill chip: the palette selection rides the send as
+            // an opaque lease the Mac redeems; removing it keeps the draft.
+            if (selectedSkill != null) {
+                Surface(
+                    color = palette.secondary.copy(alpha = 0.12f),
+                    shape = CircleShape,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = palette.secondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "/${selectedSkill.name}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.secondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        IconButton(
+                            onClick = onClearSkill,
+                            modifier = Modifier
+                                .size(AidenUi.MinimumTouchTarget)
+                                .semantics { contentDescription = "Remove skill ${selectedSkill.name}" }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 3. `/` and `@` suggestion palette — bounded rows above the field.
+            if (composerSuggestions.isNotEmpty()) {
+                AidenComposerSuggestionList(
+                    suggestions = composerSuggestions,
+                    palette = palette,
+                    onSelect = onSelectSuggestion,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                )
+            }
+
+            // 4. Multiline Auto-Expanding Text Field
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -526,6 +589,137 @@ fun AidenComposerView(
                     color = palette.danger,
                     modifier = Modifier.padding(start = 4.dp)
                 )
+            }
+        }
+    }
+}
+
+/** `/` skill and `@` mention suggestion rows, bounded to the shared visible
+ * maximum. Selecting a row is a pure composer action — skill rows set the
+ * pending lease, mention rows insert plain text. */
+@Composable
+private fun AidenComposerSuggestionList(
+    suggestions: List<AidenComposerSuggestion>,
+    palette: AidenPalette,
+    onSelect: (AidenComposerSuggestion) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val visible = suggestions.take(6)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(14.dp),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            visible.forEachIndexed { index, suggestion ->
+                val enabled = when (suggestion) {
+                    is AidenComposerSuggestion.Skill -> suggestion.entry.available
+                    else -> true
+                }
+                val label = when (suggestion) {
+                    is AidenComposerSuggestion.Skill ->
+                        if (suggestion.entry.available) "Skill ${suggestion.entry.name}"
+                        else "Skill ${suggestion.entry.name}, unavailable"
+                    is AidenComposerSuggestion.Agent -> "Mention agent ${suggestion.agent.label}"
+                    is AidenComposerSuggestion.File -> "Mention file ${suggestion.entry.displayPath}"
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) { contentDescription = label }
+                        .clickable(enabled = enabled) { onSelect(suggestion) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    when (suggestion) {
+                        is AidenComposerSuggestion.Skill -> {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "/${suggestion.entry.name}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (suggestion.entry.available) palette.foreground else palette.secondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (suggestion.entry.available) suggestion.entry.description else suggestion.entry.unavailableReason.orEmpty(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.secondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = suggestion.entry.source.rawValue,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.secondary.copy(alpha = 0.85f),
+                                maxLines = 1
+                            )
+                        }
+                        is AidenComposerSuggestion.Agent -> {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = suggestion.agent.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "agent",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.secondary.copy(alpha = 0.85f),
+                                maxLines = 1
+                            )
+                        }
+                        is AidenComposerSuggestion.File -> {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = suggestion.entry.displayPath,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "file",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.secondary.copy(alpha = 0.85f),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                if (index != visible.lastIndex) {
+                    HorizontalDivider(color = palette.secondary.copy(alpha = 0.15f))
+                }
             }
         }
     }

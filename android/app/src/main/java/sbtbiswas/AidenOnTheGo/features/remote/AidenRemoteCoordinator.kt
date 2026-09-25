@@ -197,6 +197,9 @@ class AidenRemoteCoordinator(
             if (server.supportsQuestionPrompts && !installation.hasNegotiatedAccess(AidenRemoteCapability.QUESTIONS_RESPOND)) {
                 add(AidenRemoteCapability.QUESTIONS_RESPOND)
             }
+            if (server.supportsChatSkills && !installation.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE)) {
+                add(AidenRemoteCapability.SKILLS_INVOKE)
+            }
         }
         if (requested.isEmpty()) return server
         return try {

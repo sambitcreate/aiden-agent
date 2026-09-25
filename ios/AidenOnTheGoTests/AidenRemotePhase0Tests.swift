@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 13)
+        XCTAssertEqual(fixture.contractRevision, 14)
         XCTAssertEqual(fixture.protocolVersion, AidenRemoteProtocol.version)
         XCTAssertTrue(fixture.health.ok)
         XCTAssertEqual(fixture.health.protocolVersion, AidenRemoteProtocol.version)
@@ -153,12 +153,22 @@ final class AidenRemotePhase0Tests: XCTestCase {
         ])
         XCTAssertEqual(
             fixture.deviceCapabilitiesUpdate?.request.accepts,
-            [.tasksRead, .agentsRead, .questionsRespond]
+            [.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke]
         )
         XCTAssertTrue(fixture.server.supportsChatTasks)
         XCTAssertTrue(fixture.server.supportsChatAgents)
         XCTAssertTrue(fixture.server.supportsChatRunInput)
         XCTAssertTrue(fixture.server.supportsQuestionPrompts)
+        XCTAssertTrue(fixture.server.supportsChatSkills)
+        XCTAssertEqual(fixture.chatSkills?.skills.count, 2)
+        XCTAssertEqual(fixture.chatSkills?.skills.first?.name, "review-code")
+        XCTAssertEqual(fixture.chatSkills?.skills.first?.available, true)
+        XCTAssertNil(fixture.chatSkills?.skills.first?.unavailableReason)
+        XCTAssertEqual(fixture.chatSkills?.skills.last?.available, false)
+        XCTAssertEqual(
+            fixture.chatSkills?.skills.last?.unavailableReason,
+            "Shadowed by workspace skill \"release-notes\"."
+        )
         XCTAssertEqual(fixture.question?.pending.promptId, "q-fixture-01")
         XCTAssertEqual(fixture.question?.pending.streamId, fixture.streamStatus.streamId)
         XCTAssertEqual(fixture.question?.pending.chatId, fixture.chat.id)
