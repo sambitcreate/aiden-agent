@@ -418,3 +418,61 @@ helper preserves a non-default label. A separate denied file-capability case
 returns an I/O failure while preserving the original bytes and capability.
 Hosted exact-head validation and automated-review thread closure remain the
 final pull-request delivery gate.
+
+## Phase 20: Upstream merge with main@0.43.0 (linux-parity worktree)
+
+`origin/main` (352 commits ahead of merge-base a4c85c6d, through release
+0.43.0) was merged into the branch in the `linux-parity` worktree:
+`git merge --no-commit --no-ff origin/main` → commits b922f253, b3d92c54,
+38dd35c8. 42 conflicted files resolved; 249 commits now sit ahead of main
+with zero behind.
+
+Resolution themes:
+
+- **Keep both platform surfaces.** `main/handlers/app.ts` capabilities carry
+  Linux fields (bots, appUpdates, computerUse, dictation, appleFoundationModels)
+  plus main's `geminiLive` flag; the renderer parser/defaults union both.
+- **Keep linux's richer models, port main's hardening.** external-editors
+  keeps the bundle|executable|flatpak|file-manager launch union and gains
+  main's `path.resolve`, regular-file, absolute-PATH and unsupported-editor
+  semantics plus its PATH-order precedence; the mutator C helper keeps the
+  `#ifdef __APPLE__` split and gains `exclusive_regular` +
+  `TEST_PAUSE_AFTER_HTML_OPEN`.
+- **CI union.** main's restructured job graph stays; the branch's `linux`
+  and `linux-rpm` jobs are grafted back and registered in
+  `scripts/ci-required.mjs` so the required gate waits on them.
+- **Tests union.** Additive suites from both sides coexist; main's
+  editor/app-updater tests were adapted to the launch-union and bundled-
+  service shapes rather than reverting linux APIs.
+
+Verified on this worktree (macOS): `tsc --noEmit` clean, `tsc
+tests/e2e/tsconfig.json` clean, `eslint` clean on all changed files, `npm
+run build:native` end-to-end (all C helpers + both Swift helper apps),
+and the focused suites around every conflicted file pass.
+
+Remaining before the branch merges to main:
+
+1. **Linux VM smoke.** Run on a Linux box: `npm ci`,
+   `npm run build:native` (compiles secret-service-authority and
+   global-shortcuts-portal on the linux path), `npm run test:linux-native`,
+   `test:linux-contracts`, `test:bot-authority`,
+   `test:secret-service-integration`,
+   `computer-use:linux-host-preflight`, and the main suite.
+2. **First real linux CI run.** Watch the grafted `linux` + `linux-rpm`
+   jobs plus the Playwright e2e shards on the hosted runners.
+3. **Gemini Live orb on Linux.** #129–#137 replaced Assistant with the
+   orb; the `geminiLive` capability parses and gates, but the orb UI,
+   voice setup dialog and onboarding surfaces still need a linux runtime
+   check.
+4. **Managed worktree lifecycle (#185, #221) on Linux.** The remover and
+   file-io helpers build via `native-c-build-core`; verify create/remove
+   cycles under the platform layer.
+5. **Shared-contract native clients.** `AidenChatFeature.swift` keeps
+   linux's richer authorization-error switch; confirm the iOS build and
+   focused mobile suites on CI.
+6. **Plan-index + memory hygiene.** Update `docs/plans/README.md` status
+   and `.memory/` notes per AGENTS.md when the merge lands.
+
+Deliberately platform-gated (not gaps): production Computer Use on Linux,
+Apple Foundation Models, macOS-only CUA-S1 forms helper, macOS packaging
+assertions in `verify-macos-package.mjs`.
