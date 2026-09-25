@@ -1009,6 +1009,10 @@ test("stream capacity does not reclaim genuinely active generations", () => {
   assert.deepEqual(app.cancelled, []);
 });
 
+function inputPassthrough<T>(_chatId: string, action: () => Promise<T>): Promise<T> {
+  return action();
+}
+
 function inputFixture(submitInput?: (input: {
   streamId: string;
   chatId: string;
@@ -1054,7 +1058,7 @@ test("run input admission binds to the stream owner and returns an accepted rece
     "stream-1",
     { mode: "queue", text: "Follow up after this." },
     "input-key-0000000001",
-  );
+    inputPassthrough);
   assert.equal(result.status, "admitted");
   assert.equal(result.queue, "follow-up");
   assert.equal(result.committed, true);
@@ -1088,7 +1092,7 @@ test("run input admission rejects terminal and cancelled streams without calling
     "stream-1",
     { mode: "steer", text: "too late" },
     "input-key-0000000002",
-  );
+    inputPassthrough);
   assert.deepEqual(terminal, {
     streamId: "stream-1",
     chatId: "chat-1",
@@ -1116,7 +1120,7 @@ test("run input admission rejects terminal and cancelled streams without calling
     "stream-2",
     { mode: "steer", text: "stop racing" },
     "input-key-0000000003",
-  );
+    inputPassthrough);
   assert.equal(cancelled.status, "rejected");
   assert.equal(cancelled.reason, "cancelled");
   assert.equal(cancelled.committed, false);
@@ -1133,8 +1137,8 @@ test("run input admission replays the original outcome and rejects conflicting r
   const app = inputFixture(async () => outcome);
   app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   const input = { mode: "queue" as const, text: "Queue this." };
-  const first = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004");
-  const replay = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004");
+  const first = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
+  const replay = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
   assert.deepEqual(replay, first);
   assert.equal(app.calls.length, 1);
   await assert.rejects(
@@ -1143,7 +1147,7 @@ test("run input admission replays the original outcome and rejects conflicting r
       "stream-1",
       { mode: "queue", text: "Different text." },
       "input-key-0000000004",
-    ),
+      inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
 
@@ -1154,7 +1158,7 @@ test("run input admission replays the original outcome and rejects conflicting r
     "stream-1",
     { mode: "steer", text: "Full queue." },
     "input-key-0000000005",
-  );
+    inputPassthrough);
   assert.equal(rejected.status, "rejected");
   assert.equal(rejected.reason, "capacity");
   const rejectedReplay = await app.service.submitInput(
@@ -1162,7 +1166,7 @@ test("run input admission replays the original outcome and rejects conflicting r
     "stream-1",
     { mode: "steer", text: "Full queue." },
     "input-key-0000000005",
-  );
+    inputPassthrough);
   assert.deepEqual(rejectedReplay, rejected);
   assert.equal(app.calls.length, 2);
 });
@@ -1180,7 +1184,7 @@ test("run input admission reports committed rejections and stays hidden when unw
     "stream-1",
     { mode: "steer", text: "ended mid-flight" },
     "input-key-0000000006",
-  );
+    inputPassthrough);
   assert.equal(result.status, "rejected");
   assert.equal(result.reason, "run_not_active");
   assert.equal(result.committed, true);
@@ -1194,7 +1198,7 @@ test("run input admission reports committed rejections and stays hidden when unw
   unwired.create("device-1", "stream-9", "chat-9", "turn-9");
   assert.equal(unwired.supportsRunInput(), false);
   await assert.rejects(
-    unwired.submitInput("device-1", "stream-9", { mode: "queue", text: "x" }, "input-key-0000000007"),
+    unwired.submitInput("device-1", "stream-9", { mode: "queue", text: "x" }, "input-key-0000000007", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
   assert.equal(app.service.supportsRunInput(), true);
@@ -1209,19 +1213,19 @@ test("run input admission validates the body and binds to the owning device", as
   }));
   app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "read", text: "x" }, "input-key-0000000008"),
+    app.service.submitInput("device-1", "stream-1", { mode: "read", text: "x" }, "input-key-0000000008", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "" }, "input-key-0000000008"),
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "" }, "input-key-0000000008", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   await assert.rejects(
-    app.service.submitInput("device-2", "stream-1", { mode: "steer", text: "x" }, "input-key-0000000008"),
+    app.service.submitInput("device-2", "stream-1", { mode: "steer", text: "x" }, "input-key-0000000008", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "x" }, "short"),
+    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "x" }, "short", inputPassthrough),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 });
@@ -1248,7 +1252,7 @@ test("run input admission replays settled outcomes across a durable ledger resto
     "stream-1",
     { mode: "queue", text: "Remember this." },
     "input-key-durable-00001",
-  );
+    inputPassthrough);
   assert.equal(original.status, "rejected");
   assert.equal(original.reason, "capacity");
   assert.equal(calls.length, 1);
@@ -1273,7 +1277,7 @@ test("run input admission replays settled outcomes across a durable ledger resto
     "stream-1",
     { mode: "queue", text: "Remember this." },
     "input-key-durable-00001",
-  );
+    inputPassthrough);
   assert.deepEqual(replayed, original);
   assert.equal(calls.length, 1);
 });
@@ -1302,7 +1306,7 @@ test("run input admission reports an unknown outcome when outcome persistence fa
       "stream-1",
       { mode: "steer", text: "x" },
       "input-key-durable-00002",
-    ),
+      inputPassthrough),
     (error: unknown) =>
       (error as { code?: string }).code === "idempotency_in_flight",
   );

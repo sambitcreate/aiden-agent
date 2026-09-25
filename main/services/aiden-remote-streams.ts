@@ -461,7 +461,12 @@ export class AidenRemoteStreamService {
       admit = resolve;
       reject = rejectPromise;
     });
+    // Replays never invoke the wrapper: keep a sink so a rejected gate cannot
+    // surface as an unhandled rejection.
+    void durable.catch(() => undefined);
+    let actionGated = false;
     const pending = this.idempotency.execute(scope, input, async () => {
+      actionGated = true;
       await durable;
       return action();
     });
@@ -471,6 +476,11 @@ export class AidenRemoteStreamService {
     } catch (error) {
       reject(error);
       await pending.catch(() => undefined);
+      // Only discard when this call created the entry: the wrapper ran but the
+      // action provably never did (admit() was never called), so nothing could
+      // have committed. Replays and concurrent in-flight entries keep their
+      // recorded outcome intact.
+      if (actionGated) this.idempotency.discardUnexecuted(scope);
       throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this stream request.", 500);
     }
     let result: T | undefined;
@@ -1178,14 +1188,15 @@ export class AidenRemoteStreamService {
    * ledger replays the original admission outcome for a retried request UUID.
    * `runAccess` wraps fresh admissions in the router's chat-access validation;
    * it stays inside the ledger action so a settled outcome still replays after
-   * the stream record is evicted or the chat becomes unavailable.
+   * the stream record is evicted or the chat becomes unavailable. Required so
+   * no caller can silently skip authorization (tests pass a passthrough).
    */
   async submitInput(
     deviceId: string,
     streamId: string,
     rawInput: unknown,
     key: string,
-    runAccess?: (
+    runAccess: (
       chatId: string,
       action: () => Promise<AidenRemoteStreamInputResult>,
     ) => Promise<AidenRemoteStreamInputResult>,
@@ -1260,7 +1271,7 @@ export class AidenRemoteStreamService {
                 : { messageId: admission.messageId }),
             };
           };
-          return runAccess ? runAccess(stream.chatId, execute) : execute();
+          return runAccess(stream.chatId, execute);
         },
       );
     } catch (error) {

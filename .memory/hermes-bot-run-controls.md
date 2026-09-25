@@ -51,3 +51,14 @@ bot chat access through runChatMutation, and returns 404 when unwired.
 Desktop `chat:admitRunInput` IPC shares the same boundary and owner check.
 iOS/Android gained additive DTOs, `supportsChatRunInput`, and client methods;
 native Steer/Queue composer UX remains the On The Go slice C work.
+
+Slice 2 review follow-ups: `POST /streams/{id}/cancel` and
+`/approvals/{id}/respond` still run stream/approval chat-access checks before
+their idempotency actions, so a replayed request after record eviction returns
+not_found instead of the recorded outcome. The inputs route solved this by
+executing `runAccess` inside the ledger action; apply the same pattern to the
+sibling routes in a follow-up. Also fixed in that pass: a prepare-persist
+failure previously poisoned the key with a sticky internal_error even though
+the action provably never ran — the ledger now discards the unexecuted entry
+(`discardUnexecuted`), and the durable gate has a rejection sink for replay
+paths that never invoke the wrapper.
