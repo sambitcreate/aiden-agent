@@ -13,6 +13,11 @@ const val READ_ALOUD_SETUP_GUIDANCE = "Enable Read Aloud in the desktop app: Set
     val jobId: String, val chatId: String?, val phase: String,
     val totalSegments: Int, val readySegments: Int, val error: AidenReadAloudError? = null
 ) {
+    companion object {
+        const val MAXIMUM_STALLED_POLLS = 240 // 120s, per-segment server timeout is 60s.
+        fun nextStalledPollCount(previousReady: Int, currentReady: Int, stalled: Int): Int =
+            if (currentReady > previousReady) 0 else stalled + 1
+    }
     val isValid: Boolean get() = jobId.matches(Regex("[A-Za-z0-9-]{1,128}")) && totalSegments in 1..256 &&
         readySegments in 0..totalSegments && phase in setOf("preparing", "generating", "buffering", "paused", "completed", "cancelled", "failed")
 }

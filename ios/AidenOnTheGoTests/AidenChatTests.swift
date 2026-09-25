@@ -7,6 +7,37 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
+        for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
+            let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
+                outcome: .init(status: status, category: nil, attempts: nil, retryExhausted: nil), createdAt: Date())
+            XCTAssertFalse(message.isReadAloudEligible)
+        }
+        XCTAssertTrue(AidenChatMessage(id: "a", role: .assistant, text: "answer", createdAt: Date()).isReadAloudEligible)
+        XCTAssertFalse(AidenChatMessage(id: "u", role: .user, text: "question", createdAt: Date()).isReadAloudEligible)
+    }
+    func testReadAloudProgressWatchdogAllowsLongJobsButBoundsStalls() {
+        var stalled = 0
+        for poll in 1...3_000 {
+            stalled = AidenReadAloudJob.nextStalledPollCount(previousReady: (poll - 1) / 100, currentReady: poll / 100, stalled: stalled)
+            XCTAssertLessThan(stalled, AidenReadAloudJob.maximumStalledPolls)
+        }
+        for _ in 0..<AidenReadAloudJob.maximumStalledPolls {
+            stalled = AidenReadAloudJob.nextStalledPollCount(previousReady: 30, currentReady: 30, stalled: stalled)
+        }
+        XCTAssertEqual(stalled, AidenReadAloudJob.maximumStalledPolls)
+    }
+    func testUnpricedSpeechDoesNotDisplayFreeHostedCost() {
+        func totals(costed: Int) -> AidenUsageTotals {
+            .init(requests: 2, completedRequests: 1, failedRequests: 1, cancelledRequests: 0,
+                reportedTokenRequests: 1, unmeteredRequests: 1, localRequests: 0, costedRequests: costed,
+                unpricedHostedRequests: 1, hostedCostUsd: costed == 0 ? 0 : 0.2, activeDays: 1,
+                currentStreak: 1, longestStreak: 1,
+                tokens: .init(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, reasoning: 0, total: 0))
+        }
+        XCTAssertEqual(totals(costed: 0).hostedCostSummary, "Cost unavailable")
+        XCTAssertTrue(totals(costed: 1).hostedCostSummary.contains("1 requests unpriced"))
+    }
     func testReadAloudSharedFixtureAndBoundedAudio() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         struct Fixture: Decodable { let readAloudStatus: AidenReadAloudStatus; let readAloudAudio: AidenReadAloudAudio }

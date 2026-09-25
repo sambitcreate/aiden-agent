@@ -1003,3 +1003,6 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 - 2026-09-24 native TTS: Android mirrors `protocol/aiden-remote/v1/fixtures/contract.json` in test resources; update it byte-for-byte or the native contract gate fails. iOS uses the shared fixture directly. OpenAPI route allowlists also need the additive paths.
 - 2026-09-24 native TTS: the available physical Smbt16ProMax was locked, so xcodebuild compiled/signed but waited before XCTest launch. Terminated the wait; unsigned `build-for-testing` passed, but it is not physical playback/test acceptance. Unlock the phone before rerunning.
 - 2026-09-24 native TTS review: fresh backend/native reviewer batch was rejected before admission by the subagent tree deadline. No completed independent review/sign-off exists for these changes.
+
+- 2026-09-25 PR245: shared `contract.json` has no usage entry; usage-label tests must construct typed usage totals, not assume a fixture exists. Initial tests exposed this incorrect assumption and were corrected.
+- 2026-09-25 PR245 simulator: the reused iOS26.4 simulator launched the app but did not inject/connect XCTest on a second run (sample showed idle app, no XCTest). Terminated only that test runner/app; an isolated iPhone17 simulator completed 232 tests (5 skipped). Do not reset unrelated simulators or count the stalled run as a pass.

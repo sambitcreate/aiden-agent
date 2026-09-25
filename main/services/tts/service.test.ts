@@ -909,3 +909,67 @@ test("remote transport suspension preserves replay and source changes fence audi
   assert.equal(h.provider.calls.length, 1);
   remote.close();
 });
+
+
+test("dispatched usage is settled once on failure, timeout and cancellation, including late completion", async () => {
+  for (const action of ["failure", "timeout", "cancel", "owner"] as const) {
+    const h = harness(); const reports: import("./service.js").TtsUsageReport[] = [];
+    h.deps.recordUsage = report => reports.push(report);
+    let resolve!: (value: TtsUnarySynthesisResult) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<TtsUnarySynthesisResult>((yes, no) => { resolve = yes; reject = no; });
+    const pending = { promise, resolve, reject };
+    h.provider.synthesize = () => pending.promise;
+    const owner = h.owner();
+    await h.service.start(owner, startRequest(h)); await flush();
+    if (action === "failure") pending.reject(new Error("network failure"));
+    else if (action === "timeout") h.clock.advance(TTS_LIMITS.requestTimeoutMs + 1);
+    else if (action === "owner") owner.invalidate();
+    else h.service.stop(owner);
+    await flush();
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0]!.status, action === "cancel" || action === "owner" ? "cancelled" : "failed");
+    assert.equal(reports[0]!.usageKnown, false);
+    pending.resolve({ audio: { bytes: wavBytes(), mimeType: "audio/wav", sampleRate: 24000, channels: 1 }, usage: { inputTokens: 1, outputTokens: 2 } });
+    await flush(); assert.equal(reports.length, 1);
+  }
+});
+
+test("remote status does not reserve sessions; idle eviction and revocation never reopen billed intents", async () => {
+  const h = harness(); let now = 0;
+  const remote = new AidenRemoteTtsService(h.service, () => now);
+  const authority = (index: number) => ({ deviceId: `phone-${index}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  try {
+    for (let i = 0; i < 300; i++) await remote.status(authority(i));
+    for (let i = 0; i < 256; i++) {
+      await remote.start(authority(i), startRequest(h)); await flush();
+      remote.stop(authority(i), { requestId: "req-1" });
+    }
+    now = 120_001;
+    await remote.start(authority(256), startRequest(h)); await flush();
+    remote.stop(authority(256), { requestId: "req-1" });
+    assert.equal(h.provider.calls.length, 257);
+    await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "fresh-request" }), /expired/u);
+    await assert.rejects(remote.start(authority(0), startRequest(h)), /stopped/u);
+    assert.equal(h.provider.calls.length, 257);
+    remote.revokeDevice("phone-256");
+    await assert.rejects(remote.start(authority(256), { ...startRequest(h), requestId: "revived" }), /access/u);
+    await remote.start(authority(257), startRequest(h)); await flush();
+    assert.equal(h.provider.calls.length, 258);
+  } finally { remote.close(); }
+});
+
+
+test("provider success is accounted even if local retention fails, while preflight never counts", async () => {
+  const h = harness(); const reports: import("./service.js").TtsUsageReport[] = [];
+  h.deps.recordUsage = report => reports.push(report);
+  h.service.audioStore.put = () => { throw new Error("buffer limit"); };
+  await h.service.start(h.owner(), startRequest(h)); await flush();
+  assert.equal(lastJob(h).phase, "failed");
+  assert.equal(reports.length, 1); assert.equal(reports[0]!.status, "completed");
+  assert.equal(reports[0]!.inputTokens, 4);
+  const disabled = harness({ enabled: false });
+  disabled.deps.recordUsage = report => reports.push(report);
+  await assert.rejects(disabled.service.start(disabled.owner(), startRequest(disabled)));
+  assert.equal(reports.length, 1);
+});

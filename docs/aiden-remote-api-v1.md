@@ -416,3 +416,26 @@ never silently regenerate. Clients poll bounded status, validate each continuati
 keep only a bounded segment in memory, and stop on stale source, access change,
 interruption or microphone use. Settings on both clients show desktop setup guidance,
 not an enable toggle. Existing native transcription controls are unchanged.
+
+
+### Review hardening: accounting and bounded playback sessions
+
+Every dispatched synthesis segment is recorded once in the desktop usage store
+as `text-to-speech`, including failed/timed-out/cancelled in-flight requests.
+Replay and preflight rejection do not add usage. Missing/incomplete token reports
+remain unmetered and speech cost stays unavailable, never inferred as free.
+Native usage totals disclose unknown hosted costs using existing coverage fields.
+
+Unary synthesis accepts only the 24 kHz mono PCM16 WAV format consumed by all
+three clients; raw L16 and incompatible WAV layouts fail before retention.
+Native waiting uses a 120-second no-progress watchdog, reset when another segment
+becomes ready, rather than imposing a 15-minute total-job limit.
+
+Status and missing-audio reads do not allocate playback sessions. The active
+session map is capped at 256; capacity pressure reclaims sessions idle for more
+than two minutes, and revocation immediately releases its records/audio. Separate
+bounded SHA-256 intent ledgers (16,384 entries each for sources, requests and
+cancellations) preserve anti-rebilling protection across reclamation. A previously
+attempted source from a reclaimed session returns unavailable, conservatively
+even if speech settings changed. Ledger exhaustion fails closed for new intents;
+it never forgets a billed attempt merely to admit another one.

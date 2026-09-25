@@ -2221,6 +2221,11 @@ struct AidenReadAloudStop: Encodable, Sendable { let requestId: String }
 struct AidenReadAloudAcknowledgement: Decodable { let ok: Bool }
 struct AidenReadAloudError: Codable, Sendable { let message: String }
 struct AidenReadAloudJob: Codable, Sendable {
+    // Server gives each segment 60 seconds; allow 120 seconds without progress.
+    static let maximumStalledPolls = 240
+    static func nextStalledPollCount(previousReady: Int, currentReady: Int, stalled: Int) -> Int {
+        currentReady > previousReady ? 0 : stalled + 1
+    }
     let jobId: String
     let chatId: String?
     let phase: String

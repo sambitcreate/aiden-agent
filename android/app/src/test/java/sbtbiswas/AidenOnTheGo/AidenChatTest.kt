@@ -42,6 +42,32 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @Test fun readAloudEligibilityRejectsProjectedFailuresAndCancellation() {
+        val message = AidenChatMessage("a", AidenChatRole.ASSISTANT, "partial answer", createdAt = Instant.now())
+        assertTrue(message.isReadAloudEligible)
+        for (status in AidenMessageOutcomeStatus.entries) {
+            assertFalse(message.copy(outcome = AidenMessageOutcome(status)).isReadAloudEligible)
+        }
+        assertFalse(message.copy(role = AidenChatRole.USER).isReadAloudEligible)
+    }
+    @Test fun readAloudProgressWatchdogAllowsLongJobsButBoundsStalls() {
+        var stalled = 0
+        for (poll in 1..3_000) {
+            stalled = AidenReadAloudJob.nextStalledPollCount((poll - 1) / 100, poll / 100, stalled)
+            assertTrue(stalled < AidenReadAloudJob.MAXIMUM_STALLED_POLLS)
+        }
+        repeat(AidenReadAloudJob.MAXIMUM_STALLED_POLLS) { stalled = AidenReadAloudJob.nextStalledPollCount(30, 30, stalled) }
+        assertEquals(AidenReadAloudJob.MAXIMUM_STALLED_POLLS, stalled)
+    }
+    @Test fun unpricedSpeechDoesNotDisplayFreeHostedCost() {
+        val totals = AidenUsageTotals(requests = 2, completedRequests = 1, failedRequests = 1, cancelledRequests = 0,
+            reportedTokenRequests = 1, unmeteredRequests = 1, localRequests = 0, costedRequests = 0,
+            unpricedHostedRequests = 1, hostedCostUsd = 0.0, activeDays = 1, currentStreak = 1, longestStreak = 1,
+            tokens = AidenUsageTokens(0, 0, 0, 0, 0, 0, 0))
+        assertEquals("Cost unavailable", totals.copy(unpricedHostedRequests = 1, costedRequests = 0, hostedCostUsd = 0.0).hostedCostSummary)
+        assertTrue(totals.copy(unpricedHostedRequests = 1, costedRequests = 1, hostedCostUsd = 0.2).hostedCostSummary.contains("1 requests unpriced"))
+    }
+
     @Test fun readAloudUsesSharedFixtureAndRejectsInvalidAudio() {
         val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
         val root = Json.parseToJsonElement(data) as kotlinx.serialization.json.JsonObject

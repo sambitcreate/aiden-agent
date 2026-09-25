@@ -7,6 +7,7 @@
 // so late events can never resurrect a cancelled job.
 
 import { randomUUID } from "node:crypto";
+import { emptyUsageTokens, type UsageRequestRecord } from "../usage-store-core.js";
 import {
   TTS_LIMITS,
   TTS_PREVIEW_SENTENCE,
@@ -74,12 +75,25 @@ export interface TtsOwner {
 }
 
 export interface TtsUsageReport {
+  status: "completed" | "failed" | "cancelled";
   kind: "read-aloud" | "preview";
   model: string;
   inputTokens: number | null;
   outputTokens: number | null;
   /** False when usage was not reported by the provider. */
   usageKnown: boolean;
+}
+
+/** Privacy-safe accounting: speech is hosted even when the chat model is local. */
+export function ttsUsageRecord(report: TtsUsageReport): UsageRequestRecord {
+  const known = report.inputTokens !== null && report.outputTokens !== null;
+  return {
+    source: "text-to-speech", providerId: "google", providerLabel: "Google",
+    modelId: report.model, modelLabel: report.model, local: false,
+    status: report.status, costStatus: "unavailable",
+    tokens: known ? { ...emptyUsageTokens(), input: report.inputTokens!, output: report.outputTokens!,
+      total: report.inputTokens! + report.outputTokens! } : null,
+  };
 }
 
 export interface TtsServiceDeps {
@@ -130,6 +144,7 @@ class TtsJob {
   source: TtsSourceRef | null = null;
   releaseOwner: () => void = () => undefined;
   clearRequestTimeout: () => void = () => undefined;
+  settleRequest: (status: "failed" | "cancelled") => void = () => undefined;
   clearPauseTimeout: () => void = () => undefined;
   nextSegmentToSynthesize = 0;
   paused = false;
@@ -269,6 +284,7 @@ export function createTtsService(deps: TtsServiceDeps) {
     error: TtsSafeError | null,
   ): void {
     if (job.phase === "cancelled" || job.phase === "failed") return;
+    job.settleRequest(phase);
     job.clearRequestTimeout();
     job.clearPauseTimeout();
     job.phase = phase;
@@ -435,6 +451,17 @@ export function createTtsService(deps: TtsServiceDeps) {
         const segmentIndex = job.nextSegmentToSynthesize;
         job.phase = "generating";
         emitJob(job);
+        const body = buildTtsInteractionBody({ model: input.model, transcript: segment,
+          voice: input.voice, style: input.style });
+        let accounted = false;
+        const account = (status: TtsUsageReport["status"], usage?: TtsUnarySynthesisResult["usage"]) => {
+          if (accounted) return;
+          accounted = true;
+          deps.recordUsage?.({ kind: job.kind, model: input.model, status,
+            inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null,
+            usageKnown: usage?.inputTokens != null && usage?.outputTokens != null });
+        };
+        job.settleRequest = account;
         // Per-segment request lifetime: pauses do not consume this budget.
         const timeoutHandle = deps.clock.setTimeout(() => {
           if (!job.terminal()) {
@@ -449,14 +476,10 @@ export function createTtsService(deps: TtsServiceDeps) {
         try {
           const audio = await deps.provider.synthesize({
             apiKey: input.apiKey,
-            body: buildTtsInteractionBody({
-              model: input.model,
-              transcript: segment,
-              voice: input.voice,
-              style: input.style,
-            }),
+            body,
             signal: job.signal,
           });
+          account("completed", audio.usage);
           if (job.owner.isDestroyed()) {
             terminateJob(job, "cancelled", null);
             return;
@@ -485,14 +508,7 @@ export function createTtsService(deps: TtsServiceDeps) {
           job.nextSegmentToSynthesize += 1;
           if (!job.paused) job.phase = "buffering";
           emitJob(job);
-          // Report usage once per billed generation, never for replay.
-          deps.recordUsage?.({
-            kind: job.kind,
-            model: input.model,
-            inputTokens: audio.usage.inputTokens,
-            outputTokens: audio.usage.outputTokens,
-            usageKnown: audio.usage.inputTokens !== null || audio.usage.outputTokens !== null,
-          });
+
         } catch (error) {
           if (job.terminal()) return;
           if (job.signal.aborted) {
@@ -509,6 +525,7 @@ export function createTtsService(deps: TtsServiceDeps) {
           terminateJob(job, "failed", safe);
           return;
         } finally {
+          job.settleRequest = () => undefined;
           job.clearRequestTimeout();
         }
         // Pause halts future segment dispatch; an in-flight request was

@@ -274,3 +274,22 @@ test("starter prebuilt voices are unique and valid", () => {
     assert.equal(voice.kind, "prebuilt");
   }
 });
+
+
+test("unary audio matches every playback client: only 24 kHz mono WAV", () => {
+  for (const options of [{sampleRate: 48000}, {channels: 2}, {sampleRate: 0}, {channels: 0}]) {
+    assert.throws(() => parseUnarySynthesisResponse(synthResponse(wavBytes(options))), /24 kHz mono/u);
+  }
+  assert.throws(() => parseUnarySynthesisResponse({ status: "completed", output_audio: {
+    mime_type: "audio/l16", data: base64(new Uint8Array([1, 2])), sample_rate: 24000, channels: 1,
+  }}), /Unexpected audio format/u);
+});
+
+test("usage treats malformed or missing counts as unknown, preserving explicit zero", () => {
+  for (const value of [-1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    const response = synthResponse(wavBytes()); response.usage.total_input_tokens = value;
+    assert.equal(parseUnarySynthesisResponse(response).usage.inputTokens, null);
+  }
+  const response = synthResponse(wavBytes()); response.usage.total_input_tokens = 0;
+  assert.equal(parseUnarySynthesisResponse(response).usage.inputTokens, 0);
+});

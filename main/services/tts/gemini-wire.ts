@@ -205,39 +205,27 @@ function parseAudioContent(content: unknown): TtsSynthesizedAudio {
     throw new TtsWireError("invalid_response", "Audio content is malformed.");
   }
   const mimeType = content.mime_type;
-  if (mimeType !== "audio/wav" && mimeType !== "audio/l16") {
+  if (mimeType !== "audio/wav") {
     throw new TtsWireError("invalid_response", "Unexpected audio format.");
   }
   const bytes = decodeBase64Strict(content.data as string);
   if (bytes.byteLength > TTS_LIMITS.segmentAudioMaxBytes) {
     throw new TtsWireError("response_too_large", "Audio segment exceeds the size limit.");
   }
-  if (mimeType === "audio/wav") {
-    const info = validateWavContainer(bytes);
-    return {
-      bytes,
-      mimeType,
-      sampleRate: info.sampleRate,
-      channels: info.channels,
-    };
+  const info = validateWavContainer(bytes);
+  if (info.sampleRate !== TTS_AUDIO_SAMPLE_RATE || info.channels !== TTS_AUDIO_CHANNELS) {
+    throw new TtsWireError("invalid_response", "Expected 24 kHz mono WAV audio.", false, true);
   }
-  const sampleRate =
-    typeof content.sample_rate === "number" ? content.sample_rate : TTS_AUDIO_SAMPLE_RATE;
-  const channels =
-    typeof content.channels === "number" ? content.channels : TTS_AUDIO_CHANNELS;
-  if (sampleRate !== TTS_AUDIO_SAMPLE_RATE || channels !== TTS_AUDIO_CHANNELS) {
-    throw new TtsWireError("invalid_response", "Unexpected PCM layout.");
-  }
-  return { bytes, mimeType, sampleRate, channels };
+  return { bytes, mimeType, sampleRate: info.sampleRate, channels: info.channels };
 }
 
 function parseUsage(usage: unknown): TtsSynthesisUsage {
   if (!isRecord(usage)) return { inputTokens: null, outputTokens: null };
   return {
     inputTokens:
-      typeof usage.total_input_tokens === "number" ? usage.total_input_tokens : null,
+      typeof usage.total_input_tokens === "number" && Number.isSafeInteger(usage.total_input_tokens) && usage.total_input_tokens >= 0 ? usage.total_input_tokens : null,
     outputTokens:
-      typeof usage.total_output_tokens === "number" ? usage.total_output_tokens : null,
+      typeof usage.total_output_tokens === "number" && Number.isSafeInteger(usage.total_output_tokens) && usage.total_output_tokens >= 0 ? usage.total_output_tokens : null,
   };
 }
 

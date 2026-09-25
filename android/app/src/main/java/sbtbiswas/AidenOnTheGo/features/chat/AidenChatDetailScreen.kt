@@ -633,8 +633,7 @@ fun AidenChatDetailScreen(
                             onShare = { text -> shareText(context, text) },
                             onReply = { text -> viewModel.updateDraft("> $text\n") },
                             onReadAloud = if (!isStreaming && serverInfo?.features?.contains("tts-v1") == true &&
-                                chat?.messages?.lastOrNull()?.id == message.id && message.text.isNotBlank() &&
-                                (message.timeline == null || message.timeline.status == AidenGenerationTimelineStatus.COMPLETED)) {
+                                chat?.messages?.lastOrNull()?.id == message.id && message.isReadAloudEligible) {
                                 { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
                             } else null,
                             readAloudActive = readAloud.activeMessageId == message.id,

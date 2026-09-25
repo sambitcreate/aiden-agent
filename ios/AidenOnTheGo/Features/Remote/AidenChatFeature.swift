@@ -864,8 +864,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isStarting, streamState?.isTerminal != false,
               coordinator.server?.features.contains("tts-v1") == true,
               let last = chat.messages.last, last.role == .assistant,
-              last.timeline == nil || last.timeline?.status == .completed,
-              !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              last.isReadAloudEligible else { return nil }
         return last.id
     }
     func toggleReadAloud(_ messageID: String) {
@@ -5632,9 +5631,9 @@ final class AidenReadAloudPlayback {
                 var job = try await client.startReadAloud(chatId: chatID, request: .init(requestId: requestID, source: source, settingsRevision: status.settingsRevision))
                 try check()
                 let jobID = job.jobId
-                var polls = 0
+                var stalledPolls = 0
                 while job.phase != "completed" {
-                    guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.phase != "cancelled", polls < 1_800 else {
+                    guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.phase != "cancelled", stalledPolls < AidenReadAloudJob.maximumStalledPolls else {
                         throw AidenReadAloudFailure.unavailable
                     }
                     if job.phase == "failed" {
@@ -5645,7 +5644,8 @@ final class AidenReadAloudPlayback {
                     let update = try await client.readAloudStatus(chatId: chatID)
                     try check()
                     guard update.ready, update.source?.sourceRevision == source.sourceRevision, let next = update.job else { throw AidenReadAloudFailure.unavailable }
-                    job = next; polls += 1
+                    stalledPolls = AidenReadAloudJob.nextStalledPollCount(previousReady: job.readySegments, currentReady: next.readySegments, stalled: stalledPolls)
+                    job = next
                 }
                 guard job.isValid, job.chatId == chatID, job.jobId == jobID, job.readySegments == job.totalSegments else { throw AidenReadAloudFailure.invalidAudio }
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: .duckOthers)

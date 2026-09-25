@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TTS_LIMITS, parseTtsStartRequest, type TtsSourceRef } from "../../renderer/shared/tts.js";
 import type { TtsOwner } from "./tts/service.js";
 import { TtsStartError, type createTtsService } from "./tts/service.js";
@@ -15,7 +15,8 @@ interface Session {
   owner: TtsOwner;
   authority: RemoteTtsAuthority;
   requestId: string | null;
-  cancelledRequests: Set<string>;
+  sourceIntents: Set<string>;
+  requestIntents: Set<string>;
   jobId: string | null;
   source: TtsSourceRef | null;
   touchedAt: number;
@@ -28,33 +29,52 @@ interface Session {
 export class AidenRemoteTtsService {
   private sessions = new Map<string, Session>();
   private closed = false;
-  private readonly idleTimer: ReturnType<typeof setInterval>;
-  constructor(private readonly service: ReturnType<typeof createTtsService>) {
-    this.idleTimer = setInterval(() => {
-      for (const session of this.sessions.values()) {
-        if (Date.now() - session.touchedAt > 120_000) this.service.stop(session.owner);
+  private readonly revokedDevices = new Set<string>();
+  // Compact, bounded anti-rebilling ledgers outlive evictable playback sessions.
+  private readonly sourceIntents = new Set<string>();
+  private readonly requestIntents = new Set<string>();
+  private readonly cancelledIntents = new Set<string>();
+  private intent(authority: RemoteTtsAuthority, value: unknown): string {
+    return createHash("sha256").update(JSON.stringify([authority.deviceId, authority.chatId, value])).digest("hex");
+  }
+  private reclaimIdle(capacity = false): void {
+    if (this.closed) return;
+    for (const [key, session] of this.sessions) {
+      const idle = this.now() - session.touchedAt > 120_000;
+      if (idle) this.service.stop(session.owner);
+      if (session.owner.isDestroyed() || (capacity && idle)) {
+        session.invalidate();
+        this.sessions.delete(key);
       }
-    }, 30_000);
+    }
+  }
+  private readonly idleTimer: ReturnType<typeof setInterval>;
+  constructor(private readonly service: ReturnType<typeof createTtsService>, private readonly now: () => number = Date.now) {
+    this.idleTimer = setInterval(() => this.reclaimIdle(), 30_000);
     this.idleTimer.unref();
   }
 
-  private session(authority: RemoteTtsAuthority): Session {
-    if (this.closed || !authority.current()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access is no longer available.", 403);
-    const key = JSON.stringify([authority.deviceId, authority.chatId]);
-    const existing = this.sessions.get(key);
-    if (existing) {
-      existing.authority = authority;
-      existing.touchedAt = Date.now();
-      if (existing.owner.isDestroyed()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access is no longer available.", 403);
-      return existing;
+  private lookup(authority: RemoteTtsAuthority): Session | undefined {
+    if (this.closed || this.revokedDevices.has(authority.deviceId) || !authority.current()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access is no longer available.", 403);
+    const session = this.sessions.get(JSON.stringify([authority.deviceId, authority.chatId]));
+    if (session) {
+      session.authority = authority;
+      session.touchedAt = this.now();
+      if (session.owner.isDestroyed()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access is no longer available.", 403);
     }
-    // Never evict session identities: reconnect must not turn a possibly billed
-    // operation into fresh synthesis. Bytes remain bounded by the shared store.
+    return session;
+  }
+
+  private session(authority: RemoteTtsAuthority): Session {
+    const existing = this.lookup(authority);
+    if (existing) return existing;
+    const key = JSON.stringify([authority.deviceId, authority.chatId]);
+    if (this.sessions.size >= 256) this.reclaimIdle(true);
     if (this.sessions.size >= 256) throw new AidenRemoteServiceError("rate_limited", "The Read Aloud session limit was reached on the desktop.", 429);
     let invalidated = false;
     const listeners = new Set<() => void>();
     const session: Session = {
-      authority, requestId: null, jobId: null, source: null, touchedAt: Date.now(), cancelledRequests: new Set(),
+      authority, requestId: null, jobId: null, source: null, touchedAt: this.now(), sourceIntents: new Set(), requestIntents: new Set(),
       invalidate: () => {
         if (invalidated) return;
         invalidated = true;
@@ -86,12 +106,12 @@ export class AidenRemoteTtsService {
   }
 
   async status(authority?: RemoteTtsAuthority) {
-    const session = authority ? this.session(authority) : null;
+    const session = authority ? this.lookup(authority) : null;
     const status = await this.service.status(session?.owner ?? {
-      documentId: "remote-tts-status", isDestroyed: () => this.closed,
+      documentId: "remote-tts-status", isDestroyed: () => this.closed || (authority != null && !authority.current()),
       onInvalidated: () => () => undefined,
     }, authority?.chatId);
-    if (session?.owner.isDestroyed()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access was revoked.", 403);
+    if ((authority && !authority.current()) || session?.owner.isDestroyed()) throw new AidenRemoteServiceError("credential_revoked", "Read Aloud access was revoked.", 403);
     return {
       enabled: status.settings.enabled, ready: status.synthesisReady,
       settingsRevision: status.settingsRevision,
@@ -107,7 +127,19 @@ export class AidenRemoteTtsService {
     if (request.source.chatId !== authority.chatId) throw new AidenRemoteServiceError("invalid_request", "Read Aloud source does not match this chat.", 400);
     const session = this.session(authority);
     await session.owner.authorizeSource!(authority.chatId);
-    if (session.cancelledRequests.has(request.requestId)) throw new AidenRemoteServiceError("invalid_request", "Read Aloud was stopped before it started.", 409);
+    const requestIntent = this.intent(authority, request.requestId);
+    const sourceIntent = this.intent(authority, [request.source.messageId, request.source.sourceRevision]);
+    if (this.cancelledIntents.has(requestIntent)) throw new AidenRemoteServiceError("invalid_request", "Read Aloud was stopped before it started.", 409);
+    if ((this.requestIntents.has(requestIntent) && !session.requestIntents.has(requestIntent)) ||
+      (this.sourceIntents.has(sourceIntent) && !session.sourceIntents.has(sourceIntent))) {
+      throw new AidenRemoteServiceError("not_found", "This soundbite session expired. It will not be generated again automatically.", 404);
+    }
+    if ((!this.sourceIntents.has(sourceIntent) && this.sourceIntents.size >= 16_384) ||
+      (!this.requestIntents.has(requestIntent) && this.requestIntents.size >= 16_384)) {
+      throw new AidenRemoteServiceError("rate_limited", "The Read Aloud intent limit was reached on the desktop.", 429);
+    }
+    this.sourceIntents.add(sourceIntent); session.sourceIntents.add(sourceIntent);
+    this.requestIntents.add(requestIntent); session.requestIntents.add(requestIntent);
     session.requestId = request.requestId;
     try {
       const job = await this.service.start(session.owner, request);
@@ -120,8 +152,8 @@ export class AidenRemoteTtsService {
   }
 
   async read(authority: RemoteTtsAuthority, jobId: string, segment: number, offset: number) {
-    const session = this.session(authority);
-    if (session.jobId !== jobId) throw new AidenRemoteServiceError("not_found", "This soundbite is unavailable.", 404);
+    const session = this.lookup(authority);
+    if (!session || session.jobId !== jobId) throw new AidenRemoteServiceError("not_found", "This soundbite is unavailable.", 404);
     const status = await this.service.status(session.owner, authority.chatId);
     if (status.latestSource.source?.sourceRevision !== session.source?.sourceRevision ||
       status.latestSource.source?.messageId !== session.source?.messageId) {
@@ -137,15 +169,16 @@ export class AidenRemoteTtsService {
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).join() !== "requestId" || typeof (input as { requestId?: unknown }).requestId !== "string") {
       throw new AidenRemoteServiceError("invalid_request", "Invalid Read Aloud stop request.", 400);
     }
-    const session = this.session(authority);
+    const session = this.lookup(authority);
     const requestId = (input as { requestId: string }).requestId;
     if (!requestId || requestId.length > 128) throw new AidenRemoteServiceError("invalid_request", "Invalid Read Aloud request identity.", 400);
-    if (session.cancelledRequests.size >= 1024 && !session.cancelledRequests.has(requestId)) {
-      session.invalidate();
-      throw new AidenRemoteServiceError("rate_limited", "Read Aloud session limit reached.", 429);
+    const intent = this.intent(authority, requestId);
+    if (this.cancelledIntents.size >= 16_384 && !this.cancelledIntents.has(intent)) {
+      if (session?.requestId === requestId) this.service.stop(session.owner);
+      throw new AidenRemoteServiceError("rate_limited", "Read Aloud intent limit reached.", 429);
     }
-    session.cancelledRequests.add(requestId);
-    if (session.requestId === requestId) this.service.stop(session.owner);
+    this.cancelledIntents.add(intent);
+    if (session?.requestId === requestId) this.service.stop(session.owner);
     return { ok: true };
   }
 
@@ -157,8 +190,10 @@ export class AidenRemoteTtsService {
   resume(): void { this.closed = false; }
 
   revokeDevice(deviceId: string): void {
-    for (const session of this.sessions.values()) {
-      if (session.authority.deviceId === deviceId) session.invalidate();
+    if (this.revokedDevices.size >= 16_384) { this.close(); return; }
+    this.revokedDevices.add(deviceId);
+    for (const [key, session] of this.sessions) {
+      if (session.authority.deviceId === deviceId) { session.invalidate(); this.sessions.delete(key); }
     }
   }
 
@@ -167,5 +202,6 @@ export class AidenRemoteTtsService {
     this.closed = true;
     for (const session of this.sessions.values()) session.invalidate();
     this.sessions.clear();
+    this.sourceIntents.clear(); this.requestIntents.clear(); this.cancelledIntents.clear();
   }
 }

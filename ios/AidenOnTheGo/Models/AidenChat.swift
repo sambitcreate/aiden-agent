@@ -16,6 +16,10 @@ enum AidenChatRole: String, Codable, Sendable {
 }
 
 struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
+    var isReadAloudEligible: Bool {
+        role == .assistant && outcome == nil && (timeline == nil || timeline?.status == .completed)
+            && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     let id: String
     let role: AidenChatRole
     let text: String
@@ -1510,6 +1514,11 @@ struct AidenUsageTokens: Codable, Equatable, Sendable {
 }
 
 struct AidenUsageTotals: Codable, Equatable, Sendable {
+    var hostedCostSummary: String {
+        if unpricedHostedRequests > 0 && costedRequests == 0 { return "Cost unavailable" }
+        let tracked = hostedCostUsd.formatted(.currency(code: "USD"))
+        return unpricedHostedRequests > 0 ? "\(tracked) tracked; \(unpricedHostedRequests) requests unpriced" : tracked
+    }
     let requests: Int
     let completedRequests: Int
     let failedRequests: Int

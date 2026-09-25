@@ -9,10 +9,12 @@ import { configStore } from "../config-store.js";
 import { secrets } from "../secrets.js";
 import { llmClient } from "../llm-client.js";
 import { chatStore } from "../chat-store.js";
-import { createTtsService } from "./service.js";
+import { createTtsService, ttsUsageRecord } from "./service.js";
 import { createGeminiTtsProvider } from "./gemini-provider.js";
 import { readSavedGoogleTtsKey, TTS_DEDICATED_SECRET_ID } from "./credentials.js";
 import { piCredentialStore } from "../pi-credential-store.js";
+
+import { usageStore } from "../usage-store.js";
 
 export const ttsService = createTtsService({
   config: configStore,
@@ -27,6 +29,7 @@ export const ttsService = createTtsService({
     isChatBusy: (chatId) => llmClient.isChatBusy(chatId),
   },
   provider: createGeminiTtsProvider(),
+  recordUsage: (report) => { void usageStore.record(ttsUsageRecord(report)); },
   emit: (event, owner) => {
     if (owner?.kind === "remote") return;
     ipcMain.broadcast("tts:event", event);

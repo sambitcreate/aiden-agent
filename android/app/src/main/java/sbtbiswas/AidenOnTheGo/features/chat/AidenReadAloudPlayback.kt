@@ -88,17 +88,18 @@ class AidenReadAloudPlayback(
                 var job = api.startReadAloud(chatId, AidenReadAloudStart(id, source, status.settingsRevision))
                 checkCurrent()
                 val jobId = job.jobId
-                var polls = 0
+                var stalledPolls = 0
                 while (job.phase != "completed") {
-                    check(job.isValid && job.chatId == chatId && job.jobId == jobId && job.phase !in setOf("failed", "cancelled") && polls < 1_800) {
+                    check(job.isValid && job.chatId == chatId && job.jobId == jobId && job.phase !in setOf("failed", "cancelled") && stalledPolls < AidenReadAloudJob.MAXIMUM_STALLED_POLLS) {
                         job.error?.message ?: "This soundbite is unavailable. Generation will not retry automatically."
                     }
                     delay(500); checkCurrent()
                     val update = api.readAloudStatus(chatId)
                     checkCurrent()
                     check(update.ready && update.source?.sourceRevision == source.sourceRevision) { "Read Aloud was disabled or the response changed on the desktop." }
-                    job = update.job ?: throw IllegalStateException("This soundbite is no longer available.")
-                    polls++
+                    val next = update.job ?: throw IllegalStateException("This soundbite is no longer available.")
+                    stalledPolls = AidenReadAloudJob.nextStalledPollCount(job.readySegments, next.readySegments, stalledPolls)
+                    job = next
                 }
                 check(job.isValid && job.chatId == chatId && job.jobId == jobId && job.readySegments == job.totalSegments) { "Invalid Read Aloud completion." }
                 var totalBytes = 0

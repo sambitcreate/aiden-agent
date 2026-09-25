@@ -2869,7 +2869,7 @@ private struct AidenUsageView: View {
                 insightDivider
                 insightRow(
                     "Hosted cost",
-                    value: usage.totals.hostedCostUsd.formatted(.currency(code: "USD"))
+                    value: usage.totals.hostedCostSummary
                 )
             }
             .padding(.horizontal, 18)

@@ -117,8 +117,7 @@ records what is implemented on this branch and what remains gated; this is not a
 - **Voice library, design, replication** (Phase 4): provider voice browsing,
   import-by-ID, design dialog, replication wizard with consent recording,
   cloud deletion reconciliation.
-- **Release hardening** (Phase 5): usage-store integration (`text-to-speech`
-  source), audio-focus arbitration with dictation/Live, Electron interaction
+- **Release hardening** (Phase 5): audio-focus arbitration with dictation/Live, Electron interaction
   tests, independent final sign-off, packaged acceptance.
 - **Remote/native parity** (Phase 6, user-requested): `tts-v1` negotiation,
   authenticated device/chat-scoped audio delivery and iOS/Android playback.
@@ -190,3 +189,29 @@ segmentation behavior. Fresh full ESLint, application and E2E TypeScript checks,
 CI registry (8 tests), TTS (122 tests), and diff hygiene pass locally. PR #245
 remains draft pending the acceptance/review gates above; rerun CI is authoritative
 for the new published revision.
+
+
+### PR #245 review corrections — September 25, 2026
+
+Addressed all five Pullfrog findings against published `7bd5080`: production
+usage-store binding with once-only dispatch settlement; strict 24 kHz mono WAV;
+native progress-based watchdogs instead of the 15-minute cap; reclaimable remote
+sessions with independent bounded anti-rebilling ledgers; and projected
+failed/cancelled outcome checks in both native speaker eligibility paths.
+Native hosted-cost labels now distinguish unpriced requests from free usage.
+
+Validation: TTS 128; usage store 14; CI registry 8; Remote 17 + 441 + 7 passed
+(one skipped); Android 108 passed; iPhone 17 / iOS 26.4 simulator 227 passed,
+5 skipped, 0 failures (232 total). TypeScript, scoped ESLint, diff hygiene and
+Electron build pass. Evidence: `/tmp/aiden-pr245-review-fixes/`. The first native
+cost test assumed a nonexistent fixture entry, which was corrected to typed
+fixtures; a subsequent simulator runner stalled before XCTest connection and
+was terminated. A fresh isolated simulator completed the final suite above.
+No new paid synthesis was performed; prior owner-confirmed manual verification
+is separate from these automated results.
+
+Existing head CI and Hermes were green; Hermes reported no findings on `7bd5080`.
+Fresh CI/Hermes results for this correction commit must be checked after push.
+An additional local subagent review was not admitted (tree deadline); no new
+local reviewer sign-off is claimed. PR is ready for review, not draft; full
+Voice Studio/streaming scope remains partial.
