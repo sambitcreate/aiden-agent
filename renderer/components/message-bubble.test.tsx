@@ -110,17 +110,36 @@ test("the persisted handoff duplicate yields rich previews to the streaming copy
     },
   ];
   assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true),
+    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true, "assistant-final"),
     "assistant-final",
   );
-  assert.equal(richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false), null);
-  assert.equal(richLinkHandoffDuplicateMessageId(messages, "Different", true), null);
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false, "assistant-final"),
+    null,
+  );
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, "Different", true, "assistant-final"),
+    null,
+  );
 
   const duplicateMarkup = renderToStaticMarkup(
     <MessageBubble role="assistant" content={messages[1]!.content} richLinks={false} />,
   );
   assert.match(duplicateMarkup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
   assert.doesNotMatch(duplicateMarkup, /data-rich-link-provider/u);
+});
+
+test("an unpersisted equal-text partial does not suppress an older assistant preview", () => {
+  const repeated = "[PR](https://github.com/openai/codex/pull/247)";
+  const messages = [
+    { id: "assistant-old", role: "assistant" as const, content: repeated, createdAt: 1 },
+  ];
+
+  assert.equal(richLinkHandoffDuplicateMessageId(messages, repeated, true, null), null);
+  assert.equal(
+    richLinkHandoffDuplicateMessageId(messages, repeated, true, "missing-current-response"),
+    null,
+  );
 });
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {

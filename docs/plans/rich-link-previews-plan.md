@@ -279,7 +279,7 @@ The renderer-only slice is implemented on `feature/rich-link-previews-plan`:
 - One message can mount at most 50 rich preview triggers, including across streaming Markdown units.
 - Rendering and hover perform no network, IPC, connector, or storage work.
 
-Local verification completed on 2026-09-25: 41 focused rich-link and transcript tests, 451 Bot tests, the Chat/slash-command suite, TypeScript, ESLint, CI policy, the production build, and `git diff --check` passed. Hands-on packaged-app and assistive-technology acceptance remains part of PR review.
+Local verification completed on 2026-09-25: 42 focused rich-link and transcript tests, 451 Bot tests, the Chat/slash-command suite, TypeScript, ESLint, CI policy, the production build, and `git diff --check` passed. Hands-on packaged-app and assistive-technology acceptance remains part of PR review.
 
 ## Optional authenticated metadata phase
 

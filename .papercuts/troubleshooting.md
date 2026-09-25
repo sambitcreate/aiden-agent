@@ -986,3 +986,4 @@ The existing native read-html operation reads bounded UTF-8 regular files descri
 ## 2026-09-25 — rich link previews
 
 - Fresh worktrees have no `node_modules`, so focused `tsx` tests fail immediately. Run `npm ci --ignore-scripts` from the lockfile before renderer verification.
+- Review status can pass while an actionable inline finding remains. Inspect unresolved threads explicitly; content equality is not sufficient handoff identity when an unpersisted partial can repeat older assistant text.

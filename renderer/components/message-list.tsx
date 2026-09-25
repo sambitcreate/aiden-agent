@@ -48,6 +48,8 @@ interface MessageListProps {
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
   streamingArtifacts?: readonly ChatArtifactV1[];
   streamComplete?: boolean;
+  /** Persisted assistant message that duplicates the completed streaming row during handoff. */
+  persistedHandoffMessageId?: string | null;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
   liveSubagents: readonly SubagentRunSnapshot[];
@@ -197,13 +199,11 @@ export function richLinkHandoffDuplicateMessageId(
   messages: readonly ChatMessage[],
   streamingText: string | null,
   streamComplete: boolean,
+  persistedHandoffMessageId: string | null,
 ): string | null {
-  if (!streamComplete || streamingText === null) return null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role === "assistant" && message.content === streamingText) return message.id;
-  }
-  return null;
+  if (!streamComplete || streamingText === null || persistedHandoffMessageId === null) return null;
+  const message = messages.find((candidate) => candidate.id === persistedHandoffMessageId);
+  return message?.role === "assistant" && message.content === streamingText ? message.id : null;
 }
 
 export function MessageList({
@@ -213,6 +213,7 @@ export function MessageList({
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamComplete,
+  persistedHandoffMessageId = null,
   onStreamHandoffComplete,
   timeline,
   liveSubagents,
@@ -259,6 +260,7 @@ export function MessageList({
     messages,
     streamingText,
     Boolean(streamComplete),
+    persistedHandoffMessageId,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
