@@ -3648,8 +3648,14 @@ struct AidenChatDetailView: View {
         ) {
             // Settled rows live in a child view that tracks only `chat`, so
             // per-token liveText updates never re-evaluate finished messages.
-            AidenSettledMessageRows(model: model, presentationStyle: presentationStyle)
-                .equatable()
+            // `chat` is a value snapshot: comparing model.chat would read the
+            // same live property on both sides of == and never differ.
+            AidenSettledMessageRows(
+                model: model,
+                chat: model.chat,
+                presentationStyle: presentationStyle
+            )
+            .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
@@ -4019,23 +4025,24 @@ private struct AidenComposerHeightPreferenceKey: PreferenceKey {
 
 private struct AidenSettledMessageRows: View, Equatable {
     let model: AidenChatViewModel
+    let chat: AidenChat
     let presentationStyle: AidenChatPresentationStyle
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        // The view model is a reference type; compare the rendered payload so
-        // a settled-in chat update re-renders while per-token liveText churn
-        // (which never touches chat) still skips.
-        lhs.model.chat == rhs.model.chat && lhs.presentationStyle == rhs.presentationStyle
+        // `model` is a shared reference (same pointer on both sides of every
+        // comparison), so equality must cover the value-typed snapshot the
+        // body renders — `chat` — and the presentation style.
+        lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle
     }
 
     var body: some View {
-        ForEach(Array(model.chat.messages.enumerated()), id: \.element.id) { index, message in
+        ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
             messageRow(message, at: index)
         }
     }
 
     private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
-        let previous = index > 0 ? model.chat.messages[index - 1] : nil
+        let previous = index > 0 ? chat.messages[index - 1] : nil
         let isBotMessage = presentationStyle == .botMessages
         let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
 
