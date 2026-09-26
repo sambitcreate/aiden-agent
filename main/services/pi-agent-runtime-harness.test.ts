@@ -2391,6 +2391,62 @@ for (const lateResult of ["saved", "failed"] as const) {
   });
 }
 
+test("a queued projection saved just after cancellation still forces transaction recovery", async () => {
+  const { tool, atTool, release } = steerWaitTool();
+  let projectionStarted!: () => void;
+  const atProjection = new Promise<void>((resolve) => {
+    projectionStarted = resolve;
+  });
+  let finishProjection!: (id: string) => void;
+  const { harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not run"),
+    ],
+    {
+      tools: [tool],
+      beforeQueuedUser: () => {
+        projectionStarted();
+        return new Promise<string>((resolve) => {
+          finishProjection = resolve;
+        });
+      },
+    },
+  );
+  const running = harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await atTool;
+  assert.equal(
+    harness.queueSteer({ role: "user", content: "saved late", timestamp: 2 }).accepted,
+    true,
+  );
+  release();
+  await atProjection;
+  // Cancellation wins, then the visible save lands before the run returns.
+  const cancelling = harness.cancelAndSettle();
+  finishProjection("late-visible-id");
+  await cancelling;
+  assert.equal((await running).kind, "app_cancelled");
+  // Let every detached write settle before the host takes its snapshot.
+  await new Promise((resolve) => setImmediate(resolve));
+  const settlement = harness.pendingDurabilitySettlement();
+  assert.ok(settlement, "the settled late save must still require transaction recovery");
+  await settlement;
+  // The saved guidance is not in Pi's journal, so committing the turn as-is
+  // would let the next sync append it after the assistant.
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === "saved late",
+    ),
+    false,
+  );
+  const undelivered = harness.takeUndeliveredQueuedMessages();
+  assert.deepEqual(undelivered.messages, []);
+  assert.deepEqual(await undelivered.late, []);
+});
+
 test("terminal responses skip between-turn pressure and settle through the terminal check", async () => {
   let continuationChecks = 0;
   let terminalChecks = 0;

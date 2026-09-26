@@ -776,6 +776,13 @@ export class PiAgentRuntimeHarness {
   private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
   /** Visible-chat projections that app cancellation stopped waiting for. */
   private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> = [];
+  /**
+   * Settlements of those projections, kept for the rest of the run even once
+   * they settle. A save that lands after cancellation never reached Pi's
+   * journal, so the host must run transaction recovery (not commit the turn)
+   * however quickly the save finished.
+   */
+  private cancelledQueuedProjectionSettlements: Array<Promise<void>> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
   private activeEffectOperation:
@@ -1554,6 +1561,7 @@ export class PiAgentRuntimeHarness {
     this.pendingDurableMessages = [];
     this.acceptedQueuedMessages = [];
     this.uncertainQueuedProjections = [];
+    this.cancelledQueuedProjectionSettlements = [];
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
     this.lastAssistantMessage = undefined;
@@ -2240,10 +2248,15 @@ export class PiAgentRuntimeHarness {
   /**
    * A non-abortable host storage callback can outlive app cancellation. The
    * caller must quarantine its session until this snapshot settles and then
-   * run transaction recovery before allowing another turn.
+   * run transaction recovery before allowing another turn. A queued-input
+   * projection that cancellation stopped waiting for stays in the snapshot
+   * even after it settles, because a late save is absent from Pi's journal.
    */
   pendingDurabilitySettlement(): Promise<void> | undefined {
-    const operations = [...this.detachedDurabilityOperations];
+    const operations = [
+      ...this.detachedDurabilityOperations,
+      ...this.cancelledQueuedProjectionSettlements,
+    ];
     return operations.length > 0 ? Promise.allSettled(operations).then(() => undefined) : undefined;
   }
 
@@ -2295,6 +2308,7 @@ export class PiAgentRuntimeHarness {
     this.pendingDurableMessages = [];
     this.acceptedQueuedMessages = [];
     this.uncertainQueuedProjections = [];
+    this.cancelledQueuedProjectionSettlements = [];
     this.lastAssistantMessage = undefined;
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
@@ -2491,6 +2505,12 @@ export class PiAgentRuntimeHarness {
       // The host write may still land. Quarantine it like any other detached
       // durability operation and decide delivery only once it settles.
       this.trackDetachedDurability(operation);
+      this.cancelledQueuedProjectionSettlements.push(
+        operation.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
       this.uncertainQueuedProjections.push({
         fingerprint: snapshotQueuedMessage(message)?.fingerprint ?? "",
         operation,
