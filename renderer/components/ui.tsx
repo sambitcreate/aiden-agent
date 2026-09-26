@@ -19,6 +19,13 @@ import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
+import {
+  distanceFromScrollBottom,
+  isAtScrollBottom,
+  isUserScrollKey,
+  resolveProgrammaticFollowLatch,
+  SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
+} from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
@@ -816,6 +823,7 @@ export function ScrollArea({
   footer,
   autoScrollToBottom,
   autoScrollDeps = [],
+  autoScrollResetKey,
   showScrollToBottomButton,
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
@@ -829,12 +837,15 @@ export function ScrollArea({
   footer?: React.ReactNode;
   autoScrollToBottom?: boolean;
   autoScrollDeps?: unknown[];
+  /** Changing this identity re-arms follow and pins to the latest content. */
+  autoScrollResetKey?: unknown;
   showScrollToBottomButton?: boolean;
   scrollToBottomButtonOffset?: number;
   scrollContentBottomOffset?: number;
   className?: string;
 }>) {
   const viewport = React.useRef<HTMLDivElement>(null);
+  const content = React.useRef<HTMLDivElement>(null);
   const toolbarRef = React.useRef<HTMLDivElement>(null);
   const footerRef = React.useRef<HTMLDivElement>(null);
   const [toolbarHeight, setToolbarHeight] = React.useState(0);
@@ -845,6 +856,7 @@ export function ScrollArea({
   const [atTop, setAtTop] = React.useState(true);
   const atBottomRef = React.useRef(true);
   const followFrameRef = React.useRef(0);
+  const programmaticPinPendingRef = React.useRef(false);
   const autoScrollRef = React.useRef(autoScrollToBottom);
   const split = React.useContext(SplitContext);
 
@@ -853,6 +865,7 @@ export function ScrollArea({
   const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = viewport.current;
     if (!element) return;
+    programmaticPinPendingRef.current = behavior === "smooth";
     element.scrollTo({ top: element.scrollHeight, behavior });
     atBottomRef.current = true;
     setAtBottom(true);
@@ -860,25 +873,55 @@ export function ScrollArea({
     setAtTop(element.scrollHeight <= element.clientHeight);
   }, []);
 
-  const updateScrollEdges = React.useCallback((element = viewport.current) => {
+  const updateScrollEdges = React.useCallback((element = viewport.current, terminated = false) => {
     if (!element) return;
     setAtTop(element.scrollTop < 2);
-    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
-    atBottomRef.current = remaining < 24;
+    const remaining = distanceFromScrollBottom(
+      element.scrollHeight,
+      element.clientHeight,
+      element.scrollTop,
+    );
+    const atBottom = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
+    const next = resolveProgrammaticFollowLatch(
+      programmaticPinPendingRef.current,
+      atBottom,
+      terminated,
+    );
+    programmaticPinPendingRef.current = next.pending;
+    atBottomRef.current = next.followLatest;
     setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
   }, []);
 
+  // A smooth jump can be aborted by the reader or can end short of the live
+  // edge; either way the pending latch must yield to the real position.
+  const releaseProgrammaticPin = React.useCallback(() => {
+    if (!programmaticPinPendingRef.current) return;
+    updateScrollEdges(viewport.current, true);
+  }, [updateScrollEdges]);
+
+  React.useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    element.addEventListener("scrollend", releaseProgrammaticPin);
+    return () => element.removeEventListener("scrollend", releaseProgrammaticPin);
+  }, [releaseProgrammaticPin]);
+
+  const followBottomNow = React.useCallback(() => {
+    const element = viewport.current;
+    if (!element) return;
+    if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
+    else updateScrollEdges(element);
+  }, [scrollToBottom, updateScrollEdges]);
+
   const scheduleFollowBottom = React.useCallback(() => {
+    followBottomNow();
     if (followFrameRef.current) return;
     followFrameRef.current = requestAnimationFrame(() => {
       followFrameRef.current = 0;
-      const element = viewport.current;
-      if (!element) return;
-      if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
-      else updateScrollEdges(element);
+      followBottomNow();
     });
-  }, [scrollToBottom, updateScrollEdges]);
+  }, [followBottomNow]);
 
   React.useLayoutEffect(() => {
     const measure = () => {
@@ -897,12 +940,21 @@ export function ScrollArea({
     return () => observer.disconnect();
   }, [toolbar, footer, title, leading, actions, scheduleFollowBottom]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     scheduleFollowBottom();
   }, [autoScrollToBottom, ...autoScrollDeps]);
 
   React.useLayoutEffect(() => {
+    if (autoScrollResetKey === undefined) return;
+    atBottomRef.current = true;
+    setAtBottom(true);
+    setAtScrollEnd(true);
+    if (autoScrollToBottom) scrollToBottom("auto");
+  }, [autoScrollResetKey, autoScrollToBottom, scrollToBottom]);
+
+  React.useLayoutEffect(() => {
     const element = viewport.current;
+    const contentElement = content.current;
     if (!element) return;
     const update = scheduleFollowBottom;
     // Settle synchronously first so the viewport never paints at scrollTop 0 and
@@ -912,23 +964,12 @@ export function ScrollArea({
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
-    const observeChildren = () => {
-      for (const child of element.children) {
-        if (child instanceof HTMLElement) resizeObserver.observe(child);
-      }
-    };
-    observeChildren();
-    const mutationObserver = new MutationObserver(() => {
-      observeChildren();
-      update();
-    });
-    mutationObserver.observe(element, { childList: true, subtree: true });
+    if (contentElement) resizeObserver.observe(contentElement);
     return () => {
       cancelAnimationFrame(frame);
       if (followFrameRef.current) cancelAnimationFrame(followFrameRef.current);
       followFrameRef.current = 0;
       resizeObserver.disconnect();
-      mutationObserver.disconnect();
     };
   }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges]);
 
@@ -965,8 +1006,21 @@ export function ScrollArea({
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
         }}
+        onWheel={releaseProgrammaticPin}
+        onTouchStart={releaseProgrammaticPin}
+        onPointerDown={(event) => {
+          // Only the viewport's own box (its scrollbar) starts a user scroll.
+          if (event.target === event.currentTarget) releaseProgrammaticPin();
+        }}
+        onKeyDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+          if (isUserScrollKey(event.key)) releaseProgrammaticPin();
+        }}
       >
-        {children}
+        <div ref={content} data-scroll-content className="min-h-full">
+          {children}
+        </div>
       </div>
       {showScrollToBottomButton && !atBottom ? (
         <Button

@@ -1,6 +1,5 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -18,13 +17,12 @@ enum class AidenAnnotationTag {
 }
 
 private val markdownPattern by lazy {
-    Regex("""(https?://[^\s\t\n]+)|(`[^`\n]+`)|(@\w+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)|(~[^~]+~)""")
+    Regex("""(\[[^\]\n]+\]\(\./[^)\n]+\))|(https?://[^\s\t\n]+)|(`[^`\n]+`)|(@\w+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)|(~[^~]+~)""")
 }
 
 /**
  * High-performance regex tokenizer generating AnnotatedString with rich inline styles and clickable link annotations.
  */
-@Composable
 fun buildAidenFormattedMessage(
     text: String,
     palette: AidenPalette,
@@ -41,6 +39,16 @@ fun buildAidenFormattedMessage(
             val raw = token.value
 
             when {
+                raw.startsWith("[") && raw.contains("](") -> {
+                    val separator = raw.indexOf("](")
+                    val reference = raw.substring(separator + 2, raw.length - 1)
+                    if (sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileLink.path(reference) != null) {
+                        val start = length
+                        append(raw.substring(1, separator))
+                        addStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), start, length)
+                        addStringAnnotation(AidenAnnotationTag.LINK.name, reference, start, length)
+                    } else append(raw)
+                }
                 raw.startsWith("http://") || raw.startsWith("https://") -> {
                     val start = length
                     append(raw)

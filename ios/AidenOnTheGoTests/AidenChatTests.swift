@@ -1967,6 +1967,35 @@ final class AidenChatTests: XCTestCase {
         XCTFail("Timed out waiting for agent snapshot requests (expected).")
     }
 
+    func testTranscriptAndTaskListsOpenAtTheLatestContent() {
+        XCTAssertEqual(AidenChatScrollPolicy.initialTranscriptAnchor, .bottom)
+        XCTAssertEqual(
+            AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: true),
+            .bottom
+        )
+        XCTAssertNil(AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: false))
+        XCTAssertEqual(AidenChatScrollPolicy.transcriptBottomAnchorID, "chat-bottom")
+        XCTAssertFalse(
+            AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                wasScrolledAway: false,
+                isAwayFromLatest: true,
+                contentGrew: true
+            )
+        )
+        XCTAssertTrue(
+            AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                wasScrolledAway: false,
+                isAwayFromLatest: true,
+                contentGrew: false
+            )
+        )
+        XCTAssertTrue(AidenChatScrollPolicy.shouldPinTaskListAfterGrowth(wasFollowingLatest: true))
+        XCTAssertFalse(AidenChatScrollPolicy.shouldPinTaskListAfterGrowth(wasFollowingLatest: false))
+        struct Row: Identifiable { let id: Int }
+        XCTAssertEqual(AidenChatScrollPolicy.taskListAnchorID([Row(id: 1), Row(id: 7)]), 7)
+        XCTAssertNil(AidenChatScrollPolicy.taskListAnchorID([Row]()))
+    }
+
     func testJumpToLatestThresholdOnlyAppearsWhenTranscriptIsMeaningfullyAboveBottom() {
         XCTAssertFalse(
             aidenChatIsScrolledAwayFromLatest(

@@ -1537,6 +1537,44 @@ final class AidenRemoteClient: @unchecked Sendable {
         return try AidenWorkspaceEnvironmentValidation.validated(value)
     }
 
+    func workspaceLinkedFile(workspaceId: String, reference: String) async throws -> AidenWorkspaceFileDocument {
+        guard let path = AidenWorkspaceFileLink.path(reference) else { throw AidenRemoteClientError.invalidResponse }
+        let parts = path.split(separator: "/")
+        var directory: String?
+        var requests = 0
+        for index in parts.indices {
+            let target = parts.prefix(index + 1).joined(separator: "/")
+            var cursor: String?
+            var found: AidenWorkspaceFileEntry?
+            repeat {
+                requests += 1
+                guard requests <= 40 else { throw AidenRemoteClientError.invalidResponse }
+                let page = try await workspaceFilePage(workspaceId: workspaceId, directoryId: directory, cursor: cursor)
+                found = page.entries.first { $0.displayPath == target }
+                cursor = page.nextCursor
+            } while found == nil && cursor != nil
+            guard let entry = found else { throw AidenRemoteClientError.invalidResponse }
+            if index == parts.count - 1 {
+                guard entry.kind == .file else { throw AidenRemoteClientError.invalidResponse }
+                return try await workspaceFile(workspaceId: workspaceId, fileId: entry.id)
+            }
+            guard entry.kind == .directory else { throw AidenRemoteClientError.invalidResponse }
+            directory = entry.id
+        }
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    func workspaceFilePage(workspaceId: String, directoryId: String? = nil, cursor: String? = nil) async throws -> AidenWorkspaceFileIndex {
+        var query = [URLQueryItem(name: "tree", value: "1")]
+        if let directoryId { query.append(URLQueryItem(name: "directory", value: directoryId)) }
+        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let value: AidenWorkspaceFileIndex = try await send(
+            method: "GET", path: ["workspaces", workspaceId, "files"], query: query,
+            maximumResponseBytes: 2 * 1_024 * 1_024
+        )
+        return try AidenWorkspaceEnvironmentValidation.validatedPage(value)
+    }
+
     func workspaceFile(workspaceId: String, fileId: String) async throws -> AidenWorkspaceFileDocument {
         guard AidenWorkspaceEnvironmentValidation.opaqueFileID(fileId) else {
             throw AidenRemoteClientError.invalidResponse
@@ -1552,6 +1590,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     func writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
+        displayPath: String,
         content: String,
         expectedVersion: String
     ) async throws -> AidenWorkspaceFileDocument {
@@ -1564,7 +1603,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: AidenWorkspaceFileWriteRequest(content: content, expectedVersion: expectedVersion),
             maximumResponseBytes: AidenRemoteProtocol.maxFileJSONBodyBytes
         )
-        return try AidenWorkspaceEnvironmentValidation.validated(value, expectedID: fileId)
+        return try AidenWorkspaceEnvironmentValidation.validatedSave(value, expectedDisplayPath: displayPath)
     }
 
     func gitReview(workspaceId: String) async throws -> AidenGitResult {

@@ -193,6 +193,12 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_error", "sequence": 1, "timestamp": "2026-08-18T19:02:00.000Z", "type": "error", "terminal": true, "payload": { "code": "server_interrupted", "message": "Aiden restarted before the turn completed." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_cancelled", "sequence": 1, "timestamp": "2026-08-18T19:03:00.000Z", "type": "cancelled", "terminal": true, "payload": { "source": "device" } }
   ],
+  "filePage": {
+    "snapshotId": "files_fixture_page", "directoryPath": "", "entries": [
+      { "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "displayPath": "Sources", "name": "Sources", "kind": "directory" }
+    ], "truncated": false, "maxEntries": 4000, "maxDepth": 20,
+    "nextCursor": "cur_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+  },
   "fileIndex": {
     "snapshotId": "file_snapshot_fixture_01",
     "entries": [

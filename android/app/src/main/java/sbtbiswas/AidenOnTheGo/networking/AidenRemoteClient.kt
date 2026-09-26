@@ -1572,6 +1572,42 @@ class AidenRemoteClient(
         AidenWorkspaceEnvironmentValidation.validated(index)
     }
 
+    suspend fun workspaceLinkedFile(workspaceId: String, reference: String): AidenWorkspaceFileDocument {
+        val path = AidenWorkspaceFileLink.path(reference) ?: throw AidenRemoteClientException.InvalidResponse()
+        val parts = path.split("/")
+        var directory: String? = null
+        var requests = 0
+        for (index in parts.indices) {
+            val target = parts.take(index + 1).joinToString("/")
+            var cursor: String? = null
+            var found: AidenWorkspaceFileEntry?
+            do {
+                if (++requests > 40) throw AidenRemoteClientException.InvalidResponse()
+                val page = workspaceFilePage(workspaceId, directory, cursor)
+                found = page.entries.firstOrNull { it.displayPath == target }
+                cursor = page.nextCursor
+            } while (found == null && cursor != null)
+            val entry = found ?: throw AidenRemoteClientException.InvalidResponse()
+            if (index == parts.lastIndex) {
+                if (entry.kind != AidenWorkspaceFileKind.FILE) throw AidenRemoteClientException.InvalidResponse()
+                return workspaceFile(workspaceId, entry.id)
+            }
+            if (entry.kind != AidenWorkspaceFileKind.DIRECTORY) throw AidenRemoteClientException.InvalidResponse()
+            directory = entry.id
+        }
+        throw AidenRemoteClientException.InvalidResponse()
+    }
+
+    suspend fun workspaceFilePage(workspaceId: String, directoryId: String? = null, cursor: String? = null): AidenWorkspaceFileIndex {
+        require(directoryId == null || AidenWorkspaceEnvironmentValidation.opaqueFileID(directoryId))
+        require(cursor == null || cursor.matches(Regex("^cur_[A-Za-z0-9_-]{43}$")))
+        val suffix = "?tree=1" + (directoryId?.let { "&directory=$it" } ?: "") + (cursor?.let { "&cursor=$it" } ?: "")
+        return executeRequest("/workspaces/$workspaceId/files$suffix", maximumResponseBytes = 2 * 1_024 * 1_024) { bytes ->
+            val index = json.decodeFromString<AidenWorkspaceFileIndex>(String(bytes, Charsets.UTF_8))
+            AidenWorkspaceEnvironmentValidation.validatedPage(index)
+        }
+    }
+
     suspend fun fileIndex(workspaceId: String): AidenWorkspaceFileIndex = workspaceFiles(workspaceId)
 
     suspend fun workspaceFile(workspaceId: String, fileId: String): AidenWorkspaceFileDocument = executeRequest(
@@ -1586,6 +1622,7 @@ class AidenRemoteClient(
     suspend fun writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
+        displayPath: String,
         content: String,
         expectedVersion: String
     ): AidenWorkspaceFileDocument = executeRequest(
@@ -1594,11 +1631,11 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenWorkspaceFileWriteRequest(content = content, expectedVersion = expectedVersion))
     ) { bytes ->
         val doc = json.decodeFromString<AidenWorkspaceFileDocument>(String(bytes, Charsets.UTF_8))
-        AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
+        AidenWorkspaceEnvironmentValidation.validatedSave(doc, displayPath)
     }
 
-    suspend fun writeFile(workspaceId: String, fileId: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
-        writeWorkspaceFile(workspaceId, fileId, content, expectedVersion)
+    suspend fun writeFile(workspaceId: String, fileId: String, displayPath: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
+        writeWorkspaceFile(workspaceId, fileId, displayPath, content, expectedVersion)
 
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"

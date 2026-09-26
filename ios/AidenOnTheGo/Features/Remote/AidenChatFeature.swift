@@ -3729,6 +3729,8 @@ struct AidenChatDetailView: View {
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
+    @State private var workspaceFileReference: String?
+    @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
     @State private var isScrolledAwayFromLatest = false
     @State private var attachmentPicker = AidenAttachmentPickerState()
@@ -3841,6 +3843,21 @@ struct AidenChatDetailView: View {
             botToolsModel.resetForSessionChange()
             await botToolsModel.load(coordinator: coordinator)
         }
+        .environment(\.openURL, OpenURLAction { url in
+            let raw = url.relativeString
+            if AidenWorkspaceFileLink.path(raw) != nil, model.chat.botId == nil, workspace?.hasFolder == true {
+                workspaceFileReference = raw
+                showsWorkspaceFile = true
+                return .handled
+            }
+            if url.isFileURL || raw.hasPrefix("/") || raw.hasPrefix("./") || raw.hasPrefix("../") || raw.hasPrefix("~/") { return .discarded }
+            return .systemAction
+        })
+        .sheet(isPresented: $showsWorkspaceFile) {
+            if let coordinator, let workspace {
+                NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, initialReference: workspaceFileReference) }
+            }
+        }
         .sheet(item: $botSheet) { botSheetContent($0) }
         .sheet(item: $progressSheet) { progressSheet in
             AidenChatProgressSheet(kind: progressSheet, model: model)
@@ -3933,16 +3950,31 @@ struct AidenChatDetailView: View {
             ScrollView {
                 messageList
             }
+            .defaultScrollAnchor(
+                AidenChatScrollPolicy.initialTranscriptAnchor,
+                for: .initialOffset
+            )
+            .defaultScrollAnchor(
+                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromLatest),
+                for: .sizeChanges
+            )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                aidenChatIsScrolledAwayFromLatest(
-                    contentOffsetY: geometry.contentOffset.y,
-                    containerHeight: geometry.containerSize.height,
-                    contentHeight: geometry.contentSize.height,
-                    bottomInset: geometry.contentInsets.bottom
+            .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
+                AidenScrollFollowGeometry(
+                    isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
+                        contentOffsetY: geometry.contentOffset.y,
+                        containerHeight: geometry.containerSize.height,
+                        contentHeight: geometry.contentSize.height,
+                        bottomInset: geometry.contentInsets.bottom
+                    ),
+                    contentHeight: geometry.contentSize.height
                 )
-            } action: { _, isAwayFromLatest in
-                isScrolledAwayFromLatest = isAwayFromLatest
+            } action: { previous, next in
+                isScrolledAwayFromLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
+                    wasScrolledAway: isScrolledAwayFromLatest,
+                    isAwayFromLatest: next.isAwayFromLatest,
+                    contentGrew: next.contentHeight > previous.contentHeight
+                )
             }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
@@ -3960,11 +3992,7 @@ struct AidenChatDetailView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
             .onChange(of: model.chat.messages.count) { _, _ in
                 guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy)
-            }
-            .onChange(of: model.liveText) { _, _ in
-                guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy)
+                scrollToBottom(proxy, animated: false)
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
@@ -3999,7 +4027,7 @@ struct AidenChatDetailView: View {
             Color.clear
                 .frame(height: max(96, composerHeight + 12))
                 .accessibilityHidden(true)
-            Color.clear.frame(height: 1).id("chat-bottom")
+            Color.clear.frame(height: 1).id(AidenChatScrollPolicy.transcriptBottomAnchorID)
         }
         .padding(.horizontal)
         .padding(.top, 20)
@@ -4293,9 +4321,14 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            proxy.scrollTo("chat-bottom", anchor: .bottom)
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        let scroll = {
+            proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
+        }
+        if animated {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2), scroll)
+        } else {
+            scroll()
         }
     }
 }

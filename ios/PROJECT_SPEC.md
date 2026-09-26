@@ -25,7 +25,7 @@ The complete planned product includes:
 - Workspace registry list/create/update/unregister, including folderless, managed scratch, and folders selected through a server-approved desktop directory browser.
 - Workspace Settings from the conversation toolbar ellipsis. Workspace permission is never a composer control.
 - Device-local Aiden, Slate, Berry, and Moss appearance presets plus supported mobile appearance options.
-- Aiden workspace file index/read/version-checked write and the existing Aiden Git review/diff/compare/branch/commit/push/managed-worktree operations.
+- Aiden workspace lazy directory pages, bounded source previews, explicit workspace-relative file links, index/read/version-checked write and the existing Aiden Git review/diff/compare/branch/commit/push/managed-worktree operations.
 - Aiden scheduled-task list/create/edit/remove/pause/resume/run-now/preview/history/settings.
 - Cache-only App Intents, app-driven Live Activities, native or paired-Mac local-model dictation, and desktop-configured read-aloud under the authenticated `tts-v1` contract.
 - Offline read-only display of previously fetched data. Mutations are disabled while disconnected.

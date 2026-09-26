@@ -19,9 +19,9 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -120,6 +120,7 @@ fun AidenChatDetailScreen(
 
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
+    var workspaceFileReference by remember(chatId) { mutableStateOf<String?>(null) }
     val streamState by viewModel.streamState.collectAsState()
     val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
@@ -147,7 +148,16 @@ fun AidenChatDetailScreen(
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
 
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
+    var followLatest by remember(listState) {
+        mutableStateOf(
+            AidenChatScroll.isFollowingLatest(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        )
+    }
+    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
 
     val readAloudClient by coordinator.client.collectAsState()
     val readAloud = remember(readAloudClient, chatId) {
@@ -164,6 +174,8 @@ fun AidenChatDetailScreen(
     var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
+    val currentChat by rememberUpdatedState(chat)
+    val currentlyStreaming by rememberUpdatedState(isStreaming)
 
     LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
         if (isStreaming || (readAloud.activeMessageId != null && readAloud.activeMessageId != chat?.messages?.lastOrNull()?.id)) readAloud.stop()
@@ -318,9 +330,63 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    val isScrolledUp by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+    LaunchedEffect(listState) {
+        var lastItemCount = -1
+        var wasScrolling = false
+        snapshotFlow {
+            val itemCount = AidenChatScroll.reverseLayoutItemCount(
+                currentChat?.messages?.size ?: 0,
+                currentlyStreaming
+            )
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            ) to itemCount
+        }.collect { (viewport, itemCount) ->
+            val (scrolling, index, offset) = viewport
+            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
+            lastItemCount = itemCount
+            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
+                    contentChanged,
+                    itemCount,
+                    consumedItemCount
+                )
+            ) {
+                return@collect
+            }
+            if (scrolling) {
+                wasScrolling = true
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            } else if (wasScrolling) {
+                wasScrolling = false
+                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
+            }
+        }
+    }
+
+    // Keyed by listState too: a chat switch with an equal item count must still
+    // consume the new list's insertion epoch.
+    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
+        val itemCount = AidenChatScroll.reverseLayoutItemCount(
+            chat?.messages?.size ?: 0,
+            isStreaming
+        )
+        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
+            listState.scrollToItem(AidenChatScroll.latestItemIndex())
+            followLatest = true
+        }
+        consumedItemCount = itemCount
+    }
+
+    workspaceFileReference?.let { reference ->
+        val workspaceId = chat?.workspaceId
+        if (workspaceId != null && chat?.isBotChat != true) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { workspaceFileReference = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+                sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen(
+                    workspaceId, coordinator, onNavigateBack = { workspaceFileReference = null }, initialReference = reference)
+            }
         }
     }
 
@@ -625,8 +691,13 @@ fun AidenChatDetailScreen(
         val onCopyMessage = remember(context) { { text: String -> copyToClipboard(context, text) } }
         val onShareMessage = remember(context) { { text: String -> shareText(context, text) } }
         val onReplyMessage = remember(viewModel) { { text: String -> viewModel.updateDraft("> $text\n") } }
-        val onOpenMessageUrl = remember(uriHandler) {
-            { url: String -> try { uriHandler.openUri(url) } catch (_: Exception) {} }
+        val onOpenMessageUrl = remember(uriHandler, isBotChat) {
+            { url: String ->
+                if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
+                else if (android.net.Uri.parse(url).scheme?.lowercase() in listOf("https", "http", "mailto")) {
+                    try { uriHandler.openUri(url) } catch (_: Exception) {}
+                }
+            }
         }
 
         Box(
@@ -714,10 +785,12 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = isScrolledUp,
+                visible = !followLatest,
                 onClick = {
+                    followLatest = true
                     scope.launch {
-                        listState.animateScrollToItem(0)
+                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
+                        followLatest = true
                     }
                 },
                 modifier = Modifier
