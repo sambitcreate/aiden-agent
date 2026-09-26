@@ -128,6 +128,36 @@ test("implementer role defaults meet parent permission and independent rollout c
   await prepared.abortPreparation();
 });
 
+test("implementer tasks fail closed during V1 rollback", async () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  });
+  const task = parsed.tasks[0]!;
+  const workspaceV1 = { ...workspace, permission: "full" as const };
+  const persistence = createForegroundSubagentPersistenceV2({
+    ...input(store("v1", [])), workspace: workspaceV1,
+    permission: "full",
+    writeEnabled: true, shellEnabled: true, shellBinary: "/bin/zsh",
+    requestApproval: async () => true,
+    currentWorkspace: async () => workspaceV1,
+    validateWorkspace: async () => {},
+  });
+  for (const requestedCapabilities of [
+    // Role defaults (write + shell) and an explicitly read-only implementer.
+    effectiveSubagentTaskCapabilities(parsed, task),
+    { workspaceRead: true, workspaceWrite: false, shell: false, web: false, mcp: [], delegate: false },
+  ]) {
+    await assert.rejects(
+      persistence.prepareRun({
+        identity: { runId: "run-v1-implementer", groupId: "group", childId: "child" },
+        task, requestedCapabilities, contextMode: "fresh",
+        contextRevision: "c".repeat(64), deadlineMs: 5_000, stop: () => {},
+      }),
+      /implementer role is unavailable during V1 rollback/u,
+    );
+  }
+});
+
 function store(
   selection: "v1" | "v2",
   writes: Array<{ snapshot: unknown; manifest: unknown }>,

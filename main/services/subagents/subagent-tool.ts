@@ -155,13 +155,23 @@ export function createSubagentTool(
   const shellDescription = shellEnabled
     ? "Shell is a positive full-host execution request: implementer uses a run grant while other roles require exact Allow once. Commands use only a minimal environment, are not OS-sandboxed or rolled back, may use arbitrary network access, and deliberately detached processes may survive cancellation. "
     : "";
+  // Implementer exists only to write or run commands. When neither lane can
+  // be requested (flags off, read-only turn, or V1 rollback), do not advertise
+  // a coding role whose child would silently receive read tools only.
+  const implementerAvailable = writeEnabled || shellEnabled;
+  const roles = implementerAvailable
+    ? ["scout", "planner", "reviewer", "implementer"]
+    : ["scout", "planner", "reviewer"];
+  const roleDescription = implementerAvailable
+    ? "Delegate 1–4 bounded tasks to scout, planner, reviewer, or implementer agents. Omitted task capabilities use role defaults: scout/planner/reviewer read-only; implementer requests workspace writes and shell, with no web, MCP, or nesting. When the batch root is omitted, Aiden infers only their exact union. Full workspace permission authorizes implementer writes and shell for the run; Ask requests one separate grant per lane on first use. All requests remain within parent authority and rollout flags."
+    : "Delegate 1–4 bounded tasks to scout, planner, or reviewer agents. Omitted task capabilities use read-only role defaults. When the batch root is omitted, Aiden infers only their exact union. The implementer role is unavailable for this response because neither workspace writes nor shell can be requested.";
   const delegationDescription = delegationEnabled
     ? "Delegation is a positive foreground request. A permitted depth-1 child may launch one bounded depth-2 batch with fresh context by default or an explicit immutable user-visible fork; depth-2 children cannot delegate. "
     : "";
   return {
     name: "subagent",
     label: "Delegate to Subagents",
-    description: `Delegate 1–4 bounded tasks to scout, planner, reviewer, or implementer agents. Omitted task capabilities use role defaults: scout/planner/reviewer read-only; implementer requests workspace writes and shell, with no web, MCP, or nesting. When the batch root is omitted, Aiden infers only their exact union. Full workspace permission authorizes implementer writes and shell for the run; Ask requests one separate grant per lane on first use. All requests remain within parent authority and rollout flags. ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. When supplied, task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, deadlines, and run IDs are host-owned. A read-only task may request maxTurns up to 128; omission keeps 24 turns. Never send execution, deadline, or other budget fields. Each task contains role, label, task, optional maxTurns, and optional narrower capabilities. Use for parallel evidence gathering, comparison, planning, implementation, or fresh review. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
+    description: `${roleDescription} ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. When supplied, task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, deadlines, and run IDs are host-owned. A read-only task may request maxTurns up to 128; omission keeps 24 turns. Never send execution, deadline, or other budget fields. Each task contains role, label, task, optional maxTurns, and optional narrower capabilities. Use for parallel evidence gathering, comparison, planning, implementation, or fresh review. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
     parameters: Type.Object(
       {
         context: Type.Optional(
@@ -180,8 +190,8 @@ export function createSubagentTool(
               // `parseSubagentToolRequest` still independently enforces the
               // exact role allowlist before any child can launch.
               role: Type.String({
-                enum: ["scout", "planner", "reviewer", "implementer"],
-                description: "Exactly one of: scout, planner, reviewer, implementer.",
+                enum: roles,
+                description: `Exactly one of: ${roles.join(", ")}.`,
               }),
               label: Type.String({
                 minLength: 1,

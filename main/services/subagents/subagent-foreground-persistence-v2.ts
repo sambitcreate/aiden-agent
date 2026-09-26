@@ -426,6 +426,12 @@ export function createForegroundSubagentPersistenceV2(
           "Requested subagent delegation capability is unavailable.",
         );
       }
+      // V1 rollback never mints V2 authority, so the child could only receive
+      // read tools. Refuse the coding role instead of launching a lane that
+      // cannot perform its advertised write or shell work.
+      if (input.store.selection === "v1" && value.task.role === "implementer") {
+        throw new Error("The implementer role is unavailable during V1 rollback.");
+      }
       const implicitImplementer = value.task.role === "implementer" &&
         value.task.capabilities === undefined &&
         requestedCapabilities.workspaceRead &&
@@ -441,8 +447,7 @@ export function createForegroundSubagentPersistenceV2(
           requestedCapabilities.delegate === true ||
           requestedCapabilities.web ||
           requestedCapabilities.mcp.length > 0 ||
-          (requestedCapabilities.mcpMutations?.length ?? 0) > 0) &&
-        !implicitImplementer
+          (requestedCapabilities.mcpMutations?.length ?? 0) > 0)
       ) {
         throw new Error(
           "Requested subagent capabilities are unavailable during V1 rollback.",

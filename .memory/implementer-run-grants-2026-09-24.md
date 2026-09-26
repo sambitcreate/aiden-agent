@@ -10,6 +10,11 @@ Started 2026-09-24 from freshly fetched `origin/main` in the
   an inferred mixed root pins their omitted tasks to read-only. Explicit roots
   narrow implementer defaults. Flags and parent authority intersect again at
   mint. No child runtime dependency was added.
+- V1 rollback mints no V2 authority, so `prepareRun` rejects every
+  implementer task there (defaults or explicit read-only). The parent
+  `subagent` tool lists `implementer` in its role enum and description only
+  when a write or shell lane is requestable for the response; otherwise it
+  advertises the three read roles only (Pullfrog review on 953d8818).
 - The Mac-owned in-memory write and shell grants are separate per run. Full is
   implicit only within effective Full permission; Ask prompts once on first
   use per lane. Grants bind the authority digest (including run, workspace and
