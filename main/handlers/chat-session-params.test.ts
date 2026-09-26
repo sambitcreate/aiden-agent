@@ -98,6 +98,39 @@ test("context pressure requests accept a bounded optional draft", () => {
   assert.throws(() =>
     parseChatContextPressureRequest({ chatId: "chat-1", attachments: "no" }),
   );
+  // Each text length is individually allowed, but the draft as a whole is
+  // bounded by the same 16 MiB aggregate the composer enforces.
+  const textAttachment = (id: string, textLength: number) => ({
+    id,
+    name: `${id}.txt`,
+    kind: "text",
+    mimeType: "text/plain",
+    textLength,
+  });
+  const halfBudget = 8 * 1024 * 1024;
+  assert.equal(
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [textAttachment("a", halfBudget), textAttachment("b", halfBudget)],
+    }).attachments?.length,
+    2,
+  );
+  assert.throws(
+    () =>
+      parseChatContextPressureRequest({
+        chatId: "chat-1",
+        attachments: Array.from({ length: 20 }, (_, index) =>
+          textAttachment(`a${index}`, 16 * 1024 * 1024),
+        ),
+      }),
+    /Invalid attachments/u,
+  );
+  assert.throws(() =>
+    parseChatContextPressureRequest({
+      chatId: "chat-1",
+      attachments: [textAttachment("a", halfBudget), textAttachment("b", halfBudget + 1)],
+    }),
+  );
   assert.throws(() =>
     parseChatContextPressureRequest({
       chatId: "chat-1",

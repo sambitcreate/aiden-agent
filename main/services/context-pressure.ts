@@ -23,6 +23,7 @@ import {
 } from "./agents-instructions.js";
 import {
   createGenerationContextProfile,
+  nextRequestContextOptions,
   rememberedContextOptions,
   type GenerationContextProfile,
   type GenerationContextScope,
@@ -237,14 +238,19 @@ export async function chatContextPressure(
     })) ?? (await ambientContextOptions(chatId, model.contextWindow, supportsImages));
   if (!base) return null;
   // Keep the generation-accurate static context (tools + system prompt) while
-  // overriding only the fields a live model/provider change rewrites.
-  const options: GenerationContextOptions = {
-    ...base,
-    contextWindow: model.contextWindow,
-    supportsImages,
+  // overriding the fields a live model/provider change rewrites, including a
+  // custom model's tool policy (tool calls disabled sends no tools).
+  const overrides = await configStore
+    .getProvider(providerId)
+    .then((provider) => provider?.modelMetadata?.[modelId]?.overrides)
+    .catch(() => undefined);
+  const options = nextRequestContextOptions(base, {
     providerId,
     modelId,
-  };
+    contextWindow: model.contextWindow,
+    supportsImages,
+    overrides,
+  });
   const hasDraft =
     (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
     (draft?.attachments?.length ?? 0) > 0;

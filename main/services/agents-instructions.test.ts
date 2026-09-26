@@ -12,7 +12,12 @@ import {
   withoutAgentsInstructions,
 } from "./agents-instructions.js";
 import { assertGenerationContextCapacity, projectChatContextPressure } from "./generation-context.js";
-import { createGenerationContextProfile, rememberedContextOptions } from "./context-profile.js";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import {
+  createGenerationContextProfile,
+  nextRequestContextOptions,
+  rememberedContextOptions,
+} from "./context-profile.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agents-"));
@@ -261,4 +266,31 @@ test("remembered profiles never re-read a workspace whose path or permission cha
   // Profiles without AGENTS.md (bot and assistant runs) are reused verbatim.
   const plain = createGenerationContextProfile(options);
   assert.equal(await rememberedContextOptions(plain, { ...request, instructionRoots: roots }), options);
+});
+
+test("next-request options apply the selected model's tool policy to a tool-bearing profile", () => {
+  const tool = {
+    name: "read_file",
+    label: "Read file",
+    description: "Read a workspace file. ".repeat(200),
+    parameters: { type: "object", properties: { path: { type: "string" } } },
+    execute: async () => ({ content: [], details: undefined }),
+  } as unknown as AgentTool;
+  const ambient = {
+    contextWindow: 128_000, systemPrompt: "HOST", tools: [tool], supportsImages: true,
+    providerId: "openai", modelId: "gpt-5",
+  };
+  const selection = { providerId: "custom", modelId: "local", contextWindow: 32_000, supportsImages: false };
+  const withTools = nextRequestContextOptions(ambient, selection);
+  assert.deepEqual(
+    { ...withTools, tools: withTools.tools.length },
+    { ...ambient, ...selection, tools: 1 },
+  );
+  const noTools = nextRequestContextOptions(ambient, { ...selection, overrides: { toolCall: false } });
+  assert.equal(noTools.tools.length, 0);
+  assert.ok(
+    projectChatContextPressure([], noTools).staticTokens + 500 <
+      projectChatContextPressure([], withTools).staticTokens,
+  );
+  assert.equal(ambient.tools.length, 1, "the cached ambient profile is never mutated");
 });

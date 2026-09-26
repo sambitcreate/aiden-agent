@@ -155,6 +155,13 @@ export function parseChatContextPressureRequest(value: unknown): ParsedChatConte
   if (record.modelId !== undefined) parsed.modelId = record.modelId as string;
   if (record.attachments !== undefined) {
     parsed.attachments = (record.attachments as unknown[]).map(parseContextPressureAttachment);
+    // The projection materializes each text length, so bound the draft as a
+    // whole the way the composer's aggregate attachment budget does.
+    const totalText = parsed.attachments.reduce(
+      (sum, attachment) => sum + (attachment.textLength ?? 0),
+      0,
+    );
+    if (totalText > MAX_ATTACHMENT_TEXT_CHARS) throw new Error("Invalid attachments.");
   }
   return parsed;
 }

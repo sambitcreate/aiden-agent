@@ -81,6 +81,7 @@ test("switching chats cancels a pending draft refresh from the previous chat", a
 test("pushes for another chat never reach the meter", () => {
   const h = harness();
   h.feed.showChat("b");
+  h.feed.setLive(true);
   h.feed.pushed("a", reading(5));
   h.feed.pushed("b", reading(7));
   assert.deepEqual(h.published, [null, 7]);
@@ -121,7 +122,8 @@ test("only the newest ambient request publishes and failures keep the last readi
   const h = harness();
   h.feed.showChat("a");
   void h.feed.refresh();
-  void h.feed.refresh("draft");
+  h.feed.draftChanged("draft");
+  h.fireTimers();
   assert.equal(h.requests[1].draft, "draft");
   h.requests[1].reply.resolve(reading(2));
   h.requests[0].reply.resolve(reading(1));
@@ -143,4 +145,56 @@ test("an unsaved draft chat never requests a projection", async () => {
   h.feed.showChat(null);
   await h.feed.refresh();
   assert.equal(h.requests.length, 0);
+});
+
+test("ambient refreshes keep pricing the composer draft until it is cleared", async () => {
+  const h = harness();
+  h.feed.showChat("a");
+  h.feed.draftChanged("half-written question");
+  h.fireTimers();
+  // A model switch or turn settle refreshes without a new draft event.
+  void h.feed.refresh();
+  assert.deepEqual(
+    h.requests.map((request) => request.draft),
+    ["half-written question", "half-written question"],
+  );
+  // Sending clears the composer; later refreshes price no draft.
+  h.feed.draftChanged(undefined);
+  h.fireTimers();
+  void h.feed.refresh();
+  assert.equal(h.requests[2].draft, undefined);
+  assert.equal(h.requests[3].draft, undefined);
+  // A chat switch never carries the previous chat's draft.
+  h.feed.draftChanged("for chat a only");
+  h.feed.showChat("b");
+  void h.feed.refresh();
+  assert.equal(h.requests[4].chatId, "b");
+  assert.equal(h.requests[4].draft, undefined);
+});
+
+test("a push outside a live turn re-reads with the live selection instead of painting", async () => {
+  const h = harness();
+  h.feed.showChat("a");
+  h.feed.draftChanged("draft");
+  h.fireTimers();
+  h.requests[0].reply.resolve(reading(10));
+  await settle();
+  // Manual compaction: main prices the persisted model with no draft.
+  h.feed.pushed("a", reading(999));
+  assert.deepEqual(
+    h.published,
+    [null, 10],
+    "the persisted-model reading never paints",
+  );
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].draft, "draft");
+  h.requests[1].reply.resolve(reading(4));
+  await settle();
+  assert.deepEqual(h.published, [null, 10, 4]);
+  h.feed.pushed("b", reading(1));
+  assert.equal(
+    h.requests.length,
+    2,
+    "another chat's push never triggers a read",
+  );
 });

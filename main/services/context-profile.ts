@@ -4,6 +4,10 @@ import {
   type AgentsInstructionRoots,
 } from "./agents-instructions.js";
 import type { GenerationContextOptions } from "./generation-context.js";
+import {
+  applyCustomModelToolPolicy,
+  type CustomModelOptions,
+} from "../../renderer/shared/custom-model-options.js";
 
 /**
  * The exact GenerationContextOptions the last generation for a chat resolved
@@ -89,4 +93,34 @@ export async function rememberedContextOptions(
     ...options,
     systemPrompt: await profile.instructions.current(options.systemPrompt),
   };
+}
+
+export interface NextRequestModel {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  supportsImages: boolean;
+  /** The selected model's saved overrides (e.g. tool calls disabled). */
+  overrides?: CustomModelOptions;
+}
+
+/**
+ * Price `base` (remembered or ambient static context) for the model the next
+ * request will use: identity and limits come from the live selection, and the
+ * model's tool policy strips tools exactly as the generation path does.
+ */
+export function nextRequestContextOptions(
+  base: GenerationContextOptions,
+  model: NextRequestModel,
+): GenerationContextOptions {
+  return applyCustomModelToolPolicy(
+    {
+      ...base,
+      contextWindow: model.contextWindow,
+      supportsImages: model.supportsImages,
+      providerId: model.providerId,
+      modelId: model.modelId,
+    },
+    model.overrides,
+  );
 }

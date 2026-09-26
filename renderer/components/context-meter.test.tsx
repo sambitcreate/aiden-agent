@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ContextMeter, contextMeterPhase } from "./context-meter.js";
+import { ContextMeter, ContextMeterDetails, contextMeterPhase } from "./context-meter.js";
 import type { ChatContextPressureV1 } from "../shared/context-pressure.js";
 
 function pressure(extra: Partial<ChatContextPressureV1> = {}): ChatContextPressureV1 {
@@ -41,6 +41,32 @@ test("the runtime compaction rule outranks the presentation threshold", () => {
 
 test("renders nothing until main supplies a projection", () => {
   assert.equal(renderToStaticMarkup(<ContextMeter pressure={null} />), "");
+});
+
+test("the breakdown announces each label as the term and its token count as the value", () => {
+  const markup = renderToStaticMarkup(
+    <ContextMeterDetails
+      pressure={pressure({ addedAfterUsageAnchorTokens: 2_000 })}
+      percent={42}
+      emphasized={false}
+      stateText="Context healthy."
+    />,
+  );
+  const pairs = [...markup.matchAll(/<dt[^>]*>([^<]*)<\/dt><dd[^>]*>([^<]*)<\/dd>/gu)].map(
+    ([, term, value]) => [term, value],
+  );
+  assert.deepEqual(
+    pairs.map(([term]) => term),
+    [
+      "projected tokens",
+      "model context",
+      "reserved for response + safety",
+      "conversation",
+      "system + tools",
+      "recent work",
+    ],
+  );
+  for (const [, value] of pairs) assert.match(value, /\d/u);
 });
 
 test("the trigger reports usable-input pressure without clamping", () => {

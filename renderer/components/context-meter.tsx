@@ -12,11 +12,7 @@ import {
 } from "../shared/context-pressure";
 
 export type ContextMeterPhase =
-  | "normal"
-  | "approaching"
-  | "compaction-pending"
-  | "compacting"
-  | "compacted";
+  "normal" | "approaching" | "compaction-pending" | "compacting" | "compacted";
 
 export function contextMeterPhase(
   pressure: ChatContextPressureV1,
@@ -78,57 +74,99 @@ export function ContextMeter({
           <span className="text-mini tabular-nums">{percent}%</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-3" align="end" side="top" aria-label="Context usage">
-        <Text variant="small-strong" className="block text-primary">
-          Context
-        </Text>
-        <Text variant="small" color="secondary" className="mt-1 block">
-          {percent}% of usable context
-        </Text>
-        <dl className="mt-2 space-y-1 text-small">
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-secondary">{tokenLabel(pressure, pressure.contextTokens)}</dt>
-            <dd className="text-tertiary">projected tokens</dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-secondary">{formatContextTokenCount(pressure.contextWindow)}</dt>
-            <dd className="text-tertiary">model context</dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-secondary">~{formatContextTokenCount(pressure.reservedTokens)}</dt>
-            <dd className="text-tertiary">reserved for response + safety</dd>
-          </div>
-        </dl>
-        <Text variant="small" color="tertiary" className="mt-3 block">
-          {pressure.source === "provider-anchored"
-            ? "Provider-reported composition"
-            : "Estimated composition"}
-        </Text>
-        <dl className="mt-1 space-y-1 text-small">
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-secondary">~{formatContextTokenCount(pressure.messageTokens)}</dt>
-            <dd className="text-tertiary">conversation</dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-secondary">~{formatContextTokenCount(pressure.staticTokens)}</dt>
-            <dd className="text-tertiary">system + tools</dd>
-          </div>
-          {pressure.addedAfterUsageAnchorTokens !== undefined ? (
-            <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-secondary">
-                ~{formatContextTokenCount(pressure.addedAfterUsageAnchorTokens)}
-              </dt>
-              <dd className="text-tertiary">recent work</dd>
-            </div>
-          ) : null}
-        </dl>
-        <Text
-          variant="small"
-          className={cn("mt-3 block", emphasized ? "text-support-warning" : "text-secondary")}
-        >
-          {stateText}
-        </Text>
+      <PopoverContent
+        className="w-64 p-3"
+        align="end"
+        side="top"
+        aria-label="Context usage"
+      >
+        <ContextMeterDetails
+          pressure={pressure}
+          percent={percent}
+          emphasized={emphasized}
+          stateText={stateText}
+        />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Popover body: labelled terms (dt) with their token values (dd). */
+export function ContextMeterDetails({
+  pressure,
+  percent,
+  emphasized,
+  stateText,
+}: {
+  pressure: ChatContextPressureV1;
+  percent: number;
+  emphasized: boolean;
+  stateText: string;
+}) {
+  return (
+    <>
+      <Text variant="small-strong" className="block text-primary">
+        Context
+      </Text>
+      <Text variant="small" color="secondary" className="mt-1 block">
+        {percent}% of usable context
+      </Text>
+      <dl className="mt-2 space-y-1 text-small">
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-tertiary">projected tokens</dt>
+          <dd className="text-secondary tabular-nums">
+            {tokenLabel(pressure, pressure.contextTokens)}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-tertiary">model context</dt>
+          <dd className="text-secondary tabular-nums">
+            {formatContextTokenCount(pressure.contextWindow)}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-tertiary">reserved for response + safety</dt>
+          <dd className="text-secondary tabular-nums">
+            ~{formatContextTokenCount(pressure.reservedTokens)}
+          </dd>
+        </div>
+      </dl>
+      <Text variant="small" color="tertiary" className="mt-3 block">
+        {pressure.source === "provider-anchored"
+          ? "Provider-reported composition"
+          : "Estimated composition"}
+      </Text>
+      <dl className="mt-1 space-y-1 text-small">
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-tertiary">conversation</dt>
+          <dd className="text-secondary tabular-nums">
+            ~{formatContextTokenCount(pressure.messageTokens)}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-tertiary">system + tools</dt>
+          <dd className="text-secondary tabular-nums">
+            ~{formatContextTokenCount(pressure.staticTokens)}
+          </dd>
+        </div>
+        {pressure.addedAfterUsageAnchorTokens !== undefined ? (
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="text-tertiary">recent work</dt>
+            <dd className="text-secondary tabular-nums">
+              ~{formatContextTokenCount(pressure.addedAfterUsageAnchorTokens)}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      <Text
+        variant="small"
+        className={cn(
+          "mt-3 block",
+          emphasized ? "text-support-warning" : "text-secondary",
+        )}
+      >
+        {stateText}
+      </Text>
+    </>
   );
 }

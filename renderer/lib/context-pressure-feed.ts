@@ -20,12 +20,17 @@ export interface ContextPressureFeedOptions<Draft> {
  * the harness's authoritative in-turn projection. Ambient journal reads that
  * resolve after either of those changes are stale and are dropped, as are
  * debounced draft refreshes queued before them.
+ *
+ * The feed retains the composer's current draft so every ambient refresh
+ * (model switch, turn settle, workspace change) prices what the next send
+ * will carry, not an empty composer.
  */
 export class ContextPressureFeed<Draft> {
   private chatId: string | null = null;
   private request = 0;
   private live = false;
   private draftTimer: unknown = null;
+  private draft: Draft | undefined;
   private readonly draftDelayMs: number;
   private readonly schedule: (run: () => void, delayMs: number) => unknown;
   private readonly cancel: (handle: unknown) => void;
@@ -43,6 +48,8 @@ export class ContextPressureFeed<Draft> {
   showChat(chatId: string | null): void {
     if (chatId === this.chatId) return;
     this.chatId = chatId;
+    // The incoming chat's composer re-reports its own draft after mounting.
+    this.draft = undefined;
     this.invalidate();
     this.options.publish(null);
   }
@@ -53,9 +60,11 @@ export class ContextPressureFeed<Draft> {
     if (live) this.invalidate();
   }
 
-  async refresh(draft?: Draft): Promise<void> {
+  /** Ambient refresh priced with the composer's current draft. */
+  async refresh(): Promise<void> {
     const chatId = this.chatId;
     if (chatId === null || this.live) return;
+    const draft = this.draft;
     const request = ++this.request;
     let pressure: ChatContextPressureV1 | null;
     try {
@@ -71,16 +80,24 @@ export class ContextPressureFeed<Draft> {
 
   /** Debounced refresh for composer typing and attachment changes. */
   draftChanged(draft: Draft | undefined): void {
+    this.draft = draft;
     this.cancelDraft();
     this.draftTimer = this.schedule(() => {
       this.draftTimer = null;
-      void this.refresh(draft);
+      void this.refresh();
     }, this.draftDelayMs);
   }
 
-  /** A main-process push (live turn or manual compaction) for some chat. */
+  /**
+   * A main-process push for some chat. Mid-turn pushes are the harness's
+   * authoritative projection and paint directly. Outside a turn (manual
+   * compaction) main only knows the persisted model and no draft, so the push
+   * just signals a re-read with the live selection and current draft.
+   */
   pushed(chatId: string, pressure: ChatContextPressureV1 | null): void {
-    if (chatId === this.chatId) this.options.publish(pressure);
+    if (chatId !== this.chatId) return;
+    if (this.live) this.options.publish(pressure);
+    else void this.refresh();
   }
 
   dispose(): void {
