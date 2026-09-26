@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -42,7 +43,8 @@ enum class AidenChatListLoadState {
 class AidenWorkspaceHomeViewModel(
     private val coordinator: AidenRemoteCoordinator,
     private val chatCache: AidenChatCache,
-    private val usageCache: AidenUsageCache = coordinator.usageCache
+    private val usageCache: AidenUsageCache = coordinator.usageCache,
+    private val cacheWriteDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
     private val _chats = MutableStateFlow<List<AidenChatSummary>>(emptyList())
     val chats: StateFlow<List<AidenChatSummary>> = _chats.asStateFlow()
@@ -179,14 +181,14 @@ class AidenWorkspaceHomeViewModel(
         val requestGeneration = ++loadGeneration
         loadingClient = client
 
+        val chatWriteToken = chatCache.reserveSummaryMutation(instanceId)
+        val previouslyLoaded = _chatListLoadState.value == AidenChatListLoadState.LOADED
         loadingJob = viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
             _chatLoadErrorMessage.value = null
             _chatListLoadState.value = AidenChatListLoadState.LOADING
-            _nextChatCursor.value = null
             _chatPaginationErrorMessage.value = null
-            paginationBoundary = null
             try {
                 var allCoreSucceeded = false
                 supervisorScope {
@@ -208,7 +210,9 @@ class AidenWorkspaceHomeViewModel(
 
                     val chatsResult = chatsRequest.await().mapCatching { accepted ->
                         if (isCurrentLoad(requestGeneration, client, instanceId)) {
-                            acceptSummaryPage(accepted.summaries, replace = true)
+                            acceptSummaryPage(accepted.summaries, replace = true, instanceId, chatWriteToken) {
+                                isCurrentLoad(requestGeneration, client, instanceId)
+                            }
                             _nextChatCursor.value = accepted.nextCursor
                             _chatLoadErrorMessage.value = null
                             _chatListLoadState.value = AidenChatListLoadState.LOADED
@@ -220,7 +224,7 @@ class AidenWorkspaceHomeViewModel(
                             if (isCurrentLoad(requestGeneration, client, instanceId)) {
                                 _chatLoadErrorMessage.value =
                                     failure.message ?: "Aiden couldn't load chats."
-                                _chatListLoadState.value = AidenChatListLoadState.FAILED
+                                _chatListLoadState.value = if (previouslyLoaded) AidenChatListLoadState.LOADED else AidenChatListLoadState.FAILED
                             }
                         }
                     val tasksResult = tasksRequest.await()
@@ -297,7 +301,8 @@ class AidenWorkspaceHomeViewModel(
         val summary = AidenChatSummary.fromChat(chat)
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
-            viewModelScope.launch(Dispatchers.IO) { runCatching { chatCache.saveChat(chat, instanceId) } }
+            val writeToken = chatCache.reserveSummaryMutation(instanceId)
+            viewModelScope.launch(cacheWriteDispatcher) { runCatching { chatCache.saveChat(chat, instanceId, writeToken) } }
         }
     }
 
@@ -308,6 +313,7 @@ class AidenWorkspaceHomeViewModel(
         if (_isLoadingMoreChats.value || _chatListLoadState.value != AidenChatListLoadState.LOADED) return
         val requestGeneration = loadGeneration
         paginationJob?.cancel()
+        val writeToken = chatCache.reserveSummaryMutation(instanceId)
         paginationJob = viewModelScope.launch {
             _isLoadingMoreChats.value = true
             _chatPaginationErrorMessage.value = null
@@ -320,7 +326,9 @@ class AidenWorkspaceHomeViewModel(
                 if (accepted.usedLegacyEndpoint || accepted.nextCursor == cursor) {
                     throw AidenRemoteContractException.InvalidJson("Invalid Chat Summary pagination response")
                 }
-                acceptSummaryPage(accepted.summaries, replace = false)
+                acceptSummaryPage(accepted.summaries, replace = false, instanceId, writeToken) {
+                    isCurrentPagination(requestGeneration, client, instanceId, cursor)
+                }
                 _nextChatCursor.value = accepted.nextCursor
             } catch (error: CancellationException) {
                 throw error
@@ -339,12 +347,15 @@ class AidenWorkspaceHomeViewModel(
         }
     }
 
-    private suspend fun acceptSummaryPage(summaries: List<AidenChatSummary>, replace: Boolean) {
+    private suspend fun acceptSummaryPage(
+        summaries: List<AidenChatSummary>, replace: Boolean, instanceId: String,
+        writeToken: Long, isCurrent: () -> Boolean
+    ) {
         val existing = if (replace) emptyList() else _chats.value
         if (!replace && summaries.any { summary -> existing.any { it.id == summary.id } }) {
             throw AidenRemoteContractException.InvalidJson("Duplicate Chat Summary across pages")
         }
-        val boundary = paginationBoundary
+        val boundary = if (replace) null else paginationBoundary
         val first = summaries.firstOrNull()
         if (!replace && boundary != null && first != null &&
             (first.updatedAt.isAfter(boundary.updatedAt) ||
@@ -353,18 +364,23 @@ class AidenWorkspaceHomeViewModel(
             throw AidenRemoteContractException.InvalidJson("Chat Summary pages are out of order")
         }
         val accepted = regularNewestFirst(existing + summaries)
-        val instanceId = coordinator.activeInstanceId ?: return
         // Persist first so a bounded-cache failure leaves the visible list,
         // page boundary, and cursor unchanged and Retry can request the same page.
-        withContext(Dispatchers.IO) {
+        val retained = withContext(cacheWriteDispatcher) {
             chatCache.saveSummaries(
                 accepted,
                 instanceId,
-                unchangedPrefixCount = if (replace) 0 else existing.size
+                unchangedPrefixCount = if (replace) 0 else existing.size,
+                writeToken = writeToken
             )
         }
+        if (!isCurrent()) throw CancellationException("Chat list owner changed")
+        if (!retained || !chatCache.isSummaryWriteRetained(instanceId, writeToken)) {
+            throw IllegalStateException("Chats changed while loading. Refresh and try again.")
+        }
         paginationBoundary = summaries.lastOrNull() ?: boundary
-        _chats.value = accepted.filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
+        _chats.value = regularNewestFirst(chatCache.summaries.value[instanceId]?.values.orEmpty().toList())
+            .filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
     }
 
     private suspend fun <T> request(block: suspend () -> T): Result<T> = try {

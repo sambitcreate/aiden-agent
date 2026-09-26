@@ -4378,7 +4378,13 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     func testPendingEraMetadataPreservesUnrelatedRowsAfterCleanupAndReadmission() async throws {
-        for existing in ["absent", "unrelated", "both"] {
+        let cachedCursor = "cur_cached." + String(repeating: "a", count: 43)
+        let incomingCursor = "cur_incoming." + String(repeating: "b", count: 43)
+        let freshCursor = "cur_fresh." + String(repeating: "c", count: 43)
+        for cursor in [cachedCursor, incomingCursor, freshCursor] {
+            XCTAssertTrue(AidenChatSummaryPage.isValidCursor(cursor))
+        }
+        for existing in ["absent", "unrelated", "both", "cached-nil"] {
             for writer in ["workspace", "home", "reconcile"] {
                 for delayed in [false, true] {
                     let root = FileManager.default.temporaryDirectory.appending(path: "aiden-cleanup-epoch-\(UUID())")
@@ -4394,7 +4400,7 @@ final class AidenChatTests: XCTestCase {
                     if existing != "absent" {
                         let rows = existing == "both" ? [chat, other, omitted] : [other, omitted]
                         try await cache.saveChats(rows, instanceId: instance, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
-                        try await cache.saveChatSummaries(.init(summaries: AidenChatSummaryPage.merged(current: [], appending: rows.map { AidenChatSummary(chat: $0) }), nextCursor: "cached-cursor"), instanceId: instance, writeToken: cache.reserveChatWrite())
+                        try await cache.saveChatSummaries(.init(summaries: AidenChatSummaryPage.merged(current: [], appending: rows.map { AidenChatSummary(chat: $0) }), nextCursor: existing == "cached-nil" ? nil : cachedCursor), instanceId: instance, writeToken: cache.reserveChatWrite())
                     }
                     let preRemovalToken = cache.reserveChatWrite()
                     let lifetime = cache.registerLifetime(instanceId: instance, chatId: chat.id)
@@ -4418,7 +4424,7 @@ final class AidenChatTests: XCTestCase {
                     let writing = Task {
                         switch writer {
                         case "workspace": try await cache.saveChats([chat, updatedOther], instanceId: instance, workspaceId: chat.workspaceId, writeToken: pendingToken)
-                        case "home": try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat), AidenChatSummary(chat: updatedOther)], nextCursor: nil), instanceId: instance, generation: 999, writeToken: pendingToken)
+                        case "home": try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat), AidenChatSummary(chat: updatedOther)], nextCursor: incomingCursor), instanceId: instance, generation: 999, writeToken: pendingToken)
                         default: try await cache.reconcileChatSummary(updatedOther, instanceId: instance, writeToken: pendingToken)
                         }
                     }
@@ -4440,13 +4446,13 @@ final class AidenChatTests: XCTestCase {
                         let rows = await reopened.loadChatSummaries(instanceId: instance)
                         XCTAssertEqual(Set(rows?.summaries.map(\.id) ?? []), Set(existing == "absent" ? [other.id] : [other.id, omitted.id]))
                         XCTAssertEqual(rows?.summaries.first(where: { $0.id == other.id })?.title, "Updated unrelated")
-                        XCTAssertEqual(rows?.nextCursor, existing == "absent" ? nil : "cached-cursor")
+                        XCTAssertEqual(rows?.nextCursor, existing == "absent" ? (writer == "home" ? incomingCursor : nil) : (existing == "cached-nil" ? nil : cachedCursor))
                     }
                     if writer == "home" {
-                        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh)], nextCursor: "fresh-generation"), instanceId: instance, generation: 1, writeToken: cache.reserveChatWrite())
+                        try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh)], nextCursor: freshCursor), instanceId: instance, generation: 1, writeToken: cache.reserveChatWrite())
                         let freshHome = await reopened.loadChatSummaries(instanceId: instance)
                         XCTAssertEqual(freshHome?.summaries.map(\.title), [fresh.title])
-                        XCTAssertEqual(freshHome?.nextCursor, "fresh-generation")
+                        XCTAssertEqual(freshHome?.nextCursor, freshCursor)
                     }
                     let rejectedDetail = try await cache.saveChat(chat, instanceId: instance, writeToken: pendingToken)
                     XCTAssertFalse(rejectedDetail)
@@ -4459,6 +4465,8 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     func testPendingMetadataCannotReplaceFreshFullSnapshotAfterRemovalOrPurge() async throws {
+        let freshCursor = "cur_fresh." + String(repeating: "d", count: 43)
+        XCTAssertTrue(AidenChatSummaryPage.isValidCursor(freshCursor))
         for purging in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-finished-cleanup-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
@@ -4482,7 +4490,7 @@ final class AidenChatTests: XCTestCase {
             fresh.title = "Fresh full snapshot"
             try await cache.saveChat(fresh, instanceId: instance, writeToken: cache.reserveChatWrite())
             try await cache.saveChats([fresh], instanceId: instance, workspaceId: chat.workspaceId, writeToken: cache.reserveChatWrite())
-            try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh)], nextCursor: "fresh-cursor"), instanceId: instance, generation: 1, writeToken: cache.reserveChatWrite())
+            try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: fresh)], nextCursor: freshCursor), instanceId: instance, generation: 1, writeToken: cache.reserveChatWrite())
             try await cache.saveChats([chat], instanceId: instance, workspaceId: chat.workspaceId, writeToken: pendingToken)
             try await cache.saveChatSummaries(.init(summaries: [AidenChatSummary(chat: chat)], nextCursor: nil), instanceId: instance, generation: 999, writeToken: pendingToken)
             try await cache.reconcileChatSummary(chat, instanceId: instance, writeToken: pendingToken)
@@ -4491,7 +4499,7 @@ final class AidenChatTests: XCTestCase {
             let home = await reopened.loadChatSummaries(instanceId: instance)
             XCTAssertEqual(rows?.map(\.title), [fresh.title])
             XCTAssertEqual(home?.summaries.map(\.title), [fresh.title])
-            XCTAssertEqual(home?.nextCursor, "fresh-cursor")
+            XCTAssertEqual(home?.nextCursor, freshCursor)
             try await cache.saveChats([chat], instanceId: "other-instance", workspaceId: chat.workspaceId, writeToken: pendingToken)
             let isolated = await reopened.loadChats(instanceId: "other-instance", workspaceId: chat.workspaceId)
             XCTAssertEqual(isolated?.map(\.id), [chat.id])

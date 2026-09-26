@@ -671,7 +671,7 @@ actor AidenChatCache {
         if partial {
             let cached = loadChatSummaries(instanceId: instanceId)
             retained = AidenChatSummaryPage.merged(current: cached?.summaries ?? [], appending: retained)
-            nextCursor = cached.map(\.nextCursor) ?? snapshot.nextCursor
+            if let cached { nextCursor = cached.nextCursor }
         }
         if updatedRows?.isEmpty == true { return true }
         let acceptedSnapshot = SummarySnapshot(summaries: retained, nextCursor: nextCursor)
