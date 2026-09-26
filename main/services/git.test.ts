@@ -2916,6 +2916,169 @@ test("GitService rolls creation back when the setup script fails", async (t) => 
   );
 });
 
+function portableRemovalService(): GitService {
+  return new GitService({
+    cacheTtlMs: 0,
+    // The native descriptor-bound remover is macOS-only; a plain recursive
+    // removal stands in so removal transactions run on every platform.
+    worktreeDirectoryRemover: async (identity) => {
+      await fs.rm(identity.path, { recursive: true, force: true });
+    },
+    worktreeRemovalManifestFinalizer: async () => {},
+    worktreeRemovalManifestInspector: async () => false,
+  });
+}
+
+test("GitService provisions repository-root paths from a nested source workspace", async (t) => {
+  const repository = await createRepository(t);
+  await fs.mkdir(path.join(repository, "packages", "app"), { recursive: true });
+  await fs.writeFile(path.join(repository, "packages", "app", "index.ts"), "export {};\n");
+  await fs.writeFile(path.join(repository, ".gitignore"), "*.env\n");
+  await fs.writeFile(
+    path.join(repository, ".worktreeinclude"),
+    "packages/app/local.env\nroot.env\n",
+  );
+  await git(repository, ["add", ".gitignore", ".worktreeinclude", "packages/app/index.ts"]);
+  await git(repository, ["commit", "-m", "Add nested package"]);
+  await fs.writeFile(path.join(repository, "packages", "app", "local.env"), "NESTED=1\n");
+  await fs.writeFile(path.join(repository, "root.env"), "ROOT=1\n");
+  // Same basename at the root, ignored but not included: must never stand in
+  // for the nested file.
+  await fs.writeFile(path.join(repository, "local.env"), "WRONG=1\n");
+
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(
+    path.join(repository, "packages", "app"),
+    root,
+    "codex/nested-provisioned",
+  );
+
+  assert.deepEqual(
+    created.provisionedFiles?.map((entry) => entry.relativePath),
+    ["packages/app/local.env", "root.env"],
+  );
+  assert.equal(
+    await fs.readFile(path.join(created.path, "packages", "app", "local.env"), "utf8"),
+    "NESTED=1\n",
+  );
+  assert.equal(await fs.readFile(path.join(created.path, "root.env"), "utf8"), "ROOT=1\n");
+  await assert.rejects(fs.stat(path.join(created.path, "local.env")));
+});
+
+test("GitService rollback discards setup output when the setup script fails", async (t) => {
+  const repository = await createRepository(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), "*.log\n");
+  await fs.mkdir(path.join(repository, ".aiden"));
+  await fs.writeFile(
+    path.join(repository, ".aiden", "worktree-setup.sh"),
+    [
+      "#!/bin/sh",
+      'echo "partial" > "$PWD/setup.log"',
+      'echo "partial" > "$PWD/untracked.txt"',
+      'echo "changed" >> "$PWD/README.md"',
+      "exit 4",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  await git(repository, ["add", ".gitignore", ".aiden/worktree-setup.sh"]);
+  await git(repository, ["commit", "-m", "Add a setup script that leaves output"]);
+
+  const root = await temporaryDirectory(t);
+  const service = portableRemovalService();
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/setup-leftovers", undefined, {
+      allowSetupScript: true,
+    }),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      !/could not fully roll it back/u.test(error.message),
+  );
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/setup-leftovers"]),
+  );
+});
+
+test("GitService deletes and rolls back worktrees holding only unchanged provisioned files", async (t) => {
+  const repository = await createRepository(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), ".env.local\nconfig/\n");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env.local\nconfig/**\n");
+  await git(repository, ["add", ".gitignore", ".worktreeinclude"]);
+  await git(repository, ["commit", "-m", "Add provisioning rules"]);
+  await fs.writeFile(path.join(repository, ".env.local"), "KEY=dev\n", { mode: 0o600 });
+  await fs.mkdir(path.join(repository, "config"));
+  await fs.writeFile(path.join(repository, "config", "local.json"), "{}\n");
+
+  const root = await temporaryDirectory(t);
+  // The real descriptor-bound remover re-authorizes the quarantined tree too.
+  const service = new GitService({ cacheTtlMs: 0 });
+  const deleteCreated = (created: Awaited<ReturnType<GitService["createWorktree"]>>) =>
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      false,
+      created.provisionedFiles,
+    );
+
+  const created = await service.createWorktree(repository, root, "codex/provisioned-delete");
+  assert.equal(created.provisionedFiles?.length, 2);
+  assert.ok(created.provisionedFiles?.every((entry) => /^[0-9a-f]{64}$/u.test(entry.sha256!)));
+
+  // An edited provisioned copy is user data and blocks deletion.
+  await fs.appendFile(path.join(created.path, ".env.local"), "EDITED=1\n");
+  await assert.rejects(
+    deleteCreated(created),
+    (error) => error instanceof GitServiceError && error.code === "dirty_worktree",
+  );
+  await fs.writeFile(path.join(created.path, ".env.local"), "KEY=dev\n");
+
+  // So does an unrecorded ignored file inside a provisioned directory.
+  await fs.writeFile(path.join(created.path, "config", "extra.json"), "{}\n");
+  await assert.rejects(
+    deleteCreated(created),
+    (error) => error instanceof GitServiceError && error.code === "dirty_worktree",
+  );
+  await fs.rm(path.join(created.path, "config", "extra.json"));
+
+  // Without the manifest nothing is provably Aiden's, so the gate still holds.
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) => error instanceof GitServiceError && error.code === "dirty_worktree",
+  );
+
+  // Unchanged provisioned copies alone never make the worktree undeletable.
+  await deleteCreated(created);
+  await assert.rejects(fs.stat(created.path));
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/provisioned-delete"]),
+  );
+
+  // The post-save rollback path honors the same manifest.
+  const rolledBack = await service.createWorktree(repository, root, "codex/provisioned-rollback");
+  await service.rollbackWorktree(repository, rolledBack);
+  await assert.rejects(fs.stat(rolledBack.path));
+  assert.equal((await service.worktrees(repository)).length, 1);
+});
+
 test("GitService creates, lists, and removes managed worktrees", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
@@ -4775,7 +4938,7 @@ test("GitService preserves an unregistered target directory when worktree creati
   );
 });
 
-test("GitService rollback preserves files created by a post-checkout hook", async (t) => {
+test("GitService never runs repository hooks during managed creation and rolls back cleanly", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
   const nested = path.join(repository, "nested-not-in-head");
@@ -4795,23 +4958,22 @@ printf 'hook data must survive\\n' > "$checkout/hook-sentinel.txt"
   await git(repository, ["config", "core.hooksPath", hooks]);
   const service = new GitService({ cacheTtlMs: 0 });
 
+  // Repository automation is disabled for managed creation, so the configured
+  // hook never runs; the missing subfolder then rolls the creation back with
+  // nothing hook-written to preserve.
   await assert.rejects(
     service.createWorktree(nested, root, "codex/hook-sentinel"),
     (error) =>
       error instanceof GitServiceError &&
       error.code === "command_failed" &&
-      /could not fully roll it back/u.test(error.message),
+      /subfolder is not present in HEAD/u.test(error.message),
   );
 
-  const target = await fs.readFile(targetRecord, "utf8");
-  assert.equal(
-    await fs.readFile(path.join(target, "hook-sentinel.txt"), "utf8"),
-    "hook data must survive\n",
+  await assert.rejects(fs.stat(targetRecord));
+  assert.equal((await service.worktrees(repository)).length, 1);
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/codex/hook-sentinel"]),
   );
-  assert.equal((await service.worktrees(repository)).length, 2);
-  await git(repository, ["show-ref", "--verify", "refs/heads/codex/hook-sentinel"]);
-  await git(repository, ["worktree", "remove", "--force", "--", target]);
-  await git(repository, ["update-ref", "-d", "refs/heads/codex/hook-sentinel"]);
 });
 
 test("GitService rollback preserves a file that appears at the removal boundary", async (t) => {

@@ -25,8 +25,8 @@ import {
 import {
   copyProvisionedFiles,
   estimateProvisionedBytes,
+  ignoredPathsAreUnchangedProvisionedFiles,
   parseLsFilesZero,
-  removeProvisionedFiles,
   resolveWorktreeInclude,
   selectProvisionedFiles,
   WorktreeProvisionError,
@@ -280,6 +280,17 @@ export interface GitCreateWorktreeOptions {
   allowSetupScript?: boolean;
 }
 
+/** What a managed-worktree removal may discard besides a clean checkout. */
+interface GitWorktreeDisposalPolicy {
+  /** Files Aiden provisioned; unchanged copies never block removal. */
+  provisionedFiles?: readonly ProvisionedFileEntry[];
+  /**
+   * The creation transaction ran the repository setup script, so everything
+   * in the fresh checkout is creation output the failed creation must discard.
+   */
+  discardCreationOutput?: boolean;
+}
+
 type GitWorktreeRollbackIdentity = Pick<
   GitCreatedWorktree,
   "worktreeGitDir" | "ownershipToken" | "worktreeDevice" | "worktreeInode"
@@ -499,6 +510,23 @@ function gitCommandConfigEnvironment(options: GitRunOptions): NodeJS.ProcessEnv 
     env[`GIT_CONFIG_VALUE_${index}`] = value;
   });
   return env;
+}
+
+/** Root-relative paths of `! <path>` records in `git status --porcelain=v2 -z` output. */
+export function parseIgnoredStatusPaths(raw: string): string[] {
+  const records = raw.split("\u0000");
+  const ignored: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.startsWith("! ")) {
+      ignored.push(record.slice(2));
+    } else if (record.startsWith("2 ")) {
+      // Rename/copy records carry their original path as the next NUL record.
+      index += 1;
+    }
+  }
+  return ignored;
 }
 
 /** Parse `git status --porcelain=v2 --branch -z` without line/path splitting. */
@@ -3904,6 +3932,7 @@ export class GitService {
     createdFromHead: string,
     signal: AbortSignal | undefined,
     onDestructiveMutation: () => void,
+    disposal: GitWorktreeDisposalPolicy = {},
   ): Promise<GitWorktreeRemovalJournal> {
     const originalGitDir = this.validatedWorktreeGitDir(repo, worktreeGitDir);
     const removal = this.managedWorktreeRemovalPaths(worktreePath, originalGitDir, ownershipToken);
@@ -4249,23 +4278,14 @@ export class GitService {
       journal.phase === "checkout_cleanup_started" &&
       journal.checkoutManifestDigest !== null;
     if (checkoutQuarantined && !checkoutCleanupHasDurableManifest) {
-      const status = parseGitStatus(
-        (
-          await this.run(repo.cwd, [
-            `--git-dir=${activeGitDir}`,
-            `--work-tree=${checkoutRemovalPath!}`,
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-          ], {
-            disableRepositoryAutomation: true,
-          })
-        ).stdout,
-      );
-      if (status.uncommitted > 0 || status.ignored > 0) {
+      if (
+        await this.worktreeHasUserChanges(
+          repo.cwd,
+          [`--git-dir=${activeGitDir}`, `--work-tree=${checkoutRemovalPath!}`],
+          checkoutRemovalPath!,
+          disposal,
+        )
+      ) {
         if (!adminQuarantined && checkoutMovedThisCall) {
           await this.restoreQuarantinedPath(removal.checkout, worktreePath);
         }
@@ -4379,23 +4399,14 @@ export class GitService {
           inode: worktreeInode,
           authorizedManifestDigest: journal.checkoutManifestDigest ?? undefined,
           authorize: async (scannedPath, manifestDigest) => {
-            const status = parseGitStatus(
-              (
-                await this.run(repo.cwd, [
-                  `--git-dir=${adminRemovalPath!}`,
-                  `--work-tree=${scannedPath}`,
-                  "status",
-                  "--porcelain=v2",
-                  "--branch",
-                  "-z",
-                  "--untracked-files=all",
-                  "--ignored=matching",
-                ], {
-                  disableRepositoryAutomation: true,
-                })
-              ).stdout,
-            );
-            if (status.uncommitted > 0 || status.ignored > 0) {
+            if (
+              await this.worktreeHasUserChanges(
+                repo.cwd,
+                [`--git-dir=${adminRemovalPath!}`, `--work-tree=${scannedPath}`],
+                scannedPath,
+                disposal,
+              )
+            ) {
               throw new GitServiceError(
                 "dirty_worktree",
                 "The managed worktree changed after its deletion scan and was preserved for review.",
@@ -4501,6 +4512,7 @@ export class GitService {
     createdFromHead: string,
     createdByCommand: boolean,
     identity?: GitWorktreeRollbackIdentity,
+    cleanup: GitWorktreeDisposalPolicy = {},
   ): Promise<unknown | undefined> {
     let rollbackError: unknown;
     let removalJournal: GitWorktreeRemovalJournal | undefined;
@@ -4581,25 +4593,10 @@ export class GitService {
     }
 
     try {
-      const status = parseGitStatus(
-        (
-          await this.run(
-            worktreePath,
-            [
-              "status",
-              "--porcelain=v2",
-              "--branch",
-              "-z",
-              "--untracked-files=all",
-              "--ignored=matching",
-            ],
-            {
-              disableRepositoryAutomation: true,
-            },
-          )
-        ).stdout,
-      );
-      if (status.uncommitted > 0 || status.ignored > 0) {
+      if (
+        !cleanup.discardCreationOutput &&
+        (await this.worktreeHasUserChanges(worktreePath, [], worktreePath, cleanup))
+      ) {
         return new GitServiceError(
           "dirty_worktree",
           "The partially created worktree contains uncommitted, untracked, or ignored files and was preserved for inspection.",
@@ -4629,6 +4626,7 @@ export class GitService {
         createdFromHead,
         undefined,
         () => undefined,
+        cleanup,
       );
     } catch (error) {
       rollbackError ??= error;
@@ -4751,6 +4749,7 @@ export class GitService {
       const worktreePath = path.join(repositoryRoot, `${branchSlug}-${randomUUID().slice(0, 8)}`);
       let createdByCommand = false;
       let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
+      const rollbackCleanup: GitWorktreeDisposalPolicy = {};
       try {
         await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", worktreePath, "HEAD"], {
           disableRepositoryAutomation: true,
@@ -4794,7 +4793,11 @@ export class GitService {
         };
         const relativeWorkspacePath = path.relative(repo.topLevel, repo.cwd);
         const workspacePath = path.join(created.path, relativeWorkspacePath);
-        if (!(await fs.stat(workspacePath)).isDirectory()) {
+        const workspaceInfo = await fs.stat(workspacePath).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!workspaceInfo?.isDirectory()) {
           throw new GitServiceError(
             "command_failed",
             "The workspace subfolder is not present in HEAD, so Aiden did not widen access to the repository root.",
@@ -4805,15 +4808,14 @@ export class GitService {
           created.path,
           signal,
         );
+        rollbackCleanup.provisionedFiles = provisionedFiles;
         if (options?.allowSetupScript) {
-          try {
-            await this.setupManagedWorktree(repo, created.path, signal);
-          } catch (error) {
-            if (provisionedFiles?.length) {
-              await removeProvisionedFiles(created.path, provisionedFiles);
-            }
-            throw error;
-          }
+          // From here on the checkout may hold anything the setup script (run
+          // by Aiden inside this creation transaction, before the worktree is
+          // handed to anyone) wrote. A failed creation owns all of it, so the
+          // rollback must not preserve the checkout just because of that output.
+          rollbackCleanup.discardCreationOutput = true;
+          await this.setupManagedWorktree(repo, created.path, signal);
         }
         return {
           ...created,
@@ -4835,6 +4837,7 @@ export class GitService {
           createdFromHead,
           createdByCommand,
           rollbackIdentity,
+          rollbackCleanup,
         );
         if (rollbackError) {
           throw new GitServiceError(
@@ -4880,15 +4883,19 @@ export class GitService {
     try {
       const include = await resolveWorktreeInclude(repo.topLevel);
       if (!include) return undefined;
+      // Listings run from the repository root: Git prints paths relative to
+      // its working directory, and selection, estimation, and copying all
+      // resolve against `repo.topLevel`. A nested source workspace must not
+      // shift the namespace (or skip files outside its subfolder).
       const [all, includeVisible, ignored] = [
-        await this.run(repo.cwd, ["ls-files", "-z", "--others"], runOptions),
+        await this.run(repo.topLevel, ["ls-files", "-z", "--others"], runOptions),
         await this.run(
-          repo.cwd,
+          repo.topLevel,
           ["ls-files", "-z", "--others", `--exclude-from=${include}`],
           runOptions,
         ),
         await this.run(
-          repo.cwd,
+          repo.topLevel,
           ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
           runOptions,
         ),
@@ -4931,6 +4938,45 @@ export class GitService {
     }
   }
 
+  /**
+   * Whether a managed checkout holds anything Aiden must not discard: any
+   * tracked change or untracked file, or an ignored entry that is not an
+   * unchanged copy Aiden provisioned from `.worktreeinclude`.
+   */
+  private async worktreeHasUserChanges(
+    runCwd: string,
+    locationArgs: readonly string[],
+    checkoutPath: string,
+    disposal: GitWorktreeDisposalPolicy,
+  ): Promise<boolean> {
+    if (disposal.discardCreationOutput) return false;
+    const raw = (
+      await this.run(
+        runCwd,
+        [
+          ...locationArgs,
+          "status",
+          "--porcelain=v2",
+          "--branch",
+          "-z",
+          "--untracked-files=all",
+          "--ignored=matching",
+        ],
+        {
+          disableRepositoryAutomation: true,
+        },
+      )
+    ).stdout;
+    const status = parseGitStatus(raw);
+    if (status.uncommitted > 0) return true;
+    if (status.ignored === 0) return false;
+    return !(await ignoredPathsAreUnchangedProvisionedFiles(
+      checkoutPath,
+      parseIgnoredStatusPaths(raw),
+      disposal.provisionedFiles,
+    ));
+  }
+
   async rollbackWorktree(cwd: string, created: GitCreatedWorktree): Promise<void> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.enqueueMutation(repo.commonDir, async () => {
@@ -4946,6 +4992,7 @@ export class GitService {
           worktreeDevice: created.worktreeDevice,
           worktreeInode: created.worktreeInode,
         },
+        { provisionedFiles: created.provisionedFiles },
       );
       if (rollbackError) {
         throw new GitServiceError(
@@ -4968,6 +5015,7 @@ export class GitService {
     worktreeDevice?: number,
     worktreeInode?: number,
     retainRemovalJournal = false,
+    provisionedFiles?: readonly ProvisionedFileEntry[],
   ): Promise<GitDeleteWorktreeResult> {
     let destructiveMutationAttempted = false;
     try {
@@ -5031,25 +5079,9 @@ export class GitService {
               "This managed worktree changed branches or became detached. Restore its original branch before deleting it from Aiden.",
             );
           }
-          const status = parseGitStatus(
-            (
-              await this.run(
-                worktreePath,
-                [
-                  "status",
-                  "--porcelain=v2",
-                  "--branch",
-                  "-z",
-                  "--untracked-files=all",
-                  "--ignored=matching",
-                ],
-                {
-                  disableRepositoryAutomation: true,
-                },
-              )
-            ).stdout,
-          );
-          if (status.uncommitted > 0 || status.ignored > 0) {
+          // Unchanged files Aiden provisioned are its own regenerable output;
+          // anything else ignored, untracked, or modified is preserved.
+          if (await this.worktreeHasUserChanges(worktreePath, [], worktreePath, { provisionedFiles })) {
             throw new GitServiceError(
               "dirty_worktree",
               "Remove, commit, stash, or discard every uncommitted, untracked, and ignored file before deleting this worktree.",
@@ -5086,6 +5118,7 @@ export class GitService {
           () => {
             destructiveMutationAttempted = true;
           },
+          { provisionedFiles },
         );
         const branchDeleted = await this.deleteBranchRefIfMatches(
           repo,
@@ -5390,6 +5423,7 @@ export const gitDeleteManagedWorktree = (
   ownershipToken?: string,
   worktreeDevice?: number,
   worktreeInode?: number,
+  provisionedFiles?: readonly ProvisionedFileEntry[],
 ) =>
   gitService.deleteManagedWorktree(
     folderPath,
@@ -5402,4 +5436,5 @@ export const gitDeleteManagedWorktree = (
     worktreeDevice,
     worktreeInode,
     true,
+    provisionedFiles,
   );

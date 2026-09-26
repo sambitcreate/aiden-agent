@@ -1,4 +1,5 @@
 import * as assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import test from "node:test";
 import {
   copyProvisionedFiles,
   estimateProvisionedBytes,
+  ignoredPathsAreUnchangedProvisionedFiles,
   parseLsFilesZero,
   removeProvisionedFiles,
   resolveWorktreeInclude,
@@ -19,7 +21,9 @@ async function temporaryDirectory(t: test.TestContext): Promise<string> {
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
-  return directory;
+  // Canonical path: macOS reaches the temp directory through `/var` ->
+  // `/private/var`, and include resolution returns the canonical file.
+  return fs.realpath(directory);
 }
 
 test("selectProvisionedFiles keeps only ignored files matched by .worktreeinclude", () => {
@@ -86,9 +90,10 @@ test("copyProvisionedFiles copies modes, skips symlinks, and never overwrites", 
     ".env.link",
     "gone",
   ]);
+  const digest = (text: string) => createHash("sha256").update(text).digest("hex");
   assert.deepEqual(manifest, [
-    { relativePath: ".env", mode: 0o600 },
-    { relativePath: "run.sh", mode: 0o755 },
+    { relativePath: ".env", mode: 0o600, sha256: digest("KEY=1\n") },
+    { relativePath: "run.sh", mode: 0o755, sha256: digest("#!/bin/sh\n") },
   ]);
   assert.equal(await fs.readFile(path.join(worktree, ".env"), "utf8"), "KEY=1\n");
   assert.equal((await fs.stat(path.join(worktree, ".env"))).mode & 0o777, 0o600);
@@ -171,4 +176,53 @@ test("removeProvisionedFiles deletes only recorded manifest entries", async (t) 
   ]);
   await assert.rejects(fs.stat(path.join(worktree, ".env")));
   assert.equal(await fs.readFile(path.join(worktree, "user-file"), "utf8"), "keep\n");
+});
+
+test("ignoredPathsAreUnchangedProvisionedFiles accepts only unchanged recorded copies", async (t) => {
+  const source = await temporaryDirectory(t);
+  const worktree = await temporaryDirectory(t);
+  await fs.writeFile(path.join(source, ".env"), "KEY=1\n");
+  await fs.mkdir(path.join(source, "config"));
+  await fs.writeFile(path.join(source, "config", "local.json"), "{}\n");
+  const manifest = await copyProvisionedFiles(source, worktree, [".env", "config/local.json"]);
+
+  assert.equal(await ignoredPathsAreUnchangedProvisionedFiles(worktree, [], undefined), true);
+  assert.equal(
+    await ignoredPathsAreUnchangedProvisionedFiles(worktree, [".env", "config/"], manifest),
+    true,
+  );
+  // No manifest, or a legacy manifest without digests, proves nothing.
+  assert.equal(await ignoredPathsAreUnchangedProvisionedFiles(worktree, [".env"], undefined), false);
+  assert.equal(
+    await ignoredPathsAreUnchangedProvisionedFiles(
+      worktree,
+      [".env"],
+      manifest.map(({ relativePath, mode }) => ({ relativePath, mode })),
+    ),
+    false,
+  );
+
+  // An unrecorded file beneath a reported directory keeps the checkout.
+  await fs.writeFile(path.join(worktree, "config", "extra.json"), "{}\n");
+  assert.equal(
+    await ignoredPathsAreUnchangedProvisionedFiles(worktree, ["config/"], manifest),
+    false,
+  );
+  await fs.rm(path.join(worktree, "config", "extra.json"));
+
+  // So does a symlink standing in for a recorded file.
+  await fs.symlink("config/local.json", path.join(worktree, "linked"));
+  assert.equal(
+    await ignoredPathsAreUnchangedProvisionedFiles(worktree, ["linked"], [
+      ...manifest,
+      { relativePath: "linked", mode: 0o644, sha256: manifest[0]!.sha256 },
+    ]),
+    false,
+  );
+
+  // An edited copy is user data.
+  await fs.appendFile(path.join(worktree, ".env"), "EDITED=1\n");
+  assert.equal(await ignoredPathsAreUnchangedProvisionedFiles(worktree, [".env"], manifest), false);
+  // A vanished path cannot be verified either.
+  assert.equal(await ignoredPathsAreUnchangedProvisionedFiles(worktree, ["gone"], manifest), false);
 });

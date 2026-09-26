@@ -121,7 +121,7 @@ export interface ManagedWorktree {
   /** Last time the worktree was opened or mutated through Aiden. */
   lastUsedAt?: number;
   /** Files Aiden provisioned from `.worktreeinclude`; authoritative at delete time. */
-  provisionedFiles?: { relativePath: string; mode: number }[];
+  provisionedFiles?: { relativePath: string; mode: number; sha256?: string }[];
 }
 
 /** A named working context: an optional folder + a permission level for its chats. */

@@ -250,11 +250,15 @@ export class WorktreeSnapshotStore {
     await this.root();
     const payloads = this.payloadRoot(snapshotId);
     const filesRoot = path.join(payloads, "files");
-    const worktreeRoot = path.resolve(worktreePath);
     const stored: WorktreeSnapshotProvisionedFile[] = [];
     let totalBytes = 0;
     await fs.mkdir(filesRoot, { recursive: true, mode: 0o700 });
     try {
+      // Containment is compared on canonical paths: a root reached through a
+      // symlink (macOS `/var` -> `/private/var`) must not make every realpath
+      // look like it escaped and silently drop the whole payload.
+      const worktreeRoot = await fs.realpath(worktreePath);
+      const canonicalFilesRoot = await fs.realpath(filesRoot);
       for (const entry of manifest) {
         if (!isContainedRelativePath(entry.relativePath)) {
           throw new WorktreeSnapshotStoreError(
@@ -303,8 +307,8 @@ export class WorktreeSnapshotStore {
         await fs.mkdir(parent, { recursive: true, mode: 0o700 });
         const canonicalParent = await fs.realpath(parent);
         if (
-          canonicalParent !== filesRoot &&
-          !canonicalParent.startsWith(`${filesRoot}${path.sep}`)
+          canonicalParent !== canonicalFilesRoot &&
+          !canonicalParent.startsWith(`${canonicalFilesRoot}${path.sep}`)
         ) {
           throw new WorktreeSnapshotStoreError(
             "invalid",
@@ -336,7 +340,8 @@ export class WorktreeSnapshotStore {
     if (snapshot.provisionedFiles.length === 0) return;
     await this.root();
     const filesRoot = path.join(this.payloadRoot(snapshot.id), "files");
-    const worktreeRoot = path.resolve(worktreePath);
+    const canonicalFilesRoot = await fs.realpath(filesRoot);
+    const worktreeRoot = await fs.realpath(worktreePath);
     for (const entry of snapshot.provisionedFiles) {
       if (!isContainedRelativePath(entry.relativePath)) {
         throw new WorktreeSnapshotStoreError(
@@ -347,8 +352,8 @@ export class WorktreeSnapshotStore {
       const stored = path.join(filesRoot, entry.relativePath);
       const canonicalStoredParent = await fs.realpath(path.dirname(stored)).catch(() => "");
       if (
-        canonicalStoredParent !== filesRoot &&
-        !canonicalStoredParent.startsWith(`${filesRoot}${path.sep}`)
+        canonicalStoredParent !== canonicalFilesRoot &&
+        !canonicalStoredParent.startsWith(`${canonicalFilesRoot}${path.sep}`)
       ) {
         throw new WorktreeSnapshotStoreError(
           "invalid",

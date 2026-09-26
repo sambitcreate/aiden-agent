@@ -1941,6 +1941,7 @@ if (!ownsSingleInstanceLock) {
             managed.ownershipToken,
             managed.worktreeDevice,
             managed.worktreeInode,
+            managed.provisionedFiles,
           );
         },
         removeWorkspaceRecord: (workspaceId) =>

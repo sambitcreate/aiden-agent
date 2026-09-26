@@ -35,6 +35,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     managed.ownershipToken,
     managed.worktreeDevice,
     managed.worktreeInode,
+    managed.provisionedFiles,
   ),
   managedWorktreeDeletionPending: (managed) => gitManagedWorktreeDeletionPending(
     managed.worktreePath,

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { isContainedRelativePath } from "./worktree-snapshot-store-core.js";
 
@@ -30,6 +31,26 @@ export class WorktreeProvisionError extends Error {
 export interface ProvisionedFileEntry {
   relativePath: string;
   mode: number;
+  /**
+   * SHA-256 of the bytes Aiden wrote. A copy still matching it is Aiden's own
+   * regenerable output, so deletion may discard it; an edited copy is user data.
+   */
+  sha256?: string;
+}
+
+/** Bound on filesystem entries inspected when classifying ignored status paths. */
+export const WORKTREE_PROVISION_MAX_INSPECTED_ENTRIES = 4_096;
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+
+export function isProvisionedFileDigest(value: unknown): value is string {
+  return typeof value === "string" && SHA256_PATTERN.test(value);
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
 
 export function parseLsFilesZero(output: string): string[] {
@@ -203,9 +224,12 @@ export async function copyProvisionedFiles(
         );
       }
       await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
-      const mode = info.mode & 0o777;
-      await fs.chmod(destination, mode);
-      manifest.push({ relativePath, mode });
+      // Recorded before any later step can fail, so the partial-copy cleanup
+      // below always knows about this destination.
+      const entry: ProvisionedFileEntry = { relativePath, mode: info.mode & 0o777 };
+      manifest.push(entry);
+      await fs.chmod(destination, entry.mode);
+      entry.sha256 = await sha256File(destination);
     }
   } catch (error) {
     for (const entry of manifest) {
@@ -244,5 +268,72 @@ export async function removeProvisionedFiles(
     if (!isContainedRelativePath(entry.relativePath)) continue;
     const target = path.join(canonicalWorktree, entry.relativePath);
     await fs.rm(target, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Whether every ignored path Git reports in a managed checkout is a file Aiden
+ * provisioned and that still holds exactly the bytes Aiden wrote. Directory
+ * entries (`dir/`, reported when a whole directory is ignored) qualify only
+ * when every file beneath them does. Symlinks, special files, unrecorded or
+ * edited files, legacy manifest entries without a digest, and oversized trees
+ * all return false so the caller preserves the checkout.
+ */
+export async function ignoredPathsAreUnchangedProvisionedFiles(
+  worktreePath: string,
+  ignoredPaths: readonly string[],
+  manifest: readonly ProvisionedFileEntry[] | undefined,
+): Promise<boolean> {
+  if (ignoredPaths.length === 0) return true;
+  if (!manifest?.length) return false;
+  const expected = new Map<string, string>();
+  for (const entry of manifest) {
+    if (!isContainedRelativePath(entry.relativePath)) return false;
+    if (isProvisionedFileDigest(entry.sha256)) expected.set(entry.relativePath, entry.sha256);
+  }
+  let canonicalWorktree: string;
+  try {
+    canonicalWorktree = await fs.realpath(worktreePath);
+  } catch {
+    return false;
+  }
+  let inspected = 0;
+
+  const fileMatches = async (relativePath: string): Promise<boolean> => {
+    const digest = expected.get(relativePath);
+    if (!digest) return false;
+    const absolute = path.join(canonicalWorktree, relativePath);
+    const info = await fs.lstat(absolute);
+    if (info.isSymbolicLink() || !info.isFile()) return false;
+    const parent = await fs.realpath(path.dirname(absolute));
+    if (parent !== canonicalWorktree && !parent.startsWith(`${canonicalWorktree}${path.sep}`)) {
+      return false;
+    }
+    return (await sha256File(absolute)) === digest;
+  };
+
+  const entryMatches = async (relativePath: string): Promise<boolean> => {
+    inspected += 1;
+    if (inspected > WORKTREE_PROVISION_MAX_INSPECTED_ENTRIES) return false;
+    if (!isContainedRelativePath(relativePath)) return false;
+    const absolute = path.join(canonicalWorktree, relativePath);
+    const info = await fs.lstat(absolute);
+    if (info.isSymbolicLink()) return false;
+    if (info.isFile()) return fileMatches(relativePath);
+    if (!info.isDirectory()) return false;
+    for (const child of await fs.readdir(absolute)) {
+      if (!(await entryMatches(`${relativePath}/${child}`))) return false;
+    }
+    return true;
+  };
+
+  try {
+    for (const reported of ignoredPaths) {
+      const relativePath = reported.endsWith("/") ? reported.slice(0, -1) : reported;
+      if (!(await entryMatches(relativePath))) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }

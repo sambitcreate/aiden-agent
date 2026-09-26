@@ -183,12 +183,12 @@ function normalizePortableConfig(value: unknown): {
 /** Bounded validation for recorded `.worktreeinclude` provisioning manifests. */
 function normalizeProvisionedManifest(
   value: ManagedWorktree["provisionedFiles"],
-): { relativePath: string; mode: number }[] {
+): { relativePath: string; mode: number; sha256?: string }[] {
   if (!Array.isArray(value) || value.length > 512) return [];
   return value
     .map((entry) => {
       if (!entry || typeof entry !== "object") return undefined;
-      const { relativePath, mode } = entry;
+      const { relativePath, mode, sha256 } = entry;
       if (
         typeof relativePath !== "string" ||
         relativePath.length === 0 ||
@@ -202,9 +202,16 @@ function normalizeProvisionedManifest(
       ) {
         return undefined;
       }
-      return { relativePath, mode };
+      // A malformed digest only loses the "unchanged copy" proof; the entry
+      // itself stays recorded so deletion still treats the file as Aiden's.
+      return typeof sha256 === "string" && /^[0-9a-f]{64}$/u.test(sha256)
+        ? { relativePath, mode, sha256 }
+        : { relativePath, mode };
     })
-    .filter((entry): entry is { relativePath: string; mode: number } => entry !== undefined);
+    .filter(
+      (entry): entry is { relativePath: string; mode: number; sha256?: string } =>
+        entry !== undefined,
+    );
 }
 
 function normalizeWorkspace(w: Workspace): Workspace {

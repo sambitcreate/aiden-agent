@@ -14,7 +14,9 @@ async function temporaryDirectory(t: test.TestContext): Promise<string> {
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
-  return directory;
+  // Canonical path: macOS reaches the temp directory through `/var` ->
+  // `/private/var`, while resolution and the child's `$PWD` are canonical.
+  return fs.realpath(directory);
 }
 
 async function writeScript(
@@ -96,5 +98,48 @@ test("runWorktreeSetupScript rejects non-zero exits, timeouts, and flooding outp
       maxOutputBytes: 1024,
     }),
     (error: unknown) => error instanceof WorktreeSetupError,
+  );
+});
+
+test("runWorktreeSetupScript kills background descendants before it settles", async (t) => {
+  const worktree = await temporaryDirectory(t);
+  const source = await temporaryDirectory(t);
+
+  // A descendant that outlives a successful script must not keep running (or
+  // hold the output pipes open) once setup reports completion.
+  const detached = await writeScript(
+    worktree,
+    '#!/bin/sh\n(sleep 1; echo late > "$PWD/late.success") &\nexit 0\n',
+  );
+  const startedAt = Date.now();
+  await runWorktreeSetupScript(detached, worktree, source);
+  assert.ok(Date.now() - startedAt < 900, "setup waited on its background descendant");
+
+  // A timed-out script's whole process group dies with it, so rollback never
+  // races a descendant that is still writing into the checkout.
+  const slow = await writeScript(
+    worktree,
+    '#!/bin/sh\n(sleep 1; echo late > "$PWD/late.timeout") &\nsleep 30\n',
+  );
+  await assert.rejects(
+    runWorktreeSetupScript(slow, worktree, source, undefined, { timeoutMs: 200 }),
+    (error: unknown) => error instanceof WorktreeSetupError && error.failure === "timeout",
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await assert.rejects(fs.stat(path.join(worktree, "late.success")));
+  await assert.rejects(fs.stat(path.join(worktree, "late.timeout")));
+});
+
+test("runWorktreeSetupScript reports an aborted setup and stops the script", async (t) => {
+  const worktree = await temporaryDirectory(t);
+  const source = await temporaryDirectory(t);
+  const slow = await writeScript(worktree, "#!/bin/sh\nsleep 30\n");
+  const controller = new AbortController();
+  const running = runWorktreeSetupScript(slow, worktree, source, controller.signal);
+  setTimeout(() => controller.abort(), 100);
+  await assert.rejects(
+    running,
+    (error: unknown) => error instanceof WorktreeSetupError && error.failure === "io",
   );
 });

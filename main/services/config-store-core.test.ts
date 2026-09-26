@@ -2399,7 +2399,7 @@ test("managed worktree lifecycle metadata survives workspace round-trips", async
       snapshotId: "11111111-2222-4333-8444-555555555555",
       owner: "session" as const,
       lastUsedAt: 1_700_000_000_000,
-      provisionedFiles: [{ relativePath: ".env.local", mode: 0o600 }],
+      provisionedFiles: [{ relativePath: ".env.local", mode: 0o600, sha256: "c".repeat(64) }],
     },
     createdAt: 1,
     updatedAt: 1,
@@ -2421,6 +2421,7 @@ test("managed worktree lifecycle metadata survives workspace round-trips", async
       provisionedFiles: [
         { relativePath: "../escape", mode: 0o600 },
         { relativePath: ".ok", mode: 0o640 },
+        { relativePath: ".bad-digest", mode: 0o600, sha256: "not-a-digest" },
       ],
     },
   });
@@ -2430,6 +2431,7 @@ test("managed worktree lifecycle metadata survives workspace round-trips", async
   assert.equal(normalized?.managedWorktree?.lastUsedAt, undefined);
   assert.deepEqual(normalized?.managedWorktree?.provisionedFiles, [
     { relativePath: ".ok", mode: 0o640 },
+    { relativePath: ".bad-digest", mode: 0o600 },
   ]);
 });
 
