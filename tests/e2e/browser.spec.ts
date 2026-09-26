@@ -83,6 +83,11 @@ test("browser user and automation share a sandboxed page, annotations and isolat
       guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
     }, url);
     await expect(page.getByRole("region", { name: "Annotate browser" })).toBeVisible();
+    await expect.poll(() => aiden.app.evaluate(({ BrowserWindow }, guestUrl) => {
+      const guests = BrowserWindow.getAllWindows().flatMap(window => window.contentView.children)
+        .filter(child => "webContents" in child && (child as Electron.WebContentsView).webContents.getURL().startsWith(guestUrl));
+      return { attached: guests.length > 0, visible: guests.some(guest => guest.getVisible()) };
+    }, url)).toEqual({ attached: process.platform === "linux", visible: false });
     expect((await command(page, { action: "evaluate", tabId, expression: "globalThis.pickSideEffects" })).value).toBe(0);
     await page.getByRole("textbox", { name: "Annotation comment" }).fill("Make this button clearer.");
     await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = true; });
@@ -139,7 +144,7 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     // Compact windows collapse the sidebar until the user explicitly reopens it.
     await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await draft.evaluate(input => { (input as HTMLTextAreaElement).readOnly = false; });
-    await page.getByRole("textbox", { name: "Annotation comment" }).press("Meta+Enter");
+    await page.getByRole("textbox", { name: "Annotation comment" }).press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
     await expect(draft).toHaveValue("Existing draft.\n\nMake this button clearer.");
     await expect(page.getByRole("button", { name: "Remove Browser annotation.txt" })).toBeVisible();
 
@@ -196,6 +201,12 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     const secondTabId = (await state(page)).activeTabId!;
     expect(secondTabId).not.toBe(tabId);
     expect((await state(page)).tabs.find(tab => tab.id === secondTabId)?.floating).toBe(true);
+    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
+    const inactiveCapture = await command(page, { action: "screenshot", tabId });
+    expect(inactiveCapture.image?.mimeType).toBe("image/png");
+    expect(inactiveCapture.image?.width).toBeGreaterThan(0);
+    expect((await state(page)).activeTabId).toBe(secondTabId);
+    expect((await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
     await floating.getByRole("tab", { name: "Browser fixture", exact: true }).click();
     await expect.poll(async () => (await state(page)).activeTabId).toBe(tabId);
     await expect(floating).toBeVisible();
@@ -356,4 +367,43 @@ test("browser recording produces a real bounded WebM artifact", async ({ aiden }
     expect(decoded.height).toBeGreaterThan(0);
   }
   await command(page, { action: "close", tabId });
+});
+
+test("guest identity headers match the renderer's navigator.userAgentData", async ({ aiden }) => {
+  const seen: Array<Record<string, string | string[] | undefined>> = [];
+  const server = createServer((request, response) => {
+    // /favicon.ico is fetched by Aiden's own tab strip, not by the guest page.
+    if (request.url === "/" || request.url === "/pixel") seen.push(request.headers);
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<!doctype html><title>Identity fixture</title><img src=\"/pixel\">");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  try {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const opened = await command(page, { action: "create", url });
+    const tabId = opened.state.activeTabId!;
+    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Identity fixture");
+    await expect.poll(() => seen.length).toBeGreaterThanOrEqual(2);
+    const renderer = (await command(page, {
+      action: "evaluate",
+      tabId,
+      expression: "({ userAgent: navigator.userAgent, brands: navigator.userAgentData.brands.map(({ brand, version }) => ({ brand, version })), mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform })",
+    })).value as { userAgent: string; brands: Array<{ brand: string; version: string }>; mobile: boolean; platform: string };
+    expect(renderer.userAgent).not.toMatch(/Electron|Aiden/iu);
+    expect(renderer.brands.map(({ brand }) => brand)).not.toContain("Electron");
+    const expectedBrands = renderer.brands.map(({ brand, version }) => `"${brand}";v="${version}"`).join(", ");
+    // Document and subresource requests carry the identity the page's JavaScript sees.
+    for (const headers of seen) {
+      expect(headers["user-agent"]).toBe(renderer.userAgent);
+      expect(headers["sec-ch-ua"]).toBe(expectedBrands);
+      expect(headers["sec-ch-ua-mobile"]).toBe(renderer.mobile ? "?1" : "?0");
+      expect(headers["sec-ch-ua-platform"]).toBe(`"${renderer.platform}"`);
+      expect(Object.keys(headers).filter(name => name.startsWith("sec-ch-ua")).sort()).toEqual(["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]);
+    }
+    await command(page, { action: "close", tabId });
+  } finally {
+    server.close();
+  }
 });

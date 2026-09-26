@@ -31,7 +31,7 @@ const VERBS: Record<string, VerbPair> = {
   web_search: { active: "Searching the web", complete: "Searched the web" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
-  computer_use: { active: "Using Mac", complete: "Used Mac" },
+  computer_use: { active: "Using computer", complete: "Used computer" },
   browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
   browser_status: { active: "Checking browser", complete: "Checked browser" },
   browser_open: { active: "Opening browser", complete: "Opened browser" },
@@ -144,6 +144,16 @@ function countTools(steps: AgentStep[], names: string[]): number {
   return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
 }
 
+/**
+ * A trail that is exactly one compaction: its own line already carries every
+ * metric, so expanding it would only repeat the "Compacted context" label.
+ * Repeated compactions keep the trail so each run's metrics stay reachable.
+ */
+export function isCompactContextOnly(steps: readonly AgentStep[]): boolean {
+  const [only] = steps;
+  return steps.length === 1 && isToolStep(only) && only.toolName === "compact_context";
+}
+
 const TALLIED_TOOLS = [
   "read_file",
   "grep",
@@ -195,7 +205,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     changes ? `${running ? "editing" : "edited"} ${plural(changes, "file")}` : "",
     commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
     web ? plural(web, "web search", "web searches") : "",
-    mac ? plural(mac, "Mac action") : "",
+    mac ? plural(mac, "Computer Use action") : "",
     compactions ? (running ? "compacting context" : "compacted context") : "",
     other ? plural(other, "tool call") : "",
   ].filter(Boolean);

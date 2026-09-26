@@ -14,7 +14,14 @@ import {
   type AssistantMessage,
   type Model,
 } from "@earendil-works/pi-ai";
-import { PiCompactionCoordinator, type PiCompactionEvent } from "./pi-compaction-core.js";
+import {
+  CompactionSummaryBudgetError,
+  compactionFailureDiagnosticFields,
+  PiCompactionCoordinator,
+  type PiCompactionEvent,
+} from "./pi-compaction-core.js";
+import { VccError } from "./pi-vcc/errors.js";
+import { CompactionError } from "@earendil-works/pi-agent-core";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   AIDEN_PI_TRANSACTION,
@@ -1265,6 +1272,17 @@ test("primary generation reconciles a visible assistant after a journal batch fa
   assert.match(source, /if \(!turnLease\) \{[\s\S]{0,250}quarantineFailedPiRecovery\(/u);
 });
 
+test("Stop's terminal never waits on an unresolved queued-guidance save", async () => {
+  const source = await readFile(new URL("./llm-client.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /await\s+collectUndeliveredGuidance\(/u);
+  assert.doesNotMatch(source, /await\s+agent\.takeUndeliveredQueuedMessages\(/u);
+  assert.match(
+    source,
+    /const taken = agent\.takeUndeliveredQueuedMessages\(\);[\s\S]{0,400}void taken\.late\.then\([\s\S]{0,200}returnLateGuidance\(owner, params\.chatId/u,
+  );
+  assert.match(source, /owner\.send\("chat:guidance-returned"/u);
+});
+
 test("compaction transport awaits hidden-summary usage accounting", async () => {
   const source = await readFile(new URL("./pi-compaction-core.ts", import.meta.url), "utf8");
   assert.match(source, /await onAssistantMessage\(message\)/u);
@@ -2164,13 +2182,14 @@ for (const reserveTokens of [0, 1]) {
 }
 
 for (const mode of ["manual", "automatic"] as const) {
-  test(`${mode} long-history small-model summary fails before provider I/O`, async () => {
+  test(`${mode} long-history small-model summary recovers through bounded local preparation`, async () => {
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow: 8_192 };
     let providerRequests = 0;
-    faux.setResponses([() => {
+    faux.setResponses([(context) => {
       providerRequests += 1;
-      return fauxAssistantMessage(structuredSummary("must not be requested"));
+      assert.ok(JSON.stringify(context).length < 20_000, "the provider receives the reduced summary, not the full history");
+      return fauxAssistantMessage(structuredSummary("bounded-recovery"));
     }]);
     const session = await memorySession();
     for (let turn = 0; turn < 10; turn += 1) {
@@ -2185,18 +2204,20 @@ for (const mode of ["manual", "automatic"] as const) {
       session, models, model: smallModel, thinkingLevel: "off",
     });
     const result = mode === "manual" ? await coordinator.compact() : await coordinator.check(last);
-    assert.equal(result.compacted, false);
+    assert.equal(result.compacted, true, result.errorMessage);
     assert.equal(result.shouldRetry, false);
-    assert.match(result.errorMessage ?? "", /summary exceeds the selected model context window/u);
-    assert.equal(providerRequests, 0);
-    assert.deepEqual(await session.getEntries(), entriesBefore);
+    assert.equal(providerRequests, 1);
+    assert.deepEqual((await session.getEntries()).slice(0, entriesBefore.length), entriesBefore);
+    assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+    assert.match(JSON.stringify(result.messages), /bounded-recovery/u);
   });
 }
 
-test("summary preflight includes output reserve and does not retry a local budget rejection", async () => {
+test("summary preflight includes output reserve and fails closed when no channel can shrink", async () => {
   const { faux, models, model } = compactionFixture();
   let providerRequests = 0;
   let retries = 0;
+  let localCompiles = 0;
   faux.setResponses([() => {
     providerRequests += 1;
     return fauxAssistantMessage(structuredSummary("must not be requested"));
@@ -2208,6 +2229,7 @@ test("summary preflight includes output reserve and does not retry a local budge
   const result = await new PiCompactionCoordinator({
     session, models, model: { ...model, maxTokens: 1_000 }, thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 900, keepRecentTokens: 100 },
+    compileVcc: async () => { localCompiles += 1; throw new Error("Local compiler unavailable."); },
     onEvent: (event) => events.push(event),
     summaryRetryCallbacks: {
       onRetryScheduled: () => { retries += 1; },
@@ -2216,19 +2238,48 @@ test("summary preflight includes output reserve and does not retry a local budge
     },
   }).compact();
   assert.equal(result.failureCode, "compaction-failed");
+  // Everything is retained, so there is no history to reduce; the output
+  // reserve alone overflows and the local budget rejection is reported.
   assert.match(result.errorMessage ?? "", /summary exceeds/u);
+  assert.equal(localCompiles, 0);
   assert.equal(providerRequests, 0);
   assert.equal(retries, 0);
   assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
   assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("summary preflight accounts conservatively for high-density Unicode", async () => {
+test("oversized recovery keeps the journal intact when local reduction fails", async () => {
   const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
   let providerRequests = 0;
   faux.setResponses([() => {
     providerRequests += 1;
     return fauxAssistantMessage(structuredSummary("must not be requested"));
+  }]);
+  const session = await memorySession();
+  await session.appendMessage(user(`old ${"x".repeat(40_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user(`latest ${"l".repeat(1_200)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  const before = await session.getEntries();
+  const result = await new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 },
+    compileVcc: async () => { throw new Error("Local compiler unavailable."); },
+  }).compact();
+  assert.equal(result.failureCode, "compaction-failed");
+  assert.match(result.errorMessage ?? "", /Local compiler unavailable/u);
+  assert.equal(providerRequests, 0);
+  assert.deepEqual(await session.getEntries(), before);
+});
+
+test("summary preflight reduces high-density Unicode before the provider call", async () => {
+  const { faux, models, model } = compactionFixture();
+  let providerRequests = 0;
+  faux.setResponses([(context) => {
+    providerRequests += 1;
+    assert.ok(JSON.stringify(context).length < 20_000);
+    return fauxAssistantMessage(structuredSummary("unicode-recovery"));
   }]);
   const session = await memorySession();
   const smallModel = { ...model, contextWindow: 8_192 };
@@ -2239,7 +2290,264 @@ test("summary preflight accounts conservatively for high-density Unicode", async
   const result = await new PiCompactionCoordinator({
     session, models, model: smallModel, thinkingLevel: "off",
   }).compact();
-  assert.match(result.errorMessage ?? "", /summary exceeds/u);
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(providerRequests, 1);
+  assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+});
+
+test("switching a long chat from a million-token model to a 272k model compacts before provider I/O", async () => {
+  const { faux, models, model } = compactionFixture();
+  const currentModel = { ...model, contextWindow: 272_000, maxTokens: 128_000 };
+  const oldModel = { ...currentModel, id: "old-million-token-model", contextWindow: 1_000_000 };
+  const session = await memorySession();
+  for (let turn = 0; turn < 20; turn += 1) {
+    await session.appendMessage(user(`Old turn ${turn} ${"x".repeat(55_000)}`, turn * 2));
+    await session.appendMessage(assistant(oldModel, { timestamp: turn * 2 + 1 }));
+  }
+  let providerRequests = 0;
+  faux.setResponses([(context) => {
+    providerRequests += 1;
+    assert.ok(JSON.stringify(context).length < 30_000, "the oversized old history stays out of the new-model request");
+    return fauxAssistantMessage(structuredSummary("model-switch-recovered"));
+  }]);
+  const before = await session.getEntries();
+  const result = await new PiCompactionCoordinator({
+    session, models, model: currentModel, thinkingLevel: "off",
+  }).checkContextPressure({ contextTokens: 260_000, compressibleHistoryMessages: 40, shouldCompact: true });
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(providerRequests, 1);
+  const entries = await session.getEntries();
+  assert.deepEqual(entries.slice(0, before.length), before);
+  assert.equal(entries.filter((entry) => entry.type === "compaction").length, 1);
+  assert.match(JSON.stringify(result.messages), /model-switch-recovered/u);
+});
+
+function requestText(context: unknown): string {
+  return JSON.stringify(context);
+}
+
+/** Deterministic local reducer: shrinks channels carrying the oversized marker only. */
+type ReducerCall = { texts: string; previousSummary?: string; isSplitTurn: boolean; contextWindow: number };
+
+/**
+ * Deterministic local reducer. With `fill`, it returns the largest summary the
+ * real compiler's acceptance rule allows for the window it was given
+ * (`summary + 64 < contextWindow - reserveTokens`).
+ */
+function channelReducer(seen: ReducerCall[], options: { fill?: boolean } = {}) {
+  return async (input: Parameters<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>[0]) => {
+    const texts = JSON.stringify(input.preparation.messagesToSummarize);
+    seen.push({
+      texts,
+      previousSummary: input.preparation.previousSummary,
+      isSplitTurn: input.preparation.isSplitTurn,
+      contextWindow: input.contextWindow,
+    });
+    if (!texts.includes("OVERSIZED_HISTORY")) throw new VccError("insufficient_reduction");
+    const fillTokens = options.fill
+      ? Math.max(0, input.contextWindow - input.preparation.settings.reserveTokens - 64 - 16)
+      : 0;
+    return {
+      summary: `REDUCED_HISTORY_CANARY ${"r".repeat(fillTokens * 4)}`,
+      retainedTail: [],
+      tokensBefore: input.preparation.tokensBefore,
+      details: { engine: "vcc" as const, version: 1 },
+    } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+  };
+}
+
+test("oversized recovery keeps the split-turn prefix in its own Pi summary channel", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  const requests: string[] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(requestText(context));
+      return fauxAssistantMessage(structuredSummary("history-half"));
+    },
+    (context) => {
+      requests.push(requestText(context));
+      return fauxAssistantMessage(splitSummary("prefix-half"));
+    },
+  ]);
+  const session = await memorySession("oversized-split-turn");
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user("PREFIX_REQUEST_CANARY please continue the work", 20));
+  await session.appendMessage(assistant(smallModel, { text: `prefix progress ${"p".repeat(1_600)}`, timestamp: 21 }));
+  const last = assistant(smallModel, { text: `retained suffix ${"s".repeat(2_400)}`, timestamp: 22 });
+  await session.appendMessage(last);
+  const seen: ReducerCall[] = [];
+  const result = await new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 500 },
+    compileVcc: channelReducer(seen),
+  }).compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  // Only the oversized history is reduced; the prefix request fits and stays raw.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.isSplitTurn, false);
+  assert.equal(seen[0]!.previousSummary, undefined);
+  assert.match(seen[0]!.texts, /OVERSIZED_HISTORY/u);
+  assert.doesNotMatch(seen[0]!.texts, /PREFIX_REQUEST_CANARY/u);
+  assert.equal(requests.length, 2);
+  assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
+  assert.doesNotMatch(requests[0]!, /PREFIX_REQUEST_CANARY/u);
+  assert.match(requests[1]!, /PREFIX of a turn/u);
+  assert.match(requests[1]!, /PREFIX_REQUEST_CANARY/u);
+  const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  const summary = checkpoint?.type === "compaction" ? checkpoint.summary : "";
+  assert.match(summary, /history-half/u);
+  assert.match(summary, /Turn Context \(split turn\)/u);
+  assert.match(summary, /prefix-half/u);
+});
+
+test("oversized recovery merges the prior checkpoint through Pi's previous-summary update", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  const requests: string[] = [];
+  faux.setResponses([
+    fauxAssistantMessage(structuredSummary("PRIOR_GOAL_CANARY")),
+    (context) => {
+      requests.push(requestText(context));
+      return fauxAssistantMessage(structuredSummary("updated-after-recovery"));
+    },
+  ]);
+  const session = await memorySession("oversized-previous-summary");
+  const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 };
+  await session.appendMessage(user(`first goal ${"a".repeat(2_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user("first follow-up", 12));
+  await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
+  const seen: ReducerCall[] = [];
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off", settings,
+    compileVcc: channelReducer(seen),
+  });
+  assert.equal((await coordinator.compact()).compacted, true);
+  assert.equal(seen.length, 0, "a fitting summary does not enter recovery");
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  await session.appendMessage(user(`latest request ${"l".repeat(1_200)}`, 22));
+  await session.appendMessage(assistant(smallModel, { timestamp: 23 }));
+  const result = await coordinator.compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.previousSummary, undefined, "the local reducer never re-embeds the prior checkpoint");
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
+  assert.match(requests[0]!, /<previous-summary>[\s\S]*PRIOR_GOAL_CANARY/u);
+  const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
+  assert.equal(compactions.length, 2);
+  assert.match(compactions[1]?.type === "compaction" ? compactions[1].summary : "", /updated-after-recovery/u);
+});
+
+test("oversized recovery budgets the reduction against the prior checkpoint and final request reserves", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  const requests: string[] = [];
+  faux.setResponses([
+    // A large prior checkpoint that Pi's update request must carry again.
+    fauxAssistantMessage(structuredSummary(`PRIOR_GOAL_CANARY ${"g".repeat(14_000)}`)),
+    (context) => {
+      requests.push(requestText(context));
+      return fauxAssistantMessage(structuredSummary("fits-after-budgeted-reduction"));
+    },
+  ]);
+  const session = await memorySession("oversized-budget-boundary");
+  const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 };
+  await session.appendMessage(user(`first goal ${"a".repeat(2_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user("first follow-up", 12));
+  await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
+  const seen: ReducerCall[] = [];
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off", settings,
+    compileVcc: channelReducer(seen, { fill: true }),
+  });
+  assert.equal((await coordinator.compact()).compacted, true);
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  await session.appendMessage(user(`latest request ${"l".repeat(1_200)}`, 22));
+  await session.appendMessage(assistant(smallModel, { timestamp: 23 }));
+  const result = await coordinator.compact();
+  assert.equal(result.compacted, true, result.errorMessage);
+  assert.equal(seen.length, 1, "the first budgeted reduction already fits");
+  // Reserve-only budgeting would allow ~7,100 reduced tokens beside a ~3,500
+  // token prior checkpoint, which the final 8,192-token request cannot hold.
+  assert.ok(seen[0]!.contextWindow - settings.reserveTokens < 4_500, `budget ${seen[0]!.contextWindow}`);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!, /<previous-summary>[\s\S]*PRIOR_GOAL_CANARY/u);
+  assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
+  const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
+  assert.equal(compactions.length, 2);
+});
+
+test("oversized recovery fails closed as a local-compiler cause when no reduction fits", async () => {
+  const { faux, models, model } = compactionFixture();
+  const smallModel = { ...model, contextWindow: 8_192 };
+  let providerRequests = 0;
+  faux.setResponses([() => {
+    providerRequests += 1;
+    return fauxAssistantMessage(structuredSummary("must not be requested"));
+  }]);
+  const session = await memorySession("oversized-no-fit");
+  await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 10));
+  await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
+  await session.appendMessage(user(`latest ${"l".repeat(1_200)}`, 20));
+  await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
+  const before = await session.getEntries();
+  let compiles = 0;
+  const result = await new PiCompactionCoordinator({
+    session, models, model: smallModel, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 },
+    // Ignores the window it is given, as a pathological estimate mismatch would.
+    compileVcc: async (input) => {
+      compiles += 1;
+      return {
+        summary: "漢".repeat(8_000),
+        retainedTail: [],
+        tokensBefore: input.preparation.tokensBefore,
+        details: { engine: "vcc" as const, version: 1 },
+      } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+    },
+  }).compact();
+  assert.equal(result.compacted, false);
+  assert.match(result.errorMessage ?? "", /could not reduce context enough/iu);
+  assert.ok(compiles >= 1 && compiles <= 3, `bounded local retries (${compiles})`);
   assert.equal(providerRequests, 0);
-  assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+  assert.deepEqual(await session.getEntries(), before);
+});
+
+test("compaction failure diagnostics keep the later cause after budget recovery starts", () => {
+  const budget = new CompactionSummaryBudgetError(9_000, 800, 410, 8_192);
+  const base = { reason: "manual", sessionFailed: false, budgetFailure: budget };
+  const local = compactionFailureDiagnosticFields({
+    ...base, error: new VccError("timeout"), recoveryStage: "local-compiler",
+  });
+  assert.equal(local.compactionFailure, "local-compiler");
+  assert.equal(local.localCompilerCause, "timeout");
+  assert.equal(local.recoveryStage, "local-compiler");
+  assert.equal(local.overBudgetTokens, 2_018);
+  const provider = compactionFailureDiagnosticFields({
+    ...base, error: new CompactionError("summarization_failed", "Summarization failed"), recoveryStage: "semantic-summary",
+  });
+  assert.equal(provider.compactionFailure, "summary-provider");
+  assert.equal(provider.recoveryStage, "semantic-summary");
+  const again = new CompactionSummaryBudgetError(8_000, 800, 410, 8_192);
+  const stillOver = compactionFailureDiagnosticFields({ ...base, error: again, recoveryStage: "semantic-summary" });
+  assert.equal(stillOver.compactionFailure, "summary-budget");
+  assert.equal(stillOver.inputTokens, 8_000);
+  assert.equal(compactionFailureDiagnosticFields({
+    ...base, error: new Error("hook"), hostFailure: "policy", recoveryStage: "semantic-summary",
+  }).compactionFailure, "host-policy");
+  assert.equal(compactionFailureDiagnosticFields({
+    ...base, error: new Error("journal"), sessionFailed: true, recoveryStage: "checkpoint",
+  }).compactionFailure, "journal");
+  assert.equal(compactionFailureDiagnosticFields({
+    ...base, error: new Error("unclassified"), recoveryStage: "local-compiler",
+  }).compactionFailure, "budget-recovery");
+  assert.equal(compactionFailureDiagnosticFields({
+    reason: "manual", sessionFailed: false, error: new Error("unclassified"),
+  }).compactionFailure, "other");
 });

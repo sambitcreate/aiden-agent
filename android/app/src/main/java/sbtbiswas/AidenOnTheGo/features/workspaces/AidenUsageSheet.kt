@@ -232,7 +232,7 @@ fun AidenUsageSheet(
                 Icon(Icons.Default.Shield, null, tint = palette.accent, modifier = Modifier.size(28.dp))
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "Privacy-safe aggregates are recorded by Aiden Agent on your Mac. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.",
+                    "Privacy-safe aggregates are recorded by Aiden Agent on your paired desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )

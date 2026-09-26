@@ -82,6 +82,13 @@ const APP_ENV_PASSTHROUGH = [
   "TZ",
   "USER",
 ] as const;
+const LINUX_DISPLAY_ENV_PASSTHROUGH = [
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_TYPE",
+] as const;
 const PI_AMBIENT_AUTH_ENV_NAMES = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_BEARER_TOKEN_BEDROCK",
@@ -96,7 +103,20 @@ const PI_AMBIENT_AUTH_ENV_NAMES = new Set([
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
 ]);
-const OS_INJECTED_ENV_NAMES = new Set(["__CF_USER_TEXT_ENCODING"]);
+const OS_INJECTED_ENV_NAMES = new Set([
+  "__CF_USER_TEXT_ENCODING",
+  // Chromium/GTK add these inside the launched Linux process even when they
+  // are absent from electron.launch's explicit environment.
+  ...(process.platform === "linux"
+    ? [
+        "CHROME_DESKTOP",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "FC_FONTATIONS",
+        "GDK_BACKEND",
+        "NO_AT_BRIDGE",
+      ]
+    : []),
+]);
 const CREDENTIAL_ENV_NAME =
   /(?:^|_)(?:API_KEY|ACCESS_KEY(?:_ID)?|TOKEN|CREDENTIALS?|SECRET(?:_ACCESS)?_KEY|PASSWORD)$/u;
 
@@ -139,12 +159,18 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
-  relaunch: (afterClose?: () => Promise<void>) => Promise<Page>;
+  /** Relaunches the app; `appEnvironment` replaces the test's extra app environment. */
+  relaunch: (
+    afterClose?: () => Promise<void>,
+    appEnvironment?: Record<string, string>,
+  ) => Promise<Page>;
 };
 
 type AidenE2eOptions = {
   portableConfigSeed: PortableConfigSeed;
   workspaceSeed: boolean;
+  /** Extra variables for the app process, such as experimental feature flags. */
+  appEnvironment: Record<string, string>;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -302,7 +328,11 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
             : undefined,
         );
         const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
-        const latestUser = [...(completion?.messages ?? [])].reverse().find(({ role }) => role === "user");
+        // pi-ai forwards tool-result images as a follow-up user message; that
+        // carrier is not the user's prompt.
+        const latestUser = [...(completion?.messages ?? [])]
+          .reverse()
+          .find(({ role, content }) => role === "user" && !JSON.stringify(content ?? "").includes("Attached image(s) from tool result:"));
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
@@ -384,7 +414,11 @@ async function closeMockLmStudio(mock: MockLmStudio): Promise<void> {
 
 function isolatedAppEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
-  for (const key of APP_ENV_PASSTHROUGH) {
+  const passthrough =
+    process.platform === "linux"
+      ? [...APP_ENV_PASSTHROUGH, ...LINUX_DISPLAY_ENV_PASSTHROUGH]
+      : APP_ENV_PASSTHROUGH;
+  for (const key of passthrough) {
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
   }
@@ -700,7 +734,13 @@ function formatFailure(error: unknown): string {
 export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
-  aiden: async ({ browserName: _browserName, portableConfigSeed, workspaceSeed }, use, testInfo) => {
+  appEnvironment: [{}, { option: true }],
+  aiden: async (
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment },
+    use,
+    testInfo,
+  ) => {
+    let extraAppEnvironment = appEnvironment;
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
     let app: ElectronApplication | undefined;
@@ -761,6 +801,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           XDG_CONFIG_HOME: testXdgConfigDir,
           XDG_DATA_HOME: testXdgDataDir,
           ...(redirectOrigin ? { [LM_STUDIO_REDIRECT_ENV]: redirectOrigin } : {}),
+          ...extraAppEnvironment,
         };
         const launchArgs = [
           "-r",
@@ -808,7 +849,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
-        relaunch: async (afterClose) => {
+        relaunch: async (afterClose, nextAppEnvironment) => {
+          if (nextAppEnvironment) extraAppEnvironment = nextAppEnvironment;
           const previous = app;
           app = undefined;
           await closeAiden(previous);

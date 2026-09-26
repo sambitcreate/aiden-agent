@@ -156,7 +156,7 @@ export async function buildProductionSubagentChildTools(
     if (input.permission !== "ask" && input.permission !== "full") {
       throw new Error("Subagent workspace-write permission is unavailable.");
     }
-    const write = createSubagentWorkspaceWriteTools();
+    const write = createSubagentWorkspaceWriteTools(input.role === "implementer");
     tools.push(...write.tools);
     workspaceWriteApprovalBindings.push(...write.bindings);
   }
@@ -164,7 +164,7 @@ export async function buildProductionSubagentChildTools(
     if (!input.shellEnabled || input.permission === "none") {
       throw new Error("Subagent shell tool assembly is unavailable.");
     }
-    const shell = createSubagentShellTool();
+    const shell = createSubagentShellTool(input.role === "implementer");
     tools.push(shell.tool);
     shellApprovalBindings.push(shell.binding);
   }

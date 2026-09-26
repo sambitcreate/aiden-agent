@@ -89,3 +89,21 @@ export async function reconcileGlobalShortcuts(
 
   return { ok: true, registered: next };
 }
+
+/** Electron must not claim the dictation trigger while its portal session owns it. */
+export function excludePortalDictationShortcut(
+  desired: readonly DesiredGlobalShortcut[],
+  portalActive: boolean,
+): DesiredGlobalShortcut[] {
+  return desired.map((shortcut) => portalActive && shortcut.commandId === "dictation.toggle"
+    ? { ...shortcut, accelerator: null }
+    : shortcut);
+}
+
+export function canBindPortalDictationShortcut(
+  globalShortcutsEnabled: boolean,
+  dictationBinding: string | null | undefined,
+  recordingSuspended: boolean,
+): boolean {
+  return globalShortcutsEnabled && typeof dictationBinding === "string" && dictationBinding.length > 0 && !recordingSuspended;
+}

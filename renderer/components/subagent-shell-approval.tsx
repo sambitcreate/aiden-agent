@@ -42,7 +42,7 @@ export function SubagentShellApproval({
         </pre>
       </div>
       <Text as="p" variant="small" color="secondary">
-        This command is not OS-sandboxed. It has the macOS user&apos;s filesystem, process,
+        This command is not OS-sandboxed. It has the current user&apos;s filesystem, process,
         system-tool, Keychain/API, and arbitrary network reach. The minimal environment only reduces
         ambient secrets. There is no rollback, output is sent to the configured model, and
         deliberately detached processes may survive cancellation.

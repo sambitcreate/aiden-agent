@@ -920,25 +920,48 @@ test("restore fails closed on branch conflicts and existing destinations", async
   assert.ok(created.path);
 });
 
+function isExpectedCapacityDenial(error: unknown): boolean {
+  return error instanceof InsufficientDiskSpaceError &&
+    error.code === "insufficient_disk_space" &&
+    // statfs reports Number values; large valid filesystems can exceed the
+    // safe-integer range. Compare only values from this admission observation.
+    Number.isFinite(error.availableBytes) && error.availableBytes >= 0 &&
+    Number.isFinite(error.requiredBytes) &&
+    error.requiredBytes > error.availableBytes &&
+    error.requiredBytes > error.reserveBytes &&
+    error.reserveBytes > 0 &&
+    error.estimatedBytes === Number.MAX_SAFE_INTEGER;
+}
+
 test("capacity admission reports a typed insufficient_disk_space error", async (t) => {
   const root = await temporaryDirectory(t);
   const available = await statfsAvailableBytes(root);
   assert.ok(available > 0);
   await assert.rejects(
     checkCreateCapacity(root, Number.MAX_SAFE_INTEGER),
-    (error: unknown) =>
-      error instanceof InsufficientDiskSpaceError &&
-      error.code === "insufficient_disk_space" &&
-      // The filesystem can change between the earlier observation and admission.
-      Number.isSafeInteger(error.availableBytes) && error.availableBytes >= 0 &&
-      error.requiredBytes > error.availableBytes &&
-      error.requiredBytes > error.reserveBytes &&
-      error.reserveBytes > 0 &&
-      error.estimatedBytes === Number.MAX_SAFE_INTEGER,
+    isExpectedCapacityDenial,
   );
   // Snapshot admission uses a much smaller reserve than creation.
   const report = await checkSnapshotCapacity(root, 0);
   assert.ok(report.reserveBytes <= 64 * 1024 * 1024);
+});
+
+test("capacity denial predicate supports large finite filesystem observations", () => {
+  const report = {
+    availableBytes: Number.MAX_SAFE_INTEGER + 1,
+    requiredBytes: Math.ceil(Number.MAX_SAFE_INTEGER * 1.25) + 512 * 1024 * 1024,
+    reserveBytes: 512 * 1024 * 1024,
+    estimatedBytes: Number.MAX_SAFE_INTEGER,
+  };
+  assert.equal(Number.isSafeInteger(report.availableBytes), false);
+  assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError(report)), true);
+  for (const availableBytes of [NaN, Infinity, -Infinity, -1, report.requiredBytes]) {
+    assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, availableBytes })), false);
+  }
+  for (const requiredBytes of [NaN, Infinity, -Infinity]) {
+    assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, requiredBytes })), false);
+  }
+  assert.equal(isExpectedCapacityDenial(new Error("untyped denial")), false);
 });
 
 test(".worktreeinclude provisions only ignored+untracked files with mode preserved", async (t) => {
@@ -983,6 +1006,34 @@ test(".worktreeinclude provisions only ignored+untracked files with mode preserv
   await assert.rejects(fs.lstat(path.join(worktreePath, "untracked.txt")), {
     code: "ENOENT",
   });
+});
+
+test(".worktreeinclude provisioning is a no-op without the macOS transfer helper", async (t) => {
+  const repository = await createRepository(t);
+  const worktreePath = await temporaryDirectory(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), ".env\n");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "ignore"]);
+  await fs.writeFile(path.join(repository, ".env"), "SECRET=42\n");
+  await fs.writeFile(path.join(repository, ".worktreeinclude"), ".env\n");
+
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "linux" });
+  try {
+    const service = new GitService({ cacheTtlMs: 0 });
+    // The Darwin-only transfer helper cannot exist on Linux; provisioning must
+    // degrade to an empty record instead of failing worktree creation.
+    assert.deepEqual(
+      await provisionWorktreeIncludedFiles(
+        { listFiles: (cwd, args) => service.listFiles(cwd, args) },
+        { sourceRoot: repository, worktreePath },
+      ),
+      [],
+    );
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  await assert.rejects(fs.lstat(path.join(worktreePath, ".env")), { code: "ENOENT" });
 });
 
 test("provisioning refuses symlinked sources, escapes, and existing destinations", async (t) => {

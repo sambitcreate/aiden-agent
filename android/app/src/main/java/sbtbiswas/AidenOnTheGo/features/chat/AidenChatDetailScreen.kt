@@ -122,6 +122,7 @@ fun AidenChatDetailScreen(
     val connectionState by coordinator.connectionState.collectAsState()
     val chat by viewModel.chat.collectAsState()
     val streamState by viewModel.streamState.collectAsState()
+    val hasActiveStream by viewModel.hasActiveStream.collectAsState()
     val isStreaming = streamState != null && !streamState!!.isTerminal
     val liveText by viewModel.liveText.collectAsState()
     val reasoning by viewModel.reasoning.collectAsState()
@@ -356,7 +357,7 @@ fun AidenChatDetailScreen(
                 ) {
                     pendingApproval?.let { approval ->
                         val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresMacConfirmation = AidenApprovalPresentation.requiresMacConfirmation(approval)
+                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -401,10 +402,10 @@ fun AidenChatDetailScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
-                                } else if (requiresMacConfirmation) {
+                                } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your Mac. You can deny it here.",
+                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
@@ -490,7 +491,7 @@ fun AidenChatDetailScreen(
                     },
                     onStop = { viewModel.cancelTurn() },
                     canStop = viewModel.canControlCurrentRun && !isStopping,
-                    canSend = viewModel.canSend,
+                    canSend = viewModel.canSend && !hasActiveStream,
                     isStreaming = isStreaming,
                     isVoiceListening = voiceInput.isListening,
                     isVoiceBusy = voiceInput.isBusy,
@@ -1235,6 +1236,14 @@ private fun AidenTimelineCollapsibleCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
+    val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
+    val allowsDisclosure = !compactOnly || timeline.issueCount > 0
+    val headline = if (compactOnly && !allowsDisclosure) {
+        timeline.steps.lastOrNull()?.let { AidenAgentActivityPresentation.line(it) }
+            ?: AidenAgentActivityPresentation.summary(timeline)
+    } else {
+        AidenAgentActivityPresentation.summary(timeline)
+    }
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
@@ -1248,7 +1257,10 @@ private fun AidenTimelineCollapsibleCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
+                    .then(
+                        if (allowsDisclosure) Modifier.clickable { isExpanded = !isExpanded }
+                        else Modifier
+                    )
             ) {
                 Icon(
                     imageVector = if (timeline.issueCount > 0) Icons.Default.Warning else Icons.Default.CheckCircle,
@@ -1258,21 +1270,23 @@ private fun AidenTimelineCollapsibleCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = AidenAgentActivityPresentation.summary(timeline),
+                    text = headline,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = palette.secondary,
-                    modifier = Modifier.size(18.dp)
-                )
+                if (allowsDisclosure) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            if (isExpanded) {
+            if (allowsDisclosure && isExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
                 Spacer(modifier = Modifier.height(6.dp))
